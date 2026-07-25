@@ -12,6 +12,7 @@ import { useEditorTabs } from "./hooks/useEditorTabs";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
+import { formatLabelFor, lineEndingLabelFor } from "./lib/supportedFiles";
 
 function App() {
   const layout = useWorkspaceLayout();
@@ -81,8 +82,12 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [editor.saveActive, hasProject]);
 
-  const statusPath = editor.activeTab?.path ?? "—";
-  const statusLanguage = editor.activeTab?.language ?? "—";
+  const activePath = editor.activeTab?.path ?? null;
+  const statusPath = activePath ?? "—";
+  const statusFormat = activePath ? formatLabelFor(activePath) : "—";
+  const statusLineEnding = editor.activeTab
+    ? lineEndingLabelFor(editor.activeTab.content)
+    : "—";
 
   return (
     <div className="app" style={panelStyle}>
@@ -148,8 +153,10 @@ function App() {
       </div>
       <StatusBar
         filePath={hasProject ? statusPath : "—"}
-        language={hasProject ? statusLanguage : "—"}
+        formatLabel={statusFormat}
+        lineEndingLabel={statusLineEnding}
         cursorLabel={cursorLabel}
+        hasActiveFile={Boolean(hasProject && activePath)}
       />
 
       {project.pendingOpen ? (

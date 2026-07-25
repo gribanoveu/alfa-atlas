@@ -64,3 +64,42 @@ export function monacoLanguageFor(path: string): string {
       return "plaintext";
   }
 }
+
+/** Human-readable format label for the status bar. */
+export function formatLabelFor(path: string): string {
+  switch (extensionOf(path)) {
+    case ".adoc":
+    case ".asciidoc":
+      return "AsciiDoc";
+    case ".json":
+      return "JSON";
+    case ".md":
+    case ".markdown":
+      return "Markdown";
+    case ".txt":
+      return "Plain text";
+    case ".puml":
+    case ".plantuml":
+      return "PlantUML";
+    case ".yaml":
+    case ".yml":
+      return "YAML";
+    case ".mmd":
+    case ".mermaid":
+      return "Mermaid";
+    default:
+      return "Plain text";
+  }
+}
+
+/** Detect dominant line ending from file contents for the status bar. */
+export function lineEndingLabelFor(content: string): string {
+  const crlf = (content.match(/\r\n/g) ?? []).length;
+  const crOnly = (content.match(/\r(?!\n)/g) ?? []).length;
+  const lfOnly = (content.match(/(?<!\r)\n/g) ?? []).length;
+
+  if (crlf === 0 && crOnly === 0 && lfOnly === 0) return "LF";
+  if (crlf >= lfOnly && crlf >= crOnly) return "CRLF";
+  if (crOnly > lfOnly) return "CR";
+  return "LF";
+}
