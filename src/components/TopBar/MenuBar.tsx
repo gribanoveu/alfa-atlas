@@ -1,3 +1,8 @@
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  GitCommitHorizontal,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
@@ -92,9 +97,27 @@ const MENUS: MenuDef[] = [
     id: "git",
     label: "Git",
     items: [
-      { type: "item", id: "commit", label: "Commit…", disabled: true },
-      { type: "item", id: "pull", label: "Pull", disabled: true },
-      { type: "item", id: "push", label: "Push", disabled: true },
+      {
+        type: "item",
+        id: "commit",
+        label: "Commit…",
+        action: "git.toggleCommit",
+        icon: GitCommitHorizontal,
+      },
+      {
+        type: "item",
+        id: "pull",
+        label: "Pull",
+        action: "git.pull",
+        icon: ArrowDownToLine,
+      },
+      {
+        type: "item",
+        id: "push",
+        label: "Push",
+        action: "git.push",
+        icon: ArrowUpFromLine,
+      },
     ],
   },
   {
@@ -143,11 +166,29 @@ const MENUS: MenuDef[] = [
 
 type MenuBarProps = {
   onAction: (action: MenuActionId) => void;
+  hasProject?: boolean;
+  gitBusy?: boolean;
 };
 
-export function MenuBar({ onAction }: MenuBarProps) {
+export function MenuBar({
+  onAction,
+  hasProject = false,
+  gitBusy = false,
+}: MenuBarProps) {
   const [openId, setOpenId] = useState<string | null>(null);
   const rootRef = useRef<HTMLElement>(null);
+
+  const menus = MENUS.map((menu) => {
+    if (menu.id !== "git") return menu;
+    return {
+      ...menu,
+      items: menu.items.map((item) =>
+        item.type === "item"
+          ? { ...item, disabled: !hasProject || gitBusy }
+          : item,
+      ),
+    };
+  });
 
   useEffect(() => {
     if (!openId) return;
@@ -172,7 +213,7 @@ export function MenuBar({ onAction }: MenuBarProps) {
 
   return (
     <nav className="menu" ref={rootRef} aria-label="Главное меню">
-      {MENUS.map((menu) => {
+      {menus.map((menu) => {
         const open = openId === menu.id;
         return (
           <div key={menu.id} className={`menu-root${open ? " is-open" : ""}`}>

@@ -1,8 +1,14 @@
 use std::path::{Path, PathBuf};
 
-use git2::{Repository, Signature, Status, StatusOptions, StatusShow};
+use git2::{
+    build::CheckoutBuilder, AnnotatedCommit, BranchType, Cred, CredentialType, FetchOptions,
+    MergeOptions, PushOptions, RemoteCallbacks, Repository, ResetType, Signature, Status,
+    StatusOptions, StatusShow,
+};
 
-use crate::domain::git::{GitCommitSummary, GitError, GitFileStatus, GitStatusSnapshot};
+use crate::domain::git::{
+    GitCommitSummary, GitError, GitFileStatus, GitStatusSnapshot, PullMode,
+};
 
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
 pub fn discover_repo_root(path: &Path) -> PathBuf {
@@ -288,4 +294,283 @@ pub fn log(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitE
         });
     }
     Ok(commits)
+}
+
+fn map_remote_error(err: git2::Error) -> GitError {
+    let msg = err.message().to_string();
+    let lower = msg.to_lowercase();
+    if lower.contains("auth")
+        || lower.contains("credential")
+        || lower.contains("authentication")
+        || lower.contains("permission denied")
+        || lower.contains("could not read username")
+    {
+        GitError::Message(format!("authentication failed: {msg}"))
+    } else {
+        GitError::Operation(err)
+    }
+}
+
+fn configure_credentials<'a>(
+    callbacks: &mut RemoteCallbacks<'a>,
+    config: &'a git2::Config,
+) {
+    callbacks.credentials(move |url, username_from_url, allowed| {
+        if allowed.contains(CredentialType::SSH_KEY) {
+            let user = username_from_url.unwrap_or("git");
+            if let Ok(cred) = Cred::ssh_key_from_agent(user) {
+                return Ok(cred);
+            }
+        }
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
+            || allowed.contains(CredentialType::DEFAULT)
+        {
+            if let Ok(cred) = Cred::credential_helper(config, url, username_from_url) {
+                return Ok(cred);
+            }
+        }
+        Err(git2::Error::from_str("no credentials available"))
+    });
+}
+
+struct UpstreamRef {
+    remote_name: String,
+    /// Remote-tracking ref name, e.g. `refs/remotes/origin/main`.
+    tracking_ref: String,
+    /// Branch name on the remote, e.g. `main`.
+    remote_branch: String,
+}
+
+fn upstream_of_head(repo: &Repository) -> Result<UpstreamRef, GitError> {
+    let head = repo.head().map_err(GitError::Operation)?;
+    if !head.is_branch() {
+        return Err(GitError::Message(
+            "detached HEAD: check out a branch before pull/push".into(),
+        ));
+    }
+    let branch_name = head
+        .shorthand()
+        .map_err(|_| GitError::Message("cannot determine current branch".into()))?
+        .to_string();
+    let local = repo
+        .find_branch(&branch_name, BranchType::Local)
+        .map_err(|_| GitError::NoUpstream)?;
+    let upstream = local.upstream().map_err(|_| GitError::NoUpstream)?;
+    let tracking_ref = upstream
+        .get()
+        .name()
+        .map_err(|_| GitError::NoUpstream)?
+        .to_string();
+    let remote_buf = repo
+        .branch_upstream_remote(&format!("refs/heads/{branch_name}"))
+        .map_err(|_| GitError::NoUpstream)?;
+    let remote_name = remote_buf
+        .as_str()
+        .map_err(|_| GitError::NoUpstream)?
+        .to_string();
+    let remote_branch = tracking_ref
+        .strip_prefix(&format!("refs/remotes/{remote_name}/"))
+        .unwrap_or(tracking_ref.as_str())
+        .to_string();
+    Ok(UpstreamRef {
+        remote_name,
+        tracking_ref,
+        remote_branch,
+    })
+}
+
+fn fetch_upstream<'repo>(
+    repo: &'repo Repository,
+    upstream: &UpstreamRef,
+) -> Result<AnnotatedCommit<'repo>, GitError> {
+    let config = repo.config().map_err(GitError::Operation)?;
+    let mut callbacks = RemoteCallbacks::new();
+    configure_credentials(&mut callbacks, &config);
+
+    let mut fetch_opts = FetchOptions::new();
+    fetch_opts.remote_callbacks(callbacks);
+
+    let mut remote = repo
+        .find_remote(&upstream.remote_name)
+        .map_err(map_remote_error)?;
+    let refspec = format!(
+        "+refs/heads/{0}:refs/remotes/{1}/{0}",
+        upstream.remote_branch, upstream.remote_name
+    );
+    remote
+        .fetch(&[refspec.as_str()], Some(&mut fetch_opts), None)
+        .map_err(map_remote_error)?;
+
+    let reference = repo
+        .find_reference(&upstream.tracking_ref)
+        .map_err(GitError::Operation)?;
+    repo.reference_to_annotated_commit(&reference)
+        .map_err(GitError::Operation)
+}
+
+fn head_branch_refname(repo: &Repository) -> Result<String, GitError> {
+    let head = repo.head().map_err(GitError::Operation)?;
+    head.name()
+        .map(str::to_string)
+        .map_err(|_| GitError::Message("cannot resolve HEAD ref".into()))
+}
+
+fn do_merge(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitError> {
+    let (analysis, _) = repo
+        .merge_analysis(&[theirs])
+        .map_err(GitError::Operation)?;
+
+    if analysis.is_up_to_date() {
+        return Ok(());
+    }
+
+    if analysis.is_fast_forward() {
+        let refname = head_branch_refname(repo)?;
+        let mut reference = repo
+            .find_reference(&refname)
+            .map_err(GitError::Operation)?;
+        reference
+            .set_target(theirs.id(), "Fast-Forward")
+            .map_err(GitError::Operation)?;
+        repo.set_head(&refname).map_err(GitError::Operation)?;
+        repo.checkout_head(Some(CheckoutBuilder::default().force()))
+            .map_err(GitError::Operation)?;
+        return Ok(());
+    }
+
+    if analysis.is_normal() {
+        let mut opts = MergeOptions::new();
+        repo.merge(&[theirs], Some(&mut opts), None)
+            .map_err(GitError::Operation)?;
+
+        let mut index = repo.index().map_err(GitError::Operation)?;
+        if index.has_conflicts() {
+            let _ = repo.cleanup_state();
+            return Err(GitError::MergeConflict);
+        }
+
+        let tree_oid = index.write_tree().map_err(GitError::Operation)?;
+        let tree = repo.find_tree(tree_oid).map_err(GitError::Operation)?;
+        let sig = commit_signature(repo)?;
+        let head = repo
+            .head()
+            .map_err(GitError::Operation)?
+            .peel_to_commit()
+            .map_err(GitError::Operation)?;
+        let their_commit = repo
+            .find_commit(theirs.id())
+            .map_err(GitError::Operation)?;
+        let msg = format!(
+            "Merge remote-tracking branch '{}'",
+            theirs.refname().unwrap_or("upstream")
+        );
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            &msg,
+            &tree,
+            &[&head, &their_commit],
+        )
+        .map_err(GitError::Operation)?;
+        repo.cleanup_state().map_err(GitError::Operation)?;
+        return Ok(());
+    }
+
+    Err(GitError::Message(
+        "cannot merge: unsupported merge analysis result".into(),
+    ))
+}
+
+fn do_rebase(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitError> {
+    let head_ann = {
+        let head = repo.head().map_err(GitError::Operation)?;
+        repo.reference_to_annotated_commit(&head)
+            .map_err(GitError::Operation)?
+    };
+
+    let mut rebase = repo
+        .rebase(Some(&head_ann), None, Some(theirs), None)
+        .map_err(GitError::Operation)?;
+
+    let sig = commit_signature(repo)?;
+    while let Some(op) = rebase.next() {
+        if let Err(e) = op {
+            let _ = rebase.abort();
+            return Err(GitError::Operation(e));
+        }
+        let index = repo.index().map_err(|e| {
+            let _ = rebase.abort();
+            GitError::Operation(e)
+        })?;
+        if index.has_conflicts() {
+            let _ = rebase.abort();
+            return Err(GitError::RebaseConflict);
+        }
+        match rebase.commit(None, &sig, None) {
+            Ok(_) => {}
+            Err(e) if e.code() == git2::ErrorCode::Applied => {}
+            Err(e) if e.code() == git2::ErrorCode::Conflict => {
+                let _ = rebase.abort();
+                return Err(GitError::RebaseConflict);
+            }
+            Err(e) => {
+                let _ = rebase.abort();
+                return Err(GitError::Operation(e));
+            }
+        }
+    }
+
+    rebase.finish(None).map_err(GitError::Operation)?;
+    Ok(())
+}
+
+pub fn pull(repo_root: &Path, mode: PullMode) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let upstream = upstream_of_head(&repo)?;
+    let theirs = fetch_upstream(&repo, &upstream)?;
+    match mode {
+        PullMode::Merge => do_merge(&repo, &theirs),
+        PullMode::Rebase => do_rebase(&repo, &theirs),
+    }
+}
+
+pub fn reset_to_remote(repo_root: &Path) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let upstream = upstream_of_head(&repo)?;
+    let theirs = fetch_upstream(&repo, &upstream)?;
+    let commit = repo
+        .find_object(theirs.id(), Some(git2::ObjectType::Commit))
+        .map_err(GitError::Operation)?;
+    repo.reset(&commit, ResetType::Hard, Some(CheckoutBuilder::default().force()))
+        .map_err(GitError::Operation)?;
+    Ok(())
+}
+
+pub fn push(repo_root: &Path) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let upstream = upstream_of_head(&repo)?;
+    let head = repo.head().map_err(GitError::Operation)?;
+    let local_branch = head
+        .shorthand()
+        .map_err(|_| GitError::Message("cannot determine current branch".into()))?;
+
+    let config = repo.config().map_err(GitError::Operation)?;
+    let mut callbacks = RemoteCallbacks::new();
+    configure_credentials(&mut callbacks, &config);
+
+    let mut push_opts = PushOptions::new();
+    push_opts.remote_callbacks(callbacks);
+
+    let mut remote = repo
+        .find_remote(&upstream.remote_name)
+        .map_err(map_remote_error)?;
+    let refspec = format!(
+        "refs/heads/{local_branch}:refs/heads/{}",
+        upstream.remote_branch
+    );
+    remote
+        .push(&[refspec.as_str()], Some(&mut push_opts))
+        .map_err(map_remote_error)?;
+    Ok(())
 }

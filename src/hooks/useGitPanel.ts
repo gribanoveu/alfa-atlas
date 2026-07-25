@@ -2,11 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   gitCommit,
   gitLog,
+  gitPull,
+  gitPush,
+  gitResetToRemote,
   gitStage,
   gitStatus,
   gitUnstage,
   type GitCommitSummary,
   type GitStatusSnapshot,
+  type PullMode,
 } from "../lib/git";
 
 const EMPTY_STATUS: GitStatusSnapshot = {
@@ -140,6 +144,41 @@ export function useGitPanel(
     }
   }, [description, jiraKey, refresh, repoRoot, status.staged.length]);
 
+  const runRemote = useCallback(
+    async (op: () => Promise<void>): Promise<string | null> => {
+      if (!repoRoot) return "Нет открытого репозитория";
+      setBusy(true);
+      try {
+        await op();
+        await refresh();
+        return null;
+      } catch (e) {
+        return e instanceof Error ? e.message : String(e);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh, repoRoot],
+  );
+
+  const pull = useCallback(
+    (mode: PullMode) => {
+      if (!repoRoot) return Promise.resolve("Нет открытого репозитория");
+      return runRemote(() => gitPull(repoRoot, mode));
+    },
+    [repoRoot, runRemote],
+  );
+
+  const resetToRemote = useCallback(() => {
+    if (!repoRoot) return Promise.resolve("Нет открытого репозитория");
+    return runRemote(() => gitResetToRemote(repoRoot));
+  }, [repoRoot, runRemote]);
+
+  const push = useCallback(() => {
+    if (!repoRoot) return Promise.resolve("Нет открытого репозитория");
+    return runRemote(() => gitPush(repoRoot));
+  }, [repoRoot, runRemote]);
+
   const canCommit =
     status.staged.length > 0 && description.trim().length > 0 && !busy;
 
@@ -158,5 +197,8 @@ export function useGitPanel(
     stage,
     unstage,
     commit,
+    pull,
+    resetToRemote,
+    push,
   };
 }

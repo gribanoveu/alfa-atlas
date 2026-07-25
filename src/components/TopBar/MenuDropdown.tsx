@@ -1,3 +1,4 @@
+import type { LucideIcon } from "lucide-react";
 import type { MenuActionId } from "../../lib/menuActions";
 
 export type MenuItem =
@@ -8,6 +9,7 @@ export type MenuItem =
       label: string;
       disabled?: boolean;
       action?: MenuActionId;
+      icon?: LucideIcon;
     };
 
 type MenuDropdownProps = {
@@ -23,6 +25,8 @@ export function MenuDropdown({ items, onAction }: MenuDropdownProps) {
           return <div key={`sep-${index}`} className="menu-dropdown-sep" />;
         }
 
+        const Icon = item.icon;
+
         return (
           <button
             key={item.id}
@@ -34,7 +38,10 @@ export function MenuDropdown({ items, onAction }: MenuDropdownProps) {
               if (item.action && !item.disabled) onAction(item.action);
             }}
           >
-            {item.label}
+            <span className="menu-dropdown-icon" aria-hidden>
+              {Icon ? <Icon size={14} strokeWidth={1.75} /> : null}
+            </span>
+            <span className="menu-dropdown-label">{item.label}</span>
           </button>
         );
       })}

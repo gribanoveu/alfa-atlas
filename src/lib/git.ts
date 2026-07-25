@@ -18,6 +18,8 @@ export type GitCommitSummary = {
   time: number;
 };
 
+export type PullMode = "merge" | "rebase";
+
 export function gitStatus(repoRoot: string): Promise<GitStatusSnapshot> {
   return invoke<GitStatusSnapshot>("git_status", { repoRoot });
 }
@@ -42,4 +44,16 @@ export function gitLog(
   limit = 20,
 ): Promise<GitCommitSummary[]> {
   return invoke<GitCommitSummary[]>("git_log", { repoRoot, limit });
+}
+
+export function gitPull(repoRoot: string, mode: PullMode): Promise<void> {
+  return invoke<void>("git_pull", { repoRoot, mode });
+}
+
+export function gitResetToRemote(repoRoot: string): Promise<void> {
+  return invoke<void>("git_reset_to_remote", { repoRoot });
+}
+
+export function gitPush(repoRoot: string): Promise<void> {
+  return invoke<void>("git_push", { repoRoot });
 }

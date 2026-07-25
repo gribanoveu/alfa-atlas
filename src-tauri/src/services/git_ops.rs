@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::domain::git::{GitCommitSummary, GitError, GitStatusSnapshot};
+use crate::domain::git::{GitCommitSummary, GitError, GitStatusSnapshot, PullMode};
 use crate::infra::git_repo;
 
 pub fn status(repo_root: &str) -> Result<GitStatusSnapshot, GitError> {
@@ -30,33 +30,60 @@ pub fn log(repo_root: &str, limit: usize) -> Result<Vec<GitCommitSummary>, GitEr
     git_repo::log(Path::new(repo_root), limit)
 }
 
+pub fn pull(repo_root: &str, mode: PullMode) -> Result<(), GitError> {
+    git_repo::pull(Path::new(repo_root), mode)
+}
+
+pub fn reset_to_remote(repo_root: &str) -> Result<(), GitError> {
+    git_repo::reset_to_remote(Path::new(repo_root))
+}
+
+pub fn push(repo_root: &str) -> Result<(), GitError> {
+    git_repo::push(Path::new(repo_root))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use git2::Repository;
     use std::fs;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn temp_repo() -> std::path::PathBuf {
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
-            .join(format!("docflow-git-{nanos}"));
+            .join(format!("docflow-git-{prefix}-{nanos}"));
         fs::create_dir_all(&dir).unwrap();
-        let repo = Repository::init(&dir).unwrap();
+        dir
+    }
+
+    fn init_repo(dir: &Path) -> Repository {
+        let repo = Repository::init(dir).unwrap();
         let mut config = repo.config().unwrap();
         config.set_str("user.name", "Docflow Test").unwrap();
         config.set_str("user.email", "test@docflow.local").unwrap();
-        dir
+        repo
+    }
+
+    fn git(cwd: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?} failed");
     }
 
     #[test]
     fn stage_commit_clears_status_and_appears_in_log() {
-        let root = temp_repo();
+        let root = temp_dir("stage");
         let root_str = root.to_str().unwrap();
+        init_repo(&root);
 
         fs::write(root.join("note.adoc"), "= Hello\n").unwrap();
 
@@ -84,7 +111,6 @@ mod tests {
         assert_eq!(commits[0].message, "docs: add note");
         assert_eq!(commits[0].author, "Docflow Test");
 
-        // Empty commit rejected.
         let err = commit(root_str, "docs: nothing").unwrap_err();
         assert!(matches!(err, GitError::NothingStaged));
 
@@ -96,8 +122,9 @@ mod tests {
 
     #[test]
     fn unstage_returns_file_to_changes() {
-        let root = temp_repo();
+        let root = temp_dir("unstage");
         let root_str = root.to_str().unwrap();
+        init_repo(&root);
         fs::write(root.join("a.txt"), "one\n").unwrap();
         stage(root_str, &["a.txt".into()]).unwrap();
         commit(root_str, "init").unwrap();
@@ -113,5 +140,73 @@ mod tests {
         assert_eq!(snap.unstaged[0].status, "M");
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pull_merge_and_reset_via_local_remote() {
+        let remote = temp_dir("remote");
+        init_repo(&remote);
+        fs::write(remote.join("base.txt"), "base\n").unwrap();
+        git(&remote, &["add", "."]);
+        git(&remote, &["-c", "user.name=Docflow Test", "-c", "user.email=test@docflow.local", "commit", "-m", "init"]);
+        // bare remote clone target
+        let bare = temp_dir("bare");
+        git(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &[
+                "clone",
+                "--bare",
+                remote.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+
+        let local = temp_dir("local");
+        git(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &[
+                "clone",
+                bare.to_str().unwrap(),
+                local.to_str().unwrap(),
+            ],
+        );
+        git(&local, &["config", "user.name", "Docflow Test"]);
+        git(&local, &["config", "user.email", "test@docflow.local"]);
+
+        // Advance remote (via another clone)
+        let other = temp_dir("other");
+        git(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &[
+                "clone",
+                bare.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        git(&other, &["config", "user.name", "Docflow Test"]);
+        git(&other, &["config", "user.email", "test@docflow.local"]);
+        fs::write(other.join("remote.txt"), "from remote\n").unwrap();
+        git(&other, &["add", "."]);
+        git(&other, &["commit", "-m", "remote change"]);
+        git(&other, &["push", "origin", "HEAD"]);
+
+        let local_str = local.to_str().unwrap();
+        pull(local_str, PullMode::Merge).unwrap();
+        assert!(local.join("remote.txt").exists());
+
+        // Local-only commit then reset to remote
+        fs::write(local.join("local-only.txt"), "x\n").unwrap();
+        git(&local, &["add", "."]);
+        git(&local, &["commit", "-m", "local only"]);
+        assert!(local.join("local-only.txt").exists());
+
+        reset_to_remote(local_str).unwrap();
+        assert!(!local.join("local-only.txt").exists());
+        assert!(local.join("remote.txt").exists());
+
+        fs::remove_dir_all(&remote).ok();
+        fs::remove_dir_all(&bare).ok();
+        fs::remove_dir_all(&local).ok();
+        fs::remove_dir_all(&other).ok();
     }
 }

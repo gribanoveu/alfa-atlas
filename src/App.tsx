@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
+import { AlertOkModal } from "./components/Git/AlertOkModal";
+import { PullUpdateModal } from "./components/Git/PullUpdateModal";
 import { RightDock } from "./components/RightDock/RightDock";
 import { NewFileModal } from "./components/Sidebar/NewFileModal";
 import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
@@ -9,6 +11,7 @@ import { StatusBar } from "./components/StatusBar/StatusBar";
 import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
+import type { PullMode } from "./lib/git";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
@@ -56,6 +59,8 @@ function App() {
   const [folderError, setFolderError] = useState<string | null>(null);
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
+  const [pullModalOpen, setPullModalOpen] = useState(false);
+  const [gitAlert, setGitAlert] = useState<string | null>(null);
   const skipNextPanelSync = useRef(false);
   const prevDirtyCount = useRef(0);
 
@@ -134,6 +139,32 @@ function App() {
     ? `Ln ${editor.cursor.line}, Col ${editor.cursor.column}`
     : "Ln 1, Col 1";
 
+  const openPullModal = useCallback(() => {
+    if (!hasProject) return;
+    setPullModalOpen(true);
+  }, [hasProject]);
+
+  const runPush = useCallback(async () => {
+    if (!hasProject) return;
+    const err = await git.push();
+    if (err) setGitAlert(err);
+  }, [git, hasProject]);
+
+  const onPullConfirm = useCallback(
+    async (mode: PullMode) => {
+      const err = await git.pull(mode);
+      setPullModalOpen(false);
+      if (err) setGitAlert(err);
+    },
+    [git],
+  );
+
+  const onResetToRemote = useCallback(async () => {
+    const err = await git.resetToRemote();
+    setPullModalOpen(false);
+    if (err) setGitAlert(err);
+  }, [git]);
+
   const panelStyle = {
     ["--sidebar-width" as string]: `${panels.layout.sidebarWidth}px`,
     ["--right-width" as string]: `${panels.layout.rightWidth}px`,
@@ -186,6 +217,10 @@ function App() {
     }
   }, [layout]);
 
+  const toggleGitPanel = useCallback(() => {
+    layout.toggleRightTool("git");
+  }, [layout]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
@@ -228,6 +263,7 @@ function App() {
         branchName={project.branchName ?? "—"}
         projectRoot={project.repoRoot}
         hasProject={hasProject}
+        gitBusy={git.busy}
         onOpenFolder={openFolder}
         onCloseProject={closeProject}
         onSave={async () => {
@@ -239,6 +275,9 @@ function App() {
         onToggleSidebar={layout.toggleSidebar}
         onToggleRight={toggleRightPanel}
         onToggleBottom={toggleBottomPanel}
+        onToggleGit={toggleGitPanel}
+        onPull={openPullModal}
+        onPush={() => void runPush()}
       />
       <div className="workspace">
         <div className={mainClassName}>
@@ -364,6 +403,22 @@ function App() {
             setNewFolderParent(null);
             await tree.refresh();
           }}
+        />
+      ) : null}
+
+      {pullModalOpen ? (
+        <PullUpdateModal
+          busy={git.busy}
+          onCancel={() => setPullModalOpen(false)}
+          onConfirm={(mode) => void onPullConfirm(mode)}
+          onResetToRemote={() => void onResetToRemote()}
+        />
+      ) : null}
+
+      {gitAlert ? (
+        <AlertOkModal
+          message={gitAlert}
+          onClose={() => setGitAlert(null)}
         />
       ) : null}
 

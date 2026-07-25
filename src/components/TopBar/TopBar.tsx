@@ -15,6 +15,7 @@ type TopBarProps = {
   branchName?: string;
   projectRoot: string | null;
   hasProject: boolean;
+  gitBusy?: boolean;
   onOpenFolder: () => Promise<unknown>;
   onCloseProject: () => Promise<void>;
   onSave: () => Promise<unknown>;
@@ -22,6 +23,9 @@ type TopBarProps = {
   onToggleSidebar: () => void;
   onToggleRight: () => void;
   onToggleBottom: () => void;
+  onToggleGit: () => void;
+  onPull: () => void;
+  onPush: () => void;
 };
 
 export function TopBar({
@@ -29,6 +33,7 @@ export function TopBar({
   branchName = "—",
   projectRoot,
   hasProject,
+  gitBusy = false,
   onOpenFolder,
   onCloseProject,
   onSave,
@@ -36,6 +41,9 @@ export function TopBar({
   onToggleSidebar,
   onToggleRight,
   onToggleBottom,
+  onToggleGit,
+  onPull,
+  onPush,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
@@ -68,6 +76,15 @@ export function TopBar({
         case "view.toggleBottom":
           onToggleBottom();
           break;
+        case "git.toggleCommit":
+          if (hasProject) onToggleGit();
+          break;
+        case "git.pull":
+          if (hasProject) onPull();
+          break;
+        case "git.push":
+          if (hasProject) onPush();
+          break;
         case "tools.settings":
           setSettingsOpen(true);
           break;
@@ -89,8 +106,11 @@ export function TopBar({
       hasProject,
       onCloseProject,
       onOpenFolder,
+      onPull,
+      onPush,
       onSave,
       onToggleBottom,
+      onToggleGit,
       onToggleRight,
       onToggleSidebar,
     ],
@@ -99,7 +119,11 @@ export function TopBar({
   return (
     <>
       <header className="topbar">
-        <MenuBar onAction={onAction} />
+        <MenuBar
+          onAction={onAction}
+          hasProject={hasProject}
+          gitBusy={gitBusy}
+        />
         <div className="topbar-spacer" />
         <div className="topbar-right">
           <div className="repo-chip">

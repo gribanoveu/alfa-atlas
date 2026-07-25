@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -27,6 +27,13 @@ pub struct GitCommitSummary {
     pub time: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PullMode {
+    Merge,
+    Rebase,
+}
+
 #[derive(Debug, Error)]
 pub enum GitError {
     #[error("path is not a git repository: {0}")]
@@ -45,6 +52,12 @@ pub enum GitError {
     MissingIdentity,
     #[error("invalid path: {0}")]
     InvalidPath(String),
+    #[error("current branch has no upstream remote tracking branch")]
+    NoUpstream,
+    #[error("merge conflict; resolve conflicts manually and try again")]
+    MergeConflict,
+    #[error("rebase conflict; resolve conflicts manually and try again")]
+    RebaseConflict,
     #[error("{0}")]
     Message(String),
 }

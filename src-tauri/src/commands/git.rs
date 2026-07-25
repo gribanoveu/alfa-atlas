@@ -1,4 +1,4 @@
-use crate::domain::git::{GitCommitSummary, GitStatusSnapshot};
+use crate::domain::git::{GitCommitSummary, GitStatusSnapshot, PullMode};
 use crate::services::git_ops;
 
 #[tauri::command]
@@ -24,4 +24,31 @@ pub fn git_commit(repo_root: String, message: String) -> Result<String, String> 
 #[tauri::command]
 pub fn git_log(repo_root: String, limit: Option<usize>) -> Result<Vec<GitCommitSummary>, String> {
     git_ops::log(&repo_root, limit.unwrap_or(20)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_pull(repo_root: String, mode: PullMode) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_ops::pull(&repo_root, mode).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_reset_to_remote(repo_root: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_ops::reset_to_remote(&repo_root).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn git_push(repo_root: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_ops::push(&repo_root).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
