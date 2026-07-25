@@ -1,17 +1,37 @@
-import { FolderGit2, FolderOpen } from "lucide-react";
-import { useState } from "react";
+import { FolderGit2, FolderOpen, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import {
+  listRecentProjects,
+  removeRecentProject,
+  type RecentProject,
+} from "../../lib/project";
 import { CloneRepoModal } from "./CloneRepoModal";
 import "./Welcome.css";
 
 type WelcomeProps = {
   onOpenFolder: () => Promise<unknown>;
+  onOpenRecent: (root: string) => Promise<unknown>;
   error?: string | null;
 };
 
-export function Welcome({ onOpenFolder, error }: WelcomeProps) {
+export function Welcome({ onOpenFolder, onOpenRecent, error }: WelcomeProps) {
   const [busy, setBusy] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [recent, setRecent] = useState<RecentProject[]>([]);
+
+  const reloadRecent = useCallback(async () => {
+    try {
+      const items = await listRecentProjects();
+      setRecent(items);
+    } catch {
+      setRecent([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadRecent();
+  }, [reloadRecent]);
 
   const handleOpenFolder = async () => {
     setBusy(true);
@@ -22,6 +42,28 @@ export function Welcome({ onOpenFolder, error }: WelcomeProps) {
       setLocalError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleOpenRecent = async (root: string) => {
+    setBusy(true);
+    setLocalError(null);
+    try {
+      await onOpenRecent(root);
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : String(e));
+      await reloadRecent();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRemoveRecent = async (root: string) => {
+    try {
+      await removeRecentProject(root);
+      await reloadRecent();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -80,7 +122,34 @@ export function Welcome({ onOpenFolder, error }: WelcomeProps) {
 
         <section className="welcome-section">
           <h2 className="welcome-section-title">Недавние</h2>
-          <div className="welcome-recent-empty">Пока нет недавних проектов</div>
+          {recent.length === 0 ? (
+            <div className="welcome-recent-empty">Пока нет недавних проектов</div>
+          ) : (
+            <ul className="welcome-recent-list">
+              {recent.map((item) => (
+                <li key={item.root} className="welcome-recent-item">
+                  <button
+                    type="button"
+                    className="welcome-recent-open"
+                    disabled={busy}
+                    onClick={() => void handleOpenRecent(item.root)}
+                  >
+                    <span className="welcome-recent-name">{item.name}</span>
+                    <span className="welcome-recent-path">{item.root}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="welcome-recent-remove"
+                    aria-label={`Убрать «${item.name}» из недавних`}
+                    disabled={busy}
+                    onClick={() => void handleRemoveRecent(item.root)}
+                  >
+                    <X size={14} aria-hidden />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       </div>
 

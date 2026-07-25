@@ -1,4 +1,4 @@
-use crate::domain::project_config::{OpenedProject, ProbeResult, TreeNode};
+use crate::domain::project_config::{OpenedProject, ProbeResult, RecentProject, TreeNode};
 use crate::services::{docs_fs, project_open};
 
 #[tauri::command]
@@ -29,6 +29,16 @@ pub fn get_saved_repo_root() -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn clear_project() -> Result<(), String> {
     project_open::clear_project().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_recent_projects() -> Result<Vec<RecentProject>, String> {
+    project_open::list_recent_projects().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn remove_recent_project(root: String) -> Result<(), String> {
+    project_open::remove_recent_project(&root).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -58,6 +58,13 @@ pub struct OpenedProject {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RecentProject {
+    pub root: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DocsCandidate {
     pub path: String,
     pub relative_path: String,

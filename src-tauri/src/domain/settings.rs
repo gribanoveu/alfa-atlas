@@ -52,10 +52,33 @@ impl Default for WindowState {
     }
 }
 
+pub const MAX_RECENT_PROJECTS: usize = 10;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProjectSettings {
     #[serde(default)]
     pub root: Option<String>,
+    /// MRU absolute paths (index 0 = most recent). Global `~/.docflow/settings.json` only.
+    #[serde(default)]
+    pub recent: Vec<String>,
+}
+
+impl ProjectSettings {
+    /// Move `root` to the front of the recent list (dedupe + cap).
+    pub fn push_recent(&mut self, root: &str) {
+        self.recent.retain(|path| path != root);
+        self.recent.insert(0, root.to_string());
+        self.recent.truncate(MAX_RECENT_PROJECTS);
+    }
+
+    /// If `recent` is empty but `root` is set, seed one entry (legacy settings).
+    pub fn seed_recent_from_root(&mut self) {
+        if self.recent.is_empty() {
+            if let Some(root) = self.root.clone() {
+                self.recent.push(root);
+            }
+        }
+    }
 }
 
 pub const DEFAULT_AUTOSAVE_DELAY_MS: u64 = 1000;
@@ -195,6 +218,7 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
         assert_eq!(settings.project.root, None);
+        assert!(settings.project.recent.is_empty());
         assert!(settings.general.restore_last_project);
         assert!(settings.general.autosave_enabled);
         assert!(settings.general.save_on_tab_switch);
@@ -202,6 +226,31 @@ mod tests {
             settings.general.autosave_delay_ms,
             DEFAULT_AUTOSAVE_DELAY_MS
         );
+    }
+
+    #[test]
+    fn push_recent_dedupes_and_caps() {
+        let mut project = ProjectSettings::default();
+        for i in 0..12 {
+            project.push_recent(&format!("/p/{i}"));
+        }
+        assert_eq!(project.recent.len(), MAX_RECENT_PROJECTS);
+        assert_eq!(project.recent[0], "/p/11");
+        project.push_recent("/p/5");
+        assert_eq!(project.recent[0], "/p/5");
+        assert_eq!(project.recent.iter().filter(|p| *p == "/p/5").count(), 1);
+    }
+
+    #[test]
+    fn seed_recent_from_root_when_empty() {
+        let mut project = ProjectSettings {
+            root: Some("/repo".into()),
+            recent: vec![],
+        };
+        project.seed_recent_from_root();
+        assert_eq!(project.recent, vec!["/repo".to_string()]);
+        project.seed_recent_from_root();
+        assert_eq!(project.recent, vec!["/repo".to_string()]);
     }
 
     #[test]

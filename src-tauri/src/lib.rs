@@ -93,6 +93,8 @@ pub fn run() {
             commands::project::get_project,
             commands::project::get_saved_repo_root,
             commands::project::clear_project,
+            commands::project::list_recent_projects,
+            commands::project::remove_recent_project,
             commands::project::get_git_branch,
             commands::project::list_docs_tree,
             commands::project::read_project_file,

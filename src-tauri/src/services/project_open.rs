@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::paths;
 use crate::domain::project_config::{
-    OpenedProject, ProbeResult, ProjectConfig, ProjectError,
+    OpenedProject, ProbeResult, ProjectConfig, ProjectError, RecentProject,
 };
 use crate::domain::settings::SettingsError;
 use crate::infra::{git_repo, project_store, settings_store};
@@ -182,9 +182,60 @@ pub fn get_git_branch(repo_root: &str) -> Option<String> {
     git_repo::current_branch(Path::new(repo_root))
 }
 
+/// List recent projects from global settings; drop missing paths and persist cleanup.
+pub fn list_recent_projects() -> Result<Vec<RecentProject>, ProjectError> {
+    let mut settings =
+        settings_store::load().map_err(|e| ProjectError::Message(e.to_string()))?;
+    settings.project.seed_recent_from_root();
+
+    let mut kept: Vec<String> = Vec::new();
+    let mut entries: Vec<RecentProject> = Vec::new();
+
+    for path in &settings.project.recent {
+        let p = Path::new(path);
+        if !p.is_dir() {
+            continue;
+        }
+        let canonical = match p.canonicalize() {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let root = canonical.to_string_lossy().into_owned();
+        if kept.iter().any(|existing| existing == &root) {
+            continue;
+        }
+        let name = canonical
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root.clone());
+        kept.push(root.clone());
+        entries.push(RecentProject { root, name });
+    }
+
+    if kept != settings.project.recent {
+        settings.project.recent = kept;
+        settings_store::save(&settings).map_err(|e| ProjectError::Message(e.to_string()))?;
+    }
+
+    Ok(entries)
+}
+
+pub fn remove_recent_project(root: &str) -> Result<(), ProjectError> {
+    let mut settings =
+        settings_store::load().map_err(|e| ProjectError::Message(e.to_string()))?;
+    settings.project.recent.retain(|path| path != root);
+    if let Ok(canonical) = Path::new(root).canonicalize() {
+        let canonical = canonical.to_string_lossy().into_owned();
+        settings.project.recent.retain(|path| path != &canonical);
+    }
+    settings_store::save(&settings).map_err(|e| ProjectError::Message(e.to_string()))?;
+    Ok(())
+}
+
 fn set_global_root(root: &str) -> Result<(), SettingsError> {
     let mut settings = settings_store::load().unwrap_or_default();
     settings.project.root = Some(root.to_string());
+    settings.project.push_recent(root);
     settings_store::save(&settings)
 }
 

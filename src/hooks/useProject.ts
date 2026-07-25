@@ -133,6 +133,7 @@ export function useProject() {
     error,
     pendingOpen,
     openFolderDialog,
+    beginOpenPath,
     confirmPendingOpen,
     cancelPendingOpen,
     closeProject,

@@ -27,6 +27,11 @@ export type TreeNode = {
   children?: TreeNode[];
 };
 
+export type RecentProject = {
+  root: string;
+  name: string;
+};
+
 export function probeOpenPath(path: string): Promise<ProbeResult> {
   return invoke<ProbeResult>("probe_open_path", { path });
 }
@@ -52,6 +57,14 @@ export function getSavedRepoRoot(): Promise<string | null> {
 
 export function clearProject(): Promise<void> {
   return invoke<void>("clear_project");
+}
+
+export function listRecentProjects(): Promise<RecentProject[]> {
+  return invoke<RecentProject[]>("list_recent_projects");
+}
+
+export function removeRecentProject(root: string): Promise<void> {
+  return invoke<void>("remove_recent_project", { root });
 }
 
 export function getGitBranch(root: string): Promise<string | null> {

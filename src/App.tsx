@@ -141,6 +141,19 @@ function App() {
     }
   }, [project]);
 
+  const openRecent = useCallback(
+    async (root: string) => {
+      setFolderError(null);
+      try {
+        await project.beginOpenPath(root);
+      } catch (e) {
+        setFolderError(e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+    [project],
+  );
+
   const closeProject = useCallback(async () => {
     await editor.reset();
     await project.closeProject();
@@ -230,6 +243,7 @@ function App() {
           ) : (
             <Welcome
               onOpenFolder={openFolder}
+              onOpenRecent={openRecent}
               error={project.ready ? (folderError ?? project.error) : null}
             />
           )}
