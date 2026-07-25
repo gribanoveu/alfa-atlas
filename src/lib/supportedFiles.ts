@@ -30,6 +30,19 @@ export const SUPPORTED_FORMAT_LABELS = [
   "Mermaid (.mmd, .mermaid)",
 ] as const;
 
+/** Primary extensions offered when creating a new file (IDEA-style picker). */
+export const NEW_FILE_EXTENSION_OPTIONS = [
+  { ext: ".adoc", label: "AsciiDoc" },
+  { ext: ".json", label: "JSON" },
+  { ext: ".md", label: "Markdown" },
+  { ext: ".txt", label: "Plain text" },
+  { ext: ".puml", label: "PlantUML" },
+  { ext: ".yaml", label: "YAML" },
+  { ext: ".mmd", label: "Mermaid" },
+] as const;
+
+export const DEFAULT_NEW_FILE_EXTENSION = ".adoc" as const;
+
 function extensionOf(path: string): string {
   const base = path.split(/[/\\]/).pop() ?? path;
   const dot = base.lastIndexOf(".");

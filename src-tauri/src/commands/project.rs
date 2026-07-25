@@ -54,3 +54,13 @@ pub fn write_project_file(
 ) -> Result<(), String> {
     docs_fs::write_project_file(&docs_root, &relative_path, &content).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn create_project_file(docs_root: String, relative_path: String) -> Result<(), String> {
+    docs_fs::create_project_file(&docs_root, &relative_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_project_dir(docs_root: String, relative_path: String) -> Result<(), String> {
+    docs_fs::create_project_dir(&docs_root, &relative_path).map_err(|e| e.to_string())
+}

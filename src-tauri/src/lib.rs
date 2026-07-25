@@ -97,6 +97,8 @@ pub fn run() {
             commands::project::list_docs_tree,
             commands::project::read_project_file,
             commands::project::write_project_file,
+            commands::project::create_project_file,
+            commands::project::create_project_dir,
             commands::layout::get_project_layout,
             commands::layout::save_project_layout,
             commands::prefs::get_general_prefs,

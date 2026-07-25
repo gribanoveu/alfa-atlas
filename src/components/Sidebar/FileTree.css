@@ -24,6 +24,8 @@
   text-align: left;
   cursor: default;
   border-radius: 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .file-tree-row:hover {
@@ -78,4 +80,31 @@
   padding: 6px 8px 6px 34px;
   font-size: 11px;
   color: var(--text-2);
+}
+
+.file-tree-context-menu {
+  position: fixed;
+  z-index: 1200;
+  min-width: 180px;
+  padding: 4px 0;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.file-tree-context-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  color: var(--text-0);
+  font-size: 12px;
+  white-space: nowrap;
+  background: transparent;
+  border: none;
+}
+
+.file-tree-context-item:hover {
+  background: var(--accent-dim);
 }

@@ -5,6 +5,12 @@ import "./monacoSetup";
 import "./styles/tokens.css";
 import "./styles/app.css";
 
+// Suppress WebView system menu (Reload / Inspect Element) on empty areas.
+// App-specific menus still call preventDefault on their own targets.
+document.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+});
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />

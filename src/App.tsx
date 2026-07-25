@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { RightDock } from "./components/RightDock/RightDock";
+import { NewFileModal } from "./components/Sidebar/NewFileModal";
+import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
 import { TopBar } from "./components/TopBar/TopBar";
@@ -12,7 +14,13 @@ import { useEditorTabs } from "./hooks/useEditorTabs";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
+import { createProjectDir, createProjectFile } from "./lib/project";
 import { formatLabelFor, lineEndingLabelFor } from "./lib/supportedFiles";
+
+function joinParent(parentPath: string, name: string): string {
+  if (!parentPath || parentPath === ".") return name;
+  return `${parentPath.replace(/[/\\]+$/, "")}/${name}`;
+}
 
 function App() {
   const layout = useWorkspaceLayout();
@@ -21,6 +29,8 @@ function App() {
   const tree = useDocsTree(project.docsRoot);
   const editor = useEditorTabs(project.docsRoot);
   const [folderError, setFolderError] = useState<string | null>(null);
+  const [newFileParent, setNewFileParent] = useState<string | null>(null);
+  const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
 
   const mainClassName = [
     "main",
@@ -114,6 +124,8 @@ function App() {
             treeError={tree.error}
             activePath={editor.activeTab?.path ?? null}
             onOpenFile={(path) => void editor.openFile(path)}
+            onNewFile={setNewFileParent}
+            onNewFolder={setNewFolderParent}
             onResize={panels.resizeSidebarBy}
             onResizeEnd={panels.persistLayout}
           />
@@ -165,6 +177,33 @@ function App() {
           onCancel={project.cancelPendingOpen}
           onConfirm={async (docsRoot) => {
             await project.confirmPendingOpen(docsRoot);
+          }}
+        />
+      ) : null}
+
+      {newFileParent !== null && project.docsRoot ? (
+        <NewFileModal
+          parentPath={newFileParent}
+          onCancel={() => setNewFileParent(null)}
+          onConfirm={async (fileName) => {
+            const relativePath = joinParent(newFileParent, fileName);
+            await createProjectFile(project.docsRoot!, relativePath);
+            setNewFileParent(null);
+            await tree.refresh();
+            await editor.openFile(relativePath);
+          }}
+        />
+      ) : null}
+
+      {newFolderParent !== null && project.docsRoot ? (
+        <NewFolderModal
+          parentPath={newFolderParent}
+          onCancel={() => setNewFolderParent(null)}
+          onConfirm={async (folderName) => {
+            const relativePath = joinParent(newFolderParent, folderName);
+            await createProjectDir(project.docsRoot!, relativePath);
+            setNewFolderParent(null);
+            await tree.refresh();
           }}
         />
       ) : null}

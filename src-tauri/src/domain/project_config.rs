@@ -41,6 +41,10 @@ pub enum ProjectError {
     UnsupportedFile(String),
     #[error("file not found: {0}")]
     NotFound(String),
+    #[error("already exists: {0}")]
+    AlreadyExists(String),
+    #[error("invalid name: {0}")]
+    InvalidName(String),
     #[error("{0}")]
     Message(String),
 }

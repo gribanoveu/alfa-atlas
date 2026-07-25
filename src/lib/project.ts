@@ -80,3 +80,17 @@ export function writeProjectFile(
     content,
   });
 }
+
+export function createProjectFile(
+  docsRoot: string,
+  relativePath: string,
+): Promise<void> {
+  return invoke<void>("create_project_file", { docsRoot, relativePath });
+}
+
+export function createProjectDir(
+  docsRoot: string,
+  relativePath: string,
+): Promise<void> {
+  return invoke<void>("create_project_dir", { docsRoot, relativePath });
+}

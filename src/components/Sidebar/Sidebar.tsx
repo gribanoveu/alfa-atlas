@@ -13,6 +13,8 @@ type SidebarProps = {
   treeError: string | null;
   activePath: string | null;
   onOpenFile: (path: string) => void;
+  onNewFile: (parentPath: string) => void;
+  onNewFolder: (parentPath: string) => void;
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
 };
@@ -30,6 +32,8 @@ export function Sidebar({
   treeError,
   activePath,
   onOpenFile,
+  onNewFile,
+  onNewFolder,
   onResize,
   onResizeEnd,
 }: SidebarProps) {
@@ -78,6 +82,8 @@ export function Sidebar({
               rootPath={docsRoot}
               activePath={activePath}
               onOpenFile={onOpenFile}
+              onNewFile={onNewFile}
+              onNewFolder={onNewFolder}
             />
           )
         ) : (
