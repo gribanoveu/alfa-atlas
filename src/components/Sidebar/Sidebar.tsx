@@ -7,7 +7,6 @@ import "./Sidebar.css";
 type SidebarProps = {
   open: boolean;
   onToggle: () => void;
-  projectName: string | null;
   docsRoot: string | null;
   tree: TreeNode[];
   treeLoading: boolean;
@@ -18,10 +17,13 @@ type SidebarProps = {
   onResizeEnd?: () => void;
 };
 
+function rootNameOf(docsRoot: string): string {
+  return docsRoot.split(/[/\\]/).filter(Boolean).pop() ?? "Документация";
+}
+
 export function Sidebar({
   open,
   onToggle,
-  projectName,
   docsRoot,
   tree,
   treeLoading,
@@ -65,25 +67,19 @@ export function Sidebar({
       </div>
       <div className="sidebar-body">
         {docsRoot ? (
-          <>
-            <div className="sidebar-meta">
-              <div className="sidebar-meta-name">{projectName}</div>
-              <div className="sidebar-project-path" title={docsRoot}>
-                {docsRoot}
-              </div>
-            </div>
-            {treeLoading ? (
-              <div className="panel-empty">Загрузка…</div>
-            ) : treeError ? (
-              <div className="panel-empty">{treeError}</div>
-            ) : (
-              <FileTree
-                nodes={tree}
-                activePath={activePath}
-                onOpenFile={onOpenFile}
-              />
-            )}
-          </>
+          treeLoading ? (
+            <div className="panel-empty">Загрузка…</div>
+          ) : treeError ? (
+            <div className="panel-empty">{treeError}</div>
+          ) : (
+            <FileTree
+              nodes={tree}
+              rootName={rootNameOf(docsRoot)}
+              rootPath={docsRoot}
+              activePath={activePath}
+              onOpenFile={onOpenFile}
+            />
+          )
         ) : (
           <div className="panel-empty">Нет открытого репозитория</div>
         )}

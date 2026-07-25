@@ -1,9 +1,12 @@
+import { FileText, Folder, FolderOpen } from "lucide-react";
 import { useState } from "react";
 import type { TreeNode } from "../../lib/project";
 import "./FileTree.css";
 
 type FileTreeProps = {
   nodes: TreeNode[];
+  rootName: string;
+  rootPath: string;
   activePath: string | null;
   onOpenFile: (path: string) => void;
 };
@@ -21,7 +24,7 @@ function FileTreeNode({
   activePath,
   onOpenFile,
 }: FileTreeNodeProps) {
-  const [expanded, setExpanded] = useState(depth < 2);
+  const [expanded, setExpanded] = useState(depth < 3);
 
   if (node.isDir) {
     return (
@@ -29,10 +32,15 @@ function FileTreeNode({
         <button
           type="button"
           className="file-tree-row dir"
-          style={{ paddingLeft: 8 + depth * 12 }}
+          style={{ paddingLeft: 4 + depth * 14 }}
           onClick={() => setExpanded((v) => !v)}
         >
           <span className="file-tree-twist">{expanded ? "▾" : "▸"}</span>
+          {expanded ? (
+            <FolderOpen className="file-tree-icon folder" size={14} aria-hidden />
+          ) : (
+            <Folder className="file-tree-icon folder" size={14} aria-hidden />
+          )}
           <span className="file-tree-name">{node.name}</span>
         </button>
         {expanded && node.children
@@ -55,31 +63,50 @@ function FileTreeNode({
     <button
       type="button"
       className={`file-tree-row file${active ? " active" : ""}`}
-      style={{ paddingLeft: 8 + depth * 12 + 14 }}
+      style={{ paddingLeft: 4 + depth * 14 + 14 }}
       onClick={() => onOpenFile(node.path)}
       title={node.path}
     >
+      <span className="file-tree-twist" />
+      <FileText className="file-tree-icon file" size={14} aria-hidden />
       <span className="file-tree-name">{node.name}</span>
     </button>
   );
 }
 
-export function FileTree({ nodes, activePath, onOpenFile }: FileTreeProps) {
-  if (nodes.length === 0) {
-    return <div className="panel-empty">Нет поддерживаемых файлов</div>;
-  }
-
+export function FileTree({
+  nodes,
+  rootName,
+  rootPath,
+  activePath,
+  onOpenFile,
+}: FileTreeProps) {
   return (
     <div className="file-tree">
-      {nodes.map((node) => (
-        <FileTreeNode
-          key={node.path}
-          node={node}
-          depth={0}
-          activePath={activePath}
-          onOpenFile={onOpenFile}
-        />
-      ))}
+      <div className="file-tree-branch">
+        <div
+          className="file-tree-row dir root"
+          style={{ paddingLeft: 4 }}
+          title={rootPath}
+        >
+          <span className="file-tree-twist">▾</span>
+          <FolderOpen className="file-tree-icon folder" size={14} aria-hidden />
+          <span className="file-tree-name">{rootName}</span>
+        </div>
+        {nodes.length === 0 ? (
+          <div className="file-tree-empty">Нет поддерживаемых файлов</div>
+        ) : (
+          nodes.map((node) => (
+            <FileTreeNode
+              key={node.path}
+              node={node}
+              depth={1}
+              activePath={activePath}
+              onOpenFile={onOpenFile}
+            />
+          ))
+        )}
+      </div>
     </div>
   );
 }

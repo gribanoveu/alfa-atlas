@@ -103,7 +103,6 @@ function App() {
           <Sidebar
             open={layout.sidebarOpen}
             onToggle={layout.toggleSidebar}
-            projectName={project.projectName}
             docsRoot={project.docsRoot}
             tree={tree.nodes}
             treeLoading={tree.loading}
