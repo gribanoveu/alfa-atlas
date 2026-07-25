@@ -30,8 +30,9 @@ cd src-tauri && cargo check
 
 ## Что умеет сейчас (кратко)
 
-- IDE-оболочка: top bar, боковые и нижняя панели, status bar, Monaco-редактор
+- IDE-оболочка: top bar с меню, боковые и нижняя панели, status bar, Monaco-редактор
 - Welcome без проекта: открыть папку (рабочее), клонировать (UI-заглушка)
+- Справка: версия и ссылки из [`app.config.json`](./app.config.json)
 - Сохранение окна в `~/.docflow/settings.json`
 - Размеры панелей на проект в `{project}/.docflow/layout.json`
 

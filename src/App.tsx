@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { RightDock } from "./components/RightDock/RightDock";
@@ -13,6 +14,7 @@ function App() {
   const layout = useWorkspaceLayout();
   const project = useProject();
   const panels = usePanelLayout(project.projectRoot);
+  const [folderError, setFolderError] = useState<string | null>(null);
 
   const mainClassName = [
     "main",
@@ -33,11 +35,40 @@ function App() {
     ["--bottom-height" as string]: `${panels.layout.bottomHeight}px`,
   };
 
+  const openFolder = useCallback(async () => {
+    setFolderError(null);
+    try {
+      await project.openFolderDialog();
+    } catch (e) {
+      setFolderError(e instanceof Error ? e.message : String(e));
+    }
+  }, [project]);
+
+  const toggleRightPanel = useCallback(() => {
+    if (layout.activeTool) {
+      layout.setRightTool(null);
+    } else {
+      layout.setRightTool("assistant");
+    }
+  }, [layout]);
+
+  const toggleBottomPanel = useCallback(() => {
+    if (layout.bottomTool) {
+      layout.setBottomToolId(null);
+    } else {
+      layout.setBottomToolId("suggestions");
+    }
+  }, [layout]);
+
   return (
     <div className="app" style={panelStyle}>
       <TopBar
         repoName={project.projectName ?? "—"}
         branchName="—"
+        onOpenFolder={openFolder}
+        onToggleSidebar={layout.toggleSidebar}
+        onToggleRight={toggleRightPanel}
+        onToggleBottom={toggleBottomPanel}
       />
       <div className="workspace">
         <div className={mainClassName}>
@@ -61,8 +92,8 @@ function App() {
             />
           ) : (
             <Welcome
-              onOpenFolder={project.openFolderDialog}
-              error={project.ready ? project.error : null}
+              onOpenFolder={openFolder}
+              error={project.ready ? (folderError ?? project.error) : null}
             />
           )}
           <RightDock
