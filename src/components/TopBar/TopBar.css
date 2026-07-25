@@ -8,23 +8,6 @@
   -webkit-app-region: drag;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 700;
-  font-size: 12px;
-  color: var(--text-0);
-  letter-spacing: 0.2px;
-}
-
-.brand .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  background: linear-gradient(135deg, var(--accent), var(--ai-glow));
-}
-
 .menu {
   display: flex;
   gap: 2px;

@@ -69,10 +69,6 @@ export function TopBar({
   return (
     <>
       <header className="topbar">
-        <div className="brand">
-          <span className="dot" />
-          docflow
-        </div>
         <MenuBar onAction={onAction} />
         <div className="topbar-spacer" />
         <div className="topbar-right">
