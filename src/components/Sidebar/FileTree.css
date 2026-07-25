@@ -118,6 +118,26 @@
   min-height: 0;
   overflow: auto;
   padding: 2px 0 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.file-tree-external::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.file-tree-external::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.file-tree-external::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.file-tree-external::-webkit-scrollbar-thumb:hover {
+  background: var(--text-2);
 }
 
 .file-tree-row.external-root {

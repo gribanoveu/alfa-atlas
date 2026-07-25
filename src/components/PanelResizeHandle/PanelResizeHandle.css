@@ -22,18 +22,8 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: transparent;
+  background: var(--border);
   transition: background 0.12s ease;
-}
-
-.panel-resize-handle.horizontal::after {
-  left: 1px;
-  right: 1px;
-}
-
-.panel-resize-handle.vertical::after {
-  top: 1px;
-  bottom: 1px;
 }
 
 .panel-resize-handle:hover::after,

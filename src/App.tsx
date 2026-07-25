@@ -35,7 +35,11 @@ function App() {
   const layout = useWorkspaceLayout();
   const project = useProject();
   const generalPrefs = useGeneralPrefs();
-  const panels = usePanelLayout(project.repoRoot);
+  const panels = usePanelLayout(project.repoRoot, {
+    onCollapseSidebar: () => layout.setSidebarOpen(false),
+    onCollapseRight: () => layout.setRightTool(null),
+    onCollapseBottom: () => layout.setBottomToolId(null),
+  });
   const tree = useDocsTree(project.docsRoot);
   const session = useWorkspaceSession(project.repoRoot, project.docsRoot);
 

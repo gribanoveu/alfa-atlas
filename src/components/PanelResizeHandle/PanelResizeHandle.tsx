@@ -1,4 +1,10 @@
-import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import "./PanelResizeHandle.css";
 
 type PanelResizeHandleProps = {
@@ -12,6 +18,11 @@ type PanelResizeHandleProps = {
   ariaLabel: string;
 };
 
+function clearBodyDragStyles() {
+  document.body.style.userSelect = "";
+  document.body.style.cursor = "";
+}
+
 export function PanelResizeHandle({
   direction,
   onResize,
@@ -22,47 +33,73 @@ export function PanelResizeHandle({
 }: PanelResizeHandleProps) {
   const [active, setActive] = useState(false);
   const lastPos = useRef(0);
+  const activeRef = useRef(false);
+  const onResizeRef = useRef(onResize);
+  const onResizeEndRef = useRef(onResizeEnd);
+  const invertRef = useRef(invert);
+  const directionRef = useRef(direction);
+
+  onResizeRef.current = onResize;
+  onResizeEndRef.current = onResizeEnd;
+  invertRef.current = invert;
+  directionRef.current = direction;
+  activeRef.current = active;
+
+  const finishDrag = useCallback(() => {
+    if (!activeRef.current) return;
+    activeRef.current = false;
+    setActive(false);
+    clearBodyDragStyles();
+    onResizeEndRef.current?.();
+  }, []);
+
+  useEffect(() => {
+    if (!active) return;
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!activeRef.current) return;
+      const pos =
+        directionRef.current === "horizontal" ? event.clientX : event.clientY;
+      const raw = pos - lastPos.current;
+      lastPos.current = pos;
+      if (raw === 0) return;
+      onResizeRef.current(invertRef.current ? -raw : raw);
+    };
+
+    const onPointerUp = () => {
+      finishDrag();
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      // Panel may unmount mid-drag (drag-to-collapse) — clear cursor/styles.
+      if (activeRef.current) {
+        finishDrag();
+      } else {
+        clearBodyDragStyles();
+      }
+    };
+  }, [active, finishDrag]);
 
   const onPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (disabled) return;
       event.preventDefault();
-      const target = event.currentTarget;
-      target.setPointerCapture(event.pointerId);
       lastPos.current =
         direction === "horizontal" ? event.clientX : event.clientY;
+      activeRef.current = true;
       setActive(true);
       document.body.style.userSelect = "none";
       document.body.style.cursor =
         direction === "horizontal" ? "col-resize" : "row-resize";
     },
     [direction, disabled],
-  );
-
-  const onPointerMove = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (!active) return;
-      const pos = direction === "horizontal" ? event.clientX : event.clientY;
-      const raw = pos - lastPos.current;
-      lastPos.current = pos;
-      if (raw === 0) return;
-      onResize(invert ? -raw : raw);
-    },
-    [active, direction, invert, onResize],
-  );
-
-  const endDrag = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (!active) return;
-      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }
-      setActive(false);
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-      onResizeEnd?.();
-    },
-    [active, onResizeEnd],
   );
 
   if (disabled) return null;
@@ -74,9 +111,6 @@ export function PanelResizeHandle({
       aria-orientation={direction === "horizontal" ? "vertical" : "horizontal"}
       aria-label={ariaLabel}
       onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
     />
   );
 }

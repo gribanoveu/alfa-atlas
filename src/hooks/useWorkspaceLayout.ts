@@ -71,6 +71,10 @@ export function useWorkspaceLayout() {
     setSidebarOpen((open) => !open);
   }, []);
 
+  const setSidebarOpenState = useCallback((open: boolean) => {
+    setSidebarOpen(open);
+  }, []);
+
   const setRightTool = useCallback((tool: RightTool | null) => {
     setActiveTool(tool);
   }, []);
@@ -90,6 +94,7 @@ export function useWorkspaceLayout() {
   return {
     sidebarOpen,
     toggleSidebar,
+    setSidebarOpen: setSidebarOpenState,
     activeTool,
     setRightTool,
     toggleRightTool,
