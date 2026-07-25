@@ -12,13 +12,23 @@
   background: var(--bg-0);
   border-bottom: 1px solid var(--border);
   height: 34px;
+  flex: none;
   overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
+}
+
+.tabs::-webkit-scrollbar {
+  display: none; /* Chromium / WebKit (Tauri) */
 }
 
 .tab {
   display: flex;
   align-items: center;
   gap: 7px;
+  height: 100%;
+  flex: none;
   padding: 0 12px;
   border-right: 1px solid var(--border);
   font-size: 12px;
