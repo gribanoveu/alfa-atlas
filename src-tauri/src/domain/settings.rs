@@ -58,11 +58,27 @@ pub struct ProjectSettings {
     pub root: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneralPrefs {
+    pub restore_last_project: bool,
+}
+
+impl Default for GeneralPrefs {
+    fn default() -> Self {
+        Self {
+            restore_last_project: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AppSettings {
     pub window: WindowState,
     #[serde(default)]
     pub project: ProjectSettings,
+    #[serde(default)]
+    pub general: GeneralPrefs,
 }
 
 #[derive(Debug, Error)]
@@ -146,5 +162,6 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
         assert_eq!(settings.project.root, None);
+        assert!(settings.general.restore_last_project);
     }
 }

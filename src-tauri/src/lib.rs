@@ -92,6 +92,9 @@ pub fn run() {
             commands::project::clear_project_root,
             commands::layout::get_project_layout,
             commands::layout::save_project_layout,
+            commands::prefs::get_general_prefs,
+            commands::prefs::set_general_prefs,
+            commands::prefs::get_settings_paths,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

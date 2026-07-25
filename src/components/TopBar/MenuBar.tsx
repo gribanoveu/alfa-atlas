@@ -88,7 +88,12 @@ const MENUS: MenuDef[] = [
     id: "tools",
     label: "Инструменты",
     items: [
-      { type: "item", id: "settings", label: "Настройки…", disabled: true },
+      {
+        type: "item",
+        id: "settings",
+        label: "Настройки…",
+        action: "tools.settings",
+      },
     ],
   },
   {

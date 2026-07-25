@@ -65,7 +65,9 @@ function App() {
       <TopBar
         repoName={project.projectName ?? "—"}
         branchName="—"
+        projectRoot={project.projectRoot}
         onOpenFolder={openFolder}
+        onCloseProject={project.closeProject}
         onToggleSidebar={layout.toggleSidebar}
         onToggleRight={toggleRightPanel}
         onToggleBottom={toggleBottomPanel}

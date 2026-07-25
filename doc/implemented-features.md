@@ -52,10 +52,21 @@
 | **Файл** | Открыть папку… · Клонировать репозиторий… · Выход |
 | **Правка** | Пункты есть, пока disabled |
 | **Вид** | Переключение левой / правой / нижней панелей |
-| **Навигация / Git / Инструменты** | Пункты-заглушки (disabled) |
+| **Инструменты** | Настройки… — модальное окно |
+| **Навигация / Git** | Пункты-заглушки (disabled) |
 | **Справка** | О программе (модалка + версия) · Документация · Оставить отзыв · Проверить обновления — URL из конфига через `opener` |
 
 Источник данных Справки — [`app.config.json`](../app.config.json) в корне репозитория (`version`, `documentationUrl`, `feedbackUrl`, `updatesUrl`), импорт: [`src/lib/appConfig.ts`](../src/lib/appConfig.ts).
+
+### Настройки (`Инструменты → Настройки…`)
+
+Модальный диалог с разделами Общие / Редактор / Пути:
+
+- **Общие:** чекбокс «Открывать последний проект при запуске» (`general.restoreLastProject` в `~/.docflow/settings.json`); кнопка «Закрыть проект».
+- **Редактор:** placeholder + список поддерживаемых форматов.
+- **Пути:** `~/.docflow`, путь проекта, `{project}/.docflow`; кнопка открыть папку настроек пользователя.
+
+Если `restoreLastProject = false`, при старте Welcome показывается даже при сохранённом `project.root`.
 
 ---
 
@@ -94,7 +105,8 @@
 | Backend | [`commands/project.rs`](../src-tauri/src/commands/project.rs), [`services/project_settings.rs`](../src-tauri/src/services/project_settings.rs) |
 
 При старте приложения путь проверяется: если каталога нет — корень сбрасывается, показывается Welcome.  
-`closeProject` в хуке есть, в UI кнопки «закрыть проект» пока нет.
+При `general.restoreLastProject = false` сохранённый путь не подставляется в UI (файл не очищается).  
+Закрытие проекта — из Настроек → Общие.
 
 Capability: `dialog:default` в [`capabilities/default.json`](../src-tauri/capabilities/default.json).
 
@@ -141,8 +153,7 @@ Capability: `dialog:default` в [`capabilities/default.json`](../src-tauri/capab
 - AI-ассистента, AsciiDoc-библиотеки, подсказок / форматирования с данными;
 - preview / split;
 - полноценной Правки / Навигации / Git из меню (пункты disabled);
-- списка недавних проектов;
-- закрытия проекта из UI.
+- списка недавних проектов.
 
 ---
 
@@ -171,7 +182,7 @@ Rust:      commands → services → domain
 | Файл | Назначение |
 |------|------------|
 | `app.config.json` (корень репо) | Версия приложения и URL для меню Справка |
-| `~/.docflow/settings.json` | Размер/позиция/maximize окна; `project.root` |
+| `~/.docflow/settings.json` | Размер/позиция/maximize окна; `project.root`; `general.restoreLastProject` |
 | `{project}/.docflow/layout.json` | Ширины/высота панелей для этого проекта |
 
 ---

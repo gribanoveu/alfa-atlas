@@ -6,6 +6,7 @@ export type MenuActionId =
   | "view.toggleSidebar"
   | "view.toggleRight"
   | "view.toggleBottom"
+  | "tools.settings"
   | "help.about"
   | "help.docs"
   | "help.feedback"

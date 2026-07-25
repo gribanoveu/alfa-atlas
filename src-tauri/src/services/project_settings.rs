@@ -7,6 +7,10 @@ use crate::infra::settings_store;
 /// Clears a stale path from settings when the directory is gone.
 pub fn load_project_root() -> Result<Option<String>, SettingsError> {
     let mut settings = settings_store::load()?;
+    if !settings.general.restore_last_project {
+        return Ok(None);
+    }
+
     let Some(root) = settings.project.root.clone() else {
         return Ok(None);
     };

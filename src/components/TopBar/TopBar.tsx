@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
+import { SettingsDialog } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
 import { AboutModal } from "./AboutModal";
 import { MenuBar } from "./MenuBar";
@@ -11,7 +12,9 @@ import "./TopBar.css";
 type TopBarProps = {
   repoName?: string;
   branchName?: string;
+  projectRoot: string | null;
   onOpenFolder: () => Promise<unknown>;
+  onCloseProject: () => Promise<void>;
   onToggleSidebar: () => void;
   onToggleRight: () => void;
   onToggleBottom: () => void;
@@ -20,13 +23,16 @@ type TopBarProps = {
 export function TopBar({
   repoName = "—",
   branchName = "—",
+  projectRoot,
   onOpenFolder,
+  onCloseProject,
   onToggleSidebar,
   onToggleRight,
   onToggleBottom,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const onAction = useCallback(
     (action: MenuActionId) => {
@@ -48,6 +54,9 @@ export function TopBar({
           break;
         case "view.toggleBottom":
           onToggleBottom();
+          break;
+        case "tools.settings":
+          setSettingsOpen(true);
           break;
         case "help.about":
           setAboutOpen(true);
@@ -84,6 +93,13 @@ export function TopBar({
 
       {aboutOpen ? <AboutModal onClose={() => setAboutOpen(false)} /> : null}
       {cloneOpen ? <CloneRepoModal onClose={() => setCloneOpen(false)} /> : null}
+      {settingsOpen ? (
+        <SettingsDialog
+          projectRoot={projectRoot}
+          onClose={() => setSettingsOpen(false)}
+          onCloseProject={onCloseProject}
+        />
+      ) : null}
     </>
   );
 }
