@@ -97,6 +97,16 @@ export function usePanelLayout(projectRoot: string | null) {
     [applyLayout],
   );
 
+  const resizeExternalBy = useCallback(
+    (delta: number) => {
+      applyLayout({
+        ...layoutRef.current,
+        externalHeight: layoutRef.current.externalHeight + delta,
+      });
+    },
+    [applyLayout],
+  );
+
   const persistLayout = useCallback(() => {
     schedulePersist(layoutRef.current);
   }, [schedulePersist]);
@@ -106,6 +116,7 @@ export function usePanelLayout(projectRoot: string | null) {
     resizeSidebarBy,
     resizeRightBy,
     resizeBottomBy,
+    resizeExternalBy,
     persistLayout,
   };
 }

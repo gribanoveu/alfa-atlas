@@ -5,6 +5,7 @@ export type GeneralPrefs = {
   autosaveEnabled: boolean;
   saveOnTabSwitch: boolean;
   autosaveDelayMs: number;
+  separateExternalFolder: boolean;
 };
 
 export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
@@ -12,6 +13,7 @@ export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
   autosaveEnabled: true,
   saveOnTabSwitch: true,
   autosaveDelayMs: 1000,
+  separateExternalFolder: true,
 };
 
 export const AUTOSAVE_DELAY_LIMITS = { min: 300, max: 10_000 } as const;

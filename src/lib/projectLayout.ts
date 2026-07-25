@@ -4,18 +4,21 @@ export type PanelLayout = {
   sidebarWidth: number;
   rightWidth: number;
   bottomHeight: number;
+  externalHeight: number;
 };
 
 export const DEFAULT_PANEL_LAYOUT: PanelLayout = {
   sidebarWidth: 220,
   rightWidth: 340,
   bottomHeight: 220,
+  externalHeight: 160,
 };
 
 export const PANEL_LAYOUT_LIMITS = {
   sidebarWidth: { min: 160, max: 480 },
   rightWidth: { min: 200, max: 560 },
   bottomHeight: { min: 120, max: 480 },
+  externalHeight: { min: 80, max: 400 },
 } as const;
 
 export function clampPanelLayout(layout: PanelLayout): PanelLayout {
@@ -38,11 +41,22 @@ export function clampPanelLayout(layout: PanelLayout): PanelLayout {
       PANEL_LAYOUT_LIMITS.bottomHeight.min,
       PANEL_LAYOUT_LIMITS.bottomHeight.max,
     ),
+    externalHeight: clamp(
+      layout.externalHeight ?? DEFAULT_PANEL_LAYOUT.externalHeight,
+      PANEL_LAYOUT_LIMITS.externalHeight.min,
+      PANEL_LAYOUT_LIMITS.externalHeight.max,
+    ),
   };
 }
 
 export function getProjectLayout(projectRoot: string): Promise<PanelLayout> {
-  return invoke<PanelLayout>("get_project_layout", { projectRoot });
+  return invoke<PanelLayout>("get_project_layout", { projectRoot }).then(
+    (layout) =>
+      clampPanelLayout({
+        ...DEFAULT_PANEL_LAYOUT,
+        ...layout,
+      }),
+  );
 }
 
 export function saveProjectLayout(

@@ -104,6 +104,8 @@ pub struct GeneralPrefs {
     pub save_on_tab_switch: bool,
     #[serde(default = "default_autosave_delay_ms")]
     pub autosave_delay_ms: u64,
+    #[serde(default = "default_true")]
+    pub separate_external_folder: bool,
 }
 
 impl GeneralPrefs {
@@ -124,6 +126,7 @@ impl Default for GeneralPrefs {
             autosave_enabled: true,
             save_on_tab_switch: true,
             autosave_delay_ms: DEFAULT_AUTOSAVE_DELAY_MS,
+            separate_external_folder: true,
         }
     }
 }
@@ -261,6 +264,7 @@ mod tests {
         assert!(prefs.autosave_enabled);
         assert!(prefs.save_on_tab_switch);
         assert_eq!(prefs.autosave_delay_ms, DEFAULT_AUTOSAVE_DELAY_MS);
+        assert!(prefs.separate_external_folder);
     }
 
     #[test]

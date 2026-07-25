@@ -13,12 +13,15 @@ type SidebarProps = {
   treeError: string | null;
   activePath: string | null;
   expandedDirs: ReadonlySet<string>;
+  separateExternal?: boolean;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
+  onResizeExternal?: (delta: number) => void;
+  onResizeExternalEnd?: () => void;
 };
 
 function rootNameOf(docsRoot: string): string {
@@ -34,12 +37,15 @@ export function Sidebar({
   treeError,
   activePath,
   expandedDirs,
+  separateExternal = true,
   onToggleDir,
   onOpenFile,
   onNewFile,
   onNewFolder,
   onResize,
   onResizeEnd,
+  onResizeExternal,
+  onResizeExternalEnd,
 }: SidebarProps) {
   if (!open) {
     return (
@@ -86,10 +92,13 @@ export function Sidebar({
               rootPath={docsRoot}
               activePath={activePath}
               expandedDirs={expandedDirs}
+              separateExternal={separateExternal}
               onToggleDir={onToggleDir}
               onOpenFile={onOpenFile}
               onNewFile={onNewFile}
               onNewFolder={onNewFolder}
+              onResizeExternal={onResizeExternal}
+              onResizeExternalEnd={onResizeExternalEnd}
             />
           )
         ) : (

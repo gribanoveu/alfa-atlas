@@ -265,6 +265,26 @@ export function SettingsDialog({
                   </p>
                 </div>
                 <div className="settings-row">
+                  <div className="settings-section-title">Проводник</div>
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={prefs?.separateExternalFolder ?? true}
+                      disabled={!prefs || busy}
+                      onChange={(event) =>
+                        patchPrefs({
+                          separateExternalFolder: event.target.checked,
+                        })
+                      }
+                    />
+                    <span>Отдельно показывать папку _external</span>
+                  </label>
+                  <p className="settings-hint">
+                    Если в корне документации есть папка _external, она
+                    отображается отдельным блоком под основным деревом.
+                  </p>
+                </div>
+                <div className="settings-row">
                   <div className="settings-section-title">
                     Поддерживаемые форматы
                   </div>

@@ -1,8 +1,20 @@
 .file-tree {
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.file-tree-main {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 2px 0 8px;
+}
+
+.file-tree.has-external .file-tree-main {
+  padding-bottom: 4px;
 }
 
 .file-tree-branch {
@@ -80,6 +92,55 @@
   padding: 6px 8px 6px 34px;
   font-size: 11px;
   color: var(--text-2);
+}
+
+.file-tree-external-dock {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  height: var(--external-height, 160px);
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.file-tree-external-dock .panel-resize-handle.vertical {
+  position: absolute;
+  top: -2px;
+  left: 0;
+  right: 0;
+  z-index: 6;
+}
+
+.file-tree-external {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0 4px;
+}
+
+.file-tree-row.external-root {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.file-tree-icon.folder.external {
+  color: var(--cyan);
+}
+
+.file-tree-external-badge {
+  margin-left: auto;
+  flex: none;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 14px;
 }
 
 .file-tree-context-menu {

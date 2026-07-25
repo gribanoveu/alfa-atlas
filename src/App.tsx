@@ -138,6 +138,7 @@ function App() {
     ["--sidebar-width" as string]: `${panels.layout.sidebarWidth}px`,
     ["--right-width" as string]: `${panels.layout.rightWidth}px`,
     ["--bottom-height" as string]: `${panels.layout.bottomHeight}px`,
+    ["--external-height" as string]: `${panels.layout.externalHeight}px`,
   };
 
   const openFolder = useCallback(async () => {
@@ -250,12 +251,15 @@ function App() {
             treeError={tree.error}
             activePath={editor.activeTab?.path ?? null}
             expandedDirs={session.expandedDirs}
+            separateExternal={generalPrefs.prefs.separateExternalFolder}
             onToggleDir={session.toggleDir}
             onOpenFile={(path) => void editor.openFile(path)}
             onNewFile={setNewFileParent}
             onNewFolder={setNewFolderParent}
             onResize={panels.resizeSidebarBy}
             onResizeEnd={panels.persistLayout}
+            onResizeExternal={panels.resizeExternalBy}
+            onResizeExternalEnd={panels.persistLayout}
           />
           {hasProject ? (
             <EditorPane

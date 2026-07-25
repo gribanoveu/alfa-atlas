@@ -7,7 +7,10 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import type { TreeNode } from "../../lib/project";
+import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import "./FileTree.css";
+
+const EXTERNAL_FOLDER_NAME = "_external";
 
 type FileTreeProps = {
   nodes: TreeNode[];
@@ -15,10 +18,13 @@ type FileTreeProps = {
   rootPath: string;
   activePath: string | null;
   expandedDirs: ReadonlySet<string>;
+  separateExternal?: boolean;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
+  onResizeExternal?: (delta: number) => void;
+  onResizeExternalEnd?: () => void;
 };
 
 type FileTreeNodeProps = {
@@ -109,20 +115,43 @@ function FileTreeNode({
   );
 }
 
+function splitExternalNodes(nodes: TreeNode[]): {
+  main: TreeNode[];
+  external: TreeNode | null;
+} {
+  const external =
+    nodes.find((n) => n.isDir && n.name === EXTERNAL_FOLDER_NAME) ?? null;
+  if (!external) return { main: nodes, external: null };
+  return {
+    main: nodes.filter((n) => n.path !== external.path),
+    external,
+  };
+}
+
 export function FileTree({
   nodes,
   rootName,
   rootPath,
   activePath,
   expandedDirs,
+  separateExternal = true,
   onToggleDir,
   onOpenFile,
   onNewFile,
   onNewFolder,
+  onResizeExternal,
+  onResizeExternalEnd,
 }: FileTreeProps) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const rootExpanded = expandedDirs.has(".");
+  const { main, external } = separateExternal
+    ? splitExternalNodes(nodes)
+    : { main: nodes, external: null };
+  const externalExpanded = external
+    ? expandedDirs.has(external.path)
+    : false;
+  const dockedExternal = Boolean(external);
 
   useLayoutEffect(() => {
     if (!menu || !menuRef.current) return;
@@ -167,42 +196,113 @@ export function FileTree({
   };
 
   return (
-    <div className="file-tree">
-      <div className="file-tree-branch">
-        <div
-          className="file-tree-row dir root"
-          style={{ paddingLeft: 4 }}
-          title={rootPath}
-          onClick={() => onToggleDir(".")}
-          onContextMenu={(event) => openContextMenu(event, ".")}
-        >
-          <span className="file-tree-twist">{rootExpanded ? "▾" : "▸"}</span>
-          {rootExpanded ? (
-            <FolderOpen className="file-tree-icon folder" size={14} aria-hidden />
-          ) : (
-            <Folder className="file-tree-icon folder" size={14} aria-hidden />
-          )}
-          <span className="file-tree-name">{rootName}</span>
-        </div>
-        {rootExpanded ? (
-          nodes.length === 0 ? (
-            <div className="file-tree-empty">Нет поддерживаемых файлов</div>
-          ) : (
-            nodes.map((node) => (
-              <FileTreeNode
-                key={node.path}
-                node={node}
-                depth={1}
-                activePath={activePath}
-                expandedDirs={expandedDirs}
-                onToggleDir={onToggleDir}
-                onOpenFile={onOpenFile}
-                onContextMenu={openContextMenu}
+    <div className={`file-tree${dockedExternal ? " has-external" : ""}`}>
+      <div className="file-tree-main">
+        <div className="file-tree-branch">
+          <div
+            className="file-tree-row dir root"
+            style={{ paddingLeft: 4 }}
+            title={rootPath}
+            onClick={() => onToggleDir(".")}
+            onContextMenu={(event) => openContextMenu(event, ".")}
+          >
+            <span className="file-tree-twist">{rootExpanded ? "▾" : "▸"}</span>
+            {rootExpanded ? (
+              <FolderOpen
+                className="file-tree-icon folder"
+                size={14}
+                aria-hidden
               />
-            ))
-          )
-        ) : null}
+            ) : (
+              <Folder className="file-tree-icon folder" size={14} aria-hidden />
+            )}
+            <span className="file-tree-name">{rootName}</span>
+          </div>
+          {rootExpanded ? (
+            main.length === 0 && !external ? (
+              <div className="file-tree-empty">Нет поддерживаемых файлов</div>
+            ) : (
+              main.map((node) => (
+                <FileTreeNode
+                  key={node.path}
+                  node={node}
+                  depth={1}
+                  activePath={activePath}
+                  expandedDirs={expandedDirs}
+                  onToggleDir={onToggleDir}
+                  onOpenFile={onOpenFile}
+                  onContextMenu={openContextMenu}
+                />
+              ))
+            )
+          ) : null}
+        </div>
       </div>
+
+      {external ? (
+        <div className="file-tree-external-dock">
+          {onResizeExternal ? (
+            <PanelResizeHandle
+              direction="vertical"
+              invert
+              ariaLabel="Изменить высоту панели _external"
+              onResize={onResizeExternal}
+              onResizeEnd={onResizeExternalEnd}
+            />
+          ) : null}
+          <div className="file-tree-external">
+            <div className="file-tree-branch">
+              <button
+                type="button"
+                className="file-tree-row dir external-root"
+                style={{ paddingLeft: 4 }}
+                title={external.path}
+                onClick={() => onToggleDir(external.path)}
+                onContextMenu={(event) =>
+                  openContextMenu(event, external.path)
+                }
+              >
+                <span className="file-tree-twist">
+                  {externalExpanded ? "▾" : "▸"}
+                </span>
+                {externalExpanded ? (
+                  <FolderOpen
+                    className="file-tree-icon folder external"
+                    size={14}
+                    aria-hidden
+                  />
+                ) : (
+                  <Folder
+                    className="file-tree-icon folder external"
+                    size={14}
+                    aria-hidden
+                  />
+                )}
+                <span className="file-tree-name">{external.name}</span>
+                <span className="file-tree-external-badge">external</span>
+              </button>
+              {externalExpanded ? (
+                (external.children?.length ?? 0) === 0 ? (
+                  <div className="file-tree-empty">Папка пуста</div>
+                ) : (
+                  external.children!.map((child) => (
+                    <FileTreeNode
+                      key={child.path}
+                      node={child}
+                      depth={1}
+                      activePath={activePath}
+                      expandedDirs={expandedDirs}
+                      onToggleDir={onToggleDir}
+                      onOpenFile={onOpenFile}
+                      onContextMenu={openContextMenu}
+                    />
+                  ))
+                )
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {menu ? (
         <div
