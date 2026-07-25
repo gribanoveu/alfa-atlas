@@ -11,6 +11,8 @@ type EditorPaneProps = {
   activeTab: EditorTab | null;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
+  onCloseAllTabs: () => void;
+  onCloseOtherTabs: (id: string) => void;
   onChangeContent: (content: string) => void;
   onCursorChange: (cursor: CursorPosition) => void;
 };
@@ -21,6 +23,8 @@ export function EditorPane({
   activeTab,
   onSelectTab,
   onCloseTab,
+  onCloseAllTabs,
+  onCloseOtherTabs,
   onChangeContent,
   onCursorChange,
 }: EditorPaneProps) {
@@ -63,6 +67,8 @@ export function EditorPane({
         activeTabId={activeTabId}
         onSelect={onSelectTab}
         onClose={onCloseTab}
+        onCloseAll={onCloseAllTabs}
+        onCloseOthers={onCloseOtherTabs}
       />
       <div className="editor-body">
         {activeTab ? (

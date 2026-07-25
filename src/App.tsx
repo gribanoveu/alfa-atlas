@@ -119,6 +119,8 @@ function App() {
               activeTab={editor.activeTab}
               onSelectTab={editor.selectTab}
               onCloseTab={editor.closeTab}
+              onCloseAllTabs={editor.closeAllTabs}
+              onCloseOtherTabs={editor.closeOtherTabs}
               onChangeContent={editor.updateActiveContent}
               onCursorChange={editor.setCursor}
             />

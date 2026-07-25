@@ -24,6 +24,18 @@ function titleOf(relativePath: string): string {
   return relativePath.split(/[/\\]/).pop() ?? relativePath;
 }
 
+function confirmCloseDirty(closing: EditorTab[]): boolean {
+  if (!closing.some((tab) => tab.dirty)) return true;
+  if (closing.length === 1) {
+    return window.confirm(
+      `Файл «${closing[0].title}» изменён. Закрыть без сохранения?`,
+    );
+  }
+  return window.confirm(
+    "Есть несохранённые изменения. Закрыть без сохранения?",
+  );
+}
+
 export function useEditorTabs(docsRoot: string | null) {
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -78,12 +90,8 @@ export function useEditorTabs(docsRoot: string | null) {
   const closeTab = useCallback(
     (id: string) => {
       const tab = tabs.find((t) => t.id === id);
-      if (tab?.dirty) {
-        const ok = window.confirm(
-          `Файл «${tab.title}» изменён. Закрыть без сохранения?`,
-        );
-        if (!ok) return;
-      }
+      if (!tab) return;
+      if (!confirmCloseDirty([tab])) return;
       setTabs((prev) => {
         if (prev.length === 0) return prev;
         const index = prev.findIndex((t) => t.id === id);
@@ -97,6 +105,26 @@ export function useEditorTabs(docsRoot: string | null) {
       });
     },
     [activeTabId, tabs],
+  );
+
+  const closeAllTabs = useCallback(() => {
+    if (tabs.length === 0) return;
+    if (!confirmCloseDirty(tabs)) return;
+    setTabs([]);
+    setActiveTabId(null);
+  }, [tabs]);
+
+  const closeOtherTabs = useCallback(
+    (id: string) => {
+      const keep = tabs.find((t) => t.id === id);
+      if (!keep) return;
+      const closing = tabs.filter((t) => t.id !== id);
+      if (closing.length === 0) return;
+      if (!confirmCloseDirty(closing)) return;
+      setTabs([keep]);
+      setActiveTabId(keep.id);
+    },
+    [tabs],
   );
 
   const updateActiveContent = useCallback(
@@ -154,6 +182,8 @@ export function useEditorTabs(docsRoot: string | null) {
     activeTab,
     selectTab,
     closeTab,
+    closeAllTabs,
+    closeOtherTabs,
     openFile,
     updateActiveContent,
     saveActive,
