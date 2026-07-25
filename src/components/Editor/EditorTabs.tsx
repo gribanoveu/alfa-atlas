@@ -1,8 +1,8 @@
-import type { EditorTab } from "../../hooks/useWorkspaceLayout";
+import type { EditorTab } from "../../hooks/useEditorTabs";
 
 type EditorTabsProps = {
   tabs: EditorTab[];
-  activeTabId: string;
+  activeTabId: string | null;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
 };
@@ -13,6 +13,10 @@ export function EditorTabs({
   onSelect,
   onClose,
 }: EditorTabsProps) {
+  if (tabs.length === 0) {
+    return <div className="tabs tabs-empty" />;
+  }
+
   return (
     <div className="tabs">
       {tabs.map((tab) => {
@@ -26,27 +30,24 @@ export function EditorTabs({
             onClick={() => onSelect(tab.id)}
           >
             {tab.title}
-            {tab.dirty ? (
-              <span className="dot-mod tab-dot" />
-            ) : tabs.length > 1 ? (
-              <span
-                className="close"
-                role="button"
-                tabIndex={0}
-                onClick={(event) => {
+            {tab.dirty ? <span className="dot-mod tab-dot" /> : null}
+            <span
+              className="close"
+              role="button"
+              tabIndex={0}
+              onClick={(event) => {
+                event.stopPropagation();
+                onClose(tab.id);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
                   event.stopPropagation();
                   onClose(tab.id);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.stopPropagation();
-                    onClose(tab.id);
-                  }
-                }}
-              >
-                ×
-              </span>
-            ) : null}
+                }
+              }}
+            >
+              ×
+            </span>
           </button>
         );
       })}

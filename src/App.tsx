@@ -1,11 +1,14 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { RightDock } from "./components/RightDock/RightDock";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
 import { TopBar } from "./components/TopBar/TopBar";
+import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
+import { useDocsTree } from "./hooks/useDocsTree";
+import { useEditorTabs } from "./hooks/useEditorTabs";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
@@ -13,7 +16,9 @@ import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 function App() {
   const layout = useWorkspaceLayout();
   const project = useProject();
-  const panels = usePanelLayout(project.projectRoot);
+  const panels = usePanelLayout(project.repoRoot);
+  const tree = useDocsTree(project.docsRoot);
+  const editor = useEditorTabs(project.docsRoot);
   const [folderError, setFolderError] = useState<string | null>(null);
 
   const mainClassName = [
@@ -24,9 +29,9 @@ function App() {
     .filter(Boolean)
     .join(" ");
 
-  const hasProject = Boolean(project.projectRoot);
+  const hasProject = Boolean(project.docsRoot && project.repoRoot);
   const cursorLabel = hasProject
-    ? `Ln ${layout.cursor.line}, Col ${layout.cursor.column}`
+    ? `Ln ${editor.cursor.line}, Col ${editor.cursor.column}`
     : "Ln 1, Col 1";
 
   const panelStyle = {
@@ -44,6 +49,11 @@ function App() {
     }
   }, [project]);
 
+  const closeProject = useCallback(async () => {
+    await project.closeProject();
+    editor.reset();
+  }, [editor.reset, project.closeProject]);
+
   const toggleRightPanel = useCallback(() => {
     if (layout.activeTool) {
       layout.setRightTool(null);
@@ -60,14 +70,30 @@ function App() {
     }
   }, [layout]);
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (hasProject) void editor.saveActive();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editor.saveActive, hasProject]);
+
+  const statusPath = editor.activeTab?.path ?? "—";
+  const statusLanguage = editor.activeTab?.language ?? "—";
+
   return (
     <div className="app" style={panelStyle}>
       <TopBar
         repoName={project.projectName ?? "—"}
-        branchName="—"
-        projectRoot={project.projectRoot}
+        branchName={project.branchName ?? "—"}
+        projectRoot={project.repoRoot}
+        hasProject={hasProject}
         onOpenFolder={openFolder}
-        onCloseProject={project.closeProject}
+        onCloseProject={closeProject}
+        onSave={editor.saveActive}
         onToggleSidebar={layout.toggleSidebar}
         onToggleRight={toggleRightPanel}
         onToggleBottom={toggleBottomPanel}
@@ -77,20 +103,25 @@ function App() {
           <Sidebar
             open={layout.sidebarOpen}
             onToggle={layout.toggleSidebar}
-            projectRoot={project.projectRoot}
             projectName={project.projectName}
+            docsRoot={project.docsRoot}
+            tree={tree.nodes}
+            treeLoading={tree.loading}
+            treeError={tree.error}
+            activePath={editor.activeTab?.path ?? null}
+            onOpenFile={(path) => void editor.openFile(path)}
             onResize={panels.resizeSidebarBy}
             onResizeEnd={panels.persistLayout}
           />
           {hasProject ? (
             <EditorPane
-              tabs={layout.tabs}
-              activeTabId={layout.activeTabId}
-              activeTab={layout.activeTab}
-              onSelectTab={layout.selectTab}
-              onCloseTab={layout.closeTab}
-              onChangeContent={layout.updateActiveContent}
-              onCursorChange={layout.setCursor}
+              tabs={editor.tabs}
+              activeTabId={editor.activeTabId}
+              activeTab={editor.activeTab}
+              onSelectTab={editor.selectTab}
+              onCloseTab={editor.closeTab}
+              onChangeContent={editor.updateActiveContent}
+              onCursorChange={editor.setCursor}
             />
           ) : (
             <Welcome
@@ -115,10 +146,26 @@ function App() {
         />
       </div>
       <StatusBar
-        filePath={hasProject ? layout.activeTab.title : "—"}
-        language={hasProject ? layout.activeTab.language : "—"}
+        filePath={hasProject ? statusPath : "—"}
+        language={hasProject ? statusLanguage : "—"}
         cursorLabel={cursorLabel}
       />
+
+      {project.pendingOpen ? (
+        <ConfirmOpenProjectModal
+          probe={project.pendingOpen}
+          onCancel={project.cancelPendingOpen}
+          onConfirm={async (docsRoot) => {
+            await project.confirmPendingOpen(docsRoot);
+          }}
+        />
+      ) : null}
+
+      {editor.error || folderError ? (
+        <div className="app-toast" role="status">
+          {editor.error ?? folderError}
+        </div>
+      ) : null}
     </div>
   );
 }

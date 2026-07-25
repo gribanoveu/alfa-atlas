@@ -2,6 +2,8 @@
 export type MenuActionId =
   | "file.openFolder"
   | "file.cloneRepo"
+  | "file.save"
+  | "file.closeProject"
   | "file.exit"
   | "view.toggleSidebar"
   | "view.toggleRight"

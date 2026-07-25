@@ -1,12 +1,19 @@
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
+import type { TreeNode } from "../../lib/project";
+import { FileTree } from "./FileTree";
 import "./Sidebar.css";
 
 type SidebarProps = {
   open: boolean;
   onToggle: () => void;
-  projectRoot: string | null;
   projectName: string | null;
+  docsRoot: string | null;
+  tree: TreeNode[];
+  treeLoading: boolean;
+  treeError: string | null;
+  activePath: string | null;
+  onOpenFile: (path: string) => void;
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
 };
@@ -14,8 +21,13 @@ type SidebarProps = {
 export function Sidebar({
   open,
   onToggle,
-  projectRoot,
   projectName,
+  docsRoot,
+  tree,
+  treeLoading,
+  treeError,
+  activePath,
+  onOpenFile,
   onResize,
   onResizeEnd,
 }: SidebarProps) {
@@ -52,13 +64,26 @@ export function Sidebar({
         </div>
       </div>
       <div className="sidebar-body">
-        {projectRoot ? (
-          <div className="panel-empty">
-            <div>{projectName}</div>
-            <div className="sidebar-project-path" title={projectRoot}>
-              {projectRoot}
+        {docsRoot ? (
+          <>
+            <div className="sidebar-meta">
+              <div className="sidebar-meta-name">{projectName}</div>
+              <div className="sidebar-project-path" title={docsRoot}>
+                {docsRoot}
+              </div>
             </div>
-          </div>
+            {treeLoading ? (
+              <div className="panel-empty">Загрузка…</div>
+            ) : treeError ? (
+              <div className="panel-empty">{treeError}</div>
+            ) : (
+              <FileTree
+                nodes={tree}
+                activePath={activePath}
+                onOpenFile={onOpenFile}
+              />
+            )}
+          </>
         ) : (
           <div className="panel-empty">Нет открытого репозитория</div>
         )}

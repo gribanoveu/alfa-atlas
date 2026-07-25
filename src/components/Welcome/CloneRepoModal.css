@@ -126,3 +126,110 @@
   cursor: default;
   filter: none;
 }
+
+.clone-select {
+  position: relative;
+}
+
+.clone-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-0);
+  text-align: left;
+}
+
+.clone-select-trigger:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.clone-select-trigger.is-open,
+.clone-select-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.clone-select-value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.clone-select-path {
+  font-size: 12.5px;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clone-select-reason {
+  font-size: 11px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clone-select-placeholder {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.clone-select-chevron {
+  flex: none;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.clone-select-trigger.is-open .clone-select-chevron {
+  color: var(--text-0);
+}
+
+.clone-select-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px 0;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.clone-select-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 12px;
+  text-align: left;
+  color: var(--text-0);
+  background: transparent;
+  border: none;
+}
+
+.clone-select-option:hover {
+  background: var(--accent-dim);
+}
+
+.clone-select-option.is-active {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.clone-select-option.is-active .clone-select-path {
+  color: var(--text-0);
+}

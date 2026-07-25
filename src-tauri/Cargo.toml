@@ -25,4 +25,5 @@ serde_json = "1"
 thiserror = "2.0.19"
 dirs = "6.0.0"
 tauri-plugin-dialog = "2.7.2"
+git2 = { version = "0.21.0", default-features = false, features = ["vendored-libgit2"] }
 

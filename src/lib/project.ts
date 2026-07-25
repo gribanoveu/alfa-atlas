@@ -1,13 +1,82 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export function getProjectRoot(): Promise<string | null> {
-  return invoke<string | null>("get_project_root");
+export type OpenedProject = {
+  root: string;
+  docsRoot: string;
+};
+
+export type DocsCandidate = {
+  path: string;
+  relativePath: string;
+  score: number;
+  reason: string;
+};
+
+export type ProbeResult = {
+  needsConfirm: boolean;
+  root: string;
+  docsRoot: string | null;
+  candidates: DocsCandidate[];
+  suggestedDocsRoot: string | null;
+};
+
+export type TreeNode = {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children?: TreeNode[];
+};
+
+export function probeOpenPath(path: string): Promise<ProbeResult> {
+  return invoke<ProbeResult>("probe_open_path", { path });
 }
 
-export function setProjectRoot(path: string): Promise<string> {
-  return invoke<string>("set_project_root", { path });
+export function openProject(
+  root: string,
+  docsRoot: string,
+): Promise<OpenedProject> {
+  return invoke<OpenedProject>("open_project", { root, docsRoot });
 }
 
-export function clearProjectRoot(): Promise<void> {
-  return invoke<void>("clear_project_root");
+export function openCachedProject(root: string): Promise<OpenedProject> {
+  return invoke<OpenedProject>("open_cached_project", { root });
+}
+
+export function getProject(): Promise<OpenedProject | null> {
+  return invoke<OpenedProject | null>("get_project");
+}
+
+export function getSavedRepoRoot(): Promise<string | null> {
+  return invoke<string | null>("get_saved_repo_root");
+}
+
+export function clearProject(): Promise<void> {
+  return invoke<void>("clear_project");
+}
+
+export function getGitBranch(root: string): Promise<string | null> {
+  return invoke<string | null>("get_git_branch", { root });
+}
+
+export function listDocsTree(docsRoot: string): Promise<TreeNode[]> {
+  return invoke<TreeNode[]>("list_docs_tree", { docsRoot });
+}
+
+export function readProjectFile(
+  docsRoot: string,
+  relativePath: string,
+): Promise<string> {
+  return invoke<string>("read_project_file", { docsRoot, relativePath });
+}
+
+export function writeProjectFile(
+  docsRoot: string,
+  relativePath: string,
+  content: string,
+): Promise<void> {
+  return invoke<void>("write_project_file", {
+    docsRoot,
+    relativePath,
+    content,
+  });
 }

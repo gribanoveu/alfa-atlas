@@ -13,187 +13,154 @@
 
 | Область | Поведение |
 |---------|-----------|
-| **TopBar** | Бренд `docflow`, выпадающие меню (Файл…Справка), чипы репозитория / ветки. Имя папки проекта подставляется после открытия; ветка пока всегда `—`. Метаданные Справки — из [`app.config.json`](../app.config.json). |
-| **Sidebar** | Панель «Документация»: сворачивается в rail 36px. Без дерева файлов — placeholder («Нет открытого репозитория» или имя/путь проекта). |
-| **Центр** | Без проекта — [Welcome](#3-стартовый-экран-welcome); с проектом — [редактор Monaco](#4-редактор). |
-| **RightDock** | Инструменты: Ассистент, AsciiDoc, Git (иконки на stripe ~40px). Тела панелей пустые (заглушки). |
-| **BottomDock** | Подсказки, Форматирование — пустые заглушки. Свернут по умолчанию; открытая высота настраивается. |
-| **StatusBar** | Путь/вкладка, язык, UTF-8, курсор (`Ln/Col`), статичный текст «AI-индекс актуален». |
+| **TopBar** | Бренд `docflow`, выпадающие меню (Файл…Справка), чипы репозитория / ветки. Имя репозитория — последний сегмент `repoRoot`; ветка — через `git2` (`get_git_branch`). |
+| **Sidebar** | Панель «Документация»: дерево файлов от `docsRoot` с фильтром supported-форматов. |
+| **Центр** | Без проекта — [Welcome](#4-стартовый-экран-welcome); с проектом — [редактор Monaco](#5-редактор). |
+| **RightDock** | Инструменты: Ассистент, AsciiDoc, Git (тела панелей — заглушки). |
+| **BottomDock** | Подсказки, Форматирование — заглушки. |
+| **StatusBar** | Относительный путь файла от `docsRoot`, язык, UTF-8, курсор, «AI-индекс актуален». |
 
-Сворачивание панелей хранится только в сессии (не пишется на диск).
-
-Дизайн: тёмные токены JetBrains-like ([`src/styles/tokens.css`](../src/styles/tokens.css)), сетка ([`src/styles/app.css`](../src/styles/app.css)).
+Сворачивание панелей — только сессия. Дизайн: тёмные токены JetBrains-like ([`src/styles/tokens.css`](../src/styles/tokens.css)).
 
 ---
 
 ## 2. Размер и позиция окна
 
-При каждом запуске окно восстанавливается из пользовательских настроек; при ресайзе / перемещении / закрытии состояние сохраняется.
-
 | | |
 |--|--|
 | Файл | `~/.docflow/settings.json` |
 | Поля | `window.width`, `height`, `x`, `y`, `maximized` |
-| Минимум / дефолт | 800×600 |
-| Код | [`domain/settings.rs`](../src-tauri/src/domain/settings.rs), [`services/window_settings.rs`](../src-tauri/src/services/window_settings.rs), [`lib.rs`](../src-tauri/src/lib.rs) |
-
-Пока окно развёрнуто, «обычные» размер и позиция не перезаписываются — после снятия maximize / при следующем старте возвращаются прежние.
-
-Окно создаётся скрытым (`visible: false` в `tauri.conf.json`), затем показывается после применения сохранённого состояния (без мигания дефолтным размером).
+| Код | [`domain/settings.rs`](../src-tauri/src/domain/settings.rs), [`services/window_settings.rs`](../src-tauri/src/services/window_settings.rs) |
 
 ---
 
 ## 3. Меню TopBar
 
-Выпадающие меню по клику (закрытие: повторный клик, клик снаружи, Esc).
-
 | Меню | Поведение |
 |------|-----------|
-| **Файл** | Открыть папку… · Клонировать репозиторий… · Выход |
-| **Правка** | Пункты есть, пока disabled |
-| **Вид** | Переключение левой / правой / нижней панелей |
-| **Инструменты** | Настройки… — модальное окно |
-| **Навигация / Git** | Пункты-заглушки (disabled) |
-| **Справка** | О программе (модалка + версия) · Документация · Оставить отзыв · Проверить обновления — URL из конфига через `opener` |
+| **Файл** | Открыть папку… · Клонировать… (заглушка) · Сохранить · Закрыть проект · Выход |
+| **Правка** | Пока disabled |
+| **Вид** | Левая / правая / нижняя панели |
+| **Инструменты** | Настройки… |
+| **Навигация / Git** | Заглушки |
+| **Справка** | О программе · Документация · Отзыв · Обновления |
 
-Источник данных Справки — [`app.config.json`](../app.config.json) в корне репозитория (`version`, `documentationUrl`, `feedbackUrl`, `updatesUrl`), импорт: [`src/lib/appConfig.ts`](../src/lib/appConfig.ts).
+Сохранение также по `⌘S` / `Ctrl+S`.
 
-### Настройки (`Инструменты → Настройки…`)
+### Настройки
 
-Модальный диалог с разделами Общие / Редактор / Пути:
-
-- **Общие:** чекбокс «Открывать последний проект при запуске» (`general.restoreLastProject` в `~/.docflow/settings.json`); кнопка «Закрыть проект».
-- **Редактор:** placeholder + список поддерживаемых форматов.
-- **Пути:** `~/.docflow`, путь проекта, `{project}/.docflow`; кнопка открыть папку настроек пользователя.
-
-Если `restoreLastProject = false`, при старте Welcome показывается даже при сохранённом `project.root`.
+- **Общие:** «Открывать последний проект при запуске»; «Закрыть проект».
+- **Редактор:** список поддерживаемых форматов.
+- **Пути:** `~/.docflow`, путь репозитория, `{repo}/.docflow`.
 
 ---
 
 ## 4. Стартовый экран (Welcome)
 
-Показывается, если нет открытого проекта (`project.root` отсутствует или путь больше не существует).
-
-Действия:
-
-1. **Открыть папку…** — системный диалог выбора каталога (`tauri-plugin-dialog`) → сохранение корня проекта → Welcome скрывается, появляется редактор.
-2. **Клонировать репозиторий…** — модалка URL + папка назначения. **Реального `git clone` нет** — после подтверждения показывается сообщение-заглушка ([`CloneRepoModal.tsx`](../src/components/Welcome/CloneRepoModal.tsx)).
-3. **Недавние** — пустой placeholder (список недавних проектов не реализован).
-
-Иконки действий — `lucide-react`.
+1. **Открыть папку…** — выбор каталога → resolve git root → если нет валидного `{repo}/.docflow/project.json`, модалка подтверждения корня документации → открытие.
+2. **Клонировать репозиторий…** — UI-заглушка (реального clone нет).
+3. **Недавние** — placeholder.
 
 ---
 
 ## 5. Редактор
 
-- Monaco Editor (локальный бандл воркеров, без CDN) — [`src/monacoSetup.ts`](../src/monacoSetup.ts).
-- Вкладки в памяти: старт с `Untitled-1`; dirty-индикатор; последнюю вкладку закрыть нельзя.
-- Курсор транслируется в StatusBar.
-- **Нет** чтения/записи файлов с диска, дерева, breadcrumb, режимов Split/Preview.
+- Monaco (локальные воркеры) — [`src/monacoSetup.ts`](../src/monacoSetup.ts).
+- Вкладки с диска: `path`, `content` / `savedContent`, `dirty = content !== savedContent`.
+- Открытие файла — клик в дереве; сохранение — меню / ⌘S.
+- Без открытых файлов — placeholder «Откройте файл в дереве».
+- Закрытие dirty-вкладки — `window.confirm`.
 
-Хук состояния вкладок: [`src/hooks/useWorkspaceLayout.ts`](../src/hooks/useWorkspaceLayout.ts).
+Хук: [`src/hooks/useEditorTabs.ts`](../src/hooks/useEditorTabs.ts).
 
 ---
 
-## 6. Открытие проекта
+## 6. Проект: repoRoot + docsRoot
 
 | | |
 |--|--|
-| Хранение корня | `~/.docflow/settings.json` → `project.root` |
-| IPC | `get_project_root`, `set_project_root`, `clear_project_root` |
+| Глобально | `~/.docflow/settings.json` → `project.root` = абсолютный **repoRoot** |
+| В репозитории | `{repoRoot}/.docflow/project.json` → `{ "docsRoot": "src/docs/asciidoc" }` (относительный путь) |
+| Layout | `{repoRoot}/.docflow/layout.json` |
+| IPC | `probe_open_path`, `open_project`, `open_cached_project`, `get_project`, `get_saved_repo_root`, `clear_project`, `get_git_branch` |
 | Frontend | [`src/lib/project.ts`](../src/lib/project.ts), [`src/hooks/useProject.ts`](../src/hooks/useProject.ts) |
-| Backend | [`commands/project.rs`](../src-tauri/src/commands/project.rs), [`services/project_settings.rs`](../src-tauri/src/services/project_settings.rs) |
+| Backend | [`services/project_open.rs`](../src-tauri/src/services/project_open.rs), [`infra/project_store.rs`](../src-tauri/src/infra/project_store.rs), [`infra/git_repo.rs`](../src-tauri/src/infra/git_repo.rs) |
 
-При старте приложения путь проверяется: если каталога нет — корень сбрасывается, показывается Welcome.  
-При `general.restoreLastProject = false` сохранённый путь не подставляется в UI (файл не очищается).  
-Закрытие проекта — из Настроек → Общие.
+**Поведение**
 
-Capability: `dialog:default` в [`capabilities/default.json`](../src-tauri/capabilities/default.json).
+- Есть валидный `project.json` → открытие без scan и без модалки.
+- Нет / битый docs path → probe (эвристики имён + плотность supported-файлов) → confirm → запись `project.json`.
+- Close очищает только global `project.root`; `.docflow` в репо остаётся.
+- Дерево и read/write ограничены `docsRoot` (path containment).
 
 ---
 
-## 7. Ресайз панелей и per-project layout
+## 7. Дерево и файлы
 
-Левую, правую и нижнюю панели можно тянуть за край (как в VS Code / IDEA), когда они **открыты**.
+| IPC | Роль |
+|-----|------|
+| `list_docs_tree` | Дерево от docsRoot, только supported + папки к ним |
+| `read_project_file` / `write_project_file` | Относительные пути под docsRoot |
+
+UI: [`Sidebar`](../src/components/Sidebar/Sidebar.tsx) + [`FileTree`](../src/components/Sidebar/FileTree.tsx).
+
+---
+
+## 8. Ресайз панелей
 
 | | |
 |--|--|
-| Файл | `{projectRoot}/.docflow/layout.json` |
+| Файл | `{repoRoot}/.docflow/layout.json` |
 | Поля | `sidebarWidth`, `rightWidth`, `bottomHeight` |
 | Дефолты | 220 / 340 / 220 |
-| Клампа | sidebar 160–480, right 200–560, bottom 120–480 |
-
-**Правила сохранения**
-
-- Проект открыт → load при открытии, save при окончании drag (~150 ms debounce).
-- Проекта нет → всегда дефолты при «сбросе» (закрытии проекта / старте без root); drag в сессии возможен, **на диск не пишется**.
-
-Код: [`domain/layout.rs`](../src-tauri/src/domain/layout.rs), [`infra/layout_store.rs`](../src-tauri/src/infra/layout_store.rs), [`src/hooks/usePanelLayout.ts`](../src/hooks/usePanelLayout.ts), [`PanelResizeHandle`](../src/components/PanelResizeHandle/PanelResizeHandle.tsx).
-
-Глобальный `~/.docflow/settings.json` для размеров панелей **не используется**.
 
 ---
 
-## 8. Поддерживаемые форматы файлов
+## 9. Поддерживаемые форматы
 
-Объявлены в [`src/lib/supportedFiles.ts`](../src/lib/supportedFiles.ts) и в [бизнес-правилах §4.3](./business-requirements/04-business-rules.md):
+[`src/lib/supportedFiles.ts`](../src/lib/supportedFiles.ts) и [`domain/supported_files.rs`](../src-tauri/src/domain/supported_files.rs):
 
 `.adoc` / `.asciidoc`, `.json`, `.md` / `.markdown`, `.txt`, `.puml` / `.plantuml`, `.yaml` / `.yml`, `.mmd` / `.mermaid`.
 
-Сейчас список — контракт для будущих open/save и фильтров. **Открытие файлов с диска ещё не подключено**, хелперы `isSupportedFile` / `monacoLanguageFor` пока не используются UI.
+---
+
+## 10. Что намеренно не реализовано
+
+- реальный `git clone`, stage/commit/push/pull;
+- AI-ассистент, AsciiDoc-библиотека, preview/split;
+- недавние проекты;
+- KPI «Покрытие документацией».
 
 ---
 
-## 9. Что намеренно не реализовано
-
-См. также [05-integrations-and-scope.md](./business-requirements/05-integrations-and-scope.md) (целевой backlog). В текущем приложении нет:
-
-- дерева документации и работы с файлами репозитория;
-- реального Git (stage/commit/clone/branch);
-- AI-ассистента, AsciiDoc-библиотеки, подсказок / форматирования с данными;
-- preview / split;
-- полноценной Правки / Навигации / Git из меню (пункты disabled);
-- списка недавних проектов.
-
----
-
-## 10. Архитектура кода
-
-Dependency direction (см. [AGENTS.md](../AGENTS.md)):
+## 11. Архитектура кода
 
 ```
 Frontend:  components → hooks → lib (IPC wrappers)
 Rust:      commands → services → domain
-           infra реализует I/O (settings / layout store)
+           infra реализует I/O (settings / project / layout / git)
 ```
-
-| Слой | Пути |
-|------|------|
-| Commands | `src-tauri/src/commands/` |
-| Services | `src-tauri/src/services/` |
-| Domain | `src-tauri/src/domain/` |
-| Infra | `src-tauri/src/infra/` |
-| UI | `src/components/`, `src/hooks/`, `src/lib/` |
 
 ---
 
-## 11. Файлы настроек (сводка)
+## 12. Файлы настроек (сводка)
 
 | Файл | Назначение |
 |------|------------|
-| `app.config.json` (корень репо) | Версия приложения и URL для меню Справка |
-| `~/.docflow/settings.json` | Размер/позиция/maximize окна; `project.root`; `general.restoreLastProject` |
-| `{project}/.docflow/layout.json` | Ширины/высота панелей для этого проекта |
+| `app.config.json` | Версия и URL Справки |
+| `~/.docflow/settings.json` | Окно; последний `project.root`; `general.restoreLastProject` |
+| `{repo}/.docflow/project.json` | Относительный `docsRoot` |
+| `{repo}/.docflow/layout.json` | Размеры панелей |
 
 ---
 
-## 12. Запуск и проверки
+## 13. Запуск и проверки
 
 ```bash
 bun install
-bun run tauri dev          # приложение
-bun run tsc --noEmit       # фронт
+bun run tauri dev
+bun run tsc --noEmit
 cd src-tauri && cargo check && cargo test
 ```
 
-Package manager фронта — **bun** (не npm/pnpm/yarn).
+Package manager фронта — **bun**.

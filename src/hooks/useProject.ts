@@ -1,28 +1,65 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useState } from "react";
 import {
-  clearProjectRoot,
-  getProjectRoot,
-  setProjectRoot,
+  clearProject,
+  getGitBranch,
+  getProject,
+  getSavedRepoRoot,
+  openCachedProject,
+  openProject,
+  probeOpenPath,
+  type ProbeResult,
 } from "../lib/project";
 
+export type PendingOpen = ProbeResult;
+
 export function useProject() {
-  const [projectRoot, setRoot] = useState<string | null>(null);
+  const [repoRoot, setRepoRoot] = useState<string | null>(null);
+  const [docsRoot, setDocsRoot] = useState<string | null>(null);
+  const [branchName, setBranchName] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingOpen, setPendingOpen] = useState<PendingOpen | null>(null);
+
+  const applyOpened = useCallback(async (root: string, docs: string) => {
+    setRepoRoot(root);
+    setDocsRoot(docs);
+    setError(null);
+    setPendingOpen(null);
+    try {
+      const branch = await getGitBranch(root);
+      setBranchName(branch);
+    } catch {
+      setBranchName(null);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const root = await getProjectRoot();
-        if (!cancelled) {
-          setRoot(root);
-          setError(null);
+        const project = await getProject();
+        if (cancelled) return;
+        if (project) {
+          await applyOpened(project.root, project.docsRoot);
+          return;
+        }
+
+        const saved = await getSavedRepoRoot();
+        if (cancelled || !saved) return;
+
+        const probe = await probeOpenPath(saved);
+        if (cancelled) return;
+        if (!probe.needsConfirm && probe.docsRoot) {
+          const opened = await openCachedProject(probe.root);
+          if (!cancelled) await applyOpened(opened.root, opened.docsRoot);
+        } else {
+          setPendingOpen(probe);
         }
       } catch (e) {
         if (!cancelled) {
-          setRoot(null);
+          setRepoRoot(null);
+          setDocsRoot(null);
           setError(e instanceof Error ? e.message : String(e));
         }
       } finally {
@@ -32,13 +69,34 @@ export function useProject() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applyOpened]);
 
-  const openProject = useCallback(async (path: string) => {
-    const root = await setProjectRoot(path);
-    setRoot(root);
-    setError(null);
-    return root;
+  const beginOpenPath = useCallback(
+    async (path: string) => {
+      const probe = await probeOpenPath(path);
+      if (!probe.needsConfirm && probe.docsRoot) {
+        const opened = await openCachedProject(probe.root);
+        await applyOpened(opened.root, opened.docsRoot);
+        return opened;
+      }
+      setPendingOpen(probe);
+      return null;
+    },
+    [applyOpened],
+  );
+
+  const confirmPendingOpen = useCallback(
+    async (docsRootPath: string) => {
+      if (!pendingOpen) return null;
+      const opened = await openProject(pendingOpen.root, docsRootPath);
+      await applyOpened(opened.root, opened.docsRoot);
+      return opened;
+    },
+    [applyOpened, pendingOpen],
+  );
+
+  const cancelPendingOpen = useCallback(() => {
+    setPendingOpen(null);
   }, []);
 
   const openFolderDialog = useCallback(async () => {
@@ -50,25 +108,33 @@ export function useProject() {
     if (selected === null || Array.isArray(selected)) {
       return null;
     }
-    return openProject(selected);
-  }, [openProject]);
+    return beginOpenPath(selected);
+  }, [beginOpenPath]);
 
   const closeProject = useCallback(async () => {
-    await clearProjectRoot();
-    setRoot(null);
+    await clearProject();
+    setRepoRoot(null);
+    setDocsRoot(null);
+    setBranchName(null);
+    setPendingOpen(null);
   }, []);
 
-  const projectName = projectRoot
-    ? projectRoot.split(/[/\\]/).filter(Boolean).pop() ?? projectRoot
+  const projectName = repoRoot
+    ? (repoRoot.split(/[/\\]/).filter(Boolean).pop() ?? repoRoot)
     : null;
 
   return {
-    projectRoot,
+    repoRoot,
+    docsRoot,
+    projectRoot: repoRoot,
     projectName,
+    branchName,
     ready,
     error,
-    openProject,
+    pendingOpen,
     openFolderDialog,
+    confirmPendingOpen,
+    cancelPendingOpen,
     closeProject,
   };
 }

@@ -13,8 +13,10 @@ type TopBarProps = {
   repoName?: string;
   branchName?: string;
   projectRoot: string | null;
+  hasProject: boolean;
   onOpenFolder: () => Promise<unknown>;
   onCloseProject: () => Promise<void>;
+  onSave: () => Promise<unknown>;
   onToggleSidebar: () => void;
   onToggleRight: () => void;
   onToggleBottom: () => void;
@@ -24,8 +26,10 @@ export function TopBar({
   repoName = "—",
   branchName = "—",
   projectRoot,
+  hasProject,
   onOpenFolder,
   onCloseProject,
+  onSave,
   onToggleSidebar,
   onToggleRight,
   onToggleBottom,
@@ -42,6 +46,12 @@ export function TopBar({
           break;
         case "file.cloneRepo":
           setCloneOpen(true);
+          break;
+        case "file.save":
+          if (hasProject) void onSave();
+          break;
+        case "file.closeProject":
+          if (hasProject) void onCloseProject();
           break;
         case "file.exit":
           void getCurrentWindow().close();
@@ -72,7 +82,15 @@ export function TopBar({
           break;
       }
     },
-    [onOpenFolder, onToggleBottom, onToggleRight, onToggleSidebar],
+    [
+      hasProject,
+      onCloseProject,
+      onOpenFolder,
+      onSave,
+      onToggleBottom,
+      onToggleRight,
+      onToggleSidebar,
+    ],
   );
 
   return (

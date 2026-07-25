@@ -63,3 +63,18 @@
   min-height: 0;
   min-width: 0;
 }
+
+.editor-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  font-size: 13px;
+  padding: 24px;
+  text-align: center;
+}
+
+.tabs-empty {
+  min-height: 34px;
+}

@@ -1,17 +1,14 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type { editor as MonacoEditor } from "monaco-editor";
 import { useCallback } from "react";
-import type {
-  CursorPosition,
-  EditorTab,
-} from "../../hooks/useWorkspaceLayout";
+import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
 import { EditorTabs } from "./EditorTabs";
 import "./Editor.css";
 
 type EditorPaneProps = {
   tabs: EditorTab[];
-  activeTabId: string;
-  activeTab: EditorTab;
+  activeTabId: string | null;
+  activeTab: EditorTab | null;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onChangeContent: (content: string) => void;
@@ -68,16 +65,20 @@ export function EditorPane({
         onClose={onCloseTab}
       />
       <div className="editor-body">
-        <Editor
-          key={activeTab.id}
-          height="100%"
-          theme="vs-dark"
-          language={activeTab.language}
-          value={activeTab.content}
-          onChange={handleChange}
-          onMount={handleMount}
-          options={options}
-        />
+        {activeTab ? (
+          <Editor
+            key={activeTab.id}
+            height="100%"
+            theme="vs-dark"
+            language={activeTab.language}
+            value={activeTab.content}
+            onChange={handleChange}
+            onMount={handleMount}
+            options={options}
+          />
+        ) : (
+          <div className="editor-empty">Откройте файл в дереве документации</div>
+        )}
       </div>
     </section>
   );
