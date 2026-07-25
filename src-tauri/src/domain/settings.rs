@@ -53,8 +53,16 @@ impl Default for WindowState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ProjectSettings {
+    #[serde(default)]
+    pub root: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AppSettings {
     pub window: WindowState,
+    #[serde(default)]
+    pub project: ProjectSettings,
 }
 
 #[derive(Debug, Error)]
@@ -71,6 +79,10 @@ pub enum SettingsError {
     Parse(#[source] serde_json::Error),
     #[error("failed to serialize settings: {0}")]
     Serialize(#[source] serde_json::Error),
+    #[error("project path is not a directory: {0}")]
+    NotADirectory(String),
+    #[error("failed to resolve project path: {0}")]
+    Canonicalize(#[source] std::io::Error),
 }
 
 #[cfg(test)]
@@ -127,5 +139,12 @@ mod tests {
         assert_eq!(state.x, None);
         assert_eq!(state.y, None);
         assert!(!state.maximized);
+    }
+
+    #[test]
+    fn deserializes_legacy_settings_without_project() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
+        assert_eq!(settings.project.root, None);
     }
 }

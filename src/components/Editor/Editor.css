@@ -1,0 +1,65 @@
+.editor-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-editor);
+}
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-0);
+  border-bottom: 1px solid var(--border);
+  height: 34px;
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border-right: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-1);
+  position: relative;
+  white-space: nowrap;
+}
+
+.tab.active {
+  background: var(--bg-editor);
+  color: var(--text-0);
+}
+
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+}
+
+.tab .close {
+  color: var(--text-2);
+  font-size: 13px;
+  margin-left: 2px;
+  line-height: 1;
+}
+
+.tab .close:hover {
+  color: var(--text-0);
+}
+
+.tab-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.editor-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}

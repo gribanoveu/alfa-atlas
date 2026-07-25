@@ -1,0 +1,24 @@
+.statusbar {
+  background: var(--bg-0);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 16px;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+
+.statusbar .grow {
+  flex: 1;
+}
+
+.statusbar .seg {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.statusbar .seg.ai {
+  color: var(--text-1);
+}

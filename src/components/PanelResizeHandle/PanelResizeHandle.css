@@ -1,0 +1,42 @@
+.panel-resize-handle {
+  position: relative;
+  z-index: 5;
+  flex: none;
+  background: transparent;
+  touch-action: none;
+}
+
+.panel-resize-handle.horizontal {
+  width: 4px;
+  margin: 0 -2px;
+  cursor: col-resize;
+}
+
+.panel-resize-handle.vertical {
+  height: 4px;
+  margin: -2px 0;
+  cursor: row-resize;
+}
+
+.panel-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.panel-resize-handle.horizontal::after {
+  left: 1px;
+  right: 1px;
+}
+
+.panel-resize-handle.vertical::after {
+  top: 1px;
+  bottom: 1px;
+}
+
+.panel-resize-handle:hover::after,
+.panel-resize-handle.is-active::after {
+  background: var(--accent);
+}

@@ -1,3 +1,4 @@
+mod commands;
 mod domain;
 mod infra;
 mod services;
@@ -66,6 +67,7 @@ fn persist_window_state(window: &Window) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let state = window_settings::load_window_state();
             if let Some(window) = app.get_webview_window("main") {
@@ -83,7 +85,14 @@ pub fn run() {
                 _ => {}
             }
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            commands::project::get_project_root,
+            commands::project::set_project_root,
+            commands::project::clear_project_root,
+            commands::layout::get_project_layout,
+            commands::layout::save_project_layout,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

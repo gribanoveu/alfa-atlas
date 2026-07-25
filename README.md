@@ -1,7 +1,38 @@
-# Tauri + React + Typescript
+# docflow
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Desktop-редактор документации, работающий с git-репозиториями.
 
-## Recommended IDE Setup
+- Идентификатор: `com.eugene.docflow`
+- Стек: **Tauri v2**, React + TypeScript, Rust
+- Package manager: **bun**
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+## Документация
+
+| Документ | Содержание |
+|----------|------------|
+| [doc/implemented-features.md](./doc/implemented-features.md) | **Что уже реализовано** и как это работает |
+| [doc/business-requirements/](./doc/business-requirements/) | Целевые бизнес-требования (vision / backlog) |
+| [AGENTS.md](./AGENTS.md) | Конвенции для AI-агентов и архитектура слоёв |
+
+## Быстрый старт
+
+```bash
+bun install
+bun run tauri dev
+```
+
+Проверки:
+
+```bash
+bun run tsc --noEmit
+cd src-tauri && cargo check
+```
+
+## Что умеет сейчас (кратко)
+
+- IDE-оболочка: top bar, боковые и нижняя панели, status bar, Monaco-редактор
+- Welcome без проекта: открыть папку (рабочее), клонировать (UI-заглушка)
+- Сохранение окна в `~/.docflow/settings.json`
+- Размеры панелей на проект в `{project}/.docflow/layout.json`
+
+Подробности — в [implemented-features.md](./doc/implemented-features.md).

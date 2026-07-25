@@ -1,50 +1,92 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { BottomDock } from "./components/BottomDock/BottomDock";
+import { EditorPane } from "./components/Editor/Editor";
+import { RightDock } from "./components/RightDock/RightDock";
+import { Sidebar } from "./components/Sidebar/Sidebar";
+import { StatusBar } from "./components/StatusBar/StatusBar";
+import { TopBar } from "./components/TopBar/TopBar";
+import { Welcome } from "./components/Welcome/Welcome";
+import { usePanelLayout } from "./hooks/usePanelLayout";
+import { useProject } from "./hooks/useProject";
+import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const layout = useWorkspaceLayout();
+  const project = useProject();
+  const panels = usePanelLayout(project.projectRoot);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  const mainClassName = [
+    "main",
+    layout.sidebarOpen ? "" : "sidebar-collapsed",
+    layout.activeTool ? "" : "right-collapsed",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const hasProject = Boolean(project.projectRoot);
+  const cursorLabel = hasProject
+    ? `Ln ${layout.cursor.line}, Col ${layout.cursor.column}`
+    : "Ln 1, Col 1";
+
+  const panelStyle = {
+    ["--sidebar-width" as string]: `${panels.layout.sidebarWidth}px`,
+    ["--right-width" as string]: `${panels.layout.rightWidth}px`,
+    ["--bottom-height" as string]: `${panels.layout.bottomHeight}px`,
+  };
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
+    <div className="app" style={panelStyle}>
+      <TopBar
+        repoName={project.projectName ?? "—"}
+        branchName="—"
+      />
+      <div className="workspace">
+        <div className={mainClassName}>
+          <Sidebar
+            open={layout.sidebarOpen}
+            onToggle={layout.toggleSidebar}
+            projectRoot={project.projectRoot}
+            projectName={project.projectName}
+            onResize={panels.resizeSidebarBy}
+            onResizeEnd={panels.persistLayout}
+          />
+          {hasProject ? (
+            <EditorPane
+              tabs={layout.tabs}
+              activeTabId={layout.activeTabId}
+              activeTab={layout.activeTab}
+              onSelectTab={layout.selectTab}
+              onCloseTab={layout.closeTab}
+              onChangeContent={layout.updateActiveContent}
+              onCursorChange={layout.setCursor}
+            />
+          ) : (
+            <Welcome
+              onOpenFolder={project.openFolderDialog}
+              error={project.ready ? project.error : null}
+            />
+          )}
+          <RightDock
+            activeTool={layout.activeTool}
+            onToggleTool={layout.toggleRightTool}
+            onHide={() => layout.setRightTool(null)}
+            onResize={panels.resizeRightBy}
+            onResizeEnd={panels.persistLayout}
+          />
+        </div>
+        <BottomDock
+          activeTool={layout.bottomTool}
+          onToggleTool={layout.toggleBottomTool}
+          onHide={() => layout.setBottomToolId(null)}
+          onResize={panels.resizeBottomBy}
+          onResizeEnd={panels.persistLayout}
         />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      </div>
+      <StatusBar
+        filePath={hasProject ? layout.activeTab.title : "—"}
+        language={hasProject ? layout.activeTab.language : "—"}
+        cursorLabel={cursorLabel}
+      />
+    </div>
   );
 }
 
