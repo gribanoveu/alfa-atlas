@@ -1,0 +1,27 @@
+use crate::domain::git::{GitCommitSummary, GitStatusSnapshot};
+use crate::services::git_ops;
+
+#[tauri::command]
+pub fn git_status(repo_root: String) -> Result<GitStatusSnapshot, String> {
+    git_ops::status(&repo_root).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_stage(repo_root: String, paths: Vec<String>) -> Result<(), String> {
+    git_ops::stage(&repo_root, &paths).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_unstage(repo_root: String, paths: Vec<String>) -> Result<(), String> {
+    git_ops::unstage(&repo_root, &paths).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_commit(repo_root: String, message: String) -> Result<String, String> {
+    git_ops::commit(&repo_root, &message).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_log(repo_root: String, limit: Option<usize>) -> Result<Vec<GitCommitSummary>, String> {
+    git_ops::log(&repo_root, limit.unwrap_or(20)).map_err(|e| e.to_string())
+}

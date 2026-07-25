@@ -12,6 +12,7 @@ import { Welcome } from "./components/Welcome/Welcome";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
+import { useGitPanel } from "./hooks/useGitPanel";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
@@ -46,10 +47,17 @@ function App() {
     onTabsChange,
     prefs: generalPrefs.prefs,
   });
+  const gitPanelActive =
+    layout.activeTool === "git" || layout.activeTool === "gitHistory";
+  const git = useGitPanel(project.repoRoot, {
+    active: gitPanelActive && Boolean(project.repoRoot),
+    onBranchChange: project.setBranchFromGit,
+  });
   const [folderError, setFolderError] = useState<string | null>(null);
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const skipNextPanelSync = useRef(false);
+  const prevDirtyCount = useRef(0);
 
   useEffect(() => {
     if (!session.ready || !session.loadedState || !project.docsRoot) return;
@@ -181,12 +189,29 @@ function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        if (hasProject) void editor.saveActive();
+        if (hasProject) {
+          void editor.saveActive().then((ok) => {
+            if (ok && gitPanelActive) git.scheduleRefresh();
+          });
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [editor.saveActive, hasProject]);
+  }, [editor.saveActive, git.scheduleRefresh, gitPanelActive, hasProject]);
+
+  // After autosave clears dirty flags, refresh Git status when the panel is open.
+  useEffect(() => {
+    const dirtyCount = editor.tabs.filter((t) => t.dirty).length;
+    if (
+      gitPanelActive &&
+      prevDirtyCount.current > 0 &&
+      dirtyCount < prevDirtyCount.current
+    ) {
+      git.scheduleRefresh();
+    }
+    prevDirtyCount.current = dirtyCount;
+  }, [editor.tabs, git.scheduleRefresh, gitPanelActive]);
 
   const activePath = editor.activeTab?.path ?? null;
   const statusPath = activePath ?? "—";
@@ -204,7 +229,11 @@ function App() {
         hasProject={hasProject}
         onOpenFolder={openFolder}
         onCloseProject={closeProject}
-        onSave={editor.saveActive}
+        onSave={async () => {
+          const ok = await editor.saveActive();
+          if (ok && gitPanelActive) git.scheduleRefresh();
+          return ok;
+        }}
         onPrefsChange={generalPrefs.setPrefs}
         onToggleSidebar={layout.toggleSidebar}
         onToggleRight={toggleRightPanel}
@@ -253,6 +282,30 @@ function App() {
             onHide={() => layout.setRightTool(null)}
             onResize={panels.resizeRightBy}
             onResizeEnd={panels.persistLayout}
+            git={
+              hasProject
+                ? {
+                    staged: git.status.staged,
+                    unstaged: git.status.unstaged,
+                    commits: git.commits,
+                    jiraKey: git.jiraKey,
+                    onJiraKeyChange: git.setJiraKey,
+                    description: git.description,
+                    onDescriptionChange: git.setDescription,
+                    canCommit: git.canCommit,
+                    busy: git.busy,
+                    error: git.error,
+                    onStage: (path) => void git.stage([path]),
+                    onUnstage: (path) => void git.unstage([path]),
+                    onStageAll: () =>
+                      void git.stage(git.status.unstaged.map((f) => f.path)),
+                    onUnstageAll: () =>
+                      void git.unstage(git.status.staged.map((f) => f.path)),
+                    onCommit: () => void git.commit(),
+                    onRefresh: () => void git.refresh(),
+                  }
+                : null
+            }
           />
         </div>
         <BottomDock

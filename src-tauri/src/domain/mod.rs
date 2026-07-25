@@ -1,3 +1,4 @@
+pub mod git;
 pub mod layout;
 pub mod paths;
 pub mod project_config;

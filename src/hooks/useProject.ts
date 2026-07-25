@@ -119,6 +119,23 @@ export function useProject() {
     setPendingOpen(null);
   }, []);
 
+  const refreshBranch = useCallback(async () => {
+    if (!repoRoot) {
+      setBranchName(null);
+      return;
+    }
+    try {
+      const branch = await getGitBranch(repoRoot);
+      setBranchName(branch);
+    } catch {
+      setBranchName(null);
+    }
+  }, [repoRoot]);
+
+  const setBranchFromGit = useCallback((branch: string | null) => {
+    setBranchName(branch);
+  }, []);
+
   const projectName = repoRoot
     ? (repoRoot.split(/[/\\]/).filter(Boolean).pop() ?? repoRoot)
     : null;
@@ -137,5 +154,7 @@ export function useProject() {
     confirmPendingOpen,
     cancelPendingOpen,
     closeProject,
+    refreshBranch,
+    setBranchFromGit,
   };
 }
