@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
+import type { GeneralPrefs } from "../../lib/prefs";
 import { SettingsDialog } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
 import { AboutModal } from "./AboutModal";
@@ -17,6 +18,7 @@ type TopBarProps = {
   onOpenFolder: () => Promise<unknown>;
   onCloseProject: () => Promise<void>;
   onSave: () => Promise<unknown>;
+  onPrefsChange?: (prefs: GeneralPrefs) => void;
   onToggleSidebar: () => void;
   onToggleRight: () => void;
   onToggleBottom: () => void;
@@ -30,6 +32,7 @@ export function TopBar({
   onOpenFolder,
   onCloseProject,
   onSave,
+  onPrefsChange,
   onToggleSidebar,
   onToggleRight,
   onToggleBottom,
@@ -116,6 +119,7 @@ export function TopBar({
           projectRoot={projectRoot}
           onClose={() => setSettingsOpen(false)}
           onCloseProject={onCloseProject}
+          onPrefsChange={onPrefsChange}
         />
       ) : null}
     </>

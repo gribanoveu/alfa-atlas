@@ -14,6 +14,8 @@ type FileTreeProps = {
   rootName: string;
   rootPath: string;
   activePath: string | null;
+  expandedDirs: ReadonlySet<string>;
+  onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
@@ -23,11 +25,10 @@ type FileTreeNodeProps = {
   node: TreeNode;
   depth: number;
   activePath: string | null;
+  expandedDirs: ReadonlySet<string>;
+  onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
-  onContextMenu: (
-    event: ReactMouseEvent,
-    parentPath: string,
-  ) => void;
+  onContextMenu: (event: ReactMouseEvent, parentPath: string) => void;
 };
 
 type ContextMenuState = {
@@ -49,19 +50,20 @@ function FileTreeNode({
   node,
   depth,
   activePath,
+  expandedDirs,
+  onToggleDir,
   onOpenFile,
   onContextMenu,
 }: FileTreeNodeProps) {
-  const [expanded, setExpanded] = useState(depth < 3);
-
   if (node.isDir) {
+    const expanded = expandedDirs.has(node.path);
     return (
       <div className="file-tree-branch">
         <button
           type="button"
           className="file-tree-row dir"
           style={{ paddingLeft: 4 + depth * 14 }}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => onToggleDir(node.path)}
           onContextMenu={(event) => onContextMenu(event, node.path)}
         >
           <span className="file-tree-twist">{expanded ? "▾" : "▸"}</span>
@@ -79,6 +81,8 @@ function FileTreeNode({
                 node={child}
                 depth={depth + 1}
                 activePath={activePath}
+                expandedDirs={expandedDirs}
+                onToggleDir={onToggleDir}
                 onOpenFile={onOpenFile}
                 onContextMenu={onContextMenu}
               />
@@ -110,12 +114,15 @@ export function FileTree({
   rootName,
   rootPath,
   activePath,
+  expandedDirs,
+  onToggleDir,
   onOpenFile,
   onNewFile,
   onNewFolder,
 }: FileTreeProps) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const rootExpanded = expandedDirs.has(".");
 
   useLayoutEffect(() => {
     if (!menu || !menuRef.current) return;
@@ -150,10 +157,7 @@ export function FileTree({
     };
   }, [menu]);
 
-  const openContextMenu = (
-    event: ReactMouseEvent,
-    parentPath: string,
-  ) => {
+  const openContextMenu = (event: ReactMouseEvent, parentPath: string) => {
     event.preventDefault();
     event.stopPropagation();
     window.getSelection()?.removeAllRanges();
@@ -169,26 +173,35 @@ export function FileTree({
           className="file-tree-row dir root"
           style={{ paddingLeft: 4 }}
           title={rootPath}
+          onClick={() => onToggleDir(".")}
           onContextMenu={(event) => openContextMenu(event, ".")}
         >
-          <span className="file-tree-twist">▾</span>
-          <FolderOpen className="file-tree-icon folder" size={14} aria-hidden />
+          <span className="file-tree-twist">{rootExpanded ? "▾" : "▸"}</span>
+          {rootExpanded ? (
+            <FolderOpen className="file-tree-icon folder" size={14} aria-hidden />
+          ) : (
+            <Folder className="file-tree-icon folder" size={14} aria-hidden />
+          )}
           <span className="file-tree-name">{rootName}</span>
         </div>
-        {nodes.length === 0 ? (
-          <div className="file-tree-empty">Нет поддерживаемых файлов</div>
-        ) : (
-          nodes.map((node) => (
-            <FileTreeNode
-              key={node.path}
-              node={node}
-              depth={1}
-              activePath={activePath}
-              onOpenFile={onOpenFile}
-              onContextMenu={openContextMenu}
-            />
-          ))
-        )}
+        {rootExpanded ? (
+          nodes.length === 0 ? (
+            <div className="file-tree-empty">Нет поддерживаемых файлов</div>
+          ) : (
+            nodes.map((node) => (
+              <FileTreeNode
+                key={node.path}
+                node={node}
+                depth={1}
+                activePath={activePath}
+                expandedDirs={expandedDirs}
+                onToggleDir={onToggleDir}
+                onOpenFile={onOpenFile}
+                onContextMenu={openContextMenu}
+              />
+            ))
+          )
+        ) : null}
       </div>
 
       {menu ? (

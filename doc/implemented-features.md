@@ -82,6 +82,7 @@
 | Глобально | `~/.docflow/settings.json` → `project.root` = абсолютный **repoRoot** |
 | В репозитории | `{repoRoot}/.docflow/project.json` → `{ "docsRoot": "src/docs/asciidoc" }` (относительный путь) |
 | Layout | `{repoRoot}/.docflow/layout.json` |
+| Workspace UI | `{repoRoot}/.docflow/workspace.json` — открытые вкладки, активная вкладка, раскрытые папки дерева |
 | IPC | `probe_open_path`, `open_project`, `open_cached_project`, `get_project`, `get_saved_repo_root`, `clear_project`, `get_git_branch` |
 | Frontend | [`src/lib/project.ts`](../src/lib/project.ts), [`src/hooks/useProject.ts`](../src/hooks/useProject.ts) |
 | Backend | [`services/project_open.rs`](../src-tauri/src/services/project_open.rs), [`infra/project_store.rs`](../src-tauri/src/infra/project_store.rs), [`infra/git_repo.rs`](../src-tauri/src/infra/git_repo.rs) |
@@ -151,6 +152,7 @@ Rust:      commands → services → domain
 | `~/.docflow/settings.json` | Окно; последний `project.root`; `general.restoreLastProject` |
 | `{repo}/.docflow/project.json` | Относительный `docsRoot` |
 | `{repo}/.docflow/layout.json` | Размеры панелей |
+| `{repo}/.docflow/workspace.json` | Вкладки и раскрытие дерева |
 
 ---
 

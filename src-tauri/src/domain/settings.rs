@@ -58,16 +58,49 @@ pub struct ProjectSettings {
     pub root: Option<String>,
 }
 
+pub const DEFAULT_AUTOSAVE_DELAY_MS: u64 = 1000;
+pub const MIN_AUTOSAVE_DELAY_MS: u64 = 300;
+pub const MAX_AUTOSAVE_DELAY_MS: u64 = 10_000;
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_autosave_delay_ms() -> u64 {
+    DEFAULT_AUTOSAVE_DELAY_MS
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralPrefs {
+    #[serde(default = "default_true")]
     pub restore_last_project: bool,
+    #[serde(default = "default_true")]
+    pub autosave_enabled: bool,
+    #[serde(default = "default_true")]
+    pub save_on_tab_switch: bool,
+    #[serde(default = "default_autosave_delay_ms")]
+    pub autosave_delay_ms: u64,
+}
+
+impl GeneralPrefs {
+    pub fn clamped(self) -> Self {
+        Self {
+            autosave_delay_ms: self
+                .autosave_delay_ms
+                .clamp(MIN_AUTOSAVE_DELAY_MS, MAX_AUTOSAVE_DELAY_MS),
+            ..self
+        }
+    }
 }
 
 impl Default for GeneralPrefs {
     fn default() -> Self {
         Self {
             restore_last_project: true,
+            autosave_enabled: true,
+            save_on_tab_switch: true,
+            autosave_delay_ms: DEFAULT_AUTOSAVE_DELAY_MS,
         }
     }
 }
@@ -163,5 +196,31 @@ mod tests {
             serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
         assert_eq!(settings.project.root, None);
         assert!(settings.general.restore_last_project);
+        assert!(settings.general.autosave_enabled);
+        assert!(settings.general.save_on_tab_switch);
+        assert_eq!(
+            settings.general.autosave_delay_ms,
+            DEFAULT_AUTOSAVE_DELAY_MS
+        );
+    }
+
+    #[test]
+    fn deserializes_legacy_general_without_autosave_fields() {
+        let prefs: GeneralPrefs =
+            serde_json::from_str(r#"{"restoreLastProject":false}"#).unwrap();
+        assert!(!prefs.restore_last_project);
+        assert!(prefs.autosave_enabled);
+        assert!(prefs.save_on_tab_switch);
+        assert_eq!(prefs.autosave_delay_ms, DEFAULT_AUTOSAVE_DELAY_MS);
+    }
+
+    #[test]
+    fn clamps_autosave_delay() {
+        let prefs = GeneralPrefs {
+            autosave_delay_ms: 10,
+            ..GeneralPrefs::default()
+        }
+        .clamped();
+        assert_eq!(prefs.autosave_delay_ms, MIN_AUTOSAVE_DELAY_MS);
     }
 }

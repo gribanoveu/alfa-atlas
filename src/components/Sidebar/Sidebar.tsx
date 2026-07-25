@@ -12,6 +12,8 @@ type SidebarProps = {
   treeLoading: boolean;
   treeError: string | null;
   activePath: string | null;
+  expandedDirs: ReadonlySet<string>;
+  onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
@@ -31,6 +33,8 @@ export function Sidebar({
   treeLoading,
   treeError,
   activePath,
+  expandedDirs,
+  onToggleDir,
   onOpenFile,
   onNewFile,
   onNewFolder,
@@ -81,6 +85,8 @@ export function Sidebar({
               rootName={rootNameOf(docsRoot)}
               rootPath={docsRoot}
               activePath={activePath}
+              expandedDirs={expandedDirs}
+              onToggleDir={onToggleDir}
               onOpenFile={onOpenFile}
               onNewFile={onNewFile}
               onNewFolder={onNewFolder}

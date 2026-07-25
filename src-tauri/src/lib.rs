@@ -101,6 +101,8 @@ pub fn run() {
             commands::project::create_project_dir,
             commands::layout::get_project_layout,
             commands::layout::save_project_layout,
+            commands::workspace::get_workspace_state,
+            commands::workspace::save_workspace_state,
             commands::prefs::get_general_prefs,
             commands::prefs::set_general_prefs,
             commands::prefs::get_settings_paths,

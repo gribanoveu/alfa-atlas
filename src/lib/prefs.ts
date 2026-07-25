@@ -2,7 +2,26 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type GeneralPrefs = {
   restoreLastProject: boolean;
+  autosaveEnabled: boolean;
+  saveOnTabSwitch: boolean;
+  autosaveDelayMs: number;
 };
+
+export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
+  restoreLastProject: true,
+  autosaveEnabled: true,
+  saveOnTabSwitch: true,
+  autosaveDelayMs: 1000,
+};
+
+export const AUTOSAVE_DELAY_LIMITS = { min: 300, max: 10_000 } as const;
+
+export function clampAutosaveDelayMs(value: number): number {
+  return Math.min(
+    AUTOSAVE_DELAY_LIMITS.max,
+    Math.max(AUTOSAVE_DELAY_LIMITS.min, Math.round(value)),
+  );
+}
 
 export type SettingsPaths = {
   userSettingsDir: string;
@@ -15,7 +34,12 @@ export function getGeneralPrefs(): Promise<GeneralPrefs> {
 }
 
 export function setGeneralPrefs(prefs: GeneralPrefs): Promise<void> {
-  return invoke<void>("set_general_prefs", { prefs });
+  return invoke<void>("set_general_prefs", {
+    prefs: {
+      ...prefs,
+      autosaveDelayMs: clampAutosaveDelayMs(prefs.autosaveDelayMs),
+    },
+  });
 }
 
 export function getSettingsPaths(): Promise<SettingsPaths> {

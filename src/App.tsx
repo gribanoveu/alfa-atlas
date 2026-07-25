@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { RightDock } from "./components/RightDock/RightDock";
@@ -11,9 +11,14 @@ import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProject
 import { Welcome } from "./components/Welcome/Welcome";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
+import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
+import {
+  collectDirPaths,
+  useWorkspaceSession,
+} from "./hooks/useWorkspaceSession";
 import { createProjectDir, createProjectFile } from "./lib/project";
 import { formatLabelFor, lineEndingLabelFor } from "./lib/supportedFiles";
 
@@ -25,12 +30,88 @@ function joinParent(parentPath: string, name: string): string {
 function App() {
   const layout = useWorkspaceLayout();
   const project = useProject();
+  const generalPrefs = useGeneralPrefs();
   const panels = usePanelLayout(project.repoRoot);
   const tree = useDocsTree(project.docsRoot);
-  const editor = useEditorTabs(project.docsRoot);
+  const session = useWorkspaceSession(project.repoRoot, project.docsRoot);
+
+  const onTabsChange = useCallback(
+    (openTabs: string[], activeTab: string | null) => {
+      session.syncTabs(openTabs, activeTab);
+    },
+    [session.syncTabs],
+  );
+
+  const editor = useEditorTabs(project.docsRoot, {
+    onTabsChange,
+    prefs: generalPrefs.prefs,
+  });
   const [folderError, setFolderError] = useState<string | null>(null);
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
+  const skipNextPanelSync = useRef(false);
+
+  useEffect(() => {
+    if (!session.ready || !session.loadedState || !project.docsRoot) return;
+    void editor.restoreTabs(
+      session.loadedState.openTabs,
+      session.loadedState.activeTab,
+    );
+  }, [
+    session.ready,
+    session.loadedState,
+    project.docsRoot,
+    editor.restoreTabs,
+  ]);
+
+  useEffect(() => {
+    if (!session.ready || !session.loadedState || !project.docsRoot) return;
+    skipNextPanelSync.current = true;
+    layout.hydrate(session.loadedState);
+  }, [
+    session.ready,
+    session.loadedState,
+    project.docsRoot,
+    layout.hydrate,
+  ]);
+
+  useEffect(() => {
+    if (!session.ready || !project.docsRoot) return;
+    if (skipNextPanelSync.current) {
+      skipNextPanelSync.current = false;
+      return;
+    }
+    session.syncPanelUi({
+      sidebarOpen: layout.sidebarOpen,
+      rightTool: layout.activeTool,
+      bottomTool: layout.bottomTool,
+    });
+  }, [
+    session.ready,
+    session.syncPanelUi,
+    project.docsRoot,
+    layout.sidebarOpen,
+    layout.activeTool,
+    layout.bottomTool,
+  ]);
+
+  useEffect(() => {
+    if (!session.ready || !session.loadedState || !project.docsRoot) return;
+    if (tree.nodes.length === 0) return;
+    const loaded = session.loadedState.expandedDirs;
+    const isDefault =
+      loaded.length === 0 || (loaded.length === 1 && loaded[0] === ".");
+    if (!isDefault) return;
+    if (session.expandedDirs.size > 1) return;
+    session.seedShallowExpanded(collectDirPaths(tree.nodes));
+  }, [
+    session.ready,
+    session.loadedState,
+    session.expandedDirs.size,
+    session.seedShallowExpanded,
+    project.docsRoot,
+    tree.nodes,
+  ]);
 
   const mainClassName = [
     "main",
@@ -61,9 +142,11 @@ function App() {
   }, [project]);
 
   const closeProject = useCallback(async () => {
+    await editor.reset();
     await project.closeProject();
-    editor.reset();
-  }, [editor.reset, project.closeProject]);
+    skipNextPanelSync.current = true;
+    layout.reset();
+  }, [editor.reset, layout.reset, project.closeProject]);
 
   const toggleRightPanel = useCallback(() => {
     if (layout.activeTool) {
@@ -109,6 +192,7 @@ function App() {
         onOpenFolder={openFolder}
         onCloseProject={closeProject}
         onSave={editor.saveActive}
+        onPrefsChange={generalPrefs.setPrefs}
         onToggleSidebar={layout.toggleSidebar}
         onToggleRight={toggleRightPanel}
         onToggleBottom={toggleBottomPanel}
@@ -123,6 +207,8 @@ function App() {
             treeLoading={tree.loading}
             treeError={tree.error}
             activePath={editor.activeTab?.path ?? null}
+            expandedDirs={session.expandedDirs}
+            onToggleDir={session.toggleDir}
             onOpenFile={(path) => void editor.openFile(path)}
             onNewFile={setNewFileParent}
             onNewFolder={setNewFolderParent}
@@ -188,6 +274,7 @@ function App() {
           onConfirm={async (fileName) => {
             const relativePath = joinParent(newFileParent, fileName);
             await createProjectFile(project.docsRoot!, relativePath);
+            session.ensureExpanded(newFileParent);
             setNewFileParent(null);
             await tree.refresh();
             await editor.openFile(relativePath);
@@ -202,6 +289,7 @@ function App() {
           onConfirm={async (folderName) => {
             const relativePath = joinParent(newFolderParent, folderName);
             await createProjectDir(project.docsRoot!, relativePath);
+            session.ensureExpanded(relativePath);
             setNewFolderParent(null);
             await tree.refresh();
           }}

@@ -1,6 +1,8 @@
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useState } from "react";
 import {
+  AUTOSAVE_DELAY_LIMITS,
+  clampAutosaveDelayMs,
   getGeneralPrefs,
   getSettingsPaths,
   setGeneralPrefs,
@@ -22,12 +24,14 @@ type SettingsDialogProps = {
   projectRoot: string | null;
   onClose: () => void;
   onCloseProject: () => Promise<void>;
+  onPrefsChange?: (prefs: GeneralPrefs) => void;
 };
 
 export function SettingsDialog({
   projectRoot,
   onClose,
   onCloseProject,
+  onPrefsChange,
 }: SettingsDialogProps) {
   const [section, setSection] = useState<SectionId>("general");
   const [prefs, setPrefs] = useState<GeneralPrefs | null>(null);
@@ -67,23 +71,31 @@ export function SettingsDialog({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const updateRestoreLastProject = useCallback(
-    async (restoreLastProject: boolean) => {
-      if (!prefs) return;
-      const next = { ...prefs, restoreLastProject };
+  const persistPrefs = useCallback(
+    async (next: GeneralPrefs) => {
       setPrefs(next);
       setBusy(true);
       try {
         await setGeneralPrefs(next);
+        onPrefsChange?.(next);
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
-        setPrefs(prefs);
+        const current = await getGeneralPrefs().catch(() => prefs);
+        if (current) setPrefs(current);
       } finally {
         setBusy(false);
       }
     },
-    [prefs],
+    [onPrefsChange, prefs],
+  );
+
+  const patchPrefs = useCallback(
+    (patch: Partial<GeneralPrefs>) => {
+      if (!prefs) return;
+      void persistPrefs({ ...prefs, ...patch });
+    },
+    [persistPrefs, prefs],
   );
 
   const handleCloseProject = useCallback(async () => {
@@ -160,7 +172,7 @@ export function SettingsDialog({
                       checked={prefs?.restoreLastProject ?? true}
                       disabled={!prefs || busy}
                       onChange={(event) =>
-                        void updateRestoreLastProject(event.target.checked)
+                        patchPrefs({ restoreLastProject: event.target.checked })
                       }
                     />
                     <span>Открывать последний проект при запуске</span>
@@ -185,10 +197,73 @@ export function SettingsDialog({
 
             {section === "editor" ? (
               <>
-                <div className="settings-section-title">Редактор</div>
-                <p className="settings-hint" style={{ paddingLeft: 0 }}>
-                  Настройки редактора появятся позже.
-                </p>
+                <div className="settings-section-title">Автосохранение</div>
+                <div className="settings-row">
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={prefs?.autosaveEnabled ?? true}
+                      disabled={!prefs || busy}
+                      onChange={(event) =>
+                        patchPrefs({ autosaveEnabled: event.target.checked })
+                      }
+                    />
+                    <span>Автосохранение при редактировании</span>
+                  </label>
+                  <p className="settings-hint">
+                    Периодически записывает файл на диск после паузы ввода.
+                  </p>
+                </div>
+                <div className="settings-row">
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={prefs?.saveOnTabSwitch ?? true}
+                      disabled={!prefs || busy}
+                      onChange={(event) =>
+                        patchPrefs({ saveOnTabSwitch: event.target.checked })
+                      }
+                    />
+                    <span>Сохранять при переключении вкладки</span>
+                  </label>
+                </div>
+                <div className="settings-row">
+                  <label className="settings-field-label" htmlFor="autosave-delay">
+                    Задержка автосохранения (мс)
+                  </label>
+                  <input
+                    id="autosave-delay"
+                    className="settings-number"
+                    type="number"
+                    min={AUTOSAVE_DELAY_LIMITS.min}
+                    max={AUTOSAVE_DELAY_LIMITS.max}
+                    step={100}
+                    value={prefs?.autosaveDelayMs ?? 1000}
+                    disabled={!prefs || busy || !(prefs?.autosaveEnabled ?? true)}
+                    onChange={(event) => {
+                      if (!prefs) return;
+                      const raw = Number(event.target.value);
+                      if (!Number.isFinite(raw)) return;
+                      setPrefs({
+                        ...prefs,
+                        autosaveDelayMs: clampAutosaveDelayMs(raw),
+                      });
+                    }}
+                    onBlur={() => {
+                      if (!prefs) return;
+                      void persistPrefs({
+                        ...prefs,
+                        autosaveDelayMs: clampAutosaveDelayMs(
+                          prefs.autosaveDelayMs,
+                        ),
+                      });
+                    }}
+                  />
+                  <p className="settings-hint">
+                    От {AUTOSAVE_DELAY_LIMITS.min} до{" "}
+                    {AUTOSAVE_DELAY_LIMITS.max} мс.
+                  </p>
+                </div>
                 <div className="settings-row">
                   <div className="settings-section-title">
                     Поддерживаемые форматы

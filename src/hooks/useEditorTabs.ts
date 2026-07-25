@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  readProjectFile,
-  writeProjectFile,
-} from "../lib/project";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { GeneralPrefs } from "../lib/prefs";
+import { DEFAULT_GENERAL_PREFS } from "../lib/prefs";
+import { readProjectFile, writeProjectFile } from "../lib/project";
 import { monacoLanguageFor } from "../lib/supportedFiles";
 
 export type EditorTab = {
@@ -20,6 +19,11 @@ export type CursorPosition = {
   column: number;
 };
 
+export type EditorAutosavePrefs = Pick<
+  GeneralPrefs,
+  "autosaveEnabled" | "saveOnTabSwitch" | "autosaveDelayMs"
+>;
+
 function titleOf(relativePath: string): string {
   return relativePath.split(/[/\\]/).pop() ?? relativePath;
 }
@@ -36,18 +40,157 @@ function confirmCloseDirty(closing: EditorTab[]): boolean {
   );
 }
 
-export function useEditorTabs(docsRoot: string | null) {
+type UseEditorTabsOptions = {
+  onTabsChange?: (openTabs: string[], activeTab: string | null) => void;
+  prefs?: EditorAutosavePrefs;
+};
+
+export function useEditorTabs(
+  docsRoot: string | null,
+  options: UseEditorTabsOptions = {},
+) {
+  const { onTabsChange } = options;
+  const prefs = options.prefs ?? DEFAULT_GENERAL_PREFS;
+
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [cursor, setCursor] = useState<CursorPosition>({ line: 1, column: 1 });
   const [error, setError] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
+  const restoredForRoot = useRef<string | null>(null);
+
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+  const docsRootRef = useRef(docsRoot);
+  docsRootRef.current = docsRoot;
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearDebounce = useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+  }, []);
+
+  const saveTab = useCallback(async (id: string): Promise<boolean> => {
+    const root = docsRootRef.current;
+    const tab = tabsRef.current.find((t) => t.id === id);
+    if (!root || !tab) return false;
+    if (!tab.dirty) return true;
+
+    const contentToSave = tab.content;
+    const path = tab.path;
+    try {
+      await writeProjectFile(root, path, contentToSave);
+      setTabs((prev) => {
+        const next = prev.map((t) => {
+          if (t.id !== id) return t;
+          return {
+            ...t,
+            savedContent: contentToSave,
+            dirty: t.content !== contentToSave,
+          };
+        });
+        tabsRef.current = next;
+        return next;
+      });
+      setError(null);
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+  }, []);
+
+  const flushDebounce = useCallback(async (): Promise<boolean> => {
+    const hadPending = debounceTimerRef.current !== null;
+    clearDebounce();
+    if (!hadPending) return true;
+    if (!prefsRef.current.autosaveEnabled) return true;
+    const id = activeTabIdRef.current;
+    if (!id) return true;
+    const tab = tabsRef.current.find((t) => t.id === id);
+    if (!tab?.dirty) return true;
+    return saveTab(id);
+  }, [clearDebounce, saveTab]);
+
+  const switchToTab = useCallback(
+    async (id: string) => {
+      if (id === activeTabIdRef.current) return;
+      await flushDebounce();
+      const currentId = activeTabIdRef.current;
+      if (currentId && prefsRef.current.saveOnTabSwitch) {
+        const current = tabsRef.current.find((t) => t.id === currentId);
+        if (current?.dirty) {
+          const ok = await saveTab(currentId);
+          if (!ok) return;
+        }
+      }
+      setActiveTabId(id);
+    },
+    [flushDebounce, saveTab],
+  );
+
+  const prepareClose = useCallback(
+    async (closing: EditorTab[]): Promise<boolean> => {
+      if (closing.length === 0) return true;
+      await flushDebounce();
+      const { autosaveEnabled, saveOnTabSwitch } = prefsRef.current;
+      if (autosaveEnabled || saveOnTabSwitch) {
+        for (const tab of closing) {
+          const latest = tabsRef.current.find((t) => t.id === tab.id);
+          if (!latest?.dirty) continue;
+          const ok = await saveTab(latest.id);
+          if (!ok) return false;
+        }
+        return true;
+      }
+      const latestClosing = closing
+        .map((tab) => tabsRef.current.find((t) => t.id === tab.id))
+        .filter((t): t is EditorTab => Boolean(t));
+      return confirmCloseDirty(latestClosing);
+    },
+    [flushDebounce, saveTab],
+  );
 
   useEffect(() => {
+    const rootForSession = docsRoot;
     setTabs([]);
     setActiveTabId(null);
     setCursor({ line: 1, column: 1 });
     setError(null);
-  }, [docsRoot]);
+    setHydrated(false);
+    restoredForRoot.current = null;
+
+    return () => {
+      const hadPending = debounceTimerRef.current !== null;
+      clearDebounce();
+      if (
+        !hadPending ||
+        !rootForSession ||
+        !prefsRef.current.autosaveEnabled
+      ) {
+        return;
+      }
+      const id = activeTabIdRef.current;
+      if (!id) return;
+      const tab = tabsRef.current.find((t) => t.id === id);
+      if (!tab?.dirty) return;
+      void writeProjectFile(rootForSession, tab.path, tab.content);
+    };
+  }, [docsRoot, clearDebounce]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    onTabsChange?.(
+      tabs.map((t) => t.path),
+      activeTabId,
+    );
+  }, [tabs, activeTabId, onTabsChange, hydrated]);
 
   const activeTab = useMemo((): EditorTab | null => {
     if (!activeTabId) return null;
@@ -57,9 +200,9 @@ export function useEditorTabs(docsRoot: string | null) {
   const openFile = useCallback(
     async (relativePath: string) => {
       if (!docsRoot) return;
-      const existing = tabs.find((tab) => tab.path === relativePath);
+      const existing = tabsRef.current.find((tab) => tab.path === relativePath);
       if (existing) {
-        setActiveTabId(existing.id);
+        await switchToTab(existing.id);
         return;
       }
       try {
@@ -73,65 +216,129 @@ export function useEditorTabs(docsRoot: string | null) {
           language: monacoLanguageFor(relativePath),
           dirty: false,
         };
-        setTabs((prev) => [...prev, tab]);
+        await flushDebounce();
+        const currentId = activeTabIdRef.current;
+        if (currentId && prefsRef.current.saveOnTabSwitch) {
+          const current = tabsRef.current.find((t) => t.id === currentId);
+          if (current?.dirty) {
+            const ok = await saveTab(currentId);
+            if (!ok) return;
+          }
+        }
+        setTabs((prev) => {
+          const next = [...prev, tab];
+          tabsRef.current = next;
+          return next;
+        });
         setActiveTabId(tab.id);
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [docsRoot, tabs],
+    [docsRoot, flushDebounce, saveTab, switchToTab],
   );
 
-  const selectTab = useCallback((id: string) => {
-    setActiveTabId(id);
-  }, []);
+  const restoreTabs = useCallback(
+    async (openTabs: string[], activeTab: string | null) => {
+      if (!docsRoot) return;
+      if (restoredForRoot.current === docsRoot) return;
+      restoredForRoot.current = docsRoot;
+
+      const restored: EditorTab[] = [];
+      for (const path of openTabs) {
+        try {
+          const content = await readProjectFile(docsRoot, path);
+          restored.push({
+            id: path,
+            path,
+            title: titleOf(path),
+            content,
+            savedContent: content,
+            language: monacoLanguageFor(path),
+            dirty: false,
+          });
+        } catch {
+          // Skip missing files.
+        }
+      }
+
+      const nextActive =
+        (activeTab && restored.some((t) => t.id === activeTab)
+          ? activeTab
+          : null) ??
+        restored[0]?.id ??
+        null;
+
+      setTabs(restored);
+      tabsRef.current = restored;
+      setActiveTabId(nextActive);
+      setError(null);
+      setHydrated(true);
+    },
+    [docsRoot],
+  );
+
+  const selectTab = useCallback(
+    (id: string) => {
+      void switchToTab(id);
+    },
+    [switchToTab],
+  );
 
   const closeTab = useCallback(
-    (id: string) => {
-      const tab = tabs.find((t) => t.id === id);
+    async (id: string) => {
+      const tab = tabsRef.current.find((t) => t.id === id);
       if (!tab) return;
-      if (!confirmCloseDirty([tab])) return;
+      const ok = await prepareClose([tab]);
+      if (!ok) return;
       setTabs((prev) => {
         if (prev.length === 0) return prev;
         const index = prev.findIndex((t) => t.id === id);
         if (index < 0) return prev;
         const next = prev.filter((t) => t.id !== id);
-        if (id === activeTabId) {
+        tabsRef.current = next;
+        if (id === activeTabIdRef.current) {
           const fallback = next[Math.max(0, index - 1)] ?? next[0] ?? null;
           setActiveTabId(fallback?.id ?? null);
         }
         return next;
       });
     },
-    [activeTabId, tabs],
+    [prepareClose],
   );
 
-  const closeAllTabs = useCallback(() => {
-    if (tabs.length === 0) return;
-    if (!confirmCloseDirty(tabs)) return;
+  const closeAllTabs = useCallback(async () => {
+    const current = tabsRef.current;
+    if (current.length === 0) return;
+    const ok = await prepareClose(current);
+    if (!ok) return;
+    clearDebounce();
     setTabs([]);
+    tabsRef.current = [];
     setActiveTabId(null);
-  }, [tabs]);
+  }, [clearDebounce, prepareClose]);
 
   const closeOtherTabs = useCallback(
-    (id: string) => {
-      const keep = tabs.find((t) => t.id === id);
+    async (id: string) => {
+      const keep = tabsRef.current.find((t) => t.id === id);
       if (!keep) return;
-      const closing = tabs.filter((t) => t.id !== id);
+      const closing = tabsRef.current.filter((t) => t.id !== id);
       if (closing.length === 0) return;
-      if (!confirmCloseDirty(closing)) return;
+      const ok = await prepareClose(closing);
+      if (!ok) return;
       setTabs([keep]);
+      tabsRef.current = [keep];
       setActiveTabId(keep.id);
     },
-    [tabs],
+    [prepareClose],
   );
 
   const updateActiveContent = useCallback(
     (content: string) => {
       if (!activeTabId) return;
-      setTabs((prev) =>
-        prev.map((tab) =>
+      setTabs((prev) => {
+        const next = prev.map((tab) =>
           tab.id === activeTabId
             ? {
                 ...tab,
@@ -139,42 +346,43 @@ export function useEditorTabs(docsRoot: string | null) {
                 dirty: content !== tab.savedContent,
               }
             : tab,
-        ),
-      );
+        );
+        tabsRef.current = next;
+        return next;
+      });
+
+      clearDebounce();
+      if (!prefsRef.current.autosaveEnabled) return;
+      const delay = prefsRef.current.autosaveDelayMs;
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        const id = activeTabIdRef.current;
+        if (!id) return;
+        const tab = tabsRef.current.find((t) => t.id === id);
+        if (!tab?.dirty) return;
+        void saveTab(id);
+      }, delay);
     },
-    [activeTabId],
+    [activeTabId, clearDebounce, saveTab],
   );
 
   const saveActive = useCallback(async () => {
-    if (!docsRoot || !activeTab) return false;
-    if (!activeTab.dirty) return true;
-    try {
-      await writeProjectFile(docsRoot, activeTab.path, activeTab.content);
-      setTabs((prev) =>
-        prev.map((tab) =>
-          tab.id === activeTab.id
-            ? {
-                ...tab,
-                savedContent: tab.content,
-                dirty: false,
-              }
-            : tab,
-        ),
-      );
-      setError(null);
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      return false;
-    }
-  }, [activeTab, docsRoot]);
+    const id = activeTabIdRef.current;
+    if (!id) return false;
+    clearDebounce();
+    return saveTab(id);
+  }, [clearDebounce, saveTab]);
 
-  const reset = useCallback(() => {
+  const reset = useCallback(async () => {
+    await flushDebounce();
     setTabs([]);
+    tabsRef.current = [];
     setActiveTabId(null);
     setCursor({ line: 1, column: 1 });
     setError(null);
-  }, []);
+    setHydrated(false);
+    restoredForRoot.current = null;
+  }, [flushDebounce]);
 
   return {
     tabs,
@@ -185,6 +393,7 @@ export function useEditorTabs(docsRoot: string | null) {
     closeAllTabs,
     closeOtherTabs,
     openFile,
+    restoreTabs,
     updateActiveContent,
     saveActive,
     cursor,
