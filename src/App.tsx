@@ -22,6 +22,7 @@ import { useProject } from "./hooks/useProject";
 import { useAsciiDocParser } from "./hooks/useAsciiDocParser";
 import { useEditorViewMode } from "./hooks/useEditorViewMode";
 import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
+import { findAnchors } from "./lib/workspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
   collectDirPaths,
@@ -90,6 +91,53 @@ function toRepoRelativePath(
   const rel = norm(docsRelativePath);
   if (!suffix) return rel;
   return `${suffix}/${rel}`;
+}
+
+/**
+ * Resolve an xref `href` (`path#anchor`, `path`, or `#anchor`) against the
+ * docs-relative `sourcePath` of the document that contains the link. Returns
+ * a `{ path, anchor }` pair where `path` is docs-relative (suitable for
+ * `editor.openFile`) and `anchor` may be `null`.
+ *
+ * When `href` has no path component (just `#anchor`), the target is the
+ * current document — `path` is `sourcePath` unchanged.
+ */
+function resolveXrefHref(
+  href: string,
+  sourcePath: string,
+): { path: string; anchor: string | null } {
+  // Strip any `./`/`../`-style relative segments against the source file's
+  // directory. We don't use `URL` because these hrefs are not real URLs
+  // (no scheme) and Tauri webview may absolutize them oddly.
+  const hashIdx = href.indexOf("#");
+  const pathPart = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
+  const anchor = hashIdx >= 0 ? href.slice(hashIdx + 1) : null;
+
+  if (!pathPart) {
+    return { path: sourcePath, anchor: anchor ?? null };
+  }
+
+  const baseDir = sourcePath.includes("/")
+    ? sourcePath.slice(0, sourcePath.lastIndexOf("/"))
+    : "";
+  const combined = baseDir ? `${baseDir}/${pathPart}` : pathPart;
+  const normalized = normalizeRelativePath(combined);
+  return { path: normalized, anchor: anchor ?? null };
+}
+
+/** Collapse `.`/`..` segments in a `/`-joined relative path. */
+function normalizeRelativePath(p: string): string {
+  const norm = p.replace(/\\/g, "/");
+  const stack: string[] = [];
+  for (const segment of norm.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      stack.pop();
+      continue;
+    }
+    stack.push(segment);
+  }
+  return stack.join("/") || ".";
 }
 
 function App() {
@@ -366,6 +414,53 @@ function App() {
     ],
   );
 
+  /**
+   * Клик по xref-ссылке в превью AsciiDoc. Распарсивает href (`path#anchor`,
+   * `path`, `#anchor`), открывает целевой файл и (если есть якорь)
+   * прокручивает редактор к строке якоря через `findAnchors`.
+   */
+  const openXref = useCallback(
+    async (href: string) => {
+      const sourcePath = editor.activeTab?.path;
+      if (!sourcePath) return;
+      // Внешние URL — не наша зона ответственности, пропускаем.
+      if (/^https?:\/\//i.test(href) || href.startsWith("mailto:")) return;
+
+      const { path: relPath, anchor } = resolveXrefHref(href, sourcePath);
+
+      try {
+        await editor.openFile(relPath);
+      } catch {
+        // Файл не существует (битый xref) — тихо игнорируем; диагностику
+        // пользователь уже видит в Problems, если она была построена.
+        return;
+      }
+
+      if (!anchor) return;
+      const repoRoot = project.repoRoot;
+      const docsRoot = project.docsRoot;
+      if (!repoRoot || !docsRoot) return;
+
+      const documentId = toRepoRelativePath(relPath, repoRoot, docsRoot);
+      try {
+        const anchors = await findAnchors(documentId);
+        const hit = anchors.find((a) => a.id === anchor);
+        if (!hit) return;
+        revealCounter.current += 1;
+        setRevealRequest({
+          id: revealCounter.current,
+          line: hit.line,
+          column: hit.column,
+          severity: "warning",
+        });
+      } catch {
+        // Индекс недоступен или документ не проиндексирован — оставляем
+        // пользователя на открытой файле без прокрутки.
+      }
+    },
+    [editor, project.repoRoot, project.docsRoot],
+  );
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
@@ -506,6 +601,7 @@ function App() {
               completionsEnabled={workspaceIndex.status !== "idle"}
               revealRequest={revealRequest}
               onOpenProblems={openProblems}
+              onOpenXref={openXref}
               viewMode={viewMode.viewMode}
               onViewModeChange={viewMode.setViewMode}
               docsRoot={project.docsRoot}

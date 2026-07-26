@@ -37,6 +37,8 @@ type EditorPaneProps = {
   revealRequest: RevealRequest | null;
   /** Открыть панель «Проблемы» (по клику на индикатор ошибок в редакторе). */
   onOpenProblems: () => void;
+  /** Клик по xref-ссылке в превью AsciiDoc (path#anchor или #anchor). */
+  onOpenXref?: (href: string) => void;
   viewMode: EditorViewMode;
   onViewModeChange: (mode: EditorViewMode) => void;
   docsRoot: string | null;
@@ -60,6 +62,7 @@ export function EditorPane({
   completionsEnabled,
   revealRequest,
   onOpenProblems,
+  onOpenXref,
   viewMode,
   onViewModeChange,
   docsRoot,
@@ -183,6 +186,7 @@ export function EditorPane({
       content={activeTab.content}
       docsRoot={docsRoot}
       monaco={monaco}
+      onOpenXref={onOpenXref}
     />
   ) : null;
 

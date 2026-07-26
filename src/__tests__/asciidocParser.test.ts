@@ -52,6 +52,79 @@ describe("extractFacts", () => {
     ]);
   });
 
+  test("angle-bracket xref with anchor and text", async () => {
+    const facts = await extractFacts(
+      "<<install.adoc#configuration, конфигурация>>\n",
+    );
+    expect(facts.references).toContainEqual({
+      targetDocument: "install.adoc",
+      anchor: "configuration",
+      line: 1,
+      column: 1,
+    });
+  });
+
+  test("angle-bracket xref with relative path", async () => {
+    const facts = await extractFacts(
+      "<<../index.adoc#common-headers, общие заголовки>>\n",
+    );
+    expect(facts.references).toContainEqual({
+      targetDocument: "../index.adoc",
+      anchor: "common-headers",
+      line: 1,
+      column: 1,
+    });
+  });
+
+  test("angle-bracket xref without anchor", async () => {
+    const facts = await extractFacts("<<install.adoc, текст>>\n");
+    expect(facts.references).toContainEqual({
+      targetDocument: "install.adoc",
+      anchor: null,
+      line: 1,
+      column: 1,
+    });
+  });
+
+  test("angle-bracket xref same-doc anchor", async () => {
+    const facts = await extractFacts("<<#section-id>>\n");
+    expect(facts.references).toContainEqual({
+      targetDocument: "",
+      anchor: "section-id",
+      line: 1,
+      column: 1,
+    });
+  });
+
+  test("angle-bracket xref same-doc anchor with text", async () => {
+    const facts = await extractFacts("<<#section-id, текст>>\n");
+    expect(facts.references).toContainEqual({
+      targetDocument: "",
+      anchor: "section-id",
+      line: 1,
+      column: 1,
+    });
+  });
+
+  test("both xref forms on one line", async () => {
+    const facts = await extractFacts(
+      "see xref:install.adoc#setup[] and <<../index.adoc#common-headers, общие>>\n",
+    );
+    expect(facts.references).toHaveLength(2);
+    expect(facts.references).toContainEqual({
+      targetDocument: "install.adoc",
+      anchor: "setup",
+      line: 1,
+      column: 5,
+    });
+    expect(facts.references).toContainEqual({
+      targetDocument: "../index.adoc",
+      anchor: "common-headers",
+      line: 1,
+      column: 35,
+    });
+  });
+
   test("attribute entry", async () => {
     const facts = await extractFacts(":product-name: DocFlow\n");
     expect(facts.attributes).toEqual([

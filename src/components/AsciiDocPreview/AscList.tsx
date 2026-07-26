@@ -2,12 +2,20 @@ import type { List, ListItem } from "./types";
 import { InlineHtml } from "./InlineHtml";
 import { AscBlockList } from "./AscBlockList";
 
+type XrefHandler = (href: string) => void;
+
 /**
  * Маркизированный (`ulist`) и нумерованный (`olist`) списки.
  * Вложенные списки хранятся как дочерние блоки `list_item`'а —
  * рекурсивно обходим их.
  */
-export function AscList({ list }: { list: List }) {
+export function AscList({
+  list,
+  onOpenXref,
+}: {
+  list: List;
+  onOpenXref?: XrefHandler;
+}) {
   const ctx = list.getContext();
   const ordered = ctx === "olist";
   const Tag = ordered ? "ol" : "ul";
@@ -15,13 +23,19 @@ export function AscList({ list }: { list: List }) {
   return (
     <Tag className={`asc-list ${ordered ? "asc-list-ordered" : "asc-list-unordered"}`}>
       {items.map((item, i) => (
-        <AscListItem key={i} item={item} />
+        <AscListItem key={i} item={item} onOpenXref={onOpenXref} />
       ))}
     </Tag>
   );
 }
 
-function AscListItem({ item }: { item: ListItem }) {
+function AscListItem({
+  item,
+  onOpenXref,
+}: {
+  item: ListItem;
+  onOpenXref?: XrefHandler;
+}) {
   const text = item.getText();
   const blocks = item.getBlocks();
   // Дочерние блоки: либо вложенные списки, либо параграфы/иные блоки.
@@ -35,12 +49,14 @@ function AscListItem({ item }: { item: ListItem }) {
   });
   return (
     <li className="asc-list-item">
-      {text ? <InlineHtml html={text} /> : null}
-      {otherBlocks.length > 0 ? <AscBlockList blocks={otherBlocks} /> : null}
+      {text ? <InlineHtml html={text} onOpenXref={onOpenXref} /> : null}
+      {otherBlocks.length > 0 ? (
+        <AscBlockList blocks={otherBlocks} onOpenXref={onOpenXref} />
+      ) : null}
       {nestedLists.length > 0 ? (
         <div className="asc-list-nested">
           {nestedLists.map((nl, i) => (
-            <AscList key={i} list={nl as unknown as List} />
+            <AscList key={i} list={nl as unknown as List} onOpenXref={onOpenXref} />
           ))}
         </div>
       ) : null}

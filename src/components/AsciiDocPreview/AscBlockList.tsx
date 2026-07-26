@@ -11,10 +11,13 @@ import { AscSection } from "./AscSection";
 import { AscTable } from "./AscTable";
 import type { AscTable as AscTableType } from "./types";
 
+type XrefHandler = (href: string) => void;
+
 type AscBlockListProps = {
   blocks: AbstractBlock[];
   docsRoot?: string | null;
   monaco?: typeof Monaco | null;
+  onOpenXref?: XrefHandler;
 };
 
 /**
@@ -26,11 +29,18 @@ export function AscBlockList({
   blocks,
   docsRoot = null,
   monaco = null,
+  onOpenXref,
 }: AscBlockListProps) {
   return (
     <>
       {blocks.map((block, i) => (
-        <AscBlock key={i} block={block} docsRoot={docsRoot} monaco={monaco} />
+        <AscBlock
+          key={i}
+          block={block}
+          docsRoot={docsRoot}
+          monaco={monaco}
+          onOpenXref={onOpenXref}
+        />
       ))}
     </>
   );
@@ -40,28 +50,30 @@ function AscBlock({
   block,
   docsRoot,
   monaco,
+  onOpenXref,
 }: {
   block: AbstractBlock;
   docsRoot: string | null;
   monaco: typeof Monaco | null;
+  onOpenXref?: XrefHandler;
 }) {
   const ctx = block.getContext();
 
   switch (ctx) {
     case "section":
-      return <AscSection section={block as unknown as Section} />;
+      return <AscSection section={block as unknown as Section} onOpenXref={onOpenXref} />;
     case "paragraph":
-      return <AscParagraph block={block} />;
+      return <AscParagraph block={block} onOpenXref={onOpenXref} />;
     case "ulist":
     case "olist":
-      return <AscList list={block as unknown as List} />;
+      return <AscList list={block as unknown as List} onOpenXref={onOpenXref} />;
     case "dlist":
       // Description list — минимальная поддержка как <dl>.
       return <AscDescriptionList block={block} />;
     case "table":
       return <AscTable table={block as unknown as AscTableType} />;
     case "admonition":
-      return <AscAdmonition block={block} />;
+      return <AscAdmonition block={block} onOpenXref={onOpenXref} />;
     case "listing":
       return <AscCodeBlock block={block} monaco={monaco} />;
     case "literal":
@@ -69,7 +81,7 @@ function AscBlock({
     case "image":
       return <AscImage block={block} docsRoot={docsRoot} />;
     case "quote":
-      return <AscQuote block={block} />;
+      return <AscQuote block={block} onOpenXref={onOpenXref} />;
     case "example":
       return (
         <div className="asc-example">
@@ -77,6 +89,7 @@ function AscBlock({
             blocks={block.getBlocks()}
             docsRoot={docsRoot}
             monaco={monaco}
+            onOpenXref={onOpenXref}
           />
         </div>
       );
@@ -88,6 +101,7 @@ function AscBlock({
             blocks={block.getBlocks()}
             docsRoot={docsRoot}
             monaco={monaco}
+            onOpenXref={onOpenXref}
           />
         </aside>
       );
@@ -103,10 +117,18 @@ function AscBlock({
           blocks={block.getBlocks()}
           docsRoot={docsRoot}
           monaco={monaco}
+          onOpenXref={onOpenXref}
         />
       );
     default:
-      return <AscUnknownBlock block={block} docsRoot={docsRoot} monaco={monaco} />;
+      return (
+        <AscUnknownBlock
+          block={block}
+          docsRoot={docsRoot}
+          monaco={monaco}
+          onOpenXref={onOpenXref}
+        />
+      );
   }
 }
 
@@ -137,10 +159,12 @@ function AscUnknownBlock({
   block,
   docsRoot,
   monaco,
+  onOpenXref,
 }: {
   block: AbstractBlock;
   docsRoot: string | null;
   monaco: typeof Monaco | null;
+  onOpenXref?: XrefHandler;
 }) {
   const text = safeGetText(block);
   return (
@@ -150,6 +174,7 @@ function AscUnknownBlock({
         blocks={block.getBlocks()}
         docsRoot={docsRoot}
         monaco={monaco}
+        onOpenXref={onOpenXref}
       />
     </div>
   );

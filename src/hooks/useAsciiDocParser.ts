@@ -180,6 +180,11 @@ function scanXrefs(content: string): {
   // Match `xref:target[#anchor][]` or `xref:target[]`. Target may be a path
   // (with optional `#fragment`) or just `#fragment` for same-doc anchors.
   const re = /xref:([^\[\]]+?)(?:#([^\[\]]+))?\[\]/g;
+  // Angle-bracket short form: `<<target#anchor,text>>`, `<<target,text>>`,
+  // `<<#anchor,text>>`, `<<target#anchor>>`, `<<target>>`, `<<#anchor>>`.
+  // Target/anchor stop at `#`, `,` or `>`. Target is `*` (not `+`) so that a
+  // leading `#anchor` form matches with an empty target.
+  const shortRe = /<<([^,>#]*)(?:#([^,>#]+))?(?:,[^>]*)?>>/g;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     let m: RegExpExecArray | null;
@@ -191,6 +196,26 @@ function scanXrefs(content: string): {
         out.push({
           targetDocument: "",
           anchor: rawTarget.slice(1),
+          line: i + 1,
+          column: m.index + 1,
+        });
+      } else {
+        out.push({
+          targetDocument: rawTarget,
+          anchor,
+          line: i + 1,
+          column: m.index + 1,
+        });
+      }
+    }
+    shortRe.lastIndex = 0;
+    while ((m = shortRe.exec(line)) !== null) {
+      const rawTarget = m[1];
+      const anchor = m[2] ?? null;
+      if (!rawTarget || rawTarget.startsWith("#")) {
+        out.push({
+          targetDocument: "",
+          anchor: rawTarget.startsWith("#") ? rawTarget.slice(1) : anchor,
           line: i + 1,
           column: m.index + 1,
         });

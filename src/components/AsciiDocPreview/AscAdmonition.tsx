@@ -19,12 +19,20 @@ const ADMONITION_LABELS: Record<string, string> = {
   caution: "Caution",
 };
 
+type XrefHandler = (href: string) => void;
+
 /**
  * Admonition-блок: `[NOTE]`, `[TIP]`, `[WARNING]`, `[IMPORTANT]`, `[CAUTION]`,
  * а также inline-форма `NOTE: текст`. Для inline-формы (без вложенных блоков)
  * `content()` возвращает готовый inline-HTML; блочная форма рендерит детей.
  */
-export function AscAdmonition({ block }: { block: AbstractBlock }) {
+export function AscAdmonition({
+  block,
+  onOpenXref,
+}: {
+  block: AbstractBlock;
+  onOpenXref?: XrefHandler;
+}) {
   const attrs = block.getAttributes() as Record<string, string>;
   const kind = (attrs.name || attrs.style || "").toLowerCase();
   const label = ADMONITION_LABELS[kind] ?? kind;
@@ -36,9 +44,9 @@ export function AscAdmonition({ block }: { block: AbstractBlock }) {
     <div className={`asc-admonition asc-admonition-${tone}`} data-tone={tone}>
       <div className="asc-admonition-label">{label}</div>
       <div className="asc-admonition-content">
-        <AscBlockList blocks={blocks} />
+        <AscBlockList blocks={blocks} onOpenXref={onOpenXref} />
         {blocks.length === 0 && inlineHtml ? (
-          <InlineHtml html={inlineHtml} />
+          <InlineHtml html={inlineHtml} onOpenXref={onOpenXref} />
         ) : null}
       </div>
     </div>

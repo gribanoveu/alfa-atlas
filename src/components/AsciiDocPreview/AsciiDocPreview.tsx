@@ -4,11 +4,15 @@ import { AscBlockList } from "./AscBlockList";
 import { InlineHtml } from "./InlineHtml";
 import "./AsciiDocPreview.css";
 
+type XrefHandler = (href: string) => void;
+
 type AsciiDocPreviewProps = {
   content: string;
   docsRoot: string | null;
   /** Monaco namespace — нужен для подсветки кода в AscCodeBlock. */
   monaco: typeof Monaco | null;
+  /** Клик по xref-ссылке в превью (path#anchor или #anchor). */
+  onOpenXref?: XrefHandler;
 };
 
 /**
@@ -20,6 +24,7 @@ export function AsciiDocPreview({
   content,
   docsRoot,
   monaco,
+  onOpenXref,
 }: AsciiDocPreviewProps) {
   const { doc, error, parsing } = useAsciiDocRender(content, true, docsRoot);
 
@@ -49,10 +54,15 @@ export function AsciiDocPreview({
     <div className="asc-preview">
       {docTitle ? (
         <h1 className="asc-doc-title">
-          <InlineHtml html={docTitle} />
+          <InlineHtml html={docTitle} onOpenXref={onOpenXref} />
         </h1>
       ) : null}
-      <AscBlockList blocks={blocks} docsRoot={docsRoot} monaco={monaco} />
+      <AscBlockList
+        blocks={blocks}
+        docsRoot={docsRoot}
+        monaco={monaco}
+        onOpenXref={onOpenXref}
+      />
     </div>
   );
 }
