@@ -23,14 +23,12 @@ const SECTIONS: { id: SectionId; label: string }[] = [
 type SettingsDialogProps = {
   projectRoot: string | null;
   onClose: () => void;
-  onCloseProject: () => Promise<void>;
   onPrefsChange?: (prefs: GeneralPrefs) => void;
 };
 
 export function SettingsDialog({
   projectRoot,
   onClose,
-  onCloseProject,
   onPrefsChange,
 }: SettingsDialogProps) {
   const [section, setSection] = useState<SectionId>("general");
@@ -97,20 +95,6 @@ export function SettingsDialog({
     },
     [persistPrefs, prefs],
   );
-
-  const handleCloseProject = useCallback(async () => {
-    setBusy(true);
-    try {
-      await onCloseProject();
-      const nextPaths = await getSettingsPaths();
-      setPaths(nextPaths);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [onCloseProject]);
 
   const openUserSettingsDir = useCallback(async () => {
     if (!paths?.userSettingsDir) return;
@@ -181,16 +165,6 @@ export function SettingsDialog({
                     Если выключено, приложение стартует с экрана Welcome, даже
                     если путь к проекту сохранён.
                   </p>
-                </div>
-                <div className="settings-actions">
-                  <button
-                    type="button"
-                    className="settings-btn"
-                    disabled={!projectRoot || busy}
-                    onClick={() => void handleCloseProject()}
-                  >
-                    Закрыть проект
-                  </button>
                 </div>
               </>
             ) : null}
