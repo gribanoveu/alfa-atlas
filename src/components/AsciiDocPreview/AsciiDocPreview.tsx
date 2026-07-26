@@ -1,4 +1,5 @@
 import type * as Monaco from "monaco-editor";
+import { extensionOf } from "../../lib/fileExtensions";
 import { useAsciiDocRender } from "../../hooks/useAsciiDocRender";
 import { AscBlockList } from "./AscBlockList";
 import { AscMermaid } from "./AscMermaid";
@@ -25,12 +26,6 @@ const PLANTUML_EXTS = new Set([".puml", ".plantuml"]);
 
 /** Extensions that are standalone Mermaid sources, not AsciiDoc. */
 const MERMAID_EXTS = new Set([".mmd", ".mermaid"]);
-
-function extensionOf(path: string): string {
-  const base = path.split(/[/\\]/).pop() ?? path;
-  const dot = base.lastIndexOf(".");
-  return dot <= 0 ? "" : base.slice(dot).toLowerCase();
-}
 
 /**
  * Standalone `.puml` file → fake asciidoctor "listing" block whose

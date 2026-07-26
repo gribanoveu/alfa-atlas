@@ -2,6 +2,8 @@
  * File formats the editor can open. Other formats are rejected by future
  * open-file flows; keep this list as the single source of truth for filters/UI.
  */
+import { extensionOf } from "./fileExtensions";
+
 export const SUPPORTED_EXTENSIONS = [
   ".adoc",
   ".asciidoc",
@@ -42,13 +44,6 @@ export const NEW_FILE_EXTENSION_OPTIONS = [
 ] as const;
 
 export const DEFAULT_NEW_FILE_EXTENSION = ".adoc" as const;
-
-function extensionOf(path: string): string {
-  const base = path.split(/[/\\]/).pop() ?? path;
-  const dot = base.lastIndexOf(".");
-  if (dot <= 0) return "";
-  return base.slice(dot).toLowerCase();
-}
 
 export function isSupportedFile(path: string): boolean {
   const ext = extensionOf(path);

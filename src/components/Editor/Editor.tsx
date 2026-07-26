@@ -8,7 +8,7 @@ import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
 import type { EditorViewMode } from "../../types/viewMode";
-import { AsciiDocPreview } from "../AsciiDocPreview/AsciiDocPreview";
+import { DocumentPreview } from "../DocumentPreview/DocumentPreview";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { EditorTabs } from "./EditorTabs";
 import "./Editor.css";
@@ -182,7 +182,7 @@ export function EditorPane({
   ) : null;
 
   const previewNode = activeTab ? (
-    <AsciiDocPreview
+    <DocumentPreview
       content={activeTab.content}
       filePath={activeTab.path}
       docsRoot={docsRoot}
