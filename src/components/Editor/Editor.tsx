@@ -1,6 +1,10 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
+import type * as Monaco from "monaco-editor";
 import type { editor as MonacoEditor } from "monaco-editor";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
+import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
+import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
+import type { Diagnostic } from "../../lib/workspaceIndex";
 import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
 import { EditorTabs } from "./EditorTabs";
 import "./Editor.css";
@@ -15,6 +19,8 @@ type EditorPaneProps = {
   onCloseOtherTabs: (id: string) => void;
   onChangeContent: (content: string) => void;
   onCursorChange: (cursor: CursorPosition) => void;
+  diagnostics: Diagnostic[];
+  completionsEnabled: boolean;
 };
 
 export function EditorPane({
@@ -27,20 +33,32 @@ export function EditorPane({
   onCloseOtherTabs,
   onChangeContent,
   onCursorChange,
+  diagnostics,
+  completionsEnabled,
 }: EditorPaneProps) {
+  const [monaco, setMonaco] = useState<typeof Monaco | null>(null);
+  const [editor, setEditor] =
+    useState<MonacoEditor.IStandaloneCodeEditor | null>(null);
+
   const handleMount: OnMount = useCallback(
-    (editor) => {
+    (editorInstance, monacoInstance) => {
+      setMonaco(monacoInstance);
+      setEditor(editorInstance);
+
       const syncCursor = () => {
-        const position = editor.getPosition();
+        const position = editorInstance.getPosition();
         if (!position) return;
         onCursorChange({ line: position.lineNumber, column: position.column });
       };
 
       syncCursor();
-      editor.onDidChangeCursorPosition(syncCursor);
+      editorInstance.onDidChangeCursorPosition(syncCursor);
     },
     [onCursorChange],
   );
+
+  useMonacoCompletions(monaco, completionsEnabled);
+  useMonacoDiagnostics(monaco, editor, diagnostics, activeTab?.path ?? null);
 
   const handleChange = useCallback(
     (value: string | undefined) => {

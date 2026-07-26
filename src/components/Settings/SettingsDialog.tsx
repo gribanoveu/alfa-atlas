@@ -23,6 +23,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
 type SettingsDialogProps = {
   projectRoot: string | null;
   onClose: () => void;
+  onCloseProject?: () => Promise<void>;
   onPrefsChange?: (prefs: GeneralPrefs) => void;
 };
 

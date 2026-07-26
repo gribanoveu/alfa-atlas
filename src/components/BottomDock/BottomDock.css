@@ -106,3 +106,34 @@
   background: var(--bg-1);
   border-top-color: var(--accent);
 }
+
+.bottom-stripe-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 8px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.bottom-stripe-badge.warnings {
+  background: rgba(217, 164, 65, 0.2);
+  color: #d9a441;
+}
+
+.bottom-stripe-badge.errors {
+  background: rgba(229, 83, 75, 0.25);
+  color: #e5534b;
+}
+
+.bottom-stripe-btn.has-errors {
+  color: #e5534b;
+}
+
+.bottom-stripe-btn.has-errors.active {
+  color: #e5534b;
+}

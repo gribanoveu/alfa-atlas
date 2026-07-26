@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 
 export type RightTool = "assistant" | "asciidoc" | "git" | "gitHistory";
-export type BottomTool = "suggestions" | "formatting";
+export type BottomTool = "suggestions" | "formatting" | "problems";
 
 export type PanelUiState = {
   sidebarOpen: boolean;
@@ -17,7 +17,11 @@ const RIGHT_TOOLS: readonly RightTool[] = [
   "git",
   "gitHistory",
 ];
-const BOTTOM_TOOLS: readonly BottomTool[] = ["suggestions", "formatting"];
+const BOTTOM_TOOLS: readonly BottomTool[] = [
+  "suggestions",
+  "formatting",
+  "problems",
+];
 
 export const DEFAULT_PANEL_UI: PanelUiState = {
   sidebarOpen: true,

@@ -18,6 +18,7 @@ import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
 import { useGitPanel } from "./hooks/useGitPanel";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
+import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
   collectDirPaths,
@@ -139,6 +140,9 @@ function App() {
     .join(" ");
 
   const hasProject = Boolean(project.docsRoot && project.repoRoot);
+  const workspaceIndex = useWorkspaceIndex(project.repoRoot, {
+    active: hasProject,
+  });
   const cursorLabel = hasProject
     ? `Ln ${editor.cursor.line}, Col ${editor.cursor.column}`
     : "Ln 1, Col 1";
@@ -224,6 +228,14 @@ function App() {
   const toggleGitPanel = useCallback(() => {
     layout.toggleRightTool("git");
   }, [layout]);
+
+  const openDiagnostic = useCallback(
+    async (documentId: string, line: number, column: number) => {
+      await editor.openFile(documentId);
+      editor.setCursor({ line, column });
+    },
+    [editor],
+  );
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -315,6 +327,8 @@ function App() {
               onCloseOtherTabs={editor.closeOtherTabs}
               onChangeContent={editor.updateActiveContent}
               onCursorChange={editor.setCursor}
+              diagnostics={workspaceIndex.diagnostics}
+              completionsEnabled={workspaceIndex.status !== "idle"}
             />
           ) : (
             <Welcome
@@ -361,6 +375,10 @@ function App() {
           onHide={() => layout.setBottomToolId(null)}
           onResize={panels.resizeBottomBy}
           onResizeEnd={panels.persistLayout}
+          diagnostics={workspaceIndex.diagnostics}
+          onOpenDiagnostic={(documentId, line, column) =>
+            void openDiagnostic(documentId, line, column)
+          }
         />
       </div>
       <StatusBar
@@ -369,6 +387,9 @@ function App() {
         lineEndingLabel={statusLineEnding}
         cursorLabel={cursorLabel}
         hasActiveFile={Boolean(hasProject && activePath)}
+        indexStatus={workspaceIndex.status}
+        indexProgress={workspaceIndex.progress}
+        indexStats={workspaceIndex.stats}
       />
 
       {project.pendingOpen ? (

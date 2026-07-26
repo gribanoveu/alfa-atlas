@@ -22,3 +22,36 @@
 .statusbar .seg.ai {
   color: var(--text-1);
 }
+
+.statusbar .seg.ai.building {
+  color: var(--text-2);
+}
+
+.statusbar .seg.ai.ready {
+  color: var(--text-1);
+}
+
+.statusbar .seg.ai.warning {
+  color: #d9a441;
+}
+
+.statusbar .seg.ai.error {
+  color: #e5534b;
+}
+
+.statusbar .seg.ai.idle {
+  color: var(--text-2);
+}
+
+.statusbar .seg.ai .spin {
+  animation: statusbar-spin 0.9s linear infinite;
+}
+
+@keyframes statusbar-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
