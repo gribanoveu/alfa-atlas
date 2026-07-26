@@ -18,6 +18,7 @@ import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
 import { useGitPanel } from "./hooks/useGitPanel";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
+import { useAsciiDocParser } from "./hooks/useAsciiDocParser";
 import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
@@ -33,6 +34,11 @@ function joinParent(parentPath: string, name: string): string {
 }
 
 function App() {
+  // Mount the AsciiDoc parse-request listener unconditionally. The hook
+  // registers the `asciidoc:parse-requested` event listener and signals
+  // `frontend_ready` to the Rust coordinator so buffered parse requests
+  // can be drained.
+  useAsciiDocParser();
   const layout = useWorkspaceLayout();
   const project = useProject();
   const generalPrefs = useGeneralPrefs();

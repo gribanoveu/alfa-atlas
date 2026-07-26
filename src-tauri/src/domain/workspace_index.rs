@@ -117,6 +117,7 @@ pub enum DiagnosticKind {
     MissingImage,
     DuplicateAnchor,
     CircularInclude,
+    ParseError,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,6 +267,46 @@ pub fn relative_key_lenient(
     Ok(parts.join("/"))
 }
 
+/// Resolve `target` against the directory of `source_document` (a repo-relative
+/// `/`-joined key), normalizing `.` / `..` components. Returns a repo-relative
+/// key suitable for `DocumentId` lookup.
+///
+/// Empty `target` is returned unchanged (used by same-document `#anchor` xrefs).
+/// Absolute-looking targets (`/…`) are returned with the leading slash stripped
+/// so they still join under the repo root key space.
+pub fn resolve_against_document(source_document: &str, target: &str) -> String {
+    if target.is_empty() {
+        return String::new();
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+
+    // Absolute-looking targets skip the source directory and start from root.
+    let absolute_like = target.starts_with('/') || target.starts_with('\\');
+    if !absolute_like {
+        if let Some(parent) = Path::new(source_document).parent() {
+            for component in parent.components() {
+                if let Component::Normal(s) = component {
+                    parts.push(s.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+
+    for part in target.split(['/', '\\']) {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            parts.pop();
+            continue;
+        }
+        parts.push(part.to_string());
+    }
+
+    parts.join("/")
+}
+
 /// Resolve a `relative` path against `root`, rejecting `..` components.
 #[allow(dead_code)]
 pub fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, WorkspaceIndexError> {
@@ -325,7 +366,27 @@ mod tests {
         let root = temp_dir();
         assert!(join_relative(&root, "../outside").is_err());
         assert!(join_relative(&root, "a/b").is_ok());
-        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn resolve_against_document_normalizes_relative_includes() {
+        assert_eq!(
+            resolve_against_document("src/docs/asciidoc/index.adoc", "./_external/foo.adoc"),
+            "src/docs/asciidoc/_external/foo.adoc"
+        );
+        assert_eq!(
+            resolve_against_document(
+                "src/docs/asciidoc/getBookkeepingServicesInfo/doc.adoc",
+                "../_external/foo.adoc"
+            ),
+            "src/docs/asciidoc/_external/foo.adoc"
+        );
+        assert_eq!(
+            resolve_against_document("src/docs/a.adoc", "sibling.adoc"),
+            "src/docs/sibling.adoc"
+        );
+        assert_eq!(resolve_against_document("a.adoc", "b.adoc"), "b.adoc");
+        assert_eq!(resolve_against_document("a.adoc", ""), "");
     }
 
     #[test]

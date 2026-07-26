@@ -1,3 +1,4 @@
+pub mod asciidoc;
 pub mod git;
 pub mod layout;
 pub mod prefs;

@@ -1,3 +1,4 @@
+pub mod asciidoc_facts;
 pub mod git;
 pub mod layout;
 pub mod paths;

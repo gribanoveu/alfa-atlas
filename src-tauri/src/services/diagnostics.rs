@@ -16,7 +16,7 @@ use crate::services::workspace_index::WorkspaceIndex;
 pub fn run_all(index: &WorkspaceIndex) {
     let docs = index.documents_iter();
     for d in &docs {
-        let diags = diagnose_one(index, &d.id);
+        let diags = diagnose_one_merged(index, &d.id);
         index.set_diagnostics(&d.id, diags);
     }
 }
@@ -27,7 +27,7 @@ pub fn run_for(index: &WorkspaceIndex, doc: &DocumentId) {
     let mut seen: HashSet<DocumentId> = HashSet::new();
     seen.insert(doc.clone());
     while let Some(current) = queue.pop() {
-        let diags = diagnose_one(index, &current);
+        let diags = diagnose_one_merged(index, &current);
         index.set_diagnostics(&current, diags);
         for dep in index.dependents_of(&current) {
             if seen.insert(dep.clone()) {
@@ -35,6 +35,21 @@ pub fn run_for(index: &WorkspaceIndex, doc: &DocumentId) {
             }
         }
     }
+}
+
+/// Cross-document diagnostics plus any `ParseError` entries already attached
+/// to the document (from the frontend asciidoctor logger). `ParseError`s are
+/// orthogonal to include/xref/image checks and must survive `run_all` at the
+/// end of an async build.
+fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
+    let mut diags = diagnose_one(index, doc);
+    diags.extend(
+        index
+            .get_diagnostics_for(doc)
+            .into_iter()
+            .filter(|d| d.kind == DiagnosticKind::ParseError),
+    );
+    diags
 }
 
 fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
@@ -188,6 +203,7 @@ mod tests {
     use crate::services::workspace_index::WorkspaceIndex;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir() -> PathBuf {
@@ -200,8 +216,8 @@ mod tests {
         dir
     }
 
-    fn build(root: &std::path::Path) -> WorkspaceIndex {
-        let idx = WorkspaceIndex::new(ParserRegistry::new());
+    fn build(root: &std::path::Path) -> Arc<WorkspaceIndex> {
+        let idx = Arc::new(WorkspaceIndex::new(ParserRegistry::new()));
         idx.build(root.to_path_buf()).unwrap();
         idx
     }

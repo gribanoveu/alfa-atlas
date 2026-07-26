@@ -69,9 +69,18 @@ fn persist_window_state(window: &Window) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    // MCP bridge plugin — debug-only, so the Cursor Tauri MCP server can
+    // inspect the running app for diagnostics. No effect in production builds.
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    }
+
+    builder
         .setup(|app| {
             let state = window_settings::load_window_state();
             if let Some(window) = app.get_webview_window("main") {
@@ -142,6 +151,8 @@ pub fn run() {
             commands::workspace_index::find_image,
             commands::workspace_index::get_diagnostics,
             commands::workspace_index::get_diagnostics_for,
+            commands::asciidoc::submit_asciidoc_facts,
+            commands::asciidoc::frontend_ready,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

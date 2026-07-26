@@ -34,6 +34,12 @@ function indexLabel(
       }
       return "Index ready";
     case "warning":
+      if (stats && stats.errors > 0) {
+        return `Index ready with ${stats.errors} error(s)`;
+      }
+      if (stats && stats.warnings > 0) {
+        return `Index ready with ${stats.warnings} warning(s)`;
+      }
       return "Index completed with warnings";
     case "error":
       return "Index failed";
@@ -55,11 +61,14 @@ function indexTitle(
         ? `${stats.documents} docs, ${stats.anchors} anchors, ${stats.includes} includes, ${stats.references} xrefs, ${stats.images} images`
         : "Index ready";
     case "warning":
+      if (stats && stats.errors > 0) {
+        return `Index ready with ${stats.errors} error(s), ${stats.warnings} warning(s) — see Problems`;
+      }
       return stats
         ? `Index ready with ${stats.warnings} warning(s)`
         : "Index ready with warnings";
     case "error":
-      return "Index failed — see Problems panel";
+      return "Index build failed — see Problems panel";
     default:
       return "Workspace index idle";
   }

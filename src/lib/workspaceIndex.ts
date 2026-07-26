@@ -17,7 +17,8 @@ export type DiagnosticKind =
   | "missingXrefAnchor"
   | "missingImage"
   | "duplicateAnchor"
-  | "circularInclude";
+  | "circularInclude"
+  | "parseError";
 
 export type Document = {
   id: string;

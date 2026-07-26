@@ -33,4 +33,5 @@ pulldown-cmark = "0.12"
 serde_yaml = "0.9"
 regex = "1"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+tauri-plugin-mcp-bridge = "0.12.0"
 

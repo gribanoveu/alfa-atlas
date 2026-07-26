@@ -13,6 +13,7 @@
         { "path": "$HOME/.docflow/**" }
       ]
     },
-    "dialog:default"
+    "dialog:default",
+    "mcp-bridge:default"
   ]
 }

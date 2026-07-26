@@ -65,9 +65,11 @@ export function useWorkspaceIndex(
         case "indexBuildingFinished": {
           const s = e.payload.stats;
           setStats(s);
-          setStatus(
-            s.errors > 0 ? "error" : s.warnings > 0 ? "warning" : "ready",
-          );
+          // Document diagnostics (missing includes, parse warnings, etc.) are
+          // not a build failure — reserve status "error" for `buildIndex`
+          // rejecting. Surface diagnostic issues as "warning" so the status
+          // bar does not claim "Index failed" after a successful build.
+          setStatus(s.errors > 0 || s.warnings > 0 ? "warning" : "ready");
           setProgress(null);
           void refreshDiagnosticsRef.current();
           break;

@@ -12,24 +12,31 @@
 //! half-written mix, because each per-document update is a single
 //! `DashMap::insert` per repository.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use dashmap::DashMap;
 use tauri::{AppHandle, Emitter};
 
+use crate::domain::asciidoc_facts::{
+    AsciiDocFacts, AsciiDocParseRequested, ParseErrorFact,
+};
 use crate::domain::supported_files::is_supported_file;
 use crate::domain::workspace_index::{
-    relative_key, relative_key_lenient, unix_seconds, Anchor, Attribute, Diagnostic, Document,
-    DocumentId, Image, Include, IndexEvent, IndexStats, ParsedDocument, Reference,
-    Severity, WorkspaceIndexError,
+    relative_key, relative_key_lenient, resolve_against_document, unix_seconds, Anchor, Attribute,
+    Diagnostic, DiagnosticKind, Document, DocumentId, DocumentType, Image, Include, IndexEvent,
+    IndexStats, ParsedDocument, Reference, Severity, WorkspaceIndexError,
 };
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::infra::workspace_scanner;
 use crate::services::diagnostics;
 
 const EVENT_CHANNEL: &str = "workspace-index://event";
+const ASCIIDOC_PARSE_REQUESTED_CHANNEL: &str = "asciidoc:parse-requested";
+const PARSE_TIMEOUT_SECS: u64 = 30;
 
 /// Reverse-dependency map: for each target `DocumentId`, the set of documents
 /// that reference it (via include or xref). Used to recompute diagnostics for
@@ -52,6 +59,34 @@ pub struct WorkspaceIndex {
     parsers: ParserRegistry,
     app_handle: RwLock<Option<AppHandle>>,
     watcher: RwLock<Option<crate::services::file_watcher::FileWatcher>>,
+
+    // --- AsciiDoc async coordinator state ---
+    /// Monotonic per-document version counter; incremented on each dispatch
+    /// for the document, removed on document deletion.
+    doc_versions: DashMap<DocumentId, u64>,
+    /// Pending parse requests buffered while the frontend is not yet ready
+    /// or while `inflight_adoc_count` is at `max_inflight`.
+    pending_adoc_queue: RwLock<VecDeque<AsciiDocParseRequested>>,
+    /// `AbortHandle` for the timeout task of each in-flight parse, keyed by
+    /// (document_id, version) so concurrent dispatches for the same document
+    /// do not interfere with each other. The value is the `JoinHandle` itself
+    /// (Tauri's wrapper over tokio's), which exposes `.abort()` directly.
+    parse_timeouts: DashMap<(DocumentId, u64), tauri::async_runtime::JoinHandle<()>>,
+    /// Number of parse requests currently in flight to the frontend.
+    inflight_adoc_count: AtomicU32,
+    /// Maximum number of concurrent in-flight parse requests. A field rather
+    /// than a const so tests can inject a smaller value.
+    max_inflight: u32,
+    /// Counter of pending AsciiDoc facts during an initial build. Decremented
+    /// as facts arrive; when it reaches zero, `IndexBuildingFinished` is
+    /// emitted by `try_finish_build`.
+    build_adoc_pending: AtomicU32,
+    /// True between `IndexBuildingStarted` and `IndexBuildingFinished`. Used
+    /// to defer the finished event until all AsciiDoc facts have arrived.
+    building_in_progress: AtomicBool,
+    /// Set to true once the frontend signals it is ready to receive parse
+    /// requests. Before this is true, all dispatches are buffered.
+    frontend_ready: AtomicBool,
 }
 
 impl WorkspaceIndex {
@@ -72,7 +107,25 @@ impl WorkspaceIndex {
             parsers,
             app_handle: RwLock::new(None),
             watcher: RwLock::new(None),
+            doc_versions: DashMap::new(),
+            pending_adoc_queue: RwLock::new(VecDeque::new()),
+            parse_timeouts: DashMap::new(),
+            inflight_adoc_count: AtomicU32::new(0),
+            max_inflight: 8,
+            build_adoc_pending: AtomicU32::new(0),
+            building_in_progress: AtomicBool::new(false),
+            frontend_ready: AtomicBool::new(false),
         }
+    }
+
+    /// Test-only constructor that allows injecting a smaller `max_inflight`
+    /// to verify queue/overflow behavior without dispatching 8 concurrent
+    /// parses.
+    #[cfg(test)]
+    pub fn with_max_inflight(parsers: ParserRegistry, max_inflight: u32) -> Self {
+        let mut idx = Self::new(parsers);
+        idx.max_inflight = max_inflight;
+        idx
     }
 
     pub fn set_app_handle(&self, handle: AppHandle) {
@@ -89,7 +142,11 @@ impl WorkspaceIndex {
 
     /// Build the index from scratch. Clears any previous state and emits
     /// `IndexBuildingStarted`, `IndexBuildingProgress`, and `IndexBuildingFinished`.
-    pub fn build(&self, repo_root: PathBuf) -> Result<IndexStats, WorkspaceIndexError> {
+    ///
+    /// Takes `&Arc<Self>` so that the AsciiDoc async delegation path can clone
+    /// the `Arc` into the timeout task. The non-AsciiDoc / test path does not
+    /// need it.
+    pub fn build(self: &Arc<Self>, repo_root: PathBuf) -> Result<IndexStats, WorkspaceIndexError> {
         let canonical = repo_root
             .canonicalize()
             .map_err(WorkspaceIndexError::Io)?;
@@ -104,6 +161,7 @@ impl WorkspaceIndex {
 
         *self.repo_root.write().unwrap() = Some(canonical.clone());
         self.emit(IndexEvent::IndexBuildingStarted);
+        self.building_in_progress.store(true, Ordering::SeqCst);
 
         let files = workspace_scanner::scan(&canonical)?;
         let total = files.len() as u32;
@@ -121,21 +179,37 @@ impl WorkspaceIndex {
                 current: current.clone(),
             });
 
-            if let Err(e) = self.index_file(&canonical, file.path.clone(), file.modified) {
+            if let Err(e) = self.index_file(
+                Arc::clone(self),
+                &canonical,
+                file.path.clone(),
+                file.modified,
+            ) {
                 // A single bad file shouldn't abort the whole build; emit a
                 // warning-level diagnostic for the index log but keep going.
                 let _ = e;
             }
         }
 
-        // After all docs are loaded, compute diagnostics.
-        diagnostics::run_all(self);
-        let stats = self.compute_stats();
-        self.emit(IndexEvent::IndexBuildingFinished {
-            stats: stats.clone(),
-        });
-
-        Ok(stats)
+        // If no AsciiDoc facts are pending (e.g., no .adoc files, or all
+        // already processed synchronously in tests), finish immediately.
+        // Otherwise, `IndexBuildingFinished` is emitted by `try_finish_build`
+        // when the last fact arrives.
+        let adoc_pending = self.build_adoc_pending.load(Ordering::SeqCst);
+        if adoc_pending == 0 {
+            diagnostics::run_all(self);
+            let stats = self.compute_stats();
+            self.building_in_progress.store(false, Ordering::SeqCst);
+            self.emit(IndexEvent::IndexBuildingFinished {
+                stats: stats.clone(),
+            });
+            Ok(stats)
+        } else {
+            // IndexBuildingFinished will be emitted by try_finish_build()
+            // when the last fact arrives. The status bar will keep showing
+            // "building" until then.
+            Ok(IndexStats::default())
+        }
     }
 
     /// Start watching the current repo root for changes. No-op if already watching.
@@ -173,10 +247,25 @@ impl WorkspaceIndex {
         self.images_by_doc.clear();
         self.diagnostics.clear();
         self.dependents.clear();
+
+        // Reset coordinator state so a fresh build starts from a clean slate.
+        // Abort in-flight timeout tasks so they cannot fire against the next build.
+        self.parse_timeouts.retain(|_, handle| {
+            handle.abort();
+            false
+        });
+        self.doc_versions.clear();
+        *self.pending_adoc_queue.write().unwrap() = VecDeque::new();
+        self.inflight_adoc_count.store(0, Ordering::SeqCst);
+        self.build_adoc_pending.store(0, Ordering::SeqCst);
+        self.building_in_progress.store(false, Ordering::SeqCst);
+        // Do NOT reset `frontend_ready`: the React listener stays mounted across
+        // rebuilds. Resetting it here would queue every parse request with no
+        // subsequent `frontend_ready` call to drain them.
     }
 
     /// Incremental update on a file change/create.
-    pub fn update_document(&self, path: PathBuf) -> Result<(), WorkspaceIndexError> {
+    pub fn update_document(self: &Arc<Self>, path: PathBuf) -> Result<(), WorkspaceIndexError> {
         let root = self.repo_root.read().unwrap().clone().ok_or(WorkspaceIndexError::NotOpen)?;
         let path_str = path.to_string_lossy().into_owned();
         if !is_supported_file(&path_str) {
@@ -192,7 +281,7 @@ impl WorkspaceIndex {
         self.remove_entries_for_doc(&old_id);
 
         let path_str = path.to_string_lossy().into_owned();
-        self.index_file(&root, path, modified)?;
+        self.index_file(Arc::clone(self), &root, path, modified)?;
         diagnostics::run_for(self, &old_id);
         // Recompute dependents of the new document too.
         if let Some(new_id) = self.document_id_for_path_opt(&root, &old_id.0) {
@@ -211,6 +300,9 @@ impl WorkspaceIndex {
         let id = self.document_id_for_path(&root, &path);
         let path_str = path.to_string_lossy().into_owned();
         self.remove_entries_for_doc(&id);
+        // Drop the version entry so any in-flight parse for this doc is treated
+        // as stale when its response arrives.
+        self.doc_versions.remove(&id);
         diagnostics::run_for(self, &id);
         self.emit(IndexEvent::IndexUpdated {
             document: path_str.clone(),
@@ -224,7 +316,7 @@ impl WorkspaceIndex {
     /// per spec section 4.
     #[allow(dead_code)]
     pub fn rename_document(
-        &self,
+        self: &Arc<Self>,
         old: PathBuf,
         new: PathBuf,
     ) -> Result<(), WorkspaceIndexError> {
@@ -232,11 +324,12 @@ impl WorkspaceIndex {
         let old_id = self.document_id_for_path(&root, &old);
         // Remove old entries (anchors/attributes/etc. were tied to old_id).
         self.remove_entries_for_doc(&old_id);
+        self.doc_versions.remove(&old_id);
 
         if new.exists() {
             let meta = std::fs::metadata(&new).map_err(WorkspaceIndexError::Io)?;
             let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            self.index_file(&root, new, modified)?;
+            self.index_file(Arc::clone(self), &root, new, modified)?;
         }
         diagnostics::run_for(self, &old_id);
         self.emit(IndexEvent::IndexUpdated {
@@ -246,8 +339,13 @@ impl WorkspaceIndex {
     }
 
     /// Read, parse, and insert one file into the index.
+    ///
+    /// `self_arc` is the owning `Arc` of this `WorkspaceIndex`. It is needed
+    /// because the AsciiDoc path spawns a timeout task that holds an `Arc`
+    /// reference. For the non-AsciiDoc / test path, `self_arc` is unused.
     fn index_file(
         &self,
+        self_arc: Arc<Self>,
         root: &Path,
         path: PathBuf,
         modified: SystemTime,
@@ -272,15 +370,21 @@ impl WorkspaceIndex {
         let document = Document {
             id: id.clone(),
             absolute_path: path.to_string_lossy().into_owned(),
-            relative_path: relative,
+            relative_path: relative.clone(),
             file_name,
             doc_type,
             modified_at: unix_seconds(modified),
         };
         self.documents.insert(id.clone(), document);
 
-        let parsed = self.parsers.parse(&path_str, &content);
-        self.insert_parsed(&id, parsed);
+        if doc_type == DocumentType::AsciiDoc && self.app_handle.read().unwrap().is_some() {
+            // Production: delegate AsciiDoc parsing to the frontend.
+            self_arc.dispatch_asciidoc_parse(&id, content, relative);
+        } else {
+            // Tests or non-AsciiDoc: synchronous parser.
+            let parsed = self.parsers.parse(&path_str, &content);
+            self.insert_parsed(&id, parsed);
+        }
 
         Ok(())
     }
@@ -300,6 +404,10 @@ impl WorkspaceIndex {
                 .push(a.clone());
         }
         for inc in &mut parsed.includes {
+            // Normalize include targets to repo-relative keys so diagnostics
+            // can look them up by DocumentId (e.g. `../_external/foo.adoc`
+            // from `src/docs/a.adoc` → `src/docs/_external/foo.adoc`).
+            inc.path = resolve_against_document(&id.0, &inc.path);
             inc.source_document = id.clone();
             self.includes
                 .entry(id.clone())
@@ -313,6 +421,9 @@ impl WorkspaceIndex {
                 .push(id.clone());
         }
         for r in &mut parsed.references {
+            if !r.target_document.is_empty() {
+                r.target_document = resolve_against_document(&id.0, &r.target_document);
+            }
             r.source_document = id.clone();
             self.references
                 .entry(id.clone())
@@ -336,6 +447,7 @@ impl WorkspaceIndex {
                 .push(attr.clone());
         }
         for img in &mut parsed.images {
+            img.path = resolve_against_document(&id.0, &img.path);
             img.document = id.clone();
             self.images
                 .entry(img.path.clone())
@@ -356,12 +468,18 @@ impl WorkspaceIndex {
         }
     }
 
-    /// Remove every entry tied to `id` from all repositories.
+    /// Remove the document row and every fact entry tied to `id`.
+    /// Used when a file is deleted/renamed/replaced.
     fn remove_entries_for_doc(&self, id: &DocumentId) {
-        if let Some((_, doc)) = self.documents.remove(id) {
-            let _ = doc;
-        }
+        self.documents.remove(id);
+        self.clear_facts_for_doc(id);
+    }
 
+    /// Clear fact repositories for `id` but keep the `Document` row.
+    /// Used when re-applying AsciiDoc facts from the frontend — the document
+    /// was already registered in `index_file` and must remain visible so
+    /// other documents' include/xref diagnostics can resolve against it.
+    fn clear_facts_for_doc(&self, id: &DocumentId) {
         // Anchors: remove from global map and per-doc map.
         if let Some((_, by_doc)) = self.anchors_by_doc.remove(id) {
             for a in by_doc {
@@ -475,6 +593,271 @@ impl WorkspaceIndex {
             document: path.to_string(),
         });
     }
+
+    // --- AsciiDoc async coordinator ---
+
+    fn try_emit_parse_request(&self, payload: AsciiDocParseRequested) {
+        if let Some(handle) = self.app_handle.read().unwrap().as_ref() {
+            let _ = handle.emit(ASCIIDOC_PARSE_REQUESTED_CHANNEL, &payload);
+        }
+    }
+
+    /// Dispatch a parse request for `doc_id` to the frontend.
+    ///
+    /// Increments the per-document version counter, registers a timeout task,
+    /// and either emits the request immediately (if a slot is available) or
+    /// buffers it in `pending_adoc_queue`. Also increments `build_adoc_pending`
+    /// when a build is in progress, so `try_finish_build` knows when the last
+    /// fact has arrived.
+    fn dispatch_asciidoc_parse(
+        self: &Arc<Self>,
+        doc_id: &DocumentId,
+        content: String,
+        relative_path: String,
+    ) {
+        let version = *self
+            .doc_versions
+            .entry(doc_id.clone())
+            .and_modify(|v| *v += 1)
+            .or_insert(1);
+
+        let payload = AsciiDocParseRequested {
+            document_id: doc_id.clone(),
+            version,
+            content,
+            relative_path: PathBuf::from(&relative_path),
+        };
+
+        // Spawn a timeout task so a hung frontend cannot stall the queue.
+        let doc_id_for_timeout = doc_id.clone();
+        let arc_for_timeout = Arc::clone(self);
+        let handle = tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(PARSE_TIMEOUT_SECS)).await;
+            arc_for_timeout.handle_parse_timeout(&doc_id_for_timeout, version);
+        });
+        self.parse_timeouts
+            .insert((doc_id.clone(), version), handle);
+
+        if !self.frontend_ready.load(Ordering::SeqCst) {
+            self.pending_adoc_queue.write().unwrap().push_back(payload);
+            if self.building_in_progress.load(Ordering::SeqCst) {
+                self.build_adoc_pending.fetch_add(1, Ordering::SeqCst);
+            }
+            return;
+        }
+
+        let current = self.inflight_adoc_count.load(Ordering::SeqCst);
+        if current < self.max_inflight {
+            self.inflight_adoc_count.fetch_add(1, Ordering::SeqCst);
+            self.try_emit_parse_request(payload);
+        } else {
+            self.pending_adoc_queue.write().unwrap().push_back(payload);
+        }
+        if self.building_in_progress.load(Ordering::SeqCst) {
+            self.build_adoc_pending.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Frontend signals it is ready to receive parse requests. Drains the
+    /// buffered queue up to `max_inflight`.
+    pub fn frontend_ready(&self) {
+        self.frontend_ready.store(true, Ordering::SeqCst);
+        let mut queue = self.pending_adoc_queue.write().unwrap();
+        loop {
+            let current = self.inflight_adoc_count.load(Ordering::SeqCst);
+            if current >= self.max_inflight {
+                break;
+            }
+            let next = queue.pop_front();
+            // Release the lock before dispatch — `next` is owned and the
+            // dispatch path does not need the queue.
+            drop(queue);
+            if let Some(payload) = next {
+                self.inflight_adoc_count.fetch_add(1, Ordering::SeqCst);
+                self.try_emit_parse_request(payload);
+                queue = self.pending_adoc_queue.write().unwrap();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Receive parsed facts from the frontend.
+    ///
+    /// Bookkeeping (decrement `inflight_adoc_count`, drain queue,
+    /// `try_finish_build`) runs unconditionally — even for stale responses —
+    /// so a stale response cannot leak the counter or hang the build.
+    pub fn submit_asciidoc_facts(
+        &self,
+        doc_id: &DocumentId,
+        version: u64,
+        facts: AsciiDocFacts,
+    ) -> Result<(), WorkspaceIndexError> {
+        // Abort the timeout for this specific (document, version) pair.
+        // Guarantees exactly-once execution: if the response arrives before
+        // the timeout fires, the timeout is cancelled. If the timeout fired
+        // first, its entry is already removed and this remove returns None.
+        if let Some((_, handle)) = self.parse_timeouts.remove(&(doc_id.clone(), version)) {
+            handle.abort();
+        }
+
+        let is_valid = match self.doc_versions.get(doc_id) {
+            Some(current) => *current == version,
+            None => false,
+        };
+
+        if is_valid {
+            let parsed = self.facts_to_parsed(doc_id, &facts);
+            // Keep the Document row — only replace facts. Removing the document
+            // would make every include/xref targeting this file look missing.
+            self.clear_facts_for_doc(doc_id);
+            self.insert_parsed(doc_id, parsed);
+
+            // Recompute diagnostics for this doc AND its dependents (run_for
+            // does BFS over the dependents graph). A "missing xref anchor"
+            // in another document may resolve once this document's facts
+            // arrive. This also sets the canonical diagnostics for `doc_id`.
+            diagnostics::run_for(self, doc_id);
+
+            // Parse errors are added AFTER run_for so they survive — they are
+            // orthogonal to the cross-document diagnostics run_for computes
+            // (missing includes, broken xrefs, duplicate anchors, etc.).
+            if !facts.parse_errors.is_empty() {
+                let mut diags = self.get_diagnostics_for(doc_id);
+                for e in &facts.parse_errors {
+                    diags.push(Diagnostic {
+                        kind: DiagnosticKind::ParseError,
+                        message: e.message.clone(),
+                        document: doc_id.clone(),
+                        line: e.line.unwrap_or(1),
+                        column: 1,
+                        severity: if e.severity.eq_ignore_ascii_case("error") {
+                            Severity::Error
+                        } else {
+                            Severity::Warning
+                        },
+                    });
+                }
+                self.set_diagnostics(doc_id, diags);
+            }
+
+            self.emit(IndexEvent::IndexUpdated {
+                document: doc_id.0.clone(),
+            });
+            self.emit(IndexEvent::DiagnosticsUpdated {
+                document: doc_id.0.clone(),
+            });
+        }
+
+        // --- Bookkeeping: runs unconditionally. ---
+
+        self.inflight_adoc_count.fetch_sub(1, Ordering::SeqCst);
+
+        // Drain queue. Release the lock before dispatch — `next` is owned.
+        let next = self.pending_adoc_queue.write().unwrap().pop_front();
+        if let Some(payload) = next {
+            self.inflight_adoc_count.fetch_add(1, Ordering::SeqCst);
+            self.try_emit_parse_request(payload);
+        }
+
+        self.try_finish_build();
+
+        Ok(())
+    }
+
+    fn handle_parse_timeout(&self, doc_id: &DocumentId, version: u64) {
+        // Remove our own entry first. If a real response already arrived and
+        // aborted this handle, the remove returns None — that's fine.
+        self.parse_timeouts.remove(&(doc_id.clone(), version));
+
+        let is_current = match self.doc_versions.get(doc_id) {
+            Some(v) => *v == version,
+            None => false,
+        };
+        if !is_current {
+            return;
+        }
+        // Synthesize a parse error and run through the standard path so the
+        // queue drains and the build can finish.
+        let facts = AsciiDocFacts {
+            anchors: vec![],
+            includes: vec![],
+            references: vec![],
+            attributes: vec![],
+            images: vec![],
+            parse_errors: vec![ParseErrorFact {
+                message: format!("parse timed out after {}s", PARSE_TIMEOUT_SECS),
+                line: None,
+                severity: "error".to_string(),
+            }],
+        };
+        let _ = self.submit_asciidoc_facts(doc_id, version, facts);
+    }
+
+    fn try_finish_build(&self) {
+        if !self.building_in_progress.load(Ordering::SeqCst) {
+            return;
+        }
+        let pending = self.build_adoc_pending.fetch_sub(1, Ordering::SeqCst);
+        if pending == 1 {
+            // Last pending adoc fact arrived. Run a full diagnostics pass to
+            // catch cross-document issues (e.g., DuplicateAnchor) that
+            // per-doc `run_for` would not have caught, then emit the final
+            // event with complete stats.
+            diagnostics::run_all(self);
+            let stats = self.compute_stats();
+            self.building_in_progress.store(false, Ordering::SeqCst);
+            self.emit(IndexEvent::IndexBuildingFinished { stats });
+        }
+    }
+
+    /// Convert frontend facts into a `ParsedDocument` with the `document` /
+    /// `source_document` fields filled in from `doc_id`.
+    fn facts_to_parsed(&self, doc_id: &DocumentId, facts: &AsciiDocFacts) -> ParsedDocument {
+        let mut out = ParsedDocument::default();
+        for a in &facts.anchors {
+            out.anchors.push(Anchor {
+                id: a.id.clone(),
+                document: doc_id.clone(),
+                line: a.line,
+                column: a.column,
+            });
+        }
+        for inc in &facts.includes {
+            out.includes.push(Include {
+                path: inc.path.clone(),
+                source_document: doc_id.clone(),
+                line: inc.line,
+                column: inc.column,
+            });
+        }
+        for r in &facts.references {
+            out.references.push(Reference {
+                target_document: r.target_document.clone(),
+                anchor: r.anchor.clone(),
+                source_document: doc_id.clone(),
+                line: r.line,
+                column: r.column,
+            });
+        }
+        for attr in &facts.attributes {
+            out.attributes.push(Attribute {
+                name: attr.name.clone(),
+                value: attr.value.clone(),
+                document: doc_id.clone(),
+                line: attr.line,
+            });
+        }
+        for img in &facts.images {
+            out.images.push(Image {
+                path: img.path.clone(),
+                document: doc_id.clone(),
+                line: img.line,
+            });
+        }
+        out
+    }
+
 
     // --- Public read API (spec section 7) ---
 
@@ -636,8 +1019,8 @@ mod tests {
         dir
     }
 
-    fn build_index(root: &Path) -> WorkspaceIndex {
-        let idx = WorkspaceIndex::new(ParserRegistry::new());
+    fn build_index(root: &Path) -> Arc<WorkspaceIndex> {
+        let idx = Arc::new(WorkspaceIndex::new(ParserRegistry::new()));
         idx.build(root.to_path_buf()).unwrap();
         idx
     }
@@ -740,3 +1123,7 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 }
+
+#[cfg(test)]
+#[path = "tests_asciidoc_coordinator.rs"]
+mod tests_asciidoc_coordinator;

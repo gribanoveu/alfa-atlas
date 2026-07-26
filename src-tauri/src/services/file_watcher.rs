@@ -106,7 +106,7 @@ async fn run_dispatcher(
     }
 }
 
-async fn apply_event(index: &WorkspaceIndex, kind: EventKind, path: PathBuf) {
+async fn apply_event(index: &Arc<WorkspaceIndex>, kind: EventKind, path: PathBuf) {
     match kind {
         EventKind::Remove(_) => {
             let _ = index.remove_document(path);
