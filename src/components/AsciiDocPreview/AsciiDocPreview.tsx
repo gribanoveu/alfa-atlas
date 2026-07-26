@@ -77,7 +77,7 @@ export function AsciiDocPreview({
   if (isPlantumlFile) {
     const name = filePath ? (filePath.split(/[/\\]/).pop() ?? null) : null;
     return (
-      <div className="asc-preview">
+      <div className="asc-preview asc-preview-standalone-plantuml">
         <AscPlantuml block={makePlantumlBlock(content, name)} docsRoot={docsRoot} />
       </div>
     );

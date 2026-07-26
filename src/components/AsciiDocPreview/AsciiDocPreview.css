@@ -50,6 +50,43 @@
   padding: 12px;
 }
 
+/* Standalone `.puml` file — edge-to-edge horizontally for max diagram area */
+.asc-preview.asc-preview-standalone-plantuml {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.asc-preview-standalone-plantuml > .asc-plantuml {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 8px 0 0;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+}
+
+.asc-preview-standalone-plantuml .asc-plantuml-viewport {
+  flex: 1;
+  min-height: 0;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+  max-height: none;
+}
+
+.asc-preview-standalone-plantuml .asc-plantuml-canvas {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.asc-preview-standalone-plantuml .asc-plantuml-toolbar {
+  padding-left: 12px;
+}
+
 /* Headings */
 .asc-doc-title {
   font-size: 26px;
