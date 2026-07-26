@@ -7,6 +7,7 @@ import {
 } from "../lib/fileExtensions";
 import {
   collectPaths,
+  firstEntryHint,
   parseStructuredData,
   valueKind,
 } from "../components/StructuredDataPreview/structuredDataUtils";
@@ -80,5 +81,31 @@ describe("structuredDataUtils", () => {
     expect(valueKind(false)).toBe("bool");
     expect(valueKind(42)).toBe("number");
     expect(valueKind("text")).toBe("string");
+  });
+
+  test("firstEntryHint returns first object key and value", () => {
+    const hint = firstEntryHint(
+      [
+        ["service", "wowtax-notifier"],
+        ["version", "1.0"],
+      ],
+      false,
+    );
+    expect(hint).toEqual({
+      key: "service",
+      valuePreview: '"wowtax-notifier"',
+      valueKind: "string",
+    });
+  });
+
+  test("firstEntryHint returns compact preview for array items", () => {
+    expect(firstEntryHint([[0, "java21"], [1, "kafka"]], true)).toEqual({
+      valuePreview: '"java21"',
+      valueKind: "string",
+    });
+    expect(firstEntryHint([[0, { name: "events" }]], true)).toEqual({
+      valuePreview: "name",
+      valueKind: "nested",
+    });
   });
 });

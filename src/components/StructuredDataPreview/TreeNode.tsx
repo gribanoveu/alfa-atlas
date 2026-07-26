@@ -1,4 +1,9 @@
-import { countLabel, isEmptyValue, valueKind } from "./structuredDataUtils";
+import {
+  countLabel,
+  firstEntryHint,
+  isEmptyValue,
+  valueKind,
+} from "./structuredDataUtils";
 import type { StructuredValue } from "./structuredDataUtils";
 
 type TreeNodeProps = {
@@ -56,6 +61,7 @@ export function TreeNode({
     ? data.map((value, index) => [index, value] as const)
     : Object.entries(data);
   const count = entries.length;
+  const firstHint = firstEntryHint(entries, isArray);
   const isOpen = expanded.has(path);
   const openBracket = isArray ? "[" : "{";
   const closeBracket = isArray ? "]" : "}";
@@ -74,7 +80,27 @@ export function TreeNode({
         {!isOpen ? (
           <>
             <span className="struct-count">{countLabel(count, isArray)}</span>
-            <span className="struct-punct">{closeBracket}</span>
+            {firstHint ? (
+              <span className="struct-hint-wrap">
+                <span className="struct-hint-sep">·</span>
+                <span className="struct-hint-entry">
+                  {firstHint.key ? (
+                    <>
+                      <span className="struct-hint struct-hint-key">
+                        {firstHint.key}
+                      </span>
+                      <span className="struct-hint struct-hint-punct">: </span>
+                    </>
+                  ) : null}
+                  <span
+                    className={`struct-hint struct-hint-${firstHint.valueKind}`}
+                  >
+                    {firstHint.valuePreview}
+                  </span>
+                </span>
+              </span>
+            ) : null}
+            <span className="struct-punct struct-close-inline">{closeBracket}</span>
           </>
         ) : null}
         {isOpen && count === 0 ? (

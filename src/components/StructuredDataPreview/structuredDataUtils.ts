@@ -93,3 +93,62 @@ export function countLabel(count: number, isArray: boolean): string {
   if (count >= 2 && count <= 4) return `${count} ключа`;
   return `${count} ключей`;
 }
+
+const MAX_KEY_HINT_LEN = 18;
+const MAX_VALUE_HINT_LEN = 24;
+
+function truncateHint(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen - 1)}…`;
+}
+
+function formatCompactPreview(value: StructuredValue): string {
+  if (isEmptyValue(value)) return "null";
+  const kind = valueKind(value);
+  if (kind === "number" || kind === "bool") {
+    return truncateHint(String(value), MAX_VALUE_HINT_LEN);
+  }
+  if (typeof value === "string") {
+    return truncateHint(`"${value}"`, MAX_VALUE_HINT_LEN);
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0 ? "[]" : `[${value.length}]`;
+  }
+  if (typeof value === "object" && value !== null) {
+    const keys = Object.keys(value);
+    return keys.length === 0 ? "{}" : truncateHint(keys[0], MAX_VALUE_HINT_LEN);
+  }
+  return truncateHint(String(value), MAX_VALUE_HINT_LEN);
+}
+
+type StructuredEntry = readonly [string | number, StructuredValue];
+
+export type HintValueKind = ValueKind | "null" | "nested";
+
+export type FirstEntryHint = {
+  key?: string;
+  valuePreview: string;
+  valueKind: HintValueKind;
+};
+
+function hintValueKind(value: StructuredValue): HintValueKind {
+  if (isEmptyValue(value)) return "null";
+  if (typeof value === "boolean") return "bool";
+  if (typeof value === "number") return "number";
+  if (typeof value === "string") return "string";
+  return "nested";
+}
+
+/** Compact hint for collapsed nodes: first key/value or first array item preview. */
+export function firstEntryHint(
+  entries: readonly StructuredEntry[],
+  isArray: boolean,
+): FirstEntryHint | null {
+  if (entries.length === 0) return null;
+  const [key, value] = entries[0];
+  return {
+    key: isArray ? undefined : truncateHint(String(key), MAX_KEY_HINT_LEN),
+    valuePreview: formatCompactPreview(value),
+    valueKind: hintValueKind(value),
+  };
+}

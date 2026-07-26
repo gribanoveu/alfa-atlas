@@ -117,6 +117,66 @@
   content: " ";
 }
 
-.struct-count::after {
+.struct-close-inline::before {
   content: " ";
+}
+
+.struct-hint-wrap {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: min(320px, 50vw);
+  min-width: 0;
+}
+
+.struct-hint-sep {
+  color: var(--text-2);
+  opacity: 0.45;
+  flex: none;
+}
+
+.struct-hint-entry {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.struct-hint {
+  font-size: 11px;
+  line-height: 1.3;
+  font-style: italic;
+  opacity: 0.72;
+  flex: none;
+}
+
+.struct-hint-key {
+  color: color-mix(in srgb, var(--purple) 45%, var(--text-2));
+}
+
+.struct-hint-punct {
+  color: var(--text-2);
+  opacity: 0.55;
+}
+
+.struct-hint-string {
+  color: color-mix(in srgb, var(--green) 50%, var(--text-2));
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.struct-hint-number {
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-2));
+}
+
+.struct-hint-bool {
+  color: color-mix(in srgb, var(--cyan) 55%, var(--text-2));
+}
+
+.struct-hint-null,
+.struct-hint-nested {
+  color: var(--text-2);
 }
