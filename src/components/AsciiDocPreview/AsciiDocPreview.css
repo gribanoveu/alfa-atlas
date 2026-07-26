@@ -364,8 +364,9 @@
   padding: 10px 14px 14px;
 }
 
-/* PlantUML diagrams */
-.asc-plantuml {
+/* PlantUML / Mermaid diagrams */
+.asc-plantuml,
+.asc-mermaid {
   margin: 14px 0;
   padding: 16px;
   border: 1px solid var(--border);
@@ -375,14 +376,16 @@
   overflow: hidden;
 }
 
-.asc-plantuml-toolbar {
+.asc-plantuml-toolbar,
+.asc-mermaid-toolbar {
   display: flex;
   align-items: center;
   gap: 4px;
   margin-bottom: 10px;
 }
 
-.asc-plantuml-btn {
+.asc-plantuml-btn,
+.asc-mermaid-btn {
   min-width: 28px;
   height: 26px;
   padding: 0 8px;
@@ -397,17 +400,20 @@
   transition: background 0.12s ease, border-color 0.12s ease;
 }
 
-.asc-plantuml-btn:hover:not(:disabled) {
+.asc-plantuml-btn:hover:not(:disabled),
+.asc-mermaid-btn:hover:not(:disabled) {
   background: var(--bg-0);
   border-color: var(--text-2);
 }
 
-.asc-plantuml-btn:disabled {
+.asc-plantuml-btn:disabled,
+.asc-mermaid-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-.asc-plantuml-zoom {
+.asc-plantuml-zoom,
+.asc-mermaid-zoom {
   min-width: 44px;
   text-align: center;
   font-size: 12px;
@@ -416,7 +422,8 @@
   user-select: none;
 }
 
-.asc-plantuml-viewport {
+.asc-plantuml-viewport,
+.asc-mermaid-viewport {
   position: relative;
   overflow: auto;
   background: var(--bg-0);
@@ -428,12 +435,14 @@
   touch-action: none;
 }
 
-.asc-plantuml-viewport.is-panning {
+.asc-plantuml-viewport.is-panning,
+.asc-mermaid-viewport.is-panning {
   cursor: grabbing;
 }
 
 /* Canvas grows with content; min 100% centers small diagrams via margin on svg. */
-.asc-plantuml-canvas {
+.asc-plantuml-canvas,
+.asc-mermaid-canvas {
   min-width: 100%;
   min-height: 100%;
   width: max-content;
@@ -441,13 +450,15 @@
   box-sizing: border-box;
 }
 
-.asc-plantuml-svg {
+.asc-plantuml-svg,
+.asc-mermaid-svg {
   display: block;
   margin-inline: auto;
   line-height: 0;
 }
 
-.asc-plantuml-svg svg {
+.asc-plantuml-svg svg,
+.asc-mermaid-svg svg {
   display: block;
   width: 100%;
   height: 100%;
@@ -456,18 +467,21 @@
   background: #ffffff;
 }
 
-.asc-plantuml-loading {
+.asc-plantuml-loading,
+.asc-mermaid-loading {
   color: var(--text-2);
   font-size: 12px;
   padding: 24px;
 }
 
-.asc-plantuml-error {
+.asc-plantuml-error,
+.asc-mermaid-error {
   text-align: left;
   color: var(--text-1);
 }
 
-.asc-plantuml-error-title {
+.asc-plantuml-error-title,
+.asc-mermaid-error-title {
   color: var(--red-tag);
   font-weight: 600;
   font-size: 12px;
@@ -475,7 +489,9 @@
 }
 
 .asc-plantuml-error-message,
-.asc-plantuml-source {
+.asc-plantuml-source,
+.asc-mermaid-error-message,
+.asc-mermaid-source {
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 12px;
   white-space: pre-wrap;

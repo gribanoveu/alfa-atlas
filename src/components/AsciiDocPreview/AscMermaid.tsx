@@ -1,0 +1,319 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { readProjectFile } from "../../lib/project";
+import type { AbstractBlock } from "./types";
+import { normalizeMermaidSource, renderMermaid } from "./mermaidRenderer";
+
+type RenderState =
+  | { kind: "loading" }
+  | { kind: "ok"; svg: string }
+  | { kind: "error"; message: string };
+
+const MIN_SCALE = 0.2;
+const MAX_SCALE = 5;
+const SCALE_STEP = 0.2;
+const VIEWPORT_PADDING = 16;
+
+type SvgSize = { w: number; h: number };
+
+/** Natural pixel size of a Mermaid SVG (width/height attrs or viewBox). */
+function measureSvgSize(svg: SVGSVGElement): SvgSize {
+  const widthAttr = svg.getAttribute("width");
+  const heightAttr = svg.getAttribute("height");
+  if (widthAttr && heightAttr) {
+    const w = parseFloat(widthAttr);
+    const h = parseFloat(heightAttr);
+    if (!Number.isNaN(w) && !Number.isNaN(h) && w > 0 && h > 0) {
+      return { w, h };
+    }
+  }
+  const vb = svg.getAttribute("viewBox");
+  if (vb) {
+    const parts = vb.split(/[\s,]+/).map(Number);
+    if (parts.length === 4 && parts.every((n) => !Number.isNaN(n))) {
+      return { w: parts[2], h: parts[3] };
+    }
+  }
+  const rect = svg.getBoundingClientRect();
+  return { w: rect.width || 1, h: rect.height || 1 };
+}
+
+const INCLUDE_RE = /^include::([^\[\]]+)\[(.*)\]\s*$/;
+
+async function expandIncludes(
+  raw: string,
+  docsRoot: string | null,
+): Promise<string> {
+  if (!raw || !docsRoot) return raw;
+  const outLines: string[] = [];
+  for (const line of raw.split(/\r\n|\r|\n/)) {
+    const m = INCLUDE_RE.exec(line);
+    if (!m) {
+      outLines.push(line);
+      continue;
+    }
+    const target = m[1];
+    try {
+      const content = await readProjectFile(docsRoot, target);
+      outLines.push(content);
+    } catch {
+      outLines.push(line);
+    }
+  }
+  return outLines.join("\n");
+}
+
+/**
+ * Mermaid-диаграмма: блок `[mermaid,…] ---- … ----`, `[source,mermaid]`
+ * или standalone `.mmd`/`.mermaid` (см. `AsciiDocPreview`).
+ */
+export function AscMermaid({
+  block,
+  docsRoot = null,
+}: {
+  block: AbstractBlock;
+  docsRoot?: string | null;
+}) {
+  const rawSource = safeGetSource(block) ?? "";
+
+  const [scale, setScale] = useState(1);
+  const [naturalSize, setNaturalSize] = useState<SvgSize | null>(null);
+  const [state, setState] = useState<RenderState>({ kind: "loading" });
+
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  const dragState = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    baseScrollLeft: number;
+    baseScrollTop: number;
+  }>({ active: false, startX: 0, startY: 0, baseScrollLeft: 0, baseScrollTop: 0 });
+
+  useEffect(() => {
+    setScale(1);
+    setNaturalSize(null);
+  }, [rawSource]);
+
+  useEffect(() => {
+    if (state.kind !== "ok") {
+      setNaturalSize(null);
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const svg = wrapperRef.current?.querySelector("svg");
+      if (svg) setNaturalSize(measureSvgSize(svg));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [state]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ kind: "loading" });
+    expandIncludes(rawSource, docsRoot)
+      .then((source) => renderMermaid(normalizeMermaidSource(source)))
+      .then((r) => {
+        if (cancelled) return;
+        if (r.kind === "ok") {
+          setState({ kind: "ok", svg: r.svg });
+        } else {
+          setState({ kind: "error", message: r.message });
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setState({ kind: "error", message: "render failed" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rawSource, docsRoot]);
+
+  const clampScale = useCallback((s: number) => {
+    return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+  }, []);
+
+  const zoomIn = useCallback(() => {
+    setScale((s) => clampScale(s + SCALE_STEP));
+  }, [clampScale]);
+
+  const zoomOut = useCallback(() => {
+    setScale((s) => clampScale(s - SCALE_STEP));
+  }, [clampScale]);
+
+  const resetView = useCallback(() => {
+    setScale(1);
+    const viewport = viewportRef.current;
+    if (viewport) {
+      viewport.scrollLeft = 0;
+      viewport.scrollTop = 0;
+    }
+  }, []);
+
+  const fitToContainer = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !naturalSize) {
+      resetView();
+      return;
+    }
+    const pad = VIEWPORT_PADDING;
+    const availW = Math.max(1, viewport.clientWidth - pad * 2);
+    const availH = Math.max(1, viewport.clientHeight - pad * 2);
+    const s = clampScale(
+      Math.min(availW / naturalSize.w, availH / naturalSize.h),
+    );
+    setScale(s);
+    requestAnimationFrame(() => {
+      const sw = naturalSize.w * s;
+      const sh = naturalSize.h * s;
+      viewport.scrollLeft = Math.max(0, (sw + pad * 2 - viewport.clientWidth) / 2);
+      viewport.scrollTop = Math.max(0, (sh + pad * 2 - viewport.clientHeight) / 2);
+    });
+  }, [naturalSize, clampScale, resetView]);
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent<HTMLDivElement>) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -SCALE_STEP : SCALE_STEP;
+      setScale((s) => clampScale(s + delta));
+    },
+    [clampScale],
+  );
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      if (target.closest("button")) return;
+      const viewport = viewportRef.current;
+      if (!viewport) return;
+      viewport.setPointerCapture(e.pointerId);
+      dragState.current = {
+        active: true,
+        startX: e.clientX,
+        startY: e.clientY,
+        baseScrollLeft: viewport.scrollLeft,
+        baseScrollTop: viewport.scrollTop,
+      };
+    },
+    [],
+  );
+
+  const handlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const ds = dragState.current;
+      const viewport = viewportRef.current;
+      if (!ds.active || !viewport) return;
+      viewport.scrollLeft = ds.baseScrollLeft - (e.clientX - ds.startX);
+      viewport.scrollTop = ds.baseScrollTop - (e.clientY - ds.startY);
+    },
+    [],
+  );
+
+  const endDrag = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const ds = dragState.current;
+      if (!ds.active) return;
+      const viewport = viewportRef.current;
+      if (viewport && viewport.hasPointerCapture(e.pointerId)) {
+        viewport.releasePointerCapture(e.pointerId);
+      }
+      dragState.current = { ...ds, active: false };
+    },
+    [],
+  );
+
+  const name = block.getAttribute("1") as string | null;
+  const isPanning = dragState.current.active;
+  const zoomLabel = `${Math.round(scale * 100)}%`;
+  const scaledW = naturalSize ? naturalSize.w * scale : undefined;
+  const scaledH = naturalSize ? naturalSize.h * scale : undefined;
+
+  return (
+    <div className="asc-mermaid" data-name={name ?? undefined}>
+      {state.kind === "loading" ? (
+        <div className="asc-mermaid-loading">Рендеринг диаграммы…</div>
+      ) : state.kind === "error" ? (
+        <div className="asc-mermaid-error">
+          <div className="asc-mermaid-error-title">Ошибка Mermaid</div>
+          <pre className="asc-mermaid-error-message">{state.message}</pre>
+          <pre className="asc-mermaid-source">{rawSource}</pre>
+        </div>
+      ) : (
+        <>
+          <div className="asc-mermaid-toolbar">
+            <button
+              type="button"
+              className="asc-mermaid-btn"
+              onClick={zoomOut}
+              disabled={scale <= MIN_SCALE + 1e-6}
+              title="Уменьшить"
+              aria-label="Уменьшить масштаб"
+            >
+              −
+            </button>
+            <span className="asc-mermaid-zoom" aria-live="polite">
+              {zoomLabel}
+            </span>
+            <button
+              type="button"
+              className="asc-mermaid-btn"
+              onClick={zoomIn}
+              disabled={scale >= MAX_SCALE - 1e-6}
+              title="Увеличить"
+              aria-label="Увеличить масштаб"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="asc-mermaid-btn"
+              onClick={fitToContainer}
+              title="Вписать в контейнер"
+              aria-label="Вписать в контейнер"
+            >
+              Fit
+            </button>
+            <button
+              type="button"
+              className="asc-mermaid-btn"
+              onClick={resetView}
+              title="Сбросить масштаб (100%)"
+              aria-label="Сбросить масштаб"
+            >
+              1:1
+            </button>
+          </div>
+          <div
+            ref={viewportRef}
+            className={`asc-mermaid-viewport${isPanning ? " is-panning" : ""}`}
+            onWheel={handleWheel}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+          >
+            <div className="asc-mermaid-canvas">
+              <div
+                ref={wrapperRef}
+                className="asc-mermaid-svg"
+                style={
+                  scaledW && scaledH
+                    ? { width: scaledW, height: scaledH }
+                    : undefined
+                }
+                dangerouslySetInnerHTML={{ __html: state.svg }}
+              />
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function safeGetSource(block: AbstractBlock): string | null {
+  const fn = (block as unknown as { getSource?: () => string }).getSource;
+  return typeof fn === "function" ? fn.call(block) : null;
+}

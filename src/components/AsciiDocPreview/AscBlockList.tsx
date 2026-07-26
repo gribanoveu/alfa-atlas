@@ -6,6 +6,7 @@ import { AscImage } from "./AscImage";
 import { AscList } from "./AscList";
 import { AscLiteral } from "./AscLiteral";
 import { AscParagraph } from "./AscParagraph";
+import { AscMermaid } from "./AscMermaid";
 import { AscPlantuml } from "./AscPlantuml";
 import { AscQuote } from "./AscQuote";
 import { AscSection } from "./AscSection";
@@ -99,8 +100,13 @@ function AscBlock({
       return <AscAdmonition block={block} onOpenXref={onOpenXref} />;
     case "listing": {
       const style = (block.getAttribute("style") as string | null) ?? null;
+      const language =
+        (block.getAttribute("language") as string | null)?.toLowerCase() ?? null;
       if (style === "plantuml") {
         return <AscPlantuml block={block} docsRoot={docsRoot} />;
+      }
+      if (style === "mermaid" || language === "mermaid") {
+        return <AscMermaid block={block} docsRoot={docsRoot} />;
       }
       return <AscCodeBlock block={block} monaco={monaco} />;
     }

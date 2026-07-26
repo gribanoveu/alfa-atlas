@@ -1,6 +1,7 @@
 import type * as Monaco from "monaco-editor";
 import { useAsciiDocRender } from "../../hooks/useAsciiDocRender";
 import { AscBlockList } from "./AscBlockList";
+import { AscMermaid } from "./AscMermaid";
 import { AscPlantuml } from "./AscPlantuml";
 import { InlineHtml } from "./InlineHtml";
 import type { AbstractBlock } from "./types";
@@ -22,6 +23,9 @@ type AsciiDocPreviewProps = {
 /** Extensions that are standalone PlantUML sources, not AsciiDoc. */
 const PLANTUML_EXTS = new Set([".puml", ".plantuml"]);
 
+/** Extensions that are standalone Mermaid sources, not AsciiDoc. */
+const MERMAID_EXTS = new Set([".mmd", ".mermaid"]);
+
 function extensionOf(path: string): string {
   const base = path.split(/[/\\]/).pop() ?? path;
   const dot = base.lastIndexOf(".");
@@ -35,6 +39,13 @@ function extensionOf(path: string): string {
  * blocks embedded in `.adoc`.
  */
 function makePlantumlBlock(source: string, name: string | null): AbstractBlock {
+  return {
+    getSource: () => source,
+    getAttribute: (key: string) => (key === "1" ? name : null),
+  } as unknown as AbstractBlock;
+}
+
+function makeMermaidBlock(source: string, name: string | null): AbstractBlock {
   return {
     getSource: () => source,
     getAttribute: (key: string) => (key === "1" ? name : null),
@@ -58,10 +69,12 @@ export function AsciiDocPreview({
 }: AsciiDocPreviewProps) {
   const ext = filePath ? extensionOf(filePath) : "";
   const isPlantumlFile = PLANTUML_EXTS.has(ext);
+  const isMermaidFile = MERMAID_EXTS.has(ext);
+  const isStandaloneDiagram = isPlantumlFile || isMermaidFile;
 
   const { doc, error, parsing } = useAsciiDocRender(
     content,
-    /* enabled */ !isPlantumlFile,
+    /* enabled */ !isStandaloneDiagram,
     docsRoot,
     filePath,
   );
@@ -71,6 +84,15 @@ export function AsciiDocPreview({
     return (
       <div className="asc-preview">
         <AscPlantuml block={makePlantumlBlock(content, name)} docsRoot={docsRoot} />
+      </div>
+    );
+  }
+
+  if (isMermaidFile) {
+    const name = filePath ? (filePath.split(/[/\\]/).pop() ?? null) : null;
+    return (
+      <div className="asc-preview">
+        <AscMermaid block={makeMermaidBlock(content, name)} docsRoot={docsRoot} />
       </div>
     );
   }
