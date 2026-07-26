@@ -362,6 +362,44 @@ export function useEditorTabs(
     });
   }, []);
 
+  const remapTabsUnder = useCallback(
+    (oldPath: string, newPath: string) => {
+      const prefix = oldPath.replace(/[/\\]+$/, "") + "/";
+      const remap = (tabPath: string): string | null => {
+        if (tabPath === oldPath) return newPath;
+        if (tabPath.startsWith(prefix)) return newPath + tabPath.slice(prefix.length);
+        if (tabPath.startsWith(oldPath + "\\")) {
+          return newPath + tabPath.slice(oldPath.length);
+        }
+        return null;
+      };
+      setTabs((prev) => {
+        let changed = false;
+        const next = prev.map((tab) => {
+          const remapped = remap(tab.path);
+          if (!remapped) return tab;
+          changed = true;
+          return {
+            ...tab,
+            id: remapped,
+            path: remapped,
+            title: titleOf(remapped),
+            language: monacoLanguageFor(remapped),
+          };
+        });
+        if (!changed) return prev;
+        tabsRef.current = next;
+        const activeId = activeTabIdRef.current;
+        if (activeId) {
+          const remappedActive = remap(activeId);
+          if (remappedActive) setActiveTabId(remappedActive);
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
   const updateActiveContent = useCallback(
     (content: string) => {
       if (!activeTabId) return;
@@ -421,6 +459,7 @@ export function useEditorTabs(
     closeAllTabs,
     closeOtherTabs,
     discardTabsUnder,
+    remapTabsUnder,
     openFile,
     restoreTabs,
     updateActiveContent,

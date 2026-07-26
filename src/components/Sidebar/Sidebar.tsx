@@ -18,6 +18,7 @@ type SidebarProps = {
   onOpenFile: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
+  onRename: (target: FileTreeDeleteTarget) => void;
   onDelete: (target: FileTreeDeleteTarget) => void;
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
@@ -43,6 +44,7 @@ export function Sidebar({
   onOpenFile,
   onNewFile,
   onNewFolder,
+  onRename,
   onDelete,
   onResize,
   onResizeEnd,
@@ -99,6 +101,7 @@ export function Sidebar({
               onOpenFile={onOpenFile}
               onNewFile={onNewFile}
               onNewFolder={onNewFolder}
+              onRename={onRename}
               onDelete={onDelete}
               onResizeExternal={onResizeExternal}
               onResizeExternalEnd={onResizeExternalEnd}

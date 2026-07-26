@@ -182,6 +182,59 @@ pub fn delete_project_dir(docs_root: &str, relative_path: &str) -> Result<(), Pr
     fs::remove_dir_all(&canonical).map_err(ProjectError::Delete)
 }
 
+/// Rename a file under docs root. Only the basename changes; the parent
+/// directory is preserved. Fails if the source is missing, the destination
+/// already exists, or the new name is not a supported file type.
+pub fn rename_project_file(
+    docs_root: &str,
+    from_relative: &str,
+    to_relative: &str,
+) -> Result<(), ProjectError> {
+    validate_relative_name(from_relative)?;
+    validate_relative_name(to_relative)?;
+    let root = resolve_docs_root(docs_root)?;
+    let from_joined = paths::join_relative(&root, from_relative)?;
+    let from_canonical = paths::ensure_under(&root, &from_joined)?;
+    if !from_canonical.is_file() {
+        return Err(ProjectError::NotFound(from_relative.to_string()));
+    }
+    let to_joined = paths::join_relative(&root, to_relative)?;
+    let to_canonical = paths::ensure_under(&root, &to_joined)?;
+    if !is_supported_file(&to_canonical.to_string_lossy()) {
+        return Err(ProjectError::UnsupportedFile(to_relative.to_string()));
+    }
+    if to_canonical.exists() {
+        return Err(ProjectError::AlreadyExists(to_relative.to_string()));
+    }
+    fs::rename(&from_canonical, &to_canonical).map_err(ProjectError::Rename)
+}
+
+/// Rename a directory under docs root. Fails if the source is missing, the
+/// destination already exists, or the source is the docs root itself.
+pub fn rename_project_dir(
+    docs_root: &str,
+    from_relative: &str,
+    to_relative: &str,
+) -> Result<(), ProjectError> {
+    validate_relative_name(from_relative)?;
+    validate_relative_name(to_relative)?;
+    let root = resolve_docs_root(docs_root)?;
+    let from_joined = paths::join_relative(&root, from_relative)?;
+    let from_canonical = paths::ensure_under(&root, &from_joined)?;
+    if from_canonical == root {
+        return Err(ProjectError::InvalidName(from_relative.to_string()));
+    }
+    if !from_canonical.is_dir() {
+        return Err(ProjectError::NotFound(from_relative.to_string()));
+    }
+    let to_joined = paths::join_relative(&root, to_relative)?;
+    let to_canonical = paths::ensure_under(&root, &to_joined)?;
+    if to_canonical.exists() {
+        return Err(ProjectError::AlreadyExists(to_relative.to_string()));
+    }
+    fs::rename(&from_canonical, &to_canonical).map_err(ProjectError::Rename)
+}
+
 fn validate_relative_name(relative_path: &str) -> Result<(), ProjectError> {
     let trimmed = relative_path.trim();
     if trimmed.is_empty() || trimmed == "." {
@@ -274,6 +327,68 @@ mod tests {
         // Deleting the docs root itself is rejected.
         let err = delete_project_dir(root.to_str().unwrap(), ".").unwrap_err();
         assert!(matches!(err, ProjectError::InvalidName(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rename_file_and_dir_update_tree() {
+        let root = temp_dir();
+        create_project_dir(root.to_str().unwrap(), "folder").unwrap();
+        create_project_file(root.to_str().unwrap(), "folder/note.adoc").unwrap();
+
+        // Rename the file.
+        rename_project_file(root.to_str().unwrap(), "folder/note.adoc", "folder/renamed.adoc").unwrap();
+        let tree = list_docs_tree(root.to_str().unwrap()).unwrap();
+        let children = tree[0].children.as_ref().unwrap();
+        assert_eq!(children[0].name, "renamed.adoc");
+
+        // Renaming to an existing name fails.
+        create_project_file(root.to_str().unwrap(), "folder/second.adoc").unwrap();
+        let err = rename_project_file(
+            root.to_str().unwrap(),
+            "folder/second.adoc",
+            "folder/renamed.adoc",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ProjectError::AlreadyExists(_)));
+
+        // Renaming a missing source fails.
+        let err = rename_project_file(
+            root.to_str().unwrap(),
+            "folder/missing.adoc",
+            "folder/other.adoc",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ProjectError::NotFound(_)));
+
+        // Renaming to an unsupported extension fails.
+        let err = rename_project_file(
+            root.to_str().unwrap(),
+            "folder/renamed.adoc",
+            "folder/renamed.rs",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ProjectError::UnsupportedFile(_)));
+
+        // Rename the directory.
+        rename_project_dir(root.to_str().unwrap(), "folder", "archive").unwrap();
+        let tree = list_docs_tree(root.to_str().unwrap()).unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, "archive");
+
+        // Renaming the docs root is rejected.
+        let err = rename_project_dir(root.to_str().unwrap(), ".", "root").unwrap_err();
+        assert!(matches!(err, ProjectError::InvalidName(_)));
+
+        // Renaming a file via the dir command fails.
+        let err = rename_project_dir(
+            root.to_str().unwrap(),
+            "archive/renamed.adoc",
+            "archive/other.adoc",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ProjectError::NotFound(_)));
 
         fs::remove_dir_all(&root).ok();
     }

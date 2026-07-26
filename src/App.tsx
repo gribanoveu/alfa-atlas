@@ -26,13 +26,20 @@ import {
   collectDirPaths,
   useWorkspaceSession,
 } from "./hooks/useWorkspaceSession";
-import { createProjectDir, createProjectFile, deleteProjectDir, deleteProjectFile } from "./lib/project";
+import { createProjectDir, createProjectFile, deleteProjectDir, deleteProjectFile, renameProjectDir, renameProjectFile } from "./lib/project";
 import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
 import { formatLabelFor, lineEndingLabelFor } from "./lib/supportedFiles";
+import { RenameModal } from "./components/Sidebar/RenameModal";
 
 function joinParent(parentPath: string, name: string): string {
   if (!parentPath || parentPath === ".") return name;
   return `${parentPath.replace(/[/\\]+$/, "")}/${name}`;
+}
+
+function parentOfPath(path: string): string {
+  const parts = path.split(/[/\\]/).filter(Boolean);
+  if (parts.length <= 1) return ".";
+  return parts.slice(0, -1).join("/");
 }
 
 /**
@@ -122,6 +129,7 @@ function App() {
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
+  const [renameTarget, setRenameTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [gitAlert, setGitAlert] = useState<string | null>(null);
   const [revealRequest, setRevealRequest] = useState<{
@@ -452,6 +460,7 @@ function App() {
             onOpenFile={(path) => void editor.openFile(path)}
             onNewFile={setNewFileParent}
             onNewFolder={setNewFolderParent}
+            onRename={setRenameTarget}
             onDelete={setDeleteTarget}
             onResize={panels.resizeSidebarBy}
             onResizeEnd={panels.persistLayout}
@@ -588,6 +597,28 @@ function App() {
             }
             editor.discardTabsUnder(target.path);
             setDeleteTarget(null);
+            await tree.refresh();
+            if (gitPanelActive) git.scheduleRefresh();
+          }}
+        />
+      ) : null}
+
+      {renameTarget !== null && project.docsRoot ? (
+        <RenameModal
+          target={renameTarget}
+          onCancel={() => setRenameTarget(null)}
+          onConfirm={async (newName) => {
+            const oldPath = renameTarget.path;
+            const newPath = joinParent(parentOfPath(oldPath), newName);
+            if (renameTarget.isDir) {
+              await renameProjectDir(project.docsRoot!, oldPath, newPath);
+            } else {
+              await renameProjectFile(project.docsRoot!, oldPath, newPath);
+            }
+            editor.remapTabsUnder(oldPath, newPath);
+            session.remapExpandedUnder(oldPath, newPath);
+            session.ensureExpanded(parentOfPath(newPath));
+            setRenameTarget(null);
             await tree.refresh();
             if (gitPanelActive) git.scheduleRefresh();
           }}

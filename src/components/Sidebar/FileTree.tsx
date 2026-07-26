@@ -1,4 +1,12 @@
-import { FilePlus, FileText, Folder, FolderOpen, FolderPlus, Trash2 } from "lucide-react";
+import {
+  FilePlus,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -28,6 +36,7 @@ type FileTreeProps = {
   onOpenFile: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
+  onRename: (target: FileTreeDeleteTarget) => void;
   onDelete: (target: FileTreeDeleteTarget) => void;
   onResizeExternal?: (delta: number) => void;
   onResizeExternalEnd?: () => void;
@@ -55,7 +64,7 @@ type ContextMenuState = {
 };
 
 const MENU_WIDTH = 200;
-const MENU_HEIGHT = 108;
+const MENU_HEIGHT = 148;
 
 function parentOfFile(path: string): string {
   const parts = path.split(/[/\\]/);
@@ -160,6 +169,7 @@ export function FileTree({
   onOpenFile,
   onNewFile,
   onNewFolder,
+  onRename,
   onDelete,
   onResizeExternal,
   onResizeExternalEnd,
@@ -372,20 +382,38 @@ export function FileTree({
             (() => {
               const target = menu.target;
               return (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="file-tree-context-item danger"
-                  onClick={() => {
-                    onDelete(target);
-                    setMenu(null);
-                  }}
-                >
-                  <span className="file-tree-context-icon" aria-hidden>
-                    <Trash2 size={14} strokeWidth={1.75} />
-                  </span>
-                  <span className="file-tree-context-label">Удалить…</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="file-tree-context-item"
+                    onClick={() => {
+                      onRename(target);
+                      setMenu(null);
+                    }}
+                  >
+                    <span className="file-tree-context-icon" aria-hidden>
+                      <Pencil size={14} strokeWidth={1.75} />
+                    </span>
+                    <span className="file-tree-context-label">
+                      Переименовать…
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="file-tree-context-item danger"
+                    onClick={() => {
+                      onDelete(target);
+                      setMenu(null);
+                    }}
+                  >
+                    <span className="file-tree-context-icon" aria-hidden>
+                      <Trash2 size={14} strokeWidth={1.75} />
+                    </span>
+                    <span className="file-tree-context-label">Удалить…</span>
+                  </button>
+                </>
               );
             })()
           ) : null}

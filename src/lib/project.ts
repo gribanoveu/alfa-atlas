@@ -121,3 +121,27 @@ export function deleteProjectDir(
 ): Promise<void> {
   return invoke<void>("delete_project_dir", { docsRoot, relativePath });
 }
+
+export function renameProjectFile(
+  docsRoot: string,
+  fromPath: string,
+  toPath: string,
+): Promise<void> {
+  return invoke<void>("rename_project_file", {
+    docsRoot,
+    fromRelative: fromPath,
+    toRelative: toPath,
+  });
+}
+
+export function renameProjectDir(
+  docsRoot: string,
+  fromPath: string,
+  toPath: string,
+): Promise<void> {
+  return invoke<void>("rename_project_dir", {
+    docsRoot,
+    fromRelative: fromPath,
+    toRelative: toPath,
+  });
+}

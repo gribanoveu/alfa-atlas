@@ -212,12 +212,41 @@ export function useWorkspaceSession(
     [schedulePersist],
   );
 
+  const remapExpandedUnder = useCallback(
+    (oldPath: string, newPath: string) => {
+      const prefix = oldPath.replace(/[/\\]+$/, "") + "/";
+      const remap = (p: string): string => {
+        if (p === oldPath) return newPath;
+        if (p.startsWith(prefix)) return newPath + p.slice(prefix.length);
+        if (p.startsWith(oldPath + "\\")) {
+          return newPath + p.slice(oldPath.length);
+        }
+        return p;
+      };
+      setExpandedDirs((prev) => {
+        let changed = false;
+        const next = new Set<string>();
+        for (const p of prev) {
+          const r = remap(p);
+          if (r !== p) changed = true;
+          next.add(r);
+        }
+        if (!changed) return prev;
+        expandedRef.current = next;
+        schedulePersist();
+        return next;
+      });
+    },
+    [schedulePersist],
+  );
+
   return {
     ready,
     loadedState,
     expandedDirs,
     toggleDir,
     ensureExpanded,
+    remapExpandedUnder,
     syncTabs,
     syncPanelUi,
     seedShallowExpanded,
