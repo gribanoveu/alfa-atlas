@@ -3,6 +3,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AUTOSAVE_DELAY_LIMITS,
   clampAutosaveDelayMs,
+  clampFontSizePx,
+  DEFAULT_GENERAL_PREFS,
+  FONT_SIZE_LIMITS,
   getGeneralPrefs,
   getSettingsPaths,
   setGeneralPrefs,
@@ -125,6 +128,35 @@ export function SettingsDialog({
     },
     [persistPrefs, prefs],
   );
+
+  const stageFontPref = useCallback(
+    (patch: Partial<GeneralPrefs>) => {
+      if (!prefs) return;
+      const next = { ...prefs, ...patch };
+      setPrefs(next);
+      onPrefsChange?.(next);
+    },
+    [onPrefsChange, prefs],
+  );
+
+  const persistFontPref = useCallback(
+    (patch: Partial<GeneralPrefs>) => {
+      if (!prefs) return;
+      void persistPrefs({ ...prefs, ...patch });
+    },
+    [persistPrefs, prefs],
+  );
+
+  const resetFontPrefs = useCallback(() => {
+    if (!prefs) return;
+    void persistPrefs({
+      ...prefs,
+      uiFontSizePx: DEFAULT_GENERAL_PREFS.uiFontSizePx,
+      sidebarFontSizePx: DEFAULT_GENERAL_PREFS.sidebarFontSizePx,
+      editorFontSizePx: DEFAULT_GENERAL_PREFS.editorFontSizePx,
+      previewFontSizePx: DEFAULT_GENERAL_PREFS.previewFontSizePx,
+    });
+  }, [persistPrefs, prefs]);
 
   const openUserSettingsDir = useCallback(async () => {
     if (!paths?.userSettingsDir) return;
@@ -328,6 +360,154 @@ export function SettingsDialog({
                     От {AUTOSAVE_DELAY_LIMITS.min} до{" "}
                     {AUTOSAVE_DELAY_LIMITS.max} мс.
                   </p>
+                </div>
+                <div className="settings-row">
+                  <div className="settings-section-title">Шрифты</div>
+                  <label className="settings-field-label" htmlFor="font-ui-size">
+                    Интерфейс (px)
+                  </label>
+                  <input
+                    id="font-ui-size"
+                    className="settings-number"
+                    type="number"
+                    min={FONT_SIZE_LIMITS.min}
+                    max={FONT_SIZE_LIMITS.max}
+                    step={FONT_SIZE_LIMITS.step}
+                    value={prefs?.uiFontSizePx ?? DEFAULT_GENERAL_PREFS.uiFontSizePx}
+                    disabled={!prefs || busy}
+                    onChange={(event) => {
+                      if (!prefs) return;
+                      const raw = Number(event.target.value);
+                      if (!Number.isFinite(raw)) return;
+                      stageFontPref({ uiFontSizePx: clampFontSizePx(raw) });
+                    }}
+                    onBlur={() => {
+                      if (!prefs) return;
+                      void persistFontPref({
+                        uiFontSizePx: clampFontSizePx(prefs.uiFontSizePx),
+                      });
+                    }}
+                  />
+                  <label
+                    className="settings-field-label"
+                    htmlFor="font-sidebar-size"
+                  >
+                    Sidebar (px)
+                  </label>
+                  <input
+                    id="font-sidebar-size"
+                    className="settings-number"
+                    type="number"
+                    min={FONT_SIZE_LIMITS.min}
+                    max={FONT_SIZE_LIMITS.max}
+                    step={FONT_SIZE_LIMITS.step}
+                    value={
+                      prefs?.sidebarFontSizePx ??
+                      DEFAULT_GENERAL_PREFS.sidebarFontSizePx
+                    }
+                    disabled={!prefs || busy}
+                    onChange={(event) => {
+                      if (!prefs) return;
+                      const raw = Number(event.target.value);
+                      if (!Number.isFinite(raw)) return;
+                      stageFontPref({
+                        sidebarFontSizePx: clampFontSizePx(raw),
+                      });
+                    }}
+                    onBlur={() => {
+                      if (!prefs) return;
+                      void persistFontPref({
+                        sidebarFontSizePx: clampFontSizePx(
+                          prefs.sidebarFontSizePx,
+                        ),
+                      });
+                    }}
+                  />
+                  <label
+                    className="settings-field-label"
+                    htmlFor="font-editor-size"
+                  >
+                    Редактор (px)
+                  </label>
+                  <input
+                    id="font-editor-size"
+                    className="settings-number"
+                    type="number"
+                    min={FONT_SIZE_LIMITS.min}
+                    max={FONT_SIZE_LIMITS.max}
+                    step={FONT_SIZE_LIMITS.step}
+                    value={
+                      prefs?.editorFontSizePx ??
+                      DEFAULT_GENERAL_PREFS.editorFontSizePx
+                    }
+                    disabled={!prefs || busy}
+                    onChange={(event) => {
+                      if (!prefs) return;
+                      const raw = Number(event.target.value);
+                      if (!Number.isFinite(raw)) return;
+                      stageFontPref({
+                        editorFontSizePx: clampFontSizePx(raw),
+                      });
+                    }}
+                    onBlur={() => {
+                      if (!prefs) return;
+                      void persistFontPref({
+                        editorFontSizePx: clampFontSizePx(
+                          prefs.editorFontSizePx,
+                        ),
+                      });
+                    }}
+                  />
+                  <label
+                    className="settings-field-label"
+                    htmlFor="font-preview-size"
+                  >
+                    Превью (px)
+                  </label>
+                  <input
+                    id="font-preview-size"
+                    className="settings-number"
+                    type="number"
+                    min={FONT_SIZE_LIMITS.min}
+                    max={FONT_SIZE_LIMITS.max}
+                    step={FONT_SIZE_LIMITS.step}
+                    value={
+                      prefs?.previewFontSizePx ??
+                      DEFAULT_GENERAL_PREFS.previewFontSizePx
+                    }
+                    disabled={!prefs || busy}
+                    onChange={(event) => {
+                      if (!prefs) return;
+                      const raw = Number(event.target.value);
+                      if (!Number.isFinite(raw)) return;
+                      stageFontPref({
+                        previewFontSizePx: clampFontSizePx(raw),
+                      });
+                    }}
+                    onBlur={() => {
+                      if (!prefs) return;
+                      void persistFontPref({
+                        previewFontSizePx: clampFontSizePx(
+                          prefs.previewFontSizePx,
+                        ),
+                      });
+                    }}
+                  />
+                  <p className="settings-hint">
+                    От {FONT_SIZE_LIMITS.min} до {FONT_SIZE_LIMITS.max} px, шаг{" "}
+                    {FONT_SIZE_LIMITS.step}. Изменения видны сразу; сохранение на
+                    диск — при потере фокуса поля.
+                  </p>
+                  <div className="settings-actions">
+                    <button
+                      type="button"
+                      className="settings-btn"
+                      disabled={!prefs || busy}
+                      onClick={resetFontPrefs}
+                    >
+                      Сбросить шрифты
+                    </button>
+                  </div>
                 </div>
                 <div className="settings-row">
                   <div className="settings-section-title">Проводник</div>

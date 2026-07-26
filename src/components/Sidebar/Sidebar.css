@@ -39,7 +39,7 @@
 .sidebar-rail-label {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  font-size: 10px;
+  font-size: var(--font-sidebar-sm);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -48,7 +48,7 @@
 
 .sidebar-head {
   padding: 8px 10px 6px 10px;
-  font-size: 10.5px;
+  font-size: var(--font-sidebar-sm);
   letter-spacing: 0.8px;
   color: var(--text-2);
   text-transform: uppercase;

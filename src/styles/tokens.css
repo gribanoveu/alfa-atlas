@@ -23,6 +23,13 @@
   --scrollbar-size: 4px;
   --scrollbar-thumb: color-mix(in srgb, var(--text-2) 55%, transparent);
   --scrollbar-thumb-hover: color-mix(in srgb, var(--text-1) 70%, transparent);
+  --font-ui: 12.5px;
+  --font-sidebar: 12px;
+  --font-editor: 13px;
+  --font-preview: 14px;
+  --font-ui-sm: calc(var(--font-ui) * 0.88);
+  --font-ui-xs: calc(var(--font-ui) * 0.72);
+  --font-sidebar-sm: calc(var(--font-sidebar) * 0.88);
 }
 
 * {
@@ -41,7 +48,7 @@ body {
   font-family: "JetBrains Mono", ui-monospace, monospace;
   background: var(--bg-0);
   color: var(--text-0);
-  font-size: 12.5px;
+  font-size: var(--font-ui);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }

@@ -8,6 +8,7 @@ import "./GitFileDiffModal.css";
 type GitFileDiffModalProps = {
   target: { file: GitFileStatus; scope: GitDiffScope };
   busy: boolean;
+  editorFontSizePx: number;
   onClose: () => void;
   onLoadDiff: (path: string, scope: GitDiffScope) => Promise<GitFileDiff | null>;
   onDiscard: (path: string) => Promise<boolean>;
@@ -16,6 +17,7 @@ type GitFileDiffModalProps = {
 export function GitFileDiffModal({
   target,
   busy,
+  editorFontSizePx,
   onClose,
   onLoadDiff,
   onDiscard,
@@ -151,7 +153,7 @@ export function GitFileDiffModal({
                 scrollBeyondLastLine: false,
                 wordWrap: "on",
                 fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-                fontSize: 13,
+                fontSize: editorFontSizePx,
                 renderOverviewRuler: false,
               }}
             />

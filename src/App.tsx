@@ -262,6 +262,10 @@ function App() {
     ["--right-width" as string]: `${panels.layout.rightWidth}px`,
     ["--bottom-height" as string]: `${panels.layout.bottomHeight}px`,
     ["--external-height" as string]: `${panels.layout.externalHeight}px`,
+    ["--font-ui" as string]: `${generalPrefs.prefs.uiFontSizePx}px`,
+    ["--font-sidebar" as string]: `${generalPrefs.prefs.sidebarFontSizePx}px`,
+    ["--font-editor" as string]: `${generalPrefs.prefs.editorFontSizePx}px`,
+    ["--font-preview" as string]: `${generalPrefs.prefs.previewFontSizePx}px`,
   };
 
   const openFolder = useCallback(async () => {
@@ -630,6 +634,7 @@ function App() {
                     }
                   : null
               }
+              editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
             />
           ) : (
             <Welcome
@@ -801,6 +806,7 @@ function App() {
         <GitFileDiffModal
           target={gitDiffTarget}
           busy={git.busy}
+          editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
           onClose={() => setGitDiffTarget(null)}
           onLoadDiff={git.loadFileDiff}
           onDiscard={handleGitDiscard}

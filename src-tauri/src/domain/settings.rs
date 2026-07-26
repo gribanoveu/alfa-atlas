@@ -85,6 +85,34 @@ pub const DEFAULT_AUTOSAVE_DELAY_MS: u64 = 1000;
 pub const MIN_AUTOSAVE_DELAY_MS: u64 = 300;
 pub const MAX_AUTOSAVE_DELAY_MS: u64 = 10_000;
 
+pub const MIN_FONT_SIZE_PX: f32 = 10.0;
+pub const MAX_FONT_SIZE_PX: f32 = 24.0;
+pub const DEFAULT_UI_FONT_SIZE_PX: f32 = 12.5;
+pub const DEFAULT_SIDEBAR_FONT_SIZE_PX: f32 = 12.0;
+pub const DEFAULT_EDITOR_FONT_SIZE_PX: f32 = 13.0;
+pub const DEFAULT_PREVIEW_FONT_SIZE_PX: f32 = 14.0;
+
+fn clamp_font_size_px(value: f32) -> f32 {
+    let clamped = value.clamp(MIN_FONT_SIZE_PX, MAX_FONT_SIZE_PX);
+    (clamped * 2.0).round() / 2.0
+}
+
+fn default_ui_font_size_px() -> f32 {
+    DEFAULT_UI_FONT_SIZE_PX
+}
+
+fn default_sidebar_font_size_px() -> f32 {
+    DEFAULT_SIDEBAR_FONT_SIZE_PX
+}
+
+fn default_editor_font_size_px() -> f32 {
+    DEFAULT_EDITOR_FONT_SIZE_PX
+}
+
+fn default_preview_font_size_px() -> f32 {
+    DEFAULT_PREVIEW_FONT_SIZE_PX
+}
+
 fn default_true() -> bool {
     true
 }
@@ -130,6 +158,14 @@ pub struct GeneralPrefs {
     /// Язык сообщений диагностик (Проблемы в нижней панели).
     #[serde(default = "default_error_language")]
     pub error_language: ErrorLanguage,
+    #[serde(default = "default_ui_font_size_px")]
+    pub ui_font_size_px: f32,
+    #[serde(default = "default_sidebar_font_size_px")]
+    pub sidebar_font_size_px: f32,
+    #[serde(default = "default_editor_font_size_px")]
+    pub editor_font_size_px: f32,
+    #[serde(default = "default_preview_font_size_px")]
+    pub preview_font_size_px: f32,
 }
 
 impl GeneralPrefs {
@@ -138,6 +174,10 @@ impl GeneralPrefs {
             autosave_delay_ms: self
                 .autosave_delay_ms
                 .clamp(MIN_AUTOSAVE_DELAY_MS, MAX_AUTOSAVE_DELAY_MS),
+            ui_font_size_px: clamp_font_size_px(self.ui_font_size_px),
+            sidebar_font_size_px: clamp_font_size_px(self.sidebar_font_size_px),
+            editor_font_size_px: clamp_font_size_px(self.editor_font_size_px),
+            preview_font_size_px: clamp_font_size_px(self.preview_font_size_px),
             ..self
         }
     }
@@ -152,6 +192,10 @@ impl Default for GeneralPrefs {
             autosave_delay_ms: DEFAULT_AUTOSAVE_DELAY_MS,
             separate_external_folder: true,
             error_language: ErrorLanguage::Ru,
+            ui_font_size_px: DEFAULT_UI_FONT_SIZE_PX,
+            sidebar_font_size_px: DEFAULT_SIDEBAR_FONT_SIZE_PX,
+            editor_font_size_px: DEFAULT_EDITOR_FONT_SIZE_PX,
+            preview_font_size_px: DEFAULT_PREVIEW_FONT_SIZE_PX,
         }
     }
 }
@@ -309,5 +353,31 @@ mod tests {
         assert_eq!(ru.error_language, ErrorLanguage::Ru);
         let en: GeneralPrefs = serde_json::from_str(r#"{"errorLanguage":"en"}"#).unwrap();
         assert_eq!(en.error_language, ErrorLanguage::En);
+    }
+
+    #[test]
+    fn deserializes_legacy_general_without_font_fields() {
+        let prefs: GeneralPrefs =
+            serde_json::from_str(r#"{"restoreLastProject":false}"#).unwrap();
+        assert_eq!(prefs.ui_font_size_px, DEFAULT_UI_FONT_SIZE_PX);
+        assert_eq!(prefs.sidebar_font_size_px, DEFAULT_SIDEBAR_FONT_SIZE_PX);
+        assert_eq!(prefs.editor_font_size_px, DEFAULT_EDITOR_FONT_SIZE_PX);
+        assert_eq!(prefs.preview_font_size_px, DEFAULT_PREVIEW_FONT_SIZE_PX);
+    }
+
+    #[test]
+    fn clamps_font_sizes_to_half_px_steps() {
+        let prefs = GeneralPrefs {
+            ui_font_size_px: 9.0,
+            sidebar_font_size_px: 25.0,
+            editor_font_size_px: 13.3,
+            preview_font_size_px: 14.7,
+            ..GeneralPrefs::default()
+        }
+        .clamped();
+        assert_eq!(prefs.ui_font_size_px, MIN_FONT_SIZE_PX);
+        assert_eq!(prefs.sidebar_font_size_px, MAX_FONT_SIZE_PX);
+        assert_eq!(prefs.editor_font_size_px, 13.5);
+        assert_eq!(prefs.preview_font_size_px, 14.5);
     }
 }

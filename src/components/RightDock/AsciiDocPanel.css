@@ -30,7 +30,7 @@
   border: none;
   background: transparent;
   color: var(--text-0);
-  font-size: 11px;
+  font-size: var(--font-ui-sm);
   outline: none;
 }
 
@@ -41,7 +41,7 @@
 .adoc-panel-banner {
   flex: none;
   padding: 6px 10px;
-  font-size: 11px;
+  font-size: var(--font-ui-sm);
   line-height: 1.35;
   color: var(--text-1);
   background: var(--bg-1);
@@ -94,7 +94,7 @@
 .adoc-group-title {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--font-ui-sm);
   font-weight: 600;
   color: var(--text-0);
   overflow: hidden;
@@ -148,7 +148,7 @@
 }
 
 .adoc-snippet-label {
-  font-size: 10px;
+  font-size: var(--font-ui-xs);
   line-height: 1.25;
   color: var(--text-0);
   overflow: hidden;

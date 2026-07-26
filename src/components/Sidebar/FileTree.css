@@ -32,7 +32,7 @@
   border: none;
   background: transparent;
   color: var(--text-1);
-  font-size: 12px;
+  font-size: var(--font-sidebar);
   text-align: left;
   cursor: default;
   border-radius: 0;
@@ -69,7 +69,7 @@
 .file-tree-twist {
   width: 12px;
   flex: none;
-  font-size: 9px;
+  font-size: calc(var(--font-sidebar-sm) * 0.82);
   line-height: 1;
   color: var(--text-2);
   text-align: center;
@@ -101,7 +101,7 @@
 
 .file-tree-empty {
   padding: 6px 8px 6px 34px;
-  font-size: 11px;
+  font-size: var(--font-sidebar-sm);
   color: var(--text-2);
 }
 
@@ -143,7 +143,7 @@
 .file-tree-external-badge {
   margin-left: auto;
   flex: none;
-  font-size: 9px;
+  font-size: calc(var(--font-sidebar-sm) * 0.82);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -173,7 +173,7 @@
   text-align: left;
   padding: 6px 12px;
   color: var(--text-0);
-  font-size: 12px;
+  font-size: var(--font-sidebar);
   white-space: nowrap;
   background: transparent;
   border: none;

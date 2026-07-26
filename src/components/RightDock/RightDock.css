@@ -39,7 +39,7 @@
 .tool-window-title {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--font-ui-sm);
   font-weight: 600;
   color: var(--text-0);
   overflow: hidden;

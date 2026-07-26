@@ -65,6 +65,7 @@ type EditorPaneProps = {
   onViewModeChange: (mode: EditorViewMode) => void;
   docsRoot: string | null;
   gitGutter?: GitGutterConfig | null;
+  editorFontSizePx: number;
 };
 
 const SPLIT_INITIAL_RATIO = 0.5;
@@ -91,6 +92,7 @@ export function EditorPane({
   onViewModeChange,
   docsRoot,
   gitGutter,
+  editorFontSizePx,
 }: EditorPaneProps) {
   const [monaco, setMonaco] = useState<typeof Monaco | null>(null);
   const [editor, setEditor] =
@@ -224,9 +226,13 @@ export function EditorPane({
     editor.focus();
   }, [editor, monaco, insertRequest, activeTabId]);
 
+  useEffect(() => {
+    editor?.updateOptions({ fontSize: editorFontSizePx });
+  }, [editor, editorFontSizePx]);
+
   const options: MonacoEditor.IStandaloneEditorConstructionOptions = {
     fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-    fontSize: 13,
+    fontSize: editorFontSizePx,
     minimap: { enabled: false },
     scrollBeyondLastLine: false,
     automaticLayout: true,

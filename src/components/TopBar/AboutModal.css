@@ -36,18 +36,18 @@
 }
 
 .about-modal-brand h2 {
-  font-size: 18px;
+  font-size: calc(var(--font-ui) * 1.44);
   font-weight: 700;
   color: var(--text-0);
 }
 
 .about-modal-version {
-  font-size: 12.5px;
+  font-size: var(--font-ui);
   color: var(--text-1);
 }
 
 .about-modal-desc {
-  font-size: 12px;
+  font-size: var(--font-ui);
   color: var(--text-2);
   line-height: 1.45;
 }
@@ -59,7 +59,7 @@
 }
 
 .about-modal-btn {
-  font-size: 12px;
+  font-size: var(--font-ui);
   padding: 6px 12px;
   border-radius: 5px;
   border: 1px solid transparent;

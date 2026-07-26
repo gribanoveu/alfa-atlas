@@ -45,7 +45,7 @@
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   padding: 8px 10px;
-  font-size: 12px;
+  font-size: var(--font-editor);
   color: var(--text-0);
 }
 
@@ -60,7 +60,7 @@
 .git-gutter-popup-title {
   font-weight: 600;
   color: var(--text-1);
-  font-size: 11px;
+  font-size: calc(var(--font-editor) * 0.85);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -76,7 +76,7 @@
   border-radius: 4px;
   background: var(--bg-2);
   color: var(--text-0);
-  font-size: 11px;
+  font-size: calc(var(--font-editor) * 0.85);
   padding: 2px 8px;
   cursor: pointer;
 }
@@ -93,7 +93,7 @@
 
 .git-gutter-popup-diff {
   font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 12px;
+  font-size: var(--font-editor);
   line-height: 1.4;
   max-height: 120px;
   overflow: auto;

@@ -22,7 +22,7 @@
 }
 
 .clone-modal-title {
-  font-size: 14px;
+  font-size: calc(var(--font-ui) * 1.12);
   font-weight: 600;
   color: var(--text-0);
 }
@@ -34,7 +34,7 @@
 }
 
 .clone-modal-label {
-  font-size: 11px;
+  font-size: var(--font-ui-sm);
   color: var(--text-2);
   font-weight: 600;
   text-transform: uppercase;
@@ -47,7 +47,7 @@
   border-radius: 5px;
   color: var(--text-0);
   padding: 8px 10px;
-  font-size: 12.5px;
+  font-size: var(--font-ui);
 }
 
 .clone-modal-input:focus {
@@ -72,7 +72,7 @@
   border-radius: 5px;
   background: var(--bg-2);
   color: var(--text-0);
-  font-size: 12px;
+  font-size: var(--font-ui);
 }
 
 .clone-modal-browse:hover {
@@ -80,7 +80,7 @@
 }
 
 .clone-modal-message {
-  font-size: 12px;
+  font-size: var(--font-ui);
   color: var(--text-1);
   line-height: 1.4;
   background: var(--ai-glow-soft);
@@ -97,7 +97,7 @@
 }
 
 .clone-modal-btn {
-  font-size: 12px;
+  font-size: var(--font-ui);
   padding: 6px 12px;
   border-radius: 5px;
   border: 1px solid var(--border);
@@ -176,7 +176,7 @@
 }
 
 .clone-select-path {
-  font-size: 12.5px;
+  font-size: var(--font-ui);
   color: var(--text-0);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -184,7 +184,7 @@
 }
 
 .clone-select-reason {
-  font-size: 11px;
+  font-size: var(--font-ui-sm);
   color: var(--text-2);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -192,14 +192,14 @@
 }
 
 .clone-select-placeholder {
-  font-size: 12.5px;
+  font-size: var(--font-ui);
   color: var(--text-2);
 }
 
 .clone-select-chevron {
   flex: none;
   color: var(--text-2);
-  font-size: 11px;
+  font-size: var(--font-ui-sm);
   line-height: 1;
 }
 
