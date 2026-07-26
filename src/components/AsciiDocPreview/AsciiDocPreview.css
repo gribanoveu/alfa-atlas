@@ -371,17 +371,88 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-1);
+  text-align: left;
+  overflow: hidden;
+}
+
+.asc-plantuml-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.asc-plantuml-btn {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 12px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.asc-plantuml-btn:hover:not(:disabled) {
+  background: var(--bg-0);
+  border-color: var(--text-2);
+}
+
+.asc-plantuml-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.asc-plantuml-zoom {
+  min-width: 44px;
   text-align: center;
+  font-size: 12px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--text-2);
+  user-select: none;
+}
+
+.asc-plantuml-viewport {
+  position: relative;
   overflow: auto;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-height: 320px;
+  max-height: 70vh;
+  cursor: grab;
+  touch-action: none;
+}
+
+.asc-plantuml-viewport.is-panning {
+  cursor: grabbing;
+}
+
+/* Canvas grows with content; min 100% centers small diagrams via margin on svg. */
+.asc-plantuml-canvas {
+  min-width: 100%;
+  min-height: 100%;
+  width: max-content;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.asc-plantuml-svg {
+  display: block;
+  margin-inline: auto;
+  line-height: 0;
 }
 
 .asc-plantuml-svg svg {
-  max-width: 100%;
-  height: auto;
+  display: block;
+  width: 100%;
+  height: 100%;
   /* PlantUML генерирует прозрачный SVG с центрированным контентом внутри
-     viewBox. При растягивании на всю ширину контейнера по бокам остаётся
-     пустая прозрачная область. Белый фон делает диаграмму читаемой на всю
-     ширину рендера. */
+     viewBox. Белый фон делает диаграмму читаемой на всю ширину рендера. */
   background: #ffffff;
 }
 

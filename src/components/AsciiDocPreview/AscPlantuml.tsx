@@ -11,7 +11,31 @@ type RenderState =
 const MIN_SCALE = 0.2;
 const MAX_SCALE = 5;
 const SCALE_STEP = 0.2;
-const FIT_PADDING = 32; // px around the diagram when "fit to container"
+const VIEWPORT_PADDING = 16;
+
+type SvgSize = { w: number; h: number };
+
+/** Natural pixel size of a PlantUML SVG (width/height attrs or viewBox). */
+function measureSvgSize(svg: SVGSVGElement): SvgSize {
+  const widthAttr = svg.getAttribute("width");
+  const heightAttr = svg.getAttribute("height");
+  if (widthAttr && heightAttr) {
+    const w = parseFloat(widthAttr);
+    const h = parseFloat(heightAttr);
+    if (!Number.isNaN(w) && !Number.isNaN(h) && w > 0 && h > 0) {
+      return { w, h };
+    }
+  }
+  const vb = svg.getAttribute("viewBox");
+  if (vb) {
+    const parts = vb.split(/[\s,]+/).map(Number);
+    if (parts.length === 4 && parts.every((n) => !Number.isNaN(n))) {
+      return { w: parts[2], h: parts[3] };
+    }
+  }
+  const rect = svg.getBoundingClientRect();
+  return { w: rect.width || 1, h: rect.height || 1 };
+}
 
 /**
  * `include::target.puml[]` inside a listing block. asciidoctor does NOT apply
@@ -83,30 +107,38 @@ export function AscPlantuml({
 }) {
   const rawSource = safeGetSource(block) ?? "";
 
-  // Zoom/pan state. `scale` is the CSS scale applied to the SVG wrapper;
-  // `tx`/`ty` are translate offsets in px (relative to the viewport origin).
   const [scale, setScale] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [naturalSize, setNaturalSize] = useState<SvgSize | null>(null);
   const [state, setState] = useState<RenderState>({ kind: "loading" });
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
-  // Drag state kept in refs — pointermove fires a lot and we don't want
-  // a React state round-trip per pixel.
   const dragState = useRef<{
     active: boolean;
     startX: number;
     startY: number;
-    baseX: number;
-    baseY: number;
-  }>({ active: false, startX: 0, startY: 0, baseX: 0, baseY: 0 });
+    baseScrollLeft: number;
+    baseScrollTop: number;
+  }>({ active: false, startX: 0, startY: 0, baseScrollLeft: 0, baseScrollTop: 0 });
 
-  // Reset zoom/pan whenever a new diagram source comes in.
+  // Reset zoom whenever a new diagram source comes in.
   useEffect(() => {
     setScale(1);
-    setOffset({ x: 0, y: 0 });
+    setNaturalSize(null);
   }, [rawSource]);
+
+  useEffect(() => {
+    if (state.kind !== "ok") {
+      setNaturalSize(null);
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const svg = wrapperRef.current?.querySelector("svg");
+      if (svg) setNaturalSize(measureSvgSize(svg));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [state]);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,30 +176,34 @@ export function AscPlantuml({
 
   const resetView = useCallback(() => {
     setScale(1);
-    setOffset({ x: 0, y: 0 });
+    const viewport = viewportRef.current;
+    if (viewport) {
+      viewport.scrollLeft = 0;
+      viewport.scrollTop = 0;
+    }
   }, []);
 
-  /** Scale the diagram so it fits the viewport width (with padding). */
+  /** Scale the diagram to fit the viewport; scroll area matches visual size. */
   const fitToContainer = useCallback(() => {
     const viewport = viewportRef.current;
-    const wrapper = wrapperRef.current;
-    if (!viewport || !wrapper) {
+    if (!viewport || !naturalSize) {
       resetView();
       return;
     }
-    const svg = wrapper.querySelector("svg");
-    if (!svg) {
-      resetView();
-      return;
-    }
-    const naturalW = svg.getBoundingClientRect().width / scale;
-    const naturalH = svg.getBoundingClientRect().height / scale;
-    const availW = viewport.clientWidth - FIT_PADDING * 2;
-    const availH = viewport.clientHeight - FIT_PADDING * 2;
-    const s = Math.min(availW / naturalW, availH / naturalH, 1);
-    setScale(clampScale(s));
-    setOffset({ x: 0, y: 0 });
-  }, [scale, clampScale, resetView]);
+    const pad = VIEWPORT_PADDING;
+    const availW = Math.max(1, viewport.clientWidth - pad * 2);
+    const availH = Math.max(1, viewport.clientHeight - pad * 2);
+    const s = clampScale(
+      Math.min(availW / naturalSize.w, availH / naturalSize.h),
+    );
+    setScale(s);
+    requestAnimationFrame(() => {
+      const sw = naturalSize.w * s;
+      const sh = naturalSize.h * s;
+      viewport.scrollLeft = Math.max(0, (sw + pad * 2 - viewport.clientWidth) / 2);
+      viewport.scrollTop = Math.max(0, (sh + pad * 2 - viewport.clientHeight) / 2);
+    });
+  }, [naturalSize, clampScale, resetView]);
 
   /** Ctrl+wheel zooms toward the cursor; plain wheel scrolls. */
   const handleWheel = useCallback(
@@ -192,20 +228,20 @@ export function AscPlantuml({
         active: true,
         startX: e.clientX,
         startY: e.clientY,
-        baseX: offset.x,
-        baseY: offset.y,
+        baseScrollLeft: viewport.scrollLeft,
+        baseScrollTop: viewport.scrollTop,
       };
     },
-    [offset],
+    [],
   );
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       const ds = dragState.current;
-      if (!ds.active) return;
-      const dx = e.clientX - ds.startX;
-      const dy = e.clientY - ds.startY;
-      setOffset({ x: ds.baseX + dx, y: ds.baseY + dy });
+      const viewport = viewportRef.current;
+      if (!ds.active || !viewport) return;
+      viewport.scrollLeft = ds.baseScrollLeft - (e.clientX - ds.startX);
+      viewport.scrollTop = ds.baseScrollTop - (e.clientY - ds.startY);
     },
     [],
   );
@@ -226,6 +262,8 @@ export function AscPlantuml({
   const name = block.getAttribute("1") as string | null;
   const isPanning = dragState.current.active;
   const zoomLabel = `${Math.round(scale * 100)}%`;
+  const scaledW = naturalSize ? naturalSize.w * scale : undefined;
+  const scaledH = naturalSize ? naturalSize.h * scale : undefined;
 
   return (
     <div className="asc-plantuml" data-name={name ?? undefined}>
@@ -291,14 +329,18 @@ export function AscPlantuml({
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
           >
-            <div
-              ref={wrapperRef}
-              className="asc-plantuml-svg"
-              style={{
-                transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
-              }}
-              dangerouslySetInnerHTML={{ __html: state.svg }}
-            />
+            <div className="asc-plantuml-canvas">
+              <div
+                ref={wrapperRef}
+                className="asc-plantuml-svg"
+                style={
+                  scaledW && scaledH
+                    ? { width: scaledW, height: scaledH }
+                    : undefined
+                }
+                dangerouslySetInnerHTML={{ __html: state.svg }}
+              />
+            </div>
           </div>
         </>
       )}
