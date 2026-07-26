@@ -124,6 +124,7 @@ function bindPopupWheelHandling(root: HTMLDivElement, diffEl: HTMLDivElement) {
 
 function createPopupDom(handlers: {
   onRevert: () => void;
+  onCancel: () => void;
   onPrev: () => void;
   onNext: () => void;
 }) {
@@ -172,6 +173,15 @@ function createPopupDom(handlers: {
   const actions = document.createElement("div");
   actions.className = "git-gutter-popup-actions";
 
+  const cancelBtn = document.createElement("button");
+  cancelBtn.type = "button";
+  cancelBtn.className = "git-gutter-popup-cancel";
+  cancelBtn.textContent = "Отмена";
+  cancelBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    handlers.onCancel();
+  });
+
   const revertBtn = document.createElement("button");
   revertBtn.type = "button";
   revertBtn.className = "git-gutter-popup-revert";
@@ -181,7 +191,7 @@ function createPopupDom(handlers: {
     handlers.onRevert();
   });
 
-  actions.append(revertBtn);
+  actions.append(cancelBtn, revertBtn);
   root.append(head, compareEl, actions);
   root.addEventListener("mousedown", (event) => event.stopPropagation());
   bindPopupWheelHandling(root, diffEl);
@@ -299,6 +309,9 @@ export function useGitGutter({
         ]);
         editor.pushUndoStop();
         onContentChangeRef.current(next);
+        hidePopup();
+      },
+      onCancel: () => {
         hidePopup();
       },
       onPrev: () => {

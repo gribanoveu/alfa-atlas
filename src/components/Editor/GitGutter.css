@@ -141,6 +141,17 @@
 .git-gutter-popup-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 6px;
+}
+
+.git-gutter-popup-cancel {
+  color: #fff;
+  background: var(--red-tag);
+  border-color: transparent;
+}
+
+.git-gutter-popup-cancel:hover:not(:disabled) {
+  filter: brightness(1.08);
 }
 
 .git-gutter-popup-revert {
