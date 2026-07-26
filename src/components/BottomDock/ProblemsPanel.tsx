@@ -1,10 +1,13 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { AlertCircle, AlertTriangle } from "lucide-react";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import "./ProblemsPanel.css";
 
+type ProblemsScope = "current" | "all";
+
 type ProblemsPanelProps = {
   diagnostics: Diagnostic[];
+  activeDocumentId: string | null;
   onOpenDiagnostic: (
     documentId: string,
     line: number,
@@ -33,48 +36,98 @@ function groupByDocument(diagnostics: Diagnostic[]): DiagnosticGroup[] {
 
 export function ProblemsPanel({
   diagnostics,
+  activeDocumentId,
   onOpenDiagnostic,
 }: ProblemsPanelProps) {
-  const groups = useMemo(() => groupByDocument(diagnostics), [diagnostics]);
+  const [scope, setScope] = useState<ProblemsScope>("current");
 
-  if (diagnostics.length === 0) {
-    return <div className="panel-empty">Нет проблем в индексе</div>;
+  const visibleDiagnostics = useMemo(() => {
+    if (scope === "all") return diagnostics;
+    if (!activeDocumentId) return [];
+    return diagnostics.filter((d) => d.document === activeDocumentId);
+  }, [diagnostics, scope, activeDocumentId]);
+
+  const groups = useMemo(
+    () => groupByDocument(visibleDiagnostics),
+    [visibleDiagnostics],
+  );
+
+  const currentCount = activeDocumentId
+    ? diagnostics.filter((d) => d.document === activeDocumentId).length
+    : 0;
+  const allCount = diagnostics.length;
+
+  let empty: string | null = null;
+  if (visibleDiagnostics.length === 0) {
+    empty =
+      scope === "current"
+        ? activeDocumentId
+          ? "Нет проблем в текущем файле"
+          : "Нет открытого файла"
+        : "Нет проблем в индексе";
   }
 
   return (
     <div className="problems-panel">
-      {groups.map((group) => (
-        <div key={group.document} className="problems-file-group">
-          <div className="problems-file-header" title={group.document}>
-            <span className="problems-file-name">{group.document}</span>
-            <span className="problems-file-count">{group.items.length}</span>
+      <div className="problems-scope" role="tablist" aria-label="Область проблем">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={scope === "current"}
+          className={`problems-scope-btn ${scope === "current" ? "active" : ""}`}
+          onClick={() => setScope("current")}
+        >
+          Текущий файл
+          <span className="problems-scope-count">{currentCount}</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={scope === "all"}
+          className={`problems-scope-btn ${scope === "all" ? "active" : ""}`}
+          onClick={() => setScope("all")}
+        >
+          Все
+          <span className="problems-scope-count">{allCount}</span>
+        </button>
+      </div>
+
+      {empty !== null ? (
+        <div className="panel-empty">{empty}</div>
+      ) : (
+        groups.map((group) => (
+          <div key={group.document} className="problems-file-group">
+            <div className="problems-file-header" title={group.document}>
+              <span className="problems-file-name">{group.document}</span>
+              <span className="problems-file-count">{group.items.length}</span>
+            </div>
+            <ul className="problems-list">
+              {group.items.map((d, i) => {
+                const Icon =
+                  d.severity === "error" ? AlertCircle : AlertTriangle;
+                return (
+                  <li key={`${d.document}-${d.line}-${d.column}-${i}`}>
+                    <button
+                      type="button"
+                      className={`problems-item ${d.severity}`}
+                      onClick={() =>
+                        onOpenDiagnostic(d.document, d.line, d.column)
+                      }
+                      title={`${d.kind}: ${d.message}`}
+                    >
+                      <Icon size={12} className="problems-item-icon" />
+                      <span className="problems-item-message">{d.message}</span>
+                      <span className="problems-item-loc">
+                        {d.line}:{d.column}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
-          <ul className="problems-list">
-            {group.items.map((d, i) => {
-              const Icon =
-                d.severity === "error" ? AlertCircle : AlertTriangle;
-              return (
-                <li key={`${d.document}-${d.line}-${d.column}-${i}`}>
-                  <button
-                    type="button"
-                    className={`problems-item ${d.severity}`}
-                    onClick={() =>
-                      onOpenDiagnostic(d.document, d.line, d.column)
-                    }
-                    title={`${d.kind}: ${d.message}`}
-                  >
-                    <Icon size={12} className="problems-item-icon" />
-                    <span className="problems-item-message">{d.message}</span>
-                    <span className="problems-item-loc">
-                      {d.line}:{d.column}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ))}
+        ))
+      )}
     </div>
   );
 }

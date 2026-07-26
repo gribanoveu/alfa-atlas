@@ -32,6 +32,7 @@ type BottomDockProps = {
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
   diagnostics: Diagnostic[];
+  activeDocumentId: string | null;
   onOpenDiagnostic: (
     documentId: string,
     line: number,
@@ -46,6 +47,7 @@ export function BottomDock({
   onResize,
   onResizeEnd,
   diagnostics,
+  activeDocumentId,
   onOpenDiagnostic,
 }: BottomDockProps) {
   const open = Boolean(activeTool);
@@ -85,6 +87,7 @@ export function BottomDock({
             {active.id === "problems" ? (
               <ProblemsPanel
                 diagnostics={diagnostics}
+                activeDocumentId={activeDocumentId}
                 onOpenDiagnostic={onOpenDiagnostic}
               />
             ) : (

@@ -60,6 +60,28 @@ function toDocsRelativePath(
   return documentId;
 }
 
+/**
+ * Обратное к `toDocsRelativePath`: склеивает docs-relative путь активного
+ * таба с docsRoot-суффиксом, чтобы получить repo-relative `documentId`,
+ * по которому диагностики хранятся в индексе.
+ */
+function toRepoRelativePath(
+  docsRelativePath: string,
+  repoRoot: string,
+  docsRoot: string,
+): string {
+  if (!repoRoot || !docsRoot) return docsRelativePath;
+  const norm = (p: string) =>
+    p.replace(/\\/g, "/").replace(/^[/\\]+/, "").replace(/[/\\]+$/, "");
+  const repo = norm(repoRoot);
+  const docs = norm(docsRoot);
+  let suffix = docs;
+  if (suffix.startsWith(repo + "/")) suffix = suffix.slice(repo.length + 1);
+  const rel = norm(docsRelativePath);
+  if (!suffix) return rel;
+  return `${suffix}/${rel}`;
+}
+
 function App() {
   // Mount the AsciiDoc parse-request listener unconditionally. The hook
   // registers the `asciidoc:parse-requested` event listener and signals
@@ -379,6 +401,11 @@ function App() {
     }));
   }, [workspaceIndex.diagnostics, project.docsRoot, project.repoRoot]);
 
+  const activeDocumentId = useMemo(() => {
+    if (!activePath || !project.docsRoot || !project.repoRoot) return null;
+    return toRepoRelativePath(activePath, project.repoRoot, project.docsRoot);
+  }, [activePath, project.docsRoot, project.repoRoot]);
+
   const openProblems = useCallback(() => {
     layout.setBottomToolId("problems");
   }, [layout]);
@@ -489,6 +516,7 @@ function App() {
           onResize={panels.resizeBottomBy}
           onResizeEnd={panels.persistLayout}
           diagnostics={workspaceIndex.diagnostics}
+          activeDocumentId={activeDocumentId}
           onOpenDiagnostic={(documentId, line, column) =>
             void openDiagnostic(documentId, line, column)
           }
