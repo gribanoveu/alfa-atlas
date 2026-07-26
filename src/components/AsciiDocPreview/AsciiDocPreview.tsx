@@ -1,13 +1,17 @@
 import type * as Monaco from "monaco-editor";
 import { useAsciiDocRender } from "../../hooks/useAsciiDocRender";
 import { AscBlockList } from "./AscBlockList";
+import { AscPlantuml } from "./AscPlantuml";
 import { InlineHtml } from "./InlineHtml";
+import type { AbstractBlock } from "./types";
 import "./AsciiDocPreview.css";
 
 type XrefHandler = (href: string) => void;
 
 type AsciiDocPreviewProps = {
   content: string;
+  /** Docs-relative path of the file being previewed (e.g. `db.adoc`, `seq.puml`). */
+  filePath: string | null;
   docsRoot: string | null;
   /** Monaco namespace — нужен для подсветки кода в AscCodeBlock. */
   monaco: typeof Monaco | null;
@@ -15,18 +19,61 @@ type AsciiDocPreviewProps = {
   onOpenXref?: XrefHandler;
 };
 
+/** Extensions that are standalone PlantUML sources, not AsciiDoc. */
+const PLANTUML_EXTS = new Set([".puml", ".plantuml"]);
+
+function extensionOf(path: string): string {
+  const base = path.split(/[/\\]/).pop() ?? path;
+  const dot = base.lastIndexOf(".");
+  return dot <= 0 ? "" : base.slice(dot).toLowerCase();
+}
+
+/**
+ * Standalone `.puml` file → fake asciidoctor "listing" block whose
+ * `getSource()` returns the raw PlantUML source. `AscPlantuml` renders it
+ * through the vendored TeaVM engine, identical to `[plantuml] ---- … ----`
+ * blocks embedded in `.adoc`.
+ */
+function makePlantumlBlock(source: string, name: string | null): AbstractBlock {
+  return {
+    getSource: () => source,
+    getAttribute: (key: string) => (key === "1" ? name : null),
+  } as unknown as AbstractBlock;
+}
+
 /**
  * Контейнер превью AsciiDoc: парсит контент в AST и рендерит дерево блоков
  * React-компонентами проекта. Состояния: загрузка, ошибка парсинга, пусто,
  * готово.
+ *
+ * Для `.puml`/`.plantuml` файлов AsciiDoc-парсинг не имеет смысла (контент —
+ * чистый PlantUML), поэтому такой файл рендерится одной `AscPlantuml`.
  */
 export function AsciiDocPreview({
   content,
+  filePath,
   docsRoot,
   monaco,
   onOpenXref,
 }: AsciiDocPreviewProps) {
-  const { doc, error, parsing } = useAsciiDocRender(content, true, docsRoot);
+  const ext = filePath ? extensionOf(filePath) : "";
+  const isPlantumlFile = PLANTUML_EXTS.has(ext);
+
+  const { doc, error, parsing } = useAsciiDocRender(
+    content,
+    /* enabled */ !isPlantumlFile,
+    docsRoot,
+    filePath,
+  );
+
+  if (isPlantumlFile) {
+    const name = filePath ? (filePath.split(/[/\\]/).pop() ?? null) : null;
+    return (
+      <div className="asc-preview">
+        <AscPlantuml block={makePlantumlBlock(content, name)} docsRoot={docsRoot} />
+      </div>
+    );
+  }
 
   if (parsing && !doc) {
     return (

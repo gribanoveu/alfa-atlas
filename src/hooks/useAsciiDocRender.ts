@@ -34,6 +34,30 @@ interface IncludeProcessorDsl {
 }
 
 /**
+ * Resolve an include target relative to the file being processed.
+ *
+ * asciidoctor sets `base_dir` to docsRoot, so `include::foo.puml[]` inside
+ * `subdir/bar.adoc` reaches us with `target = "foo.puml"`. The file actually
+ * lives at `<docsRoot>/subdir/foo.puml`. We pass the docs-relative path of
+ * the document being parsed (`filePath`) as the initial context; nested
+ * includes update that context to the resolved include path.
+ *
+ * Absolute targets and `..` segments are left as-is — backend
+ * `read_project_file` validates them against docsRoot containment anyway.
+ */
+function resolveIncludeTarget(
+  currentFile: string | null,
+  target: string,
+): string {
+  if (target.startsWith("/")) return target;
+  if (!currentFile) return target;
+  const dir = currentFile.includes("/")
+    ? currentFile.slice(0, currentFile.lastIndexOf("/"))
+    : "";
+  return dir ? `${dir}/${target}` : target;
+}
+
+/**
  * Build a fresh extension registry whose IncludeProcessor reads included
  * files from disk via the `read_project_file` Tauri command. asciidoctor
  * itself handles the subsequent parsing/recursion of the pushed content.
@@ -42,17 +66,35 @@ interface IncludeProcessorDsl {
  * `docsRoot`. When `docsRoot` is null we fall back to asciidoctor's default
  * include resolution (which will surface «Unresolved directive» for any
  * include — same as before this hook knew about docsRoot).
+ *
+ * `currentFile` is the docs-relative path of the document being parsed
+ * (e.g. `markAsAccepted/markAsAccepted.adoc`). Needed because inline
+ * `load(content)` has no filesystem path — `reader.getFile()` is always null.
  */
-function createFileIncludeRegistry(docsRoot: string) {
+function createFileIncludeRegistry(
+  docsRoot: string,
+  currentFile: string | null,
+) {
   const registry = Extensions.create();
+  // Mutable context for nested includes during one `load()` call. asciidoctor
+  // v4 awaits async processors sequentially per document, so one slot is safe.
+  let activeFile = currentFile;
+
   registry.includeProcessor(function (this: IncludeProcessorDsl) {
     this.handles(function (_target: string) {
       return true;
     });
     this.process(async function (_doc, reader, target, attrs) {
+      const resolved = resolveIncludeTarget(activeFile, target);
       try {
-        const content = await readProjectFile(docsRoot, target);
-        reader.pushInclude(content, target, target, 1, attrs);
+        const content = await readProjectFile(docsRoot, resolved);
+        const previous = activeFile;
+        activeFile = resolved;
+        try {
+          reader.pushInclude(content, resolved, resolved, 1, attrs);
+        } finally {
+          activeFile = previous;
+        }
       } catch {
         // Leave the include unresolved — asciidoctor will render the default
         // «Unresolved directive» placeholder. The parse error is also logged
@@ -73,11 +115,15 @@ function createFileIncludeRegistry(docsRoot: string) {
  * `docsRoot` нужен для раскрытия `include::file.adoc[]` — IncludeProcessor
  * читает включаемые файлы через backend-команду `read_project_file` с
  * валидацией пути против docsRoot.
+ *
+ * `filePath` — docs-relative путь редактируемого файла; без него относительные
+ * `include::foo.adoc[]` резолвятся от docsRoot, а не от каталога документа.
  */
 export function useAsciiDocRender(
   content: string,
   enabled: boolean,
   docsRoot: string | null,
+  filePath: string | null = null,
 ): RenderState {
   const [state, setState] = useState<RenderState>({
     doc: null,
@@ -109,7 +155,10 @@ export function useAsciiDocRender(
         attributes: { showtitle: true },
       };
       if (docsRoot) {
-        loadOpts.extension_registry = createFileIncludeRegistry(docsRoot);
+        loadOpts.extension_registry = createFileIncludeRegistry(
+          docsRoot,
+          filePath,
+        );
         // base_dir делает относительные `include::foo.adoc[]` резолвящимися
         // от docsRoot (asciidoctor использует его для диагностики и для
         // вложенных include, которые наш процессор делегирует обратно).
@@ -138,7 +187,7 @@ export function useAsciiDocRender(
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [content, enabled, docsRoot]);
+  }, [content, enabled, docsRoot, filePath]);
 
   return state;
 }

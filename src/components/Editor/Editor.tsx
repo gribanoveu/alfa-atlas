@@ -184,6 +184,7 @@ export function EditorPane({
   const previewNode = activeTab ? (
     <AsciiDocPreview
       content={activeTab.content}
+      filePath={activeTab.path}
       docsRoot={docsRoot}
       monaco={monaco}
       onOpenXref={onOpenXref}

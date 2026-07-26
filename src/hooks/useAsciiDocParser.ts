@@ -177,6 +177,10 @@ function scanXrefs(content: string): {
     column: number;
   }[] = [];
   const lines = content.split("\n");
+  // Lines inside verbatim delimited blocks (listing `----`, literal `....`,
+  // passthrough `++++`, comment `////`) are treated literally by asciidoctor —
+  // `<<PK>>` inside a plantuml/source block is NOT an xref. Skip them.
+  const verbatimLines = collectVerbatimLineIndices(lines);
   // Match `xref:target[#anchor][]` or `xref:target[]`. Target may be a path
   // (with optional `#fragment`) or just `#fragment` for same-doc anchors.
   const re = /xref:([^\[\]]+?)(?:#([^\[\]]+))?\[\]/g;
@@ -186,6 +190,7 @@ function scanXrefs(content: string): {
   // leading `#anchor` form matches with an empty target.
   const shortRe = /<<([^,>#]*)(?:#([^,>#]+))?(?:,[^>]*)?>>/g;
   for (let i = 0; i < lines.length; i++) {
+    if (verbatimLines.has(i)) continue;
     const line = lines[i];
     let m: RegExpExecArray | null;
     re.lastIndex = 0;
@@ -230,6 +235,48 @@ function scanXrefs(content: string): {
     }
   }
   return out;
+}
+
+/**
+ * Delimiter line for a verbatim AsciiDoc block: 4+ of `-` (listing), `.`
+ * (literal), `+` (passthrough), or `/` (comment block), optionally followed
+ * by trailing whitespace. Example/sidebar/quote/open-block delimiters are
+ * intentionally NOT matched here — their content is AsciiDoc markup, so
+ * `<<...>>` inside them is a legitimate xref.
+ */
+const VERBATIM_DELIM_RE = /^(-{4,}|\.{4,}|\+{4,}|\/{4,})\s*$/;
+
+/**
+ * Return the set of 0-based line indices that fall strictly inside a verbatim
+ * delimited block (listing / literal / passthrough / comment). Delimiter lines
+ * themselves are not included. Unclosed blocks are treated as verbatim to EOF
+ * (asciidoctor is lenient, and we prefer false negatives over false positives
+ * here).
+ */
+function collectVerbatimLineIndices(lines: string[]): Set<number> {
+  const indices = new Set<number>();
+  let delimChar: string | null = null;
+  let blockStart = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (delimChar === null) {
+      const m = VERBATIM_DELIM_RE.exec(lines[i]);
+      if (m) {
+        delimChar = m[1][0];
+        blockStart = i;
+      }
+    } else {
+      const closingRe = new RegExp(`^\\${delimChar}{4,}\\s*$`);
+      if (closingRe.test(lines[i])) {
+        for (let j = blockStart + 1; j < i; j++) indices.add(j);
+        delimChar = null;
+        blockStart = -1;
+      }
+    }
+  }
+  if (delimChar !== null && blockStart >= 0) {
+    for (let j = blockStart + 1; j < lines.length; j++) indices.add(j);
+  }
+  return indices;
 }
 
 function scanAttributes(content: string): { name: string; value: string; line: number }[] {

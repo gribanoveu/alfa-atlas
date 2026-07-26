@@ -341,6 +341,57 @@
   margin: 14px 0;
 }
 
+/* PlantUML diagrams */
+.asc-plantuml {
+  margin: 14px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  text-align: center;
+  overflow: auto;
+}
+
+.asc-plantuml-svg svg {
+  max-width: 100%;
+  height: auto;
+  /* PlantUML генерирует прозрачный SVG с центрированным контентом внутри
+     viewBox. При растягивании на всю ширину контейнера по бокам остаётся
+     пустая прозрачная область. Белый фон делает диаграмму читаемой на всю
+     ширину рендера. */
+  background: #ffffff;
+}
+
+.asc-plantuml-loading {
+  color: var(--text-2);
+  font-size: 12px;
+  padding: 24px;
+}
+
+.asc-plantuml-error {
+  text-align: left;
+  color: var(--text-1);
+}
+
+.asc-plantuml-error-title {
+  color: var(--red-tag);
+  font-weight: 600;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.asc-plantuml-error-message,
+.asc-plantuml-source {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  margin-top: 6px;
+}
+
 .asc-sidebar {
   margin: 14px 0;
   padding: 12px 14px;

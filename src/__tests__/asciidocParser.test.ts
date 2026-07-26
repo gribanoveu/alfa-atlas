@@ -170,4 +170,40 @@ describe("extractFacts", () => {
     expect(Array.isArray(facts.anchors)).toBe(true);
     expect(Array.isArray(facts.parseErrors)).toBe(true);
   });
+
+  test("angle-bracket xrefs inside verbatim blocks are ignored", async () => {
+    // Mirrors a real false-positive: `<<PK>>` and `<<TTL 30m при UNSIGNED>>`
+    // inside a plantuml/source listing block are literal text, not xrefs.
+    const content = [
+      "[plantuml, db_er, png]",
+      "----",
+      "@startuml",
+      "entity \"NotificationDocPack\" as Pack {",
+      "  _id : String <<PK>>",
+      "  createDate : Instant <<TTL 30m при UNSIGNED>>",
+      "  updateDate : Instant",
+      "}",
+      "@enduml",
+      "----",
+      "",
+      "see <<intro, введение>>",
+    ].join("\n");
+    const facts = await extractFacts(content);
+    expect(facts.references).toEqual([
+      {
+        targetDocument: "intro",
+        anchor: null,
+        line: 12,
+        column: 5,
+      },
+    ]);
+  });
+
+  test("xrefs after an unclosed verbatim block are ignored", async () => {
+    // Unclosed block — treat rest of file as verbatim (prefer false negatives
+    // over false positives).
+    const content = ["----", "<<PK>>", "<<real.adoc#sec>>"].join("\n");
+    const facts = await extractFacts(content);
+    expect(facts.references).toEqual([]);
+  });
 });

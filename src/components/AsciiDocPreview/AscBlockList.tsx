@@ -6,6 +6,7 @@ import { AscImage } from "./AscImage";
 import { AscList } from "./AscList";
 import { AscLiteral } from "./AscLiteral";
 import { AscParagraph } from "./AscParagraph";
+import { AscPlantuml } from "./AscPlantuml";
 import { AscQuote } from "./AscQuote";
 import { AscSection } from "./AscSection";
 import { AscTable } from "./AscTable";
@@ -61,7 +62,14 @@ function AscBlock({
 
   switch (ctx) {
     case "section":
-      return <AscSection section={block as unknown as Section} onOpenXref={onOpenXref} />;
+      return (
+        <AscSection
+          section={block as unknown as Section}
+          docsRoot={docsRoot}
+          monaco={monaco}
+          onOpenXref={onOpenXref}
+        />
+      );
     case "paragraph":
       return <AscParagraph block={block} onOpenXref={onOpenXref} />;
     case "ulist":
@@ -74,8 +82,13 @@ function AscBlock({
       return <AscTable table={block as unknown as AscTableType} />;
     case "admonition":
       return <AscAdmonition block={block} onOpenXref={onOpenXref} />;
-    case "listing":
+    case "listing": {
+      const style = (block.getAttribute("style") as string | null) ?? null;
+      if (style === "plantuml") {
+        return <AscPlantuml block={block} docsRoot={docsRoot} />;
+      }
       return <AscCodeBlock block={block} monaco={monaco} />;
+    }
     case "literal":
       return <AscLiteral block={block} />;
     case "image":
