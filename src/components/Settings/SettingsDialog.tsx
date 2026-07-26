@@ -1,5 +1,5 @@
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   AUTOSAVE_DELAY_LIMITS,
   clampAutosaveDelayMs,
@@ -17,12 +17,51 @@ import { SUPPORTED_FORMAT_LABELS } from "../../lib/supportedFiles";
 import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
 
-type SectionId = "general" | "editor" | "paths";
+type SectionId = "general" | "editor" | "formats" | "paths";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "Общие" },
   { id: "editor", label: "Редактор" },
+  { id: "formats", label: "Файлы" },
   { id: "paths", label: "Пути" },
+];
+
+type FontSizePrefKey =
+  | "uiFontSizePx"
+  | "sidebarFontSizePx"
+  | "editorFontSizePx"
+  | "previewFontSizePx";
+
+const FONT_SIZE_FIELDS: {
+  key: FontSizePrefKey;
+  id: string;
+  label: string;
+  hint: string;
+}[] = [
+  {
+    key: "uiFontSizePx",
+    id: "font-ui-size",
+    label: "Интерфейс",
+    hint: "Панели, меню, статус",
+  },
+  {
+    key: "sidebarFontSizePx",
+    id: "font-sidebar-size",
+    label: "Боковая панель",
+    hint: "Дерево файлов",
+  },
+  {
+    key: "editorFontSizePx",
+    id: "font-editor-size",
+    label: "Редактор",
+    hint: "Monaco, diff",
+  },
+  {
+    key: "previewFontSizePx",
+    id: "font-preview-size",
+    label: "Превью",
+    hint: "AsciiDoc, Markdown, JSON/YAML",
+  },
 ];
 
 const ERROR_LANGUAGE_OPTIONS: { value: ErrorLanguage; label: string }[] = [
@@ -289,6 +328,64 @@ export function SettingsDialog({
                     переиндексации.
                   </p>
                 </div>
+                <div className="settings-row">
+                  <div className="settings-section-head">
+                    <div className="settings-section-title">Шрифты</div>
+                    <button
+                      type="button"
+                      className="settings-link-btn"
+                      disabled={!prefs || busy}
+                      onClick={resetFontPrefs}
+                    >
+                      Сбросить
+                    </button>
+                  </div>
+                  <div
+                    className="settings-font-grid"
+                    role="group"
+                    aria-label="Размер шрифта по зонам"
+                  >
+                    <span className="settings-font-grid-head">Зона</span>
+                    <span className="settings-font-grid-head">px</span>
+                    {FONT_SIZE_FIELDS.map(({ key, id, label, hint }) => (
+                      <Fragment key={key}>
+                        <label className="settings-font-label" htmlFor={id}>
+                          <span className="settings-font-name">{label}</span>
+                          <span className="settings-font-desc">{hint}</span>
+                        </label>
+                        <input
+                          id={id}
+                          className="settings-number settings-font-input"
+                          type="number"
+                          min={FONT_SIZE_LIMITS.min}
+                          max={FONT_SIZE_LIMITS.max}
+                          step={FONT_SIZE_LIMITS.step}
+                          value={prefs?.[key] ?? DEFAULT_GENERAL_PREFS[key]}
+                          disabled={!prefs || busy}
+                          onChange={(event) => {
+                            if (!prefs) return;
+                            const raw = Number(event.target.value);
+                            if (!Number.isFinite(raw)) return;
+                            stageFontPref({
+                              [key]: clampFontSizePx(raw),
+                            } as Pick<GeneralPrefs, FontSizePrefKey>);
+                          }}
+                          onBlur={() => {
+                            if (!prefs) return;
+                            void persistFontPref({
+                              [key]: clampFontSizePx(prefs[key]),
+                            } as Pick<GeneralPrefs, FontSizePrefKey>);
+                          }}
+                        />
+                      </Fragment>
+                    ))}
+                  </div>
+                  <p className="settings-hint settings-hint-compact">
+                    {FONT_SIZE_LIMITS.min}–{FONT_SIZE_LIMITS.max} px, шаг{" "}
+                    {FONT_SIZE_LIMITS.step}. Изменения видны сразу, сохранение —
+                    при потере фокуса.
+                  </p>
+                </div>
               </>
             ) : null}
 
@@ -362,154 +459,6 @@ export function SettingsDialog({
                   </p>
                 </div>
                 <div className="settings-row">
-                  <div className="settings-section-title">Шрифты</div>
-                  <label className="settings-field-label" htmlFor="font-ui-size">
-                    Интерфейс (px)
-                  </label>
-                  <input
-                    id="font-ui-size"
-                    className="settings-number"
-                    type="number"
-                    min={FONT_SIZE_LIMITS.min}
-                    max={FONT_SIZE_LIMITS.max}
-                    step={FONT_SIZE_LIMITS.step}
-                    value={prefs?.uiFontSizePx ?? DEFAULT_GENERAL_PREFS.uiFontSizePx}
-                    disabled={!prefs || busy}
-                    onChange={(event) => {
-                      if (!prefs) return;
-                      const raw = Number(event.target.value);
-                      if (!Number.isFinite(raw)) return;
-                      stageFontPref({ uiFontSizePx: clampFontSizePx(raw) });
-                    }}
-                    onBlur={() => {
-                      if (!prefs) return;
-                      void persistFontPref({
-                        uiFontSizePx: clampFontSizePx(prefs.uiFontSizePx),
-                      });
-                    }}
-                  />
-                  <label
-                    className="settings-field-label"
-                    htmlFor="font-sidebar-size"
-                  >
-                    Sidebar (px)
-                  </label>
-                  <input
-                    id="font-sidebar-size"
-                    className="settings-number"
-                    type="number"
-                    min={FONT_SIZE_LIMITS.min}
-                    max={FONT_SIZE_LIMITS.max}
-                    step={FONT_SIZE_LIMITS.step}
-                    value={
-                      prefs?.sidebarFontSizePx ??
-                      DEFAULT_GENERAL_PREFS.sidebarFontSizePx
-                    }
-                    disabled={!prefs || busy}
-                    onChange={(event) => {
-                      if (!prefs) return;
-                      const raw = Number(event.target.value);
-                      if (!Number.isFinite(raw)) return;
-                      stageFontPref({
-                        sidebarFontSizePx: clampFontSizePx(raw),
-                      });
-                    }}
-                    onBlur={() => {
-                      if (!prefs) return;
-                      void persistFontPref({
-                        sidebarFontSizePx: clampFontSizePx(
-                          prefs.sidebarFontSizePx,
-                        ),
-                      });
-                    }}
-                  />
-                  <label
-                    className="settings-field-label"
-                    htmlFor="font-editor-size"
-                  >
-                    Редактор (px)
-                  </label>
-                  <input
-                    id="font-editor-size"
-                    className="settings-number"
-                    type="number"
-                    min={FONT_SIZE_LIMITS.min}
-                    max={FONT_SIZE_LIMITS.max}
-                    step={FONT_SIZE_LIMITS.step}
-                    value={
-                      prefs?.editorFontSizePx ??
-                      DEFAULT_GENERAL_PREFS.editorFontSizePx
-                    }
-                    disabled={!prefs || busy}
-                    onChange={(event) => {
-                      if (!prefs) return;
-                      const raw = Number(event.target.value);
-                      if (!Number.isFinite(raw)) return;
-                      stageFontPref({
-                        editorFontSizePx: clampFontSizePx(raw),
-                      });
-                    }}
-                    onBlur={() => {
-                      if (!prefs) return;
-                      void persistFontPref({
-                        editorFontSizePx: clampFontSizePx(
-                          prefs.editorFontSizePx,
-                        ),
-                      });
-                    }}
-                  />
-                  <label
-                    className="settings-field-label"
-                    htmlFor="font-preview-size"
-                  >
-                    Превью (px)
-                  </label>
-                  <input
-                    id="font-preview-size"
-                    className="settings-number"
-                    type="number"
-                    min={FONT_SIZE_LIMITS.min}
-                    max={FONT_SIZE_LIMITS.max}
-                    step={FONT_SIZE_LIMITS.step}
-                    value={
-                      prefs?.previewFontSizePx ??
-                      DEFAULT_GENERAL_PREFS.previewFontSizePx
-                    }
-                    disabled={!prefs || busy}
-                    onChange={(event) => {
-                      if (!prefs) return;
-                      const raw = Number(event.target.value);
-                      if (!Number.isFinite(raw)) return;
-                      stageFontPref({
-                        previewFontSizePx: clampFontSizePx(raw),
-                      });
-                    }}
-                    onBlur={() => {
-                      if (!prefs) return;
-                      void persistFontPref({
-                        previewFontSizePx: clampFontSizePx(
-                          prefs.previewFontSizePx,
-                        ),
-                      });
-                    }}
-                  />
-                  <p className="settings-hint">
-                    От {FONT_SIZE_LIMITS.min} до {FONT_SIZE_LIMITS.max} px, шаг{" "}
-                    {FONT_SIZE_LIMITS.step}. Изменения видны сразу; сохранение на
-                    диск — при потере фокуса поля.
-                  </p>
-                  <div className="settings-actions">
-                    <button
-                      type="button"
-                      className="settings-btn"
-                      disabled={!prefs || busy}
-                      onClick={resetFontPrefs}
-                    >
-                      Сбросить шрифты
-                    </button>
-                  </div>
-                </div>
-                <div className="settings-row">
                   <div className="settings-section-title">Проводник</div>
                   <label className="settings-check">
                     <input
@@ -529,17 +478,22 @@ export function SettingsDialog({
                     отображается отдельным блоком под основным деревом.
                   </p>
                 </div>
-                <div className="settings-row">
-                  <div className="settings-section-title">
-                    Поддерживаемые форматы
-                  </div>
-                  <div className="settings-formats">
-                    {SUPPORTED_FORMAT_LABELS.map((label) => (
-                      <span key={label} className="settings-format-chip">
-                        {label}
-                      </span>
-                    ))}
-                  </div>
+              </>
+            ) : null}
+
+            {section === "formats" ? (
+              <>
+                <div className="settings-section-title">Поддерживаемые форматы</div>
+                <p className="settings-lead">
+                  Docflow открывает и редактирует файлы с перечисленными
+                  расширениями. Список задаётся приложением и не настраивается.
+                </p>
+                <div className="settings-formats">
+                  {SUPPORTED_FORMAT_LABELS.map((label) => (
+                    <span key={label} className="settings-format-chip">
+                      {label}
+                    </span>
+                  ))}
                 </div>
               </>
             ) : null}
