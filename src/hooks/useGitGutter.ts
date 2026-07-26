@@ -97,6 +97,31 @@ function applyGutterDecorations(
   );
 }
 
+function bindPopupWheelHandling(root: HTMLDivElement, diffEl: HTMLDivElement) {
+  root.addEventListener(
+    "wheel",
+    (event) => {
+      event.stopPropagation();
+    },
+    { capture: true, passive: true },
+  );
+
+  diffEl.addEventListener(
+    "wheel",
+    (event) => {
+      event.stopPropagation();
+      if (diffEl.scrollHeight <= diffEl.clientHeight) return;
+
+      const prevScrollTop = diffEl.scrollTop;
+      diffEl.scrollTop += event.deltaY;
+      if (diffEl.scrollTop !== prevScrollTop) {
+        event.preventDefault();
+      }
+    },
+    { passive: false },
+  );
+}
+
 function createPopupDom(handlers: {
   onRevert: () => void;
   onPrev: () => void;
@@ -159,6 +184,7 @@ function createPopupDom(handlers: {
   actions.append(revertBtn);
   root.append(head, compareEl, actions);
   root.addEventListener("mousedown", (event) => event.stopPropagation());
+  bindPopupWheelHandling(root, diffEl);
 
   return { root, diffEl, prevBtn, nextBtn };
 }

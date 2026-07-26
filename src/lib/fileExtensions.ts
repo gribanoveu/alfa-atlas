@@ -11,3 +11,12 @@ export function extensionOf(path: string): string {
 export function isMarkdownPath(path: string): boolean {
   return MARKDOWN_EXTS.has(extensionOf(path));
 }
+
+export function isJsonPath(path: string): boolean {
+  return extensionOf(path) === ".json";
+}
+
+export function isYamlPath(path: string): boolean {
+  const ext = extensionOf(path);
+  return ext === ".yaml" || ext === ".yml";
+}

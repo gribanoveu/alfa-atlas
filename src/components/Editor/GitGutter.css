@@ -97,6 +97,7 @@
   line-height: 1.4;
   max-height: 120px;
   overflow: auto;
+  overscroll-behavior: contain;
   background: var(--bg-0);
   border: 1px solid var(--border);
   border-radius: 4px;

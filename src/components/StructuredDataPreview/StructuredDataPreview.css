@@ -1,0 +1,122 @@
+.struct-preview {
+  height: 100%;
+  overflow: auto;
+  padding: 16px 20px 32px;
+  background: var(--bg-editor);
+  color: var(--text-0);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 20px;
+}
+
+.struct-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.struct-toolbar-btn {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-1);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.struct-toolbar-btn:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.struct-tree {
+  min-width: min-content;
+}
+
+.struct-branch {
+  display: flex;
+  flex-direction: column;
+}
+
+.struct-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  min-height: 20px;
+  white-space: pre;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0 4px;
+}
+
+.struct-row-clickable {
+  width: 100%;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.struct-row-clickable:hover {
+  background: var(--bg-2);
+}
+
+.struct-leaf {
+  padding-left: 16px;
+}
+
+.struct-close {
+  padding-left: 4px;
+}
+
+.struct-twist {
+  display: inline-block;
+  width: 12px;
+  flex: none;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-2);
+  text-align: center;
+}
+
+.struct-children {
+  margin-left: 10px;
+  border-left: 1px solid var(--border);
+  padding-left: 4px;
+}
+
+.struct-key {
+  color: var(--purple);
+}
+
+.struct-string {
+  color: var(--green);
+}
+
+.struct-number {
+  color: var(--accent);
+}
+
+.struct-bool {
+  color: var(--cyan);
+}
+
+.struct-punct {
+  color: var(--text-2);
+}
+
+.struct-count {
+  color: var(--text-2);
+}
+
+.struct-count::before {
+  content: " ";
+}
+
+.struct-count::after {
+  content: " ";
+}

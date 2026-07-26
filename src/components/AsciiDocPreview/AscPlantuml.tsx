@@ -110,6 +110,7 @@ export function AscPlantuml({
   const [scale, setScale] = useState(1);
   const [naturalSize, setNaturalSize] = useState<SvgSize | null>(null);
   const [state, setState] = useState<RenderState>({ kind: "loading" });
+  const [isPanning, setIsPanning] = useState(false);
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
@@ -223,6 +224,8 @@ export function AscPlantuml({
       if (target.closest("button")) return;
       const viewport = viewportRef.current;
       if (!viewport) return;
+      e.preventDefault();
+      window.getSelection()?.removeAllRanges();
       viewport.setPointerCapture(e.pointerId);
       dragState.current = {
         active: true,
@@ -231,6 +234,7 @@ export function AscPlantuml({
         baseScrollLeft: viewport.scrollLeft,
         baseScrollTop: viewport.scrollTop,
       };
+      setIsPanning(true);
     },
     [],
   );
@@ -240,6 +244,7 @@ export function AscPlantuml({
       const ds = dragState.current;
       const viewport = viewportRef.current;
       if (!ds.active || !viewport) return;
+      e.preventDefault();
       viewport.scrollLeft = ds.baseScrollLeft - (e.clientX - ds.startX);
       viewport.scrollTop = ds.baseScrollTop - (e.clientY - ds.startY);
     },
@@ -255,12 +260,12 @@ export function AscPlantuml({
         viewport.releasePointerCapture(e.pointerId);
       }
       dragState.current = { ...ds, active: false };
+      setIsPanning(false);
     },
     [],
   );
 
   const name = block.getAttribute("1") as string | null;
-  const isPanning = dragState.current.active;
   const zoomLabel = `${Math.round(scale * 100)}%`;
   const scaledW = naturalSize ? naturalSize.w * scale : undefined;
   const scaledH = naturalSize ? naturalSize.h * scale : undefined;
