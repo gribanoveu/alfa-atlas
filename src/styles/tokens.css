@@ -20,6 +20,9 @@
   --diff-add-bar: #4a8f3c;
   --ai-glow: #7c5cff;
   --ai-glow-soft: rgba(124, 92, 255, 0.12);
+  --scrollbar-size: 4px;
+  --scrollbar-thumb: color-mix(in srgb, var(--text-2) 55%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-1) 70%, transparent);
 }
 
 * {
