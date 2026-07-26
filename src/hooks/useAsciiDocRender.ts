@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Extensions, load, MemoryLogger, LoggerManager } from "asciidoctor";
 import type { Document } from "asciidoctor";
+import { normalizeBarePipeTables } from "../lib/normalizeBarePipeTables";
 import { readProjectFile } from "../lib/project";
 
 type RenderState = {
@@ -165,7 +166,7 @@ export function useAsciiDocRender(
         loadOpts.base_dir = docsRoot;
       }
 
-      load(content, loadOpts)
+      load(normalizeBarePipeTables(content), loadOpts)
         .then((doc) => {
           if (cancelled) return;
           setState({ doc, error: null, parsing: false });
