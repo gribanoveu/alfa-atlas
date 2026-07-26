@@ -1,49 +1,62 @@
 import {
   FileText,
-  GitBranch,
+  GitCommitHorizontal,
+  GitFork,
   History,
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import type { RightTool } from "../../hooks/useWorkspaceLayout";
-import type { GitCommitSummary, GitDiffScope, GitFileStatus } from "../../lib/git";
+import type {
+  GitBranchInfo,
+  GitCommitSummary,
+  GitDiffScope,
+  GitFileStatus,
+} from "../../lib/git";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
+import { BranchesPanel } from "./BranchesPanel";
 import { CommitHistoryPanel } from "./CommitHistoryPanel";
 import { GitPanel } from "./GitPanel";
 import { AsciiDocPanel } from "./AsciiDocPanel";
 import "./RightDock.css";
 
-const TOOLS: {
-  id: RightTool;
-  label: string;
-  empty: string;
-  Icon: LucideIcon;
-}[] = [
-  {
-    id: "assistant",
+const TOOL_DEFS: Record<
+  RightTool,
+  { label: string; empty: string; Icon: LucideIcon }
+> = {
+  assistant: {
     label: "Ассистент",
     empty: "Ассистент пока недоступен",
     Icon: Sparkles,
   },
-  {
-    id: "asciidoc",
-    label: "AsciiDoc",
-    empty: "Библиотека блоков пуста",
-    Icon: FileText,
+  branches: {
+    label: "Branches / Ветки",
+    empty: "Нет открытого репозитория",
+    Icon: GitFork,
   },
-  {
-    id: "git",
-    label: "Git",
+  git: {
+    label: "Commit / Коммит",
     empty: "Нет изменений для отображения",
-    Icon: GitBranch,
+    Icon: GitCommitHorizontal,
   },
-  {
-    id: "gitHistory",
+  gitHistory: {
     label: "Commit history / История коммитов",
     empty: "Записей в истории пока нет",
     Icon: History,
   },
+  asciidoc: {
+    label: "AsciiDoc",
+    empty: "Библиотека блоков пуста",
+    Icon: FileText,
+  },
+};
+
+/** Stripe order: assistant on top, git tools grouped, editor tools below. */
+const TOOL_STRIPE_GROUPS: RightTool[][] = [
+  ["assistant"],
+  ["branches", "git", "gitHistory"],
+  ["asciidoc"],
 ];
 
 export type GitPanelViewProps = {
@@ -67,6 +80,16 @@ export type GitPanelViewProps = {
   selectedDiff?: { path: string; scope: GitDiffScope } | null;
 };
 
+export type BranchesPanelViewProps = {
+  currentBranch: string;
+  branches: GitBranchInfo[];
+  busy: boolean;
+  error: string | null;
+  onCheckout: (name: string) => void;
+  onCreateBranch: (name: string) => void;
+  onRefresh: () => void;
+};
+
 type RightDockProps = {
   activeTool: RightTool | null;
   onToggleTool: (tool: RightTool) => void;
@@ -74,6 +97,7 @@ type RightDockProps = {
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
   git?: GitPanelViewProps | null;
+  branches?: BranchesPanelViewProps | null;
   asciidoc?: {
     canInsert: boolean;
     onInsert: (text: string) => void;
@@ -87,10 +111,11 @@ export function RightDock({
   onResize,
   onResizeEnd,
   git,
+  branches,
   asciidoc,
 }: RightDockProps) {
   const open = Boolean(activeTool);
-  const active = TOOLS.find((tool) => tool.id === activeTool);
+  const active = activeTool ? TOOL_DEFS[activeTool] : undefined;
 
   return (
     <aside className={`right-dock ${open ? "is-open" : "is-collapsed"}`}>
@@ -104,7 +129,7 @@ export function RightDock({
         />
       ) : null}
 
-      {open && active ? (
+      {open && active && activeTool ? (
         <div className="tool-window">
           <header className="tool-window-head">
             <span className="tool-window-title">{active.label}</span>
@@ -119,7 +144,7 @@ export function RightDock({
             </button>
           </header>
           <div className="tool-window-body">
-            {active.id === "git" && git ? (
+            {activeTool === "git" && git ? (
               <GitPanel
                 staged={git.staged}
                 unstaged={git.unstaged}
@@ -139,17 +164,27 @@ export function RightDock({
                 onOpenFileDiff={git.onOpenFileDiff}
                 selectedDiff={git.selectedDiff}
               />
-            ) : active.id === "gitHistory" && git ? (
+            ) : activeTool === "gitHistory" && git ? (
               <CommitHistoryPanel
                 commits={git.commits}
                 busy={git.busy}
                 error={git.error}
                 onRefresh={git.onRefresh}
               />
-            ) : active.id === "asciidoc" && asciidoc ? (
+            ) : activeTool === "asciidoc" && asciidoc ? (
               <AsciiDocPanel
                 canInsert={asciidoc.canInsert}
                 onInsert={asciidoc.onInsert}
+              />
+            ) : activeTool === "branches" && branches ? (
+              <BranchesPanel
+                currentBranch={branches.currentBranch}
+                branches={branches.branches}
+                busy={branches.busy}
+                error={branches.error}
+                onCheckout={branches.onCheckout}
+                onCreateBranch={branches.onCreateBranch}
+                onRefresh={branches.onRefresh}
               />
             ) : (
               <div className="panel-empty">{active.empty}</div>
@@ -159,18 +194,31 @@ export function RightDock({
       ) : null}
 
       <nav className="tool-stripe" aria-label="Tool windows">
-        {TOOLS.map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            type="button"
-            className={`tool-stripe-btn ${activeTool === id ? "active" : ""}`}
-            title={label}
-            aria-label={label}
-            aria-pressed={activeTool === id}
-            onClick={() => onToggleTool(id)}
-          >
-            <Icon className="tool-stripe-icon" size={20} strokeWidth={1.75} aria-hidden />
-          </button>
+        {TOOL_STRIPE_GROUPS.map((group, groupIndex) => (
+          <div key={group.join("-")} className="tool-stripe-group">
+            {groupIndex > 0 ? <div className="tool-stripe-sep" role="separator" /> : null}
+            {group.map((id) => {
+              const { label, Icon } = TOOL_DEFS[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className={`tool-stripe-btn ${activeTool === id ? "active" : ""}`}
+                  title={label}
+                  aria-label={label}
+                  aria-pressed={activeTool === id}
+                  onClick={() => onToggleTool(id)}
+                >
+                  <Icon
+                    className="tool-stripe-icon"
+                    size={20}
+                    strokeWidth={1.75}
+                    aria-hidden
+                  />
+                </button>
+              );
+            })}
+          </div>
         ))}
       </nav>
     </aside>

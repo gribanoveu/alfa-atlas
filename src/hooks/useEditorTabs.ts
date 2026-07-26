@@ -479,6 +479,43 @@ export function useEditorTabs(
     [],
   );
 
+  const saveAllDirtyTabs = useCallback(async (): Promise<boolean> => {
+    await flushDebounce();
+    for (const tab of tabsRef.current) {
+      if (!tab.dirty) continue;
+      const ok = await saveTab(tab.id);
+      if (!ok) return false;
+    }
+    return true;
+  }, [flushDebounce, saveTab]);
+
+  const reloadAllOpenTabs = useCallback(async (): Promise<void> => {
+    const root = docsRootRef.current;
+    if (!root) return;
+    const open = [...tabsRef.current];
+    for (const tab of open) {
+      try {
+        const content = await readProjectFile(root, tab.path);
+        setTabs((prev) => {
+          const next = prev.map((t) =>
+            t.id === tab.id
+              ? {
+                  ...t,
+                  content,
+                  savedContent: content,
+                  dirty: false,
+                }
+              : t,
+          );
+          tabsRef.current = next;
+          return next;
+        });
+      } catch {
+        // File may not exist on this branch; leave tab content as-is.
+      }
+    }
+  }, []);
+
   return {
     tabs,
     activeTabId,
@@ -498,5 +535,7 @@ export function useEditorTabs(
     error,
     reset,
     reloadTabFromDisk,
+    saveAllDirtyTabs,
+    reloadAllOpenTabs,
   };
 }

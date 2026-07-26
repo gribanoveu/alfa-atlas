@@ -36,3 +36,10 @@
   gap: 8px;
   margin-left: auto;
 }
+
+.pull-update-hint {
+  margin: 0 0 12px;
+  font-size: 11px;
+  color: var(--text-2);
+  line-height: 1.4;
+}

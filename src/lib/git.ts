@@ -30,6 +30,23 @@ export type GitFileDiff = {
   isBinary: boolean;
 };
 
+export type GitBranchInfo = {
+  name: string;
+  isCurrent: boolean;
+};
+
+export function hasTrackedGitChanges(status: GitStatusSnapshot): boolean {
+  return (
+    status.staged.length > 0 ||
+    status.unstaged.some((file) => file.status !== "?")
+  );
+}
+
+export type GitSyncStatus = {
+  ahead: number;
+  behind: number;
+};
+
 export function gitStatus(repoRoot: string): Promise<GitStatusSnapshot> {
   return invoke<GitStatusSnapshot>("git_status", { repoRoot });
 }
@@ -64,6 +81,10 @@ export function gitResetToRemote(repoRoot: string): Promise<void> {
   return invoke<void>("git_reset_to_remote", { repoRoot });
 }
 
+export function gitSyncStatus(repoRoot: string): Promise<GitSyncStatus> {
+  return invoke<GitSyncStatus>("git_sync_status", { repoRoot });
+}
+
 export function gitPush(repoRoot: string): Promise<void> {
   return invoke<void>("git_push", { repoRoot });
 }
@@ -81,4 +102,24 @@ export function gitDiscardFileChanges(
   path: string,
 ): Promise<void> {
   return invoke<void>("git_discard_file_changes", { repoRoot, path });
+}
+
+export function gitListBranches(repoRoot: string): Promise<GitBranchInfo[]> {
+  return invoke<GitBranchInfo[]>("git_list_branches", { repoRoot });
+}
+
+export function gitCreateBranch(
+  repoRoot: string,
+  name: string,
+  discardChanges = false,
+): Promise<void> {
+  return invoke<void>("git_create_branch", { repoRoot, name, discardChanges });
+}
+
+export function gitCheckoutBranch(
+  repoRoot: string,
+  name: string,
+  discardChanges = false,
+): Promise<void> {
+  return invoke<void>("git_checkout_branch", { repoRoot, name, discardChanges });
 }

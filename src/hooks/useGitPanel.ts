@@ -57,17 +57,20 @@ export function useGitPanel(
     if (!repoRoot) {
       setStatus(EMPTY_STATUS);
       setCommits([]);
+      onBranchChangeRef.current?.(null);
       return;
     }
     try {
-      const [nextStatus, nextCommits] = await Promise.all([
-        gitStatus(repoRoot),
-        gitLog(repoRoot, 20),
-      ]);
+      const nextStatus = await gitStatus(repoRoot);
       setStatus(nextStatus);
-      setCommits(nextCommits);
-      setError(null);
       onBranchChangeRef.current?.(nextStatus.branch);
+      try {
+        const nextCommits = await gitLog(repoRoot, 20);
+        setCommits(nextCommits);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

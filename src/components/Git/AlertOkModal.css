@@ -1,0 +1,12 @@
+.clone-modal.alert-info .clone-modal-title {
+  color: var(--green);
+}
+
+.clone-modal.alert-info .clone-modal-btn.primary {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.clone-modal.alert-info .clone-modal-btn.primary:hover {
+  filter: brightness(1.08);
+}

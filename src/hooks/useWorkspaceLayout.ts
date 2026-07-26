@@ -1,6 +1,11 @@
 import { useCallback, useState } from "react";
 
-export type RightTool = "assistant" | "asciidoc" | "git" | "gitHistory";
+export type RightTool =
+  | "assistant"
+  | "asciidoc"
+  | "git"
+  | "gitHistory"
+  | "branches";
 export type BottomTool = "suggestions" | "formatting" | "problems";
 
 export type PanelUiState = {
@@ -13,9 +18,10 @@ export type { CursorPosition, EditorTab } from "./useEditorTabs";
 
 const RIGHT_TOOLS: readonly RightTool[] = [
   "assistant",
-  "asciidoc",
+  "branches",
   "git",
   "gitHistory",
+  "asciidoc",
 ];
 const BOTTOM_TOOLS: readonly BottomTool[] = [
   "suggestions",

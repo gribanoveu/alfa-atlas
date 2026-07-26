@@ -6,7 +6,7 @@
   color: var(--text-0);
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: var(--font-preview);
-  line-height: 20px;
+  line-height: 26px;
 }
 
 .struct-toolbar {
@@ -45,7 +45,7 @@
   display: flex;
   align-items: baseline;
   gap: 0;
-  min-height: 20px;
+  min-height: 26px;
   white-space: pre;
   border: none;
   background: transparent;

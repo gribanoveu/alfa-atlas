@@ -7,14 +7,14 @@ type PullUpdateModalProps = {
   busy: boolean;
   onCancel: () => void;
   onConfirm: (mode: PullMode) => void;
-  onResetToRemote: () => void;
+  onRequestResetToRemote: () => void;
 };
 
 export function PullUpdateModal({
   busy,
   onCancel,
   onConfirm,
-  onResetToRemote,
+  onRequestResetToRemote,
 }: PullUpdateModalProps) {
   const [mode, setMode] = useState<PullMode>("merge");
 
@@ -33,10 +33,10 @@ export function PullUpdateModal({
         aria-labelledby="pull-update-title"
       >
         <div className="clone-modal-title" id="pull-update-title">
-          Update Project
+          Обновить проект
         </div>
         <div className="clone-modal-message">
-          How should incoming changes be integrated into the current branch?
+          Как объединить изменения с сервера с текущей веткой?
         </div>
 
         <fieldset className="pull-update-options" disabled={busy}>
@@ -47,7 +47,9 @@ export function PullUpdateModal({
               checked={mode === "merge"}
               onChange={() => setMode("merge")}
             />
-            <span>Merge incoming changes into the current branch</span>
+            <span>
+              Объединить изменения с сервера (merge) — проще для начала
+            </span>
           </label>
           <label className="pull-update-option">
             <input
@@ -56,19 +58,23 @@ export function PullUpdateModal({
               checked={mode === "rebase"}
               onChange={() => setMode("rebase")}
             />
-            <span>Rebase the current branch on top of incoming changes</span>
+            <span>Переложить ваши коммиты поверх сервера (rebase)</span>
           </label>
         </fieldset>
+
+        <p className="pull-update-hint">
+          Если не уверены, выберите merge — это рекомендуемый вариант.
+        </p>
 
         <div className="clone-modal-actions pull-update-actions">
           <button
             type="button"
             className="clone-modal-btn"
             disabled={busy}
-            onClick={onResetToRemote}
-            title="Discard local commits and match the remote branch"
+            onClick={onRequestResetToRemote}
+            title="Локальные коммиты будут удалены"
           >
-            Reset to the Remote Branch
+            Сбросить к версии на сервере…
           </button>
           <div className="pull-update-actions-end">
             <button
@@ -77,7 +83,7 @@ export function PullUpdateModal({
               disabled={busy}
               onClick={onCancel}
             >
-              Cancel
+              Отмена
             </button>
             <button
               type="button"
@@ -85,7 +91,7 @@ export function PullUpdateModal({
               disabled={busy}
               onClick={() => onConfirm(mode)}
             >
-              Ok
+              Обновить
             </button>
           </div>
         </div>

@@ -3,7 +3,9 @@ import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { AlertOkModal } from "./components/Git/AlertOkModal";
 import { GitFileDiffModal } from "./components/Git/GitFileDiffModal";
+import { CheckoutBlockedModal } from "./components/Git/CheckoutBlockedModal";
 import { PullUpdateModal } from "./components/Git/PullUpdateModal";
+import { ResetRemoteConfirmModal } from "./components/Git/ResetRemoteConfirmModal";
 import { RightDock } from "./components/RightDock/RightDock";
 import { NewFileModal } from "./components/Sidebar/NewFileModal";
 import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
@@ -14,6 +16,8 @@ import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
 import type { GitDiffScope, GitFileStatus, PullMode } from "./lib/git";
+import { gitSyncStatus, hasTrackedGitChanges } from "./lib/git";
+import { useBranches } from "./hooks/useBranches";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
@@ -126,13 +130,25 @@ function App() {
     active: Boolean(project.repoRoot),
     onBranchChange: project.setBranchFromGit,
   });
+  const branches = useBranches(project.repoRoot, {
+    active: Boolean(project.repoRoot),
+  });
   const [folderError, setFolderError] = useState<string | null>(null);
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [renameTarget, setRenameTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [pullModalOpen, setPullModalOpen] = useState(false);
-  const [gitAlert, setGitAlert] = useState<string | null>(null);
+  const [resetRemoteConfirmOpen, setResetRemoteConfirmOpen] = useState(false);
+  const [branchSwitchBlocked, setBranchSwitchBlocked] = useState<{
+    kind: "checkout" | "create";
+    branchName: string;
+  } | null>(null);
+  const [gitAlert, setGitAlert] = useState<{
+    message: string;
+    title?: string;
+    variant?: "error" | "info";
+  } | null>(null);
   const [gitDiffTarget, setGitDiffTarget] = useState<{
     file: GitFileStatus;
     scope: GitDiffScope;
@@ -227,6 +243,13 @@ function App() {
   const workspaceIndex = useWorkspaceIndex(project.repoRoot, {
     active: hasProject,
   });
+
+  useEffect(() => {
+    if (layout.activeTool === "branches" && hasProject) {
+      void branches.refresh();
+    }
+  }, [layout.activeTool, hasProject, branches.refresh]);
+
   const cursorLabel = hasProject
     ? `Ln ${editor.cursor.line}, Col ${editor.cursor.column}`
     : "Ln 1, Col 1";
@@ -236,25 +259,55 @@ function App() {
     setPullModalOpen(true);
   }, [hasProject]);
 
+  function behindCommitsMessage(count: number): string {
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+    let word: string;
+    if (mod10 === 1 && mod100 !== 11) {
+      word = "новый коммит";
+    } else if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+      word = "новых коммита";
+    } else {
+      word = "новых коммитов";
+    }
+    return `есть ${count} ${word}`;
+  }
+
   const runPush = useCallback(async () => {
-    if (!hasProject) return;
-    const err = await git.push();
-    if (err) setGitAlert(err);
-  }, [git, hasProject]);
+    if (!hasProject || !project.repoRoot) return;
+    try {
+      const sync = await gitSyncStatus(project.repoRoot);
+      if (sync.behind > 0) {
+        setGitAlert({
+          title: "Сначала обновите проект",
+          message: `На сервере ${behindCommitsMessage(sync.behind)}. Выполните «Git → Pull» и повторите отправку.`,
+          variant: "info",
+        });
+        return;
+      }
+      const err = await git.push();
+      if (err) setGitAlert({ message: err });
+    } catch (e) {
+      setGitAlert({
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }, [git, hasProject, project.repoRoot]);
 
   const onPullConfirm = useCallback(
     async (mode: PullMode) => {
       const err = await git.pull(mode);
       setPullModalOpen(false);
-      if (err) setGitAlert(err);
+      if (err) setGitAlert({ message: err });
     },
     [git],
   );
 
-  const onResetToRemote = useCallback(async () => {
+  const onResetToRemoteConfirm = useCallback(async () => {
     const err = await git.resetToRemote();
+    setResetRemoteConfirmOpen(false);
     setPullModalOpen(false);
-    if (err) setGitAlert(err);
+    if (err) setGitAlert({ message: err });
   }, [git]);
 
   const panelStyle = {
@@ -316,6 +369,82 @@ function App() {
   const toggleGitPanel = useCallback(() => {
     layout.toggleRightTool("git");
   }, [layout]);
+
+  const refreshAfterBranchChange = useCallback(async () => {
+    await Promise.all([
+      git.refresh(),
+      tree.refresh(),
+      editor.reloadAllOpenTabs(),
+      project.refreshBranch(),
+    ]);
+  }, [editor.reloadAllOpenTabs, git, project.refreshBranch, tree]);
+
+  const performCheckout = useCallback(
+    async (name: string, discardChanges: boolean) => {
+      const ok = await branches.checkoutBranch(name, discardChanges);
+      if (!ok) return;
+      project.setBranchFromGit(name);
+      await refreshAfterBranchChange();
+    },
+    [branches, project.setBranchFromGit, refreshAfterBranchChange],
+  );
+
+  const performCreateBranch = useCallback(
+    async (name: string, discardChanges: boolean) => {
+      const ok = await branches.createBranch(name, discardChanges);
+      if (!ok) return;
+      project.setBranchFromGit(name);
+      await refreshAfterBranchChange();
+    },
+    [branches, project.setBranchFromGit, refreshAfterBranchChange],
+  );
+
+  const handleCheckoutBranch = useCallback(
+    async (name: string) => {
+      const saved = await editor.saveAllDirtyTabs();
+      if (!saved) {
+        setGitAlert({
+          message: "Не удалось сохранить открытые файлы перед переключением ветки.",
+        });
+        return;
+      }
+      if (hasTrackedGitChanges(git.status)) {
+        setBranchSwitchBlocked({ kind: "checkout", branchName: name });
+        return;
+      }
+      await performCheckout(name, false);
+    },
+    [editor.saveAllDirtyTabs, git.status, performCheckout],
+  );
+
+  const handleCreateBranch = useCallback(
+    async (name: string) => {
+      const saved = await editor.saveAllDirtyTabs();
+      if (!saved) {
+        setGitAlert({
+          message: "Не удалось сохранить открытые файлы перед созданием ветки.",
+        });
+        return;
+      }
+      if (hasTrackedGitChanges(git.status)) {
+        setBranchSwitchBlocked({ kind: "create", branchName: name });
+        return;
+      }
+      await performCreateBranch(name, false);
+    },
+    [editor.saveAllDirtyTabs, git.status, performCreateBranch],
+  );
+
+  const handleDiscardAndSwitchBranch = useCallback(async () => {
+    if (!branchSwitchBlocked) return;
+    const { kind, branchName } = branchSwitchBlocked;
+    setBranchSwitchBlocked(null);
+    if (kind === "checkout") {
+      await performCheckout(branchName, true);
+    } else {
+      await performCreateBranch(branchName, true);
+    }
+  }, [branchSwitchBlocked, performCheckout, performCreateBranch]);
 
   const openGitFileDiff = useCallback(
     (path: string, scope: GitDiffScope) => {
@@ -545,6 +674,9 @@ function App() {
         projectRoot={project.repoRoot}
         hasProject={hasProject}
         gitBusy={git.busy}
+        branchesPanelOpen={layout.activeTool === "branches"}
+        branchBusy={branches.busy}
+        onBranchChipClick={() => layout.setRightTool("branches")}
         onOpenFolder={openFolder}
         onCloseProject={closeProject}
         onSave={async () => {
@@ -688,6 +820,19 @@ function App() {
                   }
                 : null
             }
+            branches={
+              hasProject
+                ? {
+                    currentBranch: project.branchName ?? "—",
+                    branches: branches.branches,
+                    busy: branches.busy,
+                    error: branches.error,
+                    onCheckout: (name) => void handleCheckoutBranch(name),
+                    onCreateBranch: (name) => void handleCreateBranch(name),
+                    onRefresh: () => void branches.refresh(),
+                  }
+                : null
+            }
           />
         </div>
         <BottomDock
@@ -798,7 +943,29 @@ function App() {
           busy={git.busy}
           onCancel={() => setPullModalOpen(false)}
           onConfirm={(mode) => void onPullConfirm(mode)}
-          onResetToRemote={() => void onResetToRemote()}
+          onRequestResetToRemote={() => setResetRemoteConfirmOpen(true)}
+        />
+      ) : null}
+
+      {resetRemoteConfirmOpen ? (
+        <ResetRemoteConfirmModal
+          busy={git.busy}
+          onCancel={() => setResetRemoteConfirmOpen(false)}
+          onConfirm={() => void onResetToRemoteConfirm()}
+        />
+      ) : null}
+
+      {branchSwitchBlocked ? (
+        <CheckoutBlockedModal
+          branchName={branchSwitchBlocked.branchName}
+          mode={branchSwitchBlocked.kind}
+          busy={branches.busy || git.busy}
+          onCancel={() => setBranchSwitchBlocked(null)}
+          onOpenCommit={() => {
+            layout.setRightTool("git");
+            setBranchSwitchBlocked(null);
+          }}
+          onDiscardAndContinue={() => void handleDiscardAndSwitchBranch()}
         />
       ) : null}
 
@@ -815,7 +982,9 @@ function App() {
 
       {gitAlert ? (
         <AlertOkModal
-          message={gitAlert}
+          title={gitAlert.title}
+          message={gitAlert.message}
+          variant={gitAlert.variant}
           onClose={() => setGitAlert(null)}
         />
       ) : null}

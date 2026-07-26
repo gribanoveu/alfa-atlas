@@ -51,6 +51,20 @@ pub struct GitFileDiff {
     pub is_binary: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchInfo {
+    pub name: String,
+    pub is_current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSyncStatus {
+    pub ahead: usize,
+    pub behind: usize,
+}
+
 #[derive(Debug, Error)]
 pub enum GitError {
     #[error("path is not a git repository: {0}")]
@@ -75,6 +89,12 @@ pub enum GitError {
     MergeConflict,
     #[error("rebase conflict; resolve conflicts manually and try again")]
     RebaseConflict,
+    #[error("branch not found: {0}")]
+    BranchNotFound(String),
+    #[error("branch already exists: {0}")]
+    BranchAlreadyExists(String),
+    #[error("commit or discard tracked changes before switching branches")]
+    CheckoutBlocked,
     #[error("{0}")]
     Message(String),
 }

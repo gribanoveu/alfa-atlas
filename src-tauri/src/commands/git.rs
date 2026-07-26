@@ -1,4 +1,7 @@
-use crate::domain::git::{GitCommitSummary, GitDiffScope, GitFileDiff, GitStatusSnapshot, PullMode};
+use crate::domain::git::{
+    GitBranchInfo, GitCommitSummary, GitDiffScope, GitFileDiff, GitStatusSnapshot, GitSyncStatus,
+    PullMode,
+};
 use crate::services::git_ops;
 
 #[tauri::command]
@@ -45,6 +48,15 @@ pub async fn git_reset_to_remote(repo_root: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn git_sync_status(repo_root: String) -> Result<GitSyncStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_ops::sync_status(&repo_root).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn git_push(repo_root: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         git_ops::push(&repo_root).map_err(|e| e.to_string())
@@ -65,4 +77,27 @@ pub fn git_file_diff(
 #[tauri::command]
 pub fn git_discard_file_changes(repo_root: String, path: String) -> Result<(), String> {
     git_ops::discard_file_changes(&repo_root, &path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_list_branches(repo_root: String) -> Result<Vec<GitBranchInfo>, String> {
+    git_ops::list_branches(&repo_root).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_create_branch(
+    repo_root: String,
+    name: String,
+    discard_changes: bool,
+) -> Result<(), String> {
+    git_ops::create_branch(&repo_root, &name, discard_changes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_checkout_branch(
+    repo_root: String,
+    name: String,
+    discard_changes: bool,
+) -> Result<(), String> {
+    git_ops::checkout_branch(&repo_root, &name, discard_changes).map_err(|e| e.to_string())
 }

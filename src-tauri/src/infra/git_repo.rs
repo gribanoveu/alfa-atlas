@@ -7,8 +7,8 @@ use git2::{
 };
 
 use crate::domain::git::{
-    GitCommitSummary, GitDiffScope, GitError, GitFileDiff, GitFileStatus, GitStatusSnapshot,
-    PullMode,
+    GitBranchInfo, GitCommitSummary, GitDiffScope, GitError, GitFileDiff, GitFileStatus,
+    GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
@@ -89,6 +89,22 @@ fn index_status_letter(status: Status) -> Option<&'static str> {
 fn workdir_status_letter(status: Status) -> Option<&'static str> {
     if status.contains(Status::WT_NEW) {
         Some("?")
+    } else if status.contains(Status::WT_MODIFIED) {
+        Some("M")
+    } else if status.contains(Status::WT_DELETED) {
+        Some("D")
+    } else if status.contains(Status::WT_RENAMED) {
+        Some("R")
+    } else if status.contains(Status::WT_TYPECHANGE) {
+        Some("M")
+    } else {
+        None
+    }
+}
+
+fn tracked_workdir_status_letter(status: Status) -> Option<&'static str> {
+    if status.contains(Status::WT_NEW) {
+        None
     } else if status.contains(Status::WT_MODIFIED) {
         Some("M")
     } else if status.contains(Status::WT_DELETED) {
@@ -536,6 +552,21 @@ pub fn pull(repo_root: &Path, mode: PullMode) -> Result<(), GitError> {
     }
 }
 
+pub fn sync_status(repo_root: &Path) -> Result<GitSyncStatus, GitError> {
+    let repo = open_repo(repo_root)?;
+    let upstream = upstream_of_head(&repo)?;
+    let theirs = fetch_upstream(&repo, &upstream)?;
+    let local = repo
+        .head()
+        .map_err(GitError::Operation)?
+        .peel_to_commit()
+        .map_err(GitError::Operation)?;
+    let (ahead, behind) = repo
+        .graph_ahead_behind(local.id(), theirs.id())
+        .map_err(GitError::Operation)?;
+    Ok(GitSyncStatus { ahead, behind })
+}
+
 pub fn reset_to_remote(repo_root: &Path) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let upstream = upstream_of_head(&repo)?;
@@ -739,4 +770,151 @@ pub fn push(repo_root: &Path) -> Result<(), GitError> {
         .push(&[refspec.as_str()], Some(&mut push_opts))
         .map_err(map_remote_error)?;
     Ok(())
+}
+
+fn validate_branch_name(name: &str) -> Result<&str, GitError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(GitError::Message("branch name is empty".into()));
+    }
+    if trimmed.contains("..")
+        || trimmed.starts_with('/')
+        || trimmed.ends_with('/')
+        || trimmed.ends_with('.')
+        || trimmed.contains("//")
+        || trimmed.contains('@')
+        || trimmed.contains(' ')
+    {
+        return Err(GitError::Message(format!(
+            "invalid branch name: {trimmed}"
+        )));
+    }
+    Ok(trimmed)
+}
+
+fn has_tracked_uncommitted_changes(repo: &Repository) -> Result<bool, GitError> {
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false)
+        .show(StatusShow::IndexAndWorkdir);
+    let statuses = repo.statuses(Some(&mut opts)).map_err(GitError::Operation)?;
+    Ok(statuses.iter().any(|e| {
+        index_status_letter(e.status()).is_some()
+            || tracked_workdir_status_letter(e.status()).is_some()
+    }))
+}
+
+fn discard_tracked_changes(repo: &Repository) -> Result<(), GitError> {
+    let head = repo.head().map_err(GitError::Operation)?;
+    let commit = head.peel_to_commit().map_err(GitError::Operation)?;
+    repo.reset(
+        commit.as_object(),
+        ResetType::Hard,
+        Some(CheckoutBuilder::new().force()),
+    )
+    .map_err(GitError::Operation)?;
+    Ok(())
+}
+
+fn ensure_clean_or_discard(repo: &Repository, discard_changes: bool) -> Result<(), GitError> {
+    if !has_tracked_uncommitted_changes(repo)? {
+        return Ok(());
+    }
+    if discard_changes {
+        discard_tracked_changes(repo)
+    } else {
+        Err(GitError::CheckoutBlocked)
+    }
+}
+
+fn switch_to_branch(repo: &Repository, branch_name: &str) -> Result<(), GitError> {
+    let branch = repo
+        .find_branch(branch_name, BranchType::Local)
+        .map_err(|_| GitError::BranchNotFound(branch_name.to_string()))?;
+    let commit = branch
+        .get()
+        .peel_to_commit()
+        .map_err(GitError::Operation)?;
+    let tree = commit.tree().map_err(GitError::Operation)?;
+    repo.checkout_tree(
+        tree.as_object(),
+        Some(
+            &mut CheckoutBuilder::new()
+                .force()
+                .remove_untracked(false),
+        ),
+    )
+        .map_err(GitError::Operation)?;
+    repo.set_head(&format!("refs/heads/{branch_name}"))
+        .map_err(GitError::Operation)?;
+    Ok(())
+}
+
+pub fn list_local_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
+    let repo = open_repo(repo_root)?;
+    let current = branch_name(&repo);
+    let branches = repo
+        .branches(Some(BranchType::Local))
+        .map_err(GitError::Operation)?;
+
+    let mut out = Vec::new();
+    for branch_result in branches {
+        let (branch, _) = branch_result.map_err(GitError::Operation)?;
+        let name = branch
+            .name()
+            .map_err(GitError::Operation)?
+            .ok_or_else(|| GitError::Message("branch has invalid name".into()))?
+            .to_string();
+        out.push(GitBranchInfo {
+            is_current: current.as_deref() == Some(name.as_str()),
+            name,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+pub fn create_branch(
+    repo_root: &Path,
+    name: &str,
+    discard_changes: bool,
+) -> Result<(), GitError> {
+    let name = validate_branch_name(name)?;
+    let repo = open_repo(repo_root)?;
+    if repo
+        .find_branch(name, BranchType::Local)
+        .is_ok()
+    {
+        return Err(GitError::BranchAlreadyExists(name.to_string()));
+    }
+    ensure_clean_or_discard(&repo, discard_changes)?;
+    let head = repo.head().map_err(GitError::Operation)?;
+    let commit = head.peel_to_commit().map_err(GitError::Operation)?;
+    repo.branch(name, &commit, false)
+        .map_err(GitError::Operation)?;
+    switch_to_branch(&repo, name)
+}
+
+pub fn checkout_branch(
+    repo_root: &Path,
+    name: &str,
+    discard_changes: bool,
+) -> Result<(), GitError> {
+    let name = validate_branch_name(name)?;
+    let repo = open_repo(repo_root)?;
+    if repo
+        .find_branch(name, BranchType::Local)
+        .is_err()
+    {
+        return Err(GitError::BranchNotFound(name.to_string()));
+    }
+
+    let current = branch_name(&repo);
+    if current.as_deref() == Some(name) {
+        return Ok(());
+    }
+
+    ensure_clean_or_discard(&repo, discard_changes)?;
+    switch_to_branch(&repo, name)
 }

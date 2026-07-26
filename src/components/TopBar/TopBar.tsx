@@ -16,6 +16,9 @@ type TopBarProps = {
   projectRoot: string | null;
   hasProject: boolean;
   gitBusy?: boolean;
+  branchesPanelOpen?: boolean;
+  branchBusy?: boolean;
+  onBranchChipClick?: () => void;
   onOpenFolder: () => Promise<unknown>;
   onCloseProject: () => Promise<void>;
   onSave: () => Promise<unknown>;
@@ -34,6 +37,9 @@ export function TopBar({
   projectRoot,
   hasProject,
   gitBusy = false,
+  branchesPanelOpen = false,
+  branchBusy = false,
+  onBranchChipClick,
   onOpenFolder,
   onCloseProject,
   onSave,
@@ -132,7 +138,16 @@ export function TopBar({
             </svg>
             <b>{repoName}</b>
           </div>
-          <div className="branch-chip">⎇ {branchName}</div>
+          <button
+            type="button"
+            className="branch-chip"
+            disabled={!hasProject || gitBusy || branchBusy}
+            onClick={onBranchChipClick}
+            aria-expanded={branchesPanelOpen}
+            aria-controls="branches-panel"
+          >
+            ⎇ {branchName}
+          </button>
         </div>
       </header>
 

@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::domain::git::{
-    GitCommitSummary, GitDiffScope, GitError, GitFileDiff, GitStatusSnapshot, PullMode,
+    GitBranchInfo, GitCommitSummary, GitDiffScope, GitError, GitFileDiff, GitStatusSnapshot,
+    GitSyncStatus, PullMode,
 };
 use crate::infra::git_repo;
 
@@ -36,6 +37,10 @@ pub fn pull(repo_root: &str, mode: PullMode) -> Result<(), GitError> {
     git_repo::pull(Path::new(repo_root), mode)
 }
 
+pub fn sync_status(repo_root: &str) -> Result<GitSyncStatus, GitError> {
+    git_repo::sync_status(Path::new(repo_root))
+}
+
 pub fn reset_to_remote(repo_root: &str) -> Result<(), GitError> {
     git_repo::reset_to_remote(Path::new(repo_root))
 }
@@ -54,6 +59,26 @@ pub fn file_diff(
 
 pub fn discard_file_changes(repo_root: &str, path: &str) -> Result<(), GitError> {
     git_repo::discard_file_changes(Path::new(repo_root), path)
+}
+
+pub fn list_branches(repo_root: &str) -> Result<Vec<GitBranchInfo>, GitError> {
+    git_repo::list_local_branches(Path::new(repo_root))
+}
+
+pub fn create_branch(
+    repo_root: &str,
+    name: &str,
+    discard_changes: bool,
+) -> Result<(), GitError> {
+    git_repo::create_branch(Path::new(repo_root), name, discard_changes)
+}
+
+pub fn checkout_branch(
+    repo_root: &str,
+    name: &str,
+    discard_changes: bool,
+) -> Result<(), GitError> {
+    git_repo::checkout_branch(Path::new(repo_root), name, discard_changes)
 }
 
 #[cfg(test)]
@@ -226,6 +251,90 @@ mod tests {
     }
 
     #[test]
+    fn sync_status_reports_ahead_and_behind() {
+        let remote = temp_dir("sync-remote");
+        init_repo(&remote);
+        fs::write(remote.join("base.txt"), "base\n").unwrap();
+        git(&remote, &["add", "."]);
+        git(
+            &remote,
+            &[
+                "-c",
+                "user.name=Docflow Test",
+                "-c",
+                "user.email=test@docflow.local",
+                "commit",
+                "-m",
+                "init",
+            ],
+        );
+
+        let bare = temp_dir("sync-bare");
+        git(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &[
+                "clone",
+                "--bare",
+                remote.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+
+        let local = temp_dir("sync-local");
+        git(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &[
+                "clone",
+                bare.to_str().unwrap(),
+                local.to_str().unwrap(),
+            ],
+        );
+        git(&local, &["config", "user.name", "Docflow Test"]);
+        git(&local, &["config", "user.email", "test@docflow.local"]);
+
+        let other = temp_dir("sync-other");
+        git(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &[
+                "clone",
+                bare.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        git(&other, &["config", "user.name", "Docflow Test"]);
+        git(&other, &["config", "user.email", "test@docflow.local"]);
+        fs::write(other.join("remote.txt"), "from remote\n").unwrap();
+        git(&other, &["add", "."]);
+        git(&other, &["commit", "-m", "remote change"]);
+        git(&other, &["push", "origin", "HEAD"]);
+
+        let local_str = local.to_str().unwrap();
+
+        let behind_only = sync_status(local_str).unwrap();
+        assert_eq!(behind_only.ahead, 0);
+        assert_eq!(behind_only.behind, 1);
+
+        fs::write(local.join("local.txt"), "local\n").unwrap();
+        git(&local, &["add", "."]);
+        git(&local, &["commit", "-m", "local change"]);
+
+        let diverged = sync_status(local_str).unwrap();
+        assert_eq!(diverged.ahead, 1);
+        assert_eq!(diverged.behind, 1);
+
+        pull(local_str, PullMode::Merge).unwrap();
+
+        let after_pull = sync_status(local_str).unwrap();
+        assert_eq!(after_pull.behind, 0);
+        assert!(after_pull.ahead >= 1);
+
+        fs::remove_dir_all(&remote).ok();
+        fs::remove_dir_all(&bare).ok();
+        fs::remove_dir_all(&local).ok();
+        fs::remove_dir_all(&other).ok();
+    }
+
+    #[test]
     fn file_diff_unstaged_shows_index_vs_workdir() {
         let root = temp_dir("diff-unstaged");
         let root_str = root.to_str().unwrap();
@@ -313,6 +422,85 @@ mod tests {
         discard_file_changes(root_str, "new.txt").unwrap();
         assert!(!root.join("new.txt").exists());
         assert!(status(root_str).unwrap().unstaged.is_empty());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_create_and_checkout_branches() {
+        let root = temp_dir("branches");
+        let root_str = root.to_str().unwrap();
+        init_repo(&root);
+        fs::write(root.join("a.txt"), "one\n").unwrap();
+        stage(root_str, &["a.txt".into()]).unwrap();
+        commit(root_str, "init").unwrap();
+
+        let branches = list_branches(root_str).unwrap();
+        assert_eq!(branches.len(), 1);
+        assert!(branches.iter().any(|b| b.is_current));
+
+        create_branch(root_str, "feature", false).unwrap();
+        let branches = list_branches(root_str).unwrap();
+        assert_eq!(branches.len(), 2);
+        assert!(branches.iter().any(|b| b.name == "feature" && b.is_current));
+
+        checkout_branch(root_str, "master", false).unwrap();
+        let branches = list_branches(root_str).unwrap();
+        let current = branches.iter().find(|b| b.is_current).unwrap();
+        assert_eq!(current.name, "master");
+
+        let err = create_branch(root_str, "feature", false).unwrap_err();
+        assert!(matches!(err, GitError::BranchAlreadyExists(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn checkout_blocked_with_tracked_changes_until_discard() {
+        let root = temp_dir("checkout-blocked");
+        let root_str = root.to_str().unwrap();
+        init_repo(&root);
+        fs::write(root.join("a.txt"), "one\n").unwrap();
+        stage(root_str, &["a.txt".into()]).unwrap();
+        commit(root_str, "init").unwrap();
+
+        create_branch(root_str, "feature", false).unwrap();
+        fs::write(root.join("a.txt"), "feature edit\n").unwrap();
+
+        let err = checkout_branch(root_str, "master", false).unwrap_err();
+        assert!(matches!(err, GitError::CheckoutBlocked));
+        assert_eq!(
+            fs::read_to_string(root.join("a.txt")).unwrap(),
+            "feature edit\n"
+        );
+
+        checkout_branch(root_str, "master", true).unwrap();
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one\n");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn checkout_with_only_untracked_succeeds() {
+        let root = temp_dir("checkout-untracked");
+        let root_str = root.to_str().unwrap();
+        init_repo(&root);
+        fs::write(root.join("a.txt"), "one\n").unwrap();
+        stage(root_str, &["a.txt".into()]).unwrap();
+        commit(root_str, "init").unwrap();
+
+        create_branch(root_str, "feature", false).unwrap();
+        checkout_branch(root_str, "master", false).unwrap();
+
+        fs::write(root.join("new.txt"), "untracked\n").unwrap();
+        assert!(root.join("new.txt").exists());
+
+        checkout_branch(root_str, "feature", false).unwrap();
+        assert!(root.join("new.txt").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("new.txt")).unwrap(),
+            "untracked\n"
+        );
 
         fs::remove_dir_all(&root).ok();
     }
