@@ -4,6 +4,7 @@ import type { editor as MonacoEditor } from "monaco-editor";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
 import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
+import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
 import { EditorTabs } from "./EditorTabs";
@@ -31,6 +32,8 @@ type EditorPaneProps = {
   completionsEnabled: boolean;
   /** Запрос на переход к строке с диагностикой (из Problems panel). */
   revealRequest: RevealRequest | null;
+  /** Открыть панель «Проблемы» (по клику на индикатор ошибок в редакторе). */
+  onOpenProblems: () => void;
 };
 
 export function EditorPane({
@@ -46,6 +49,7 @@ export function EditorPane({
   diagnostics,
   completionsEnabled,
   revealRequest,
+  onOpenProblems,
 }: EditorPaneProps) {
   const [monaco, setMonaco] = useState<typeof Monaco | null>(null);
   const [editor, setEditor] =
@@ -71,6 +75,12 @@ export function EditorPane({
 
   useMonacoCompletions(monaco, completionsEnabled);
   useMonacoDiagnostics(monaco, editor, diagnostics, activeTab?.path ?? null);
+  useMonacoErrorsWidget(
+    editor,
+    diagnostics,
+    activeTab?.path ?? null,
+    onOpenProblems,
+  );
 
   const handleChange = useCallback(
     (value: string | undefined) => {

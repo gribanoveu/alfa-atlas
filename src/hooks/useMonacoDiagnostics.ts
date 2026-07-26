@@ -5,21 +5,17 @@ import type { Diagnostic } from "../lib/workspaceIndex";
 const OWNER = "workspaceIndex";
 
 /**
- * Converts the workspace index's diagnostics into Monaco markers and sets them
- * on the active editor model. Diagnostics are filtered to the active document
- * (matched by relative path). When the model or active path changes, the
- * previous markers are cleared and the new set is applied.
+ * Синхронизирует диагностики индекса с активной моделью Monaco.
  *
- * Помимо маркеров, на тех же строках выставляются glyph-margin decorations
- * (иконка слева от номера строки) и overview-ruler метки справа — как в IDE,
- * чтобы пользователь сразу видел, где есть ошибки/варнинги, и мог по ним
- * ориентироваться без раскрытия панели «Проблемы».
+ * Используются только штатные API Monaco:
+ *  - `monaco.editor.setModelMarkers` — волнистая подсветка (squiggly),
+ *    ховер-сообщения и запись в Problems-панель самого Monaco;
+ *  - `editor.deltaDecorations` с `glyphMarginClassName: "codicon codicon-error
+ *    |codicon-warning"` — нативные glyph-margin иконки из шрифта codicon,
+ *    который Monaco подгружает автоматически;
+ *  - `overviewRuler` — нативная метка на полосе прокрутки.
  *
- * @param monaco Monaco namespace (null until OnMount fires).
- * @param editor Standalone code editor instance (null until OnMount fires).
- * @param diagnostics All known diagnostics from the index.
- * @param activePath Relative path of the document currently open in the editor,
- *   or null when no document is open.
+ * Никаких самописных SVG/`::before` — только codicon-шрифт Monaco.
  */
 export function useMonacoDiagnostics(
   monaco: typeof Monaco | null,
@@ -37,7 +33,7 @@ export function useMonacoDiagnostics(
 
     const forThisDoc = diagnostics.filter((d) => d.document === activePath);
 
-    // 1. Markers — волнистая подсветка и ховер-сообщение.
+    // 1. Markers — волнистая подсветка, ховер и вкладка Problems Monaco.
     const markers: Monaco.editor.IMarkerData[] = forThisDoc.map((d) => ({
       startLineNumber: d.line,
       startColumn: d.column,
@@ -52,12 +48,7 @@ export function useMonacoDiagnostics(
     }));
     monaco.editor.setModelMarkers(model, OWNER, markers);
 
-    // 2. Glyph-margin + overview ruler decorations — иконки у строки.
-    const overviewRulerColor = (
-      severity: "error" | "warning",
-    ): string =>
-      severity === "error" ? "#ff5252" : "#ffb300";
-
+    // 2. Glyph-margin иконки через нативный codicon-шрифт Monaco.
     const decorations: Monaco.editor.IModelDeltaDecoration[] = forThisDoc.map(
       (d) => {
         const isError = d.severity === "error";
@@ -66,11 +57,11 @@ export function useMonacoDiagnostics(
           options: {
             isWholeLine: false,
             glyphMarginClassName: isError
-              ? "df-glyph-error"
-              : "df-glyph-warning",
+              ? "codicon codicon-error"
+              : "codicon codicon-warning",
             glyphMarginHoverMessage: { value: d.message },
             overviewRuler: {
-              color: overviewRulerColor(d.severity),
+              color: isError ? "#ff5252" : "#ffb300",
               position: isError
                 ? monaco.editor.OverviewRulerLane.Right
                 : monaco.editor.OverviewRulerLane.Center,
@@ -84,6 +75,15 @@ export function useMonacoDiagnostics(
       decorationsRef.current,
       decorations,
     );
+    // DEBUG: проверить, что decorations реально создаются.
+    const modelDecs = model.getAllDecorations();
+    console.log("[useMonacoDiagnostics]", {
+      activePath,
+      forThisDoc: forThisDoc.length,
+      applied: decorations.length,
+      modelDecs: modelDecs.length,
+      glyphDecs: modelDecs.filter((d) => d.options.glyphMarginClassName).length,
+    });
 
     return () => {
       monaco.editor.setModelMarkers(model, OWNER, []);

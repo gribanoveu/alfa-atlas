@@ -366,13 +366,6 @@ function App() {
     ? lineEndingLabelFor(editor.activeTab.content)
     : "—";
 
-  const errorCount = workspaceIndex.diagnostics.filter(
-    (d) => d.severity === "error",
-  ).length;
-  const warningCount = workspaceIndex.diagnostics.filter(
-    (d) => d.severity === "warning",
-  ).length;
-
   // Диагностики приходят из бэкенда с `document` в repo-relative виде
   // (`src/docs/asciidoc/foo.adoc`), а активный таб хранит docs-relative
   // путь (`foo.adoc`). Приводим к единому виду для маркеров/подсветки.
@@ -398,9 +391,6 @@ function App() {
         projectRoot={project.repoRoot}
         hasProject={hasProject}
         gitBusy={git.busy}
-        errorCount={errorCount}
-        warningCount={warningCount}
-        onOpenProblems={openProblems}
         onOpenFolder={openFolder}
         onCloseProject={closeProject}
         onSave={async () => {
@@ -451,6 +441,7 @@ function App() {
               diagnostics={editorDiagnostics}
               completionsEnabled={workspaceIndex.status !== "idle"}
               revealRequest={revealRequest}
+              onOpenProblems={openProblems}
             />
           ) : (
             <Welcome
