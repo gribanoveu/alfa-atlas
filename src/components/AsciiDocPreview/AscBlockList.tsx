@@ -9,8 +9,10 @@ import { AscParagraph } from "./AscParagraph";
 import { AscPlantuml } from "./AscPlantuml";
 import { AscQuote } from "./AscQuote";
 import { AscSection } from "./AscSection";
+import { AscSplitDetails } from "./AscSplitDetails";
 import { AscTable } from "./AscTable";
 import type { AscTable as AscTableType } from "./types";
+import { expandSplitDetails } from "./splitDetails";
 
 type XrefHandler = (href: string) => void;
 
@@ -32,17 +34,30 @@ export function AscBlockList({
   monaco = null,
   onOpenXref,
 }: AscBlockListProps) {
+  const items = expandSplitDetails(blocks);
+
   return (
     <>
-      {blocks.map((block, i) => (
-        <AscBlock
-          key={i}
-          block={block}
-          docsRoot={docsRoot}
-          monaco={monaco}
-          onOpenXref={onOpenXref}
-        />
-      ))}
+      {items.map((item, i) =>
+        item.kind === "split-details" ? (
+          <AscSplitDetails
+            key={i}
+            openSource={item.openSource}
+            innerBlocks={item.innerBlocks}
+            docsRoot={docsRoot}
+            monaco={monaco}
+            onOpenXref={onOpenXref}
+          />
+        ) : (
+          <AscBlock
+            key={i}
+            block={item.block}
+            docsRoot={docsRoot}
+            monaco={monaco}
+            onOpenXref={onOpenXref}
+          />
+        ),
+      )}
     </>
   );
 }
@@ -194,11 +209,8 @@ function AscUnknownBlock({
 }
 
 /**
- * Pass-блок (`++++ … ++++`) — raw passthrough: HTML/SVG/<details>, который
- * автор явно вставил в документ. asciidoctor разбивает `++++ <details> ++++
- * … ++++ </details> ++++` на несколько последовательных pass-блоков, поэтому
- * рендерим `getSource()` каждого через `dangerouslySetInnerHTML` — браузер
- * вебвью сам сбалансирует открывающие/закрывающие теги.
+ * Pass-блок (`++++ … ++++`) — raw passthrough: HTML/SVG и т.п.
+ * Разорванные `<details>` обрабатываются в `expandSplitDetails` → `AscSplitDetails`.
  */
 function AscPass({ block }: { block: AbstractBlock }) {
   const html = safeGetSource(block);
