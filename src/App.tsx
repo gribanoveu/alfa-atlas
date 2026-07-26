@@ -462,6 +462,28 @@ function App() {
             onNewFolder={setNewFolderParent}
             onRename={setRenameTarget}
             onDelete={setDeleteTarget}
+            onMove={async (source, destDirPath) => {
+              if (!project.docsRoot) return;
+              const oldPath = source.path;
+              const name = oldPath.split(/[/\\]/).filter(Boolean).pop();
+              if (!name) return;
+              const newPath = joinParent(destDirPath, name);
+              try {
+                if (source.isDir) {
+                  await renameProjectDir(project.docsRoot, oldPath, newPath);
+                } else {
+                  await renameProjectFile(project.docsRoot, oldPath, newPath);
+                }
+              } catch (e) {
+                setFolderError(e instanceof Error ? e.message : String(e));
+                return;
+              }
+              editor.remapTabsUnder(oldPath, newPath);
+              session.remapExpandedUnder(oldPath, newPath);
+              session.ensureExpanded(destDirPath);
+              await tree.refresh();
+              if (gitPanelActive) git.scheduleRefresh();
+            }}
             onResize={panels.resizeSidebarBy}
             onResizeEnd={panels.persistLayout}
             onResizeExternal={panels.resizeExternalBy}

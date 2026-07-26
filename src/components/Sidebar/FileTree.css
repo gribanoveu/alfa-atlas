@@ -50,6 +50,17 @@
   color: var(--text-0);
 }
 
+.file-tree-row.dragging {
+  opacity: 0.45;
+}
+
+.file-tree-row.drop-target {
+  background: var(--accent-dim);
+  color: var(--text-0);
+  outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: -1px;
+}
+
 .file-tree-row.root {
   color: var(--text-0);
   font-weight: 600;

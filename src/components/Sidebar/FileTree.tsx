@@ -12,6 +12,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import type { TreeNode } from "../../lib/project";
@@ -38,6 +39,7 @@ type FileTreeProps = {
   onNewFolder: (parentPath: string) => void;
   onRename: (target: FileTreeDeleteTarget) => void;
   onDelete: (target: FileTreeDeleteTarget) => void;
+  onMove: (source: FileTreeDeleteTarget, destDirPath: string) => void;
   onResizeExternal?: (delta: number) => void;
   onResizeExternalEnd?: () => void;
 };
@@ -47,6 +49,8 @@ type FileTreeNodeProps = {
   depth: number;
   activePath: string | null;
   expandedDirs: ReadonlySet<string>;
+  dragging: FileTreeDeleteTarget | null;
+  dropTargetPath: string | null;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
   onContextMenu: (
@@ -54,6 +58,11 @@ type FileTreeNodeProps = {
     parentPath: string,
     target: FileTreeDeleteTarget | null,
   ) => void;
+  onDragStart: (event: ReactDragEvent, source: FileTreeDeleteTarget) => void;
+  onDragEnd: () => void;
+  onDragOverDir: (event: ReactDragEvent, dirPath: string) => void;
+  onDragLeaveDir: (event: ReactDragEvent, dirPath: string) => void;
+  onDropOnDir: (event: ReactDragEvent, dirPath: string) => void;
 };
 
 type ContextMenuState = {
@@ -72,23 +81,62 @@ function parentOfFile(path: string): string {
   return parts.slice(0, -1).join("/");
 }
 
+/** Whether `dirPath` is the same as `source.path` or one of its descendants. */
+function isSelfOrDescendant(source: FileTreeDeleteTarget, dirPath: string): boolean {
+  if (!source.isDir) return false;
+  if (dirPath === source.path) return true;
+  return dirPath.startsWith(source.path + "/");
+}
+
+/** A drop is valid only when the destination parent actually changes. */
+function isNoOpMove(source: FileTreeDeleteTarget, destDirPath: string): boolean {
+  return parentOfFile(source.path) === destDirPath;
+}
+
+function isValidDrop(source: FileTreeDeleteTarget | null, destDirPath: string): boolean {
+  if (!source) return false;
+  if (destDirPath === source.path) return false;
+  if (isSelfOrDescendant(source, destDirPath)) return false;
+  if (isNoOpMove(source, destDirPath)) return false;
+  return true;
+}
+
 function FileTreeNode({
   node,
   depth,
   activePath,
   expandedDirs,
+  dragging,
+  dropTargetPath,
   onToggleDir,
   onOpenFile,
   onContextMenu,
+  onDragStart,
+  onDragEnd,
+  onDragOverDir,
+  onDragLeaveDir,
+  onDropOnDir,
 }: FileTreeNodeProps) {
   if (node.isDir) {
     const expanded = expandedDirs.has(node.path);
+    const isDragging = dragging?.path === node.path;
+    const isDropTarget = dropTargetPath === node.path;
     return (
       <div className="file-tree-branch">
         <button
           type="button"
-          className="file-tree-row dir"
+          className={
+            "file-tree-row dir" +
+            (isDragging ? " dragging" : "") +
+            (isDropTarget ? " drop-target" : "")
+          }
           style={{ paddingLeft: 4 + depth * 14 }}
+          draggable
+          onDragStart={(event) => onDragStart(event, { path: node.path, isDir: true })}
+          onDragEnd={onDragEnd}
+          onDragOver={(event) => onDragOverDir(event, node.path)}
+          onDragLeave={(event) => onDragLeaveDir(event, node.path)}
+          onDrop={(event) => onDropOnDir(event, node.path)}
           onClick={() => onToggleDir(node.path)}
           onContextMenu={(event) =>
             onContextMenu(event, node.path, {
@@ -113,9 +161,16 @@ function FileTreeNode({
                 depth={depth + 1}
                 activePath={activePath}
                 expandedDirs={expandedDirs}
+                dragging={dragging}
+                dropTargetPath={dropTargetPath}
                 onToggleDir={onToggleDir}
                 onOpenFile={onOpenFile}
                 onContextMenu={onContextMenu}
+                onDragStart={onDragStart}
+                onDragEnd={onDragEnd}
+                onDragOverDir={onDragOverDir}
+                onDragLeaveDir={onDragLeaveDir}
+                onDropOnDir={onDropOnDir}
               />
             ))
           : null}
@@ -124,11 +179,19 @@ function FileTreeNode({
   }
 
   const active = activePath === node.path;
+  const isDragging = dragging?.path === node.path;
   return (
     <button
       type="button"
-      className={`file-tree-row file${active ? " active" : ""}`}
+      className={
+        "file-tree-row file" +
+        (active ? " active" : "") +
+        (isDragging ? " dragging" : "")
+      }
       style={{ paddingLeft: 4 + depth * 14 }}
+      draggable
+      onDragStart={(event) => onDragStart(event, { path: node.path, isDir: false })}
+      onDragEnd={onDragEnd}
       onClick={() => onOpenFile(node.path)}
       onContextMenu={(event) =>
         onContextMenu(event, parentOfFile(node.path), {
@@ -171,11 +234,15 @@ export function FileTree({
   onNewFolder,
   onRename,
   onDelete,
+  onMove,
   onResizeExternal,
   onResizeExternalEnd,
 }: FileTreeProps) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<FileTreeDeleteTarget | null>(null);
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  const draggingRef = useRef<FileTreeDeleteTarget | null>(null);
   const rootExpanded = expandedDirs.has(".");
   const { main, external } = separateExternal
     ? splitExternalNodes(nodes)
@@ -184,6 +251,52 @@ export function FileTree({
     ? expandedDirs.has(external.path)
     : false;
   const dockedExternal = Boolean(external);
+
+  const handleDragStart = (
+    event: ReactDragEvent,
+    source: FileTreeDeleteTarget,
+  ) => {
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", source.path);
+    draggingRef.current = source;
+    setDragging(source);
+  };
+
+  const handleDragEnd = () => {
+    draggingRef.current = null;
+    setDragging(null);
+    setDropTargetPath(null);
+  };
+
+  const handleDragOverDir = (event: ReactDragEvent, dirPath: string) => {
+    const source = draggingRef.current;
+    if (!isValidDrop(source, dirPath)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDropTargetPath(dirPath);
+  };
+
+  const handleDragLeaveDir = (event: ReactDragEvent, dirPath: string) => {
+    // Only clear when leaving the row entirely (not when entering a child element).
+    const related = event.relatedTarget as Node | null;
+    if (related && event.currentTarget.contains(related)) return;
+    setDropTargetPath((current) => (current === dirPath ? null : current));
+  };
+
+  const handleDropOnDir = (event: ReactDragEvent, dirPath: string) => {
+    const source = draggingRef.current;
+    if (!isValidDrop(source, dirPath)) {
+      setDropTargetPath(null);
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    draggingRef.current = null;
+    setDragging(null);
+    setDropTargetPath(null);
+    if (source) onMove(source, dirPath);
+  };
 
   useLayoutEffect(() => {
     if (!menu || !menuRef.current) return;
@@ -236,9 +349,15 @@ export function FileTree({
       <div className="file-tree-main">
         <div className="file-tree-branch">
           <div
-            className="file-tree-row dir root"
+            className={
+              "file-tree-row dir root" +
+              (dropTargetPath === "." ? " drop-target" : "")
+            }
             style={{ paddingLeft: 4 }}
             title={rootPath}
+            onDragOver={(event) => handleDragOverDir(event, ".")}
+            onDragLeave={(event) => handleDragLeaveDir(event, ".")}
+            onDrop={(event) => handleDropOnDir(event, ".")}
             onClick={() => onToggleDir(".")}
             onContextMenu={(event) => openContextMenu(event, ".", null)}
           >
@@ -265,9 +384,16 @@ export function FileTree({
                   depth={1}
                   activePath={activePath}
                   expandedDirs={expandedDirs}
+                  dragging={dragging}
+                  dropTargetPath={dropTargetPath}
                   onToggleDir={onToggleDir}
                   onOpenFile={onOpenFile}
                   onContextMenu={openContextMenu}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  onDragOverDir={handleDragOverDir}
+                  onDragLeaveDir={handleDragLeaveDir}
+                  onDropOnDir={handleDropOnDir}
                 />
               ))
             )
@@ -290,9 +416,21 @@ export function FileTree({
             <div className="file-tree-branch">
               <button
                 type="button"
-                className="file-tree-row dir external-root"
+                className={
+                  "file-tree-row dir external-root" +
+                  (dropTargetPath === external.path ? " drop-target" : "") +
+                  (dragging?.path === external.path ? " dragging" : "")
+                }
                 style={{ paddingLeft: 4 }}
                 title={external.path}
+                draggable
+                onDragStart={(event) =>
+                  handleDragStart(event, { path: external.path, isDir: true })
+                }
+                onDragEnd={handleDragEnd}
+                onDragOver={(event) => handleDragOverDir(event, external.path)}
+                onDragLeave={(event) => handleDragLeaveDir(event, external.path)}
+                onDrop={(event) => handleDropOnDir(event, external.path)}
                 onClick={() => onToggleDir(external.path)}
                 onContextMenu={(event) =>
                   openContextMenu(event, external.path, {
@@ -331,9 +469,16 @@ export function FileTree({
                       depth={1}
                       activePath={activePath}
                       expandedDirs={expandedDirs}
+                      dragging={dragging}
+                      dropTargetPath={dropTargetPath}
                       onToggleDir={onToggleDir}
                       onOpenFile={onOpenFile}
                       onContextMenu={openContextMenu}
+                      onDragStart={handleDragStart}
+                      onDragEnd={handleDragEnd}
+                      onDragOverDir={handleDragOverDir}
+                      onDragLeaveDir={handleDragLeaveDir}
+                      onDropOnDir={handleDropOnDir}
                     />
                   ))
                 )
