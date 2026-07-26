@@ -5,7 +5,11 @@ mod services;
 
 use domain::settings::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, WindowState};
 use services::window_settings;
+use std::sync::Arc;
 use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
+
+use crate::infra::parsers::registry::ParserRegistry;
+use crate::services::workspace_index::WorkspaceIndex;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -73,6 +77,13 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 apply_window_state(&window, state);
             }
+
+            let index = Arc::new(WorkspaceIndex::new(ParserRegistry::new()));
+            if let Some(window) = app.get_webview_window("main") {
+                index.set_app_handle(window.app_handle().clone());
+            }
+            app.manage(index);
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -116,6 +127,21 @@ pub fn run() {
             commands::prefs::get_general_prefs,
             commands::prefs::set_general_prefs,
             commands::prefs::get_settings_paths,
+            commands::workspace_index::build_index,
+            commands::workspace_index::clear_index,
+            commands::workspace_index::index_is_open,
+            commands::workspace_index::get_document,
+            commands::workspace_index::get_documents,
+            commands::workspace_index::find_document,
+            commands::workspace_index::find_anchor,
+            commands::workspace_index::find_anchors,
+            commands::workspace_index::find_includes,
+            commands::workspace_index::find_references,
+            commands::workspace_index::find_attribute,
+            commands::workspace_index::get_attributes,
+            commands::workspace_index::find_image,
+            commands::workspace_index::get_diagnostics,
+            commands::workspace_index::get_diagnostics_for,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

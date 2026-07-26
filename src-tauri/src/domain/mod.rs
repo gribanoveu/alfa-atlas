@@ -5,3 +5,4 @@ pub mod project_config;
 pub mod settings;
 pub mod supported_files;
 pub mod workspace;
+pub mod workspace_index;
