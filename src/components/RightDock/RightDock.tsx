@@ -6,7 +6,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { RightTool } from "../../hooks/useWorkspaceLayout";
-import type { GitCommitSummary, GitFileStatus } from "../../lib/git";
+import type { GitCommitSummary, GitDiffScope, GitFileStatus } from "../../lib/git";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import { CommitHistoryPanel } from "./CommitHistoryPanel";
@@ -63,6 +63,8 @@ export type GitPanelViewProps = {
   onUnstageAll: () => void;
   onCommit: () => void;
   onRefresh: () => void;
+  onOpenFileDiff: (path: string, scope: GitDiffScope) => void;
+  selectedDiff?: { path: string; scope: GitDiffScope } | null;
 };
 
 type RightDockProps = {
@@ -134,6 +136,8 @@ export function RightDock({
                 onUnstageAll={git.onUnstageAll}
                 onCommit={git.onCommit}
                 onRefresh={git.onRefresh}
+                onOpenFileDiff={git.onOpenFileDiff}
+                selectedDiff={git.selectedDiff}
               />
             ) : active.id === "gitHistory" && git ? (
               <CommitHistoryPanel

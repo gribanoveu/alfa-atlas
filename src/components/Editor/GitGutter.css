@@ -1,0 +1,152 @@
+.git-gutter-added,
+.git-gutter-modified,
+.git-gutter-deleted {
+  cursor: pointer;
+  width: 6px !important;
+  margin-left: 2px;
+  transition: filter 0.12s ease;
+}
+
+.git-gutter-added:hover,
+.git-gutter-modified:hover,
+.git-gutter-deleted:hover {
+  filter: brightness(1.25);
+}
+
+.git-gutter-added {
+  background: color-mix(in srgb, #3fb950 55%, transparent);
+}
+
+.git-gutter-modified {
+  background: color-mix(in srgb, #58a6ff 55%, transparent);
+}
+
+.git-gutter-deleted {
+  background: color-mix(in srgb, #f85149 55%, transparent);
+}
+
+/* Pointer на полоске в gutter */
+.monaco-editor .margin-view-overlays .git-gutter-added,
+.monaco-editor .margin-view-overlays .git-gutter-modified,
+.monaco-editor .margin-view-overlays .git-gutter-deleted {
+  cursor: pointer;
+}
+
+.git-gutter-popup-anchor {
+  pointer-events: none;
+}
+
+.git-gutter-popup {
+  pointer-events: auto;
+  min-width: 260px;
+  max-width: min(480px, 85vw);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-0);
+}
+
+.git-gutter-popup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.git-gutter-popup-title {
+  font-weight: 600;
+  color: var(--text-1);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.git-gutter-popup-nav {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.git-gutter-popup-nav button,
+.git-gutter-popup-actions button {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text-0);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.git-gutter-popup-nav button:disabled,
+.git-gutter-popup-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.git-gutter-popup-compare {
+  margin-bottom: 8px;
+}
+
+.git-gutter-popup-diff {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 120px;
+  overflow: auto;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px;
+  color: var(--text-1);
+  min-height: 2.4em;
+}
+
+.git-gutter-popup-diff-empty {
+  font-style: italic;
+  color: var(--text-2);
+  padding: 6px 8px;
+}
+
+.git-gutter-diff-line {
+  padding: 2px 6px;
+  border-radius: 2px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.git-gutter-diff-removed {
+  background: color-mix(in srgb, #f85149 10%, transparent);
+}
+
+.git-gutter-diff-added {
+  background: color-mix(in srgb, #3fb950 10%, transparent);
+}
+
+.git-gutter-diff-char-removed {
+  background: color-mix(in srgb, #f85149 35%, transparent);
+  text-decoration: line-through;
+  border-radius: 2px;
+}
+
+.git-gutter-diff-char-added {
+  background: color-mix(in srgb, #3fb950 35%, transparent);
+  border-radius: 2px;
+}
+
+.git-gutter-popup-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.git-gutter-popup-revert {
+  color: var(--danger, #e06c75);
+  border-color: color-mix(in srgb, var(--danger, #e06c75) 35%, var(--border));
+}
+
+.git-gutter-popup-revert:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #e06c75) 12%, var(--bg-2));
+}

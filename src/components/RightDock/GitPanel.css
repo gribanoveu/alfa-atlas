@@ -127,8 +127,33 @@
   min-width: 0;
 }
 
-.git-file-row:hover {
+.git-file-row:hover,
+.git-file-row-selected {
   background: var(--bg-1);
+}
+
+.git-file-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+.git-file-main:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.git-file-row-selected .git-file-main .git-file-name {
+  color: var(--accent);
 }
 
 .git-file-name {

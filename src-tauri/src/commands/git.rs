@@ -1,4 +1,4 @@
-use crate::domain::git::{GitCommitSummary, GitStatusSnapshot, PullMode};
+use crate::domain::git::{GitCommitSummary, GitDiffScope, GitFileDiff, GitStatusSnapshot, PullMode};
 use crate::services::git_ops;
 
 #[tauri::command]
@@ -51,4 +51,18 @@ pub async fn git_push(repo_root: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn git_file_diff(
+    repo_root: String,
+    path: String,
+    scope: GitDiffScope,
+) -> Result<GitFileDiff, String> {
+    git_ops::file_diff(&repo_root, &path, scope).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_discard_file_changes(repo_root: String, path: String) -> Result<(), String> {
+    git_ops::discard_file_changes(&repo_root, &path).map_err(|e| e.to_string())
 }

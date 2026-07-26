@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   gitCommit,
+  gitDiscardFileChanges,
+  gitFileDiff,
   gitLog,
   gitPull,
   gitPush,
@@ -9,6 +11,8 @@ import {
   gitStatus,
   gitUnstage,
   type GitCommitSummary,
+  type GitDiffScope,
+  type GitFileDiff,
   type GitStatusSnapshot,
   type PullMode,
 } from "../lib/git";
@@ -179,6 +183,40 @@ export function useGitPanel(
     return runRemote(() => gitPush(repoRoot));
   }, [repoRoot, runRemote]);
 
+  const loadFileDiff = useCallback(
+    async (path: string, scope: GitDiffScope): Promise<GitFileDiff | null> => {
+      if (!repoRoot) return null;
+      try {
+        const diff = await gitFileDiff(repoRoot, path, scope);
+        setError(null);
+        return diff;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return null;
+      }
+    },
+    [repoRoot],
+  );
+
+  const discardFileChanges = useCallback(
+    async (path: string): Promise<boolean> => {
+      if (!repoRoot) return false;
+      setBusy(true);
+      try {
+        await gitDiscardFileChanges(repoRoot, path);
+        await refresh();
+        setError(null);
+        return true;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return false;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh, repoRoot],
+  );
+
   const canCommit =
     status.staged.length > 0 && description.trim().length > 0 && !busy;
 
@@ -200,5 +238,7 @@ export function useGitPanel(
     pull,
     resetToRemote,
     push,
+    loadFileDiff,
+    discardFileChanges,
   };
 }

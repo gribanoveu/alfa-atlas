@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { AlertOkModal } from "./components/Git/AlertOkModal";
+import { GitFileDiffModal } from "./components/Git/GitFileDiffModal";
 import { PullUpdateModal } from "./components/Git/PullUpdateModal";
 import { RightDock } from "./components/RightDock/RightDock";
 import { NewFileModal } from "./components/Sidebar/NewFileModal";
@@ -12,7 +13,7 @@ import { StatusBar } from "./components/StatusBar/StatusBar";
 import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
-import type { PullMode } from "./lib/git";
+import type { GitDiffScope, GitFileStatus, PullMode } from "./lib/git";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
@@ -31,6 +32,7 @@ import {
 import { createProjectDir, createProjectFile, deleteProjectDir, deleteProjectFile, renameProjectDir, renameProjectFile } from "./lib/project";
 import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
 import { formatLabelFor, isAsciiDocPath, lineEndingLabelFor } from "./lib/supportedFiles";
+import { toDocsRelativePath, toRepoRelativePath } from "./lib/paths";
 import { RenameModal } from "./components/Sidebar/RenameModal";
 
 function joinParent(parentPath: string, name: string): string {
@@ -42,55 +44,6 @@ function parentOfPath(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
   if (parts.length <= 1) return ".";
   return parts.slice(0, -1).join("/");
-}
-
-/**
- * Convert a `documentId` (a repo-relative `/`-joined index key, e.g.
- * `src/docs/asciidoc/foo.adoc`) into a path relative to `docsRoot`
- * (e.g. `foo.adoc`) — which is what `editor.openFile` expects.
- *
- * `repoRoot` and `docsRoot` are absolute filesystem paths. We compute the
- * docsRoot suffix relative to repoRoot and strip it from `documentId`.
- * If `documentId` doesn't start with that suffix, it's returned unchanged
- * (best-effort fallback).
- */
-function toDocsRelativePath(
-  documentId: string,
-  repoRoot: string,
-  docsRoot: string,
-): string {
-  if (!repoRoot || !docsRoot) return documentId;
-  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^[/\\]+/, "").replace(/[/\\]+$/, "");
-  const repo = norm(repoRoot);
-  const docs = norm(docsRoot);
-  // docsRoot-суффикс относительно repoRoot, например "src/docs/asciidoc".
-  let suffix = docs;
-  if (suffix.startsWith(repo + "/")) suffix = suffix.slice(repo.length + 1);
-  const doc = norm(documentId);
-  if (suffix && doc.startsWith(suffix + "/")) return doc.slice(suffix.length + 1);
-  return documentId;
-}
-
-/**
- * Обратное к `toDocsRelativePath`: склеивает docs-relative путь активного
- * таба с docsRoot-суффиксом, чтобы получить repo-relative `documentId`,
- * по которому диагностики хранятся в индексе.
- */
-function toRepoRelativePath(
-  docsRelativePath: string,
-  repoRoot: string,
-  docsRoot: string,
-): string {
-  if (!repoRoot || !docsRoot) return docsRelativePath;
-  const norm = (p: string) =>
-    p.replace(/\\/g, "/").replace(/^[/\\]+/, "").replace(/[/\\]+$/, "");
-  const repo = norm(repoRoot);
-  const docs = norm(docsRoot);
-  let suffix = docs;
-  if (suffix.startsWith(repo + "/")) suffix = suffix.slice(repo.length + 1);
-  const rel = norm(docsRelativePath);
-  if (!suffix) return rel;
-  return `${suffix}/${rel}`;
 }
 
 /**
@@ -169,10 +122,8 @@ function App() {
     onTabsChange,
     prefs: generalPrefs.prefs,
   });
-  const gitPanelActive =
-    layout.activeTool === "git" || layout.activeTool === "gitHistory";
   const git = useGitPanel(project.repoRoot, {
-    active: gitPanelActive && Boolean(project.repoRoot),
+    active: Boolean(project.repoRoot),
     onBranchChange: project.setBranchFromGit,
   });
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -182,6 +133,10 @@ function App() {
   const [renameTarget, setRenameTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [gitAlert, setGitAlert] = useState<string | null>(null);
+  const [gitDiffTarget, setGitDiffTarget] = useState<{
+    file: GitFileStatus;
+    scope: GitDiffScope;
+  } | null>(null);
   const [revealRequest, setRevealRequest] = useState<{
     id: number;
     line: number;
@@ -358,6 +313,50 @@ function App() {
     layout.toggleRightTool("git");
   }, [layout]);
 
+  const openGitFileDiff = useCallback(
+    (path: string, scope: GitDiffScope) => {
+      const file =
+        scope === "staged"
+          ? git.status.staged.find((f) => f.path === path)
+          : git.status.unstaged.find((f) => f.path === path);
+      if (!file) return;
+      setGitDiffTarget({ file, scope });
+    },
+    [git.status.staged, git.status.unstaged],
+  );
+
+  const syncEditorAfterGitDiscard = useCallback(
+    async (repoRelativePath: string) => {
+      if (!project.repoRoot || !project.docsRoot) return;
+      const docsRel = toDocsRelativePath(
+        repoRelativePath,
+        project.repoRoot,
+        project.docsRoot,
+      );
+      const reloaded = await editor.reloadTabFromDisk(docsRel);
+      if (!reloaded) {
+        const tab = editor.tabs.find((t) => t.path === docsRel);
+        if (tab) {
+          await editor.closeTab(tab.id);
+        } else {
+          editor.discardTabsUnder(docsRel);
+        }
+      }
+    },
+    [editor, project.docsRoot, project.repoRoot],
+  );
+
+  const handleGitDiscard = useCallback(
+    async (repoRelativePath: string) => {
+      const ok = await git.discardFileChanges(repoRelativePath);
+      if (!ok) return false;
+      await syncEditorAfterGitDiscard(repoRelativePath);
+      setGitDiffTarget(null);
+      return true;
+    },
+    [git, syncEditorAfterGitDiscard],
+  );
+
   const openDiagnostic = useCallback(
     async (documentId: string, line: number, column: number) => {
       // Если Problems panel был свёрнут — раскрываем его (как в IDE: клик по
@@ -473,27 +472,26 @@ function App() {
         event.preventDefault();
         if (hasProject) {
           void editor.saveActive().then((ok) => {
-            if (ok && gitPanelActive) git.scheduleRefresh();
+            if (ok) git.scheduleRefresh();
           });
         }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [editor.saveActive, git.scheduleRefresh, gitPanelActive, hasProject]);
+  }, [editor.saveActive, git.scheduleRefresh, hasProject]);
 
-  // After autosave clears dirty flags, refresh Git status when the panel is open.
+  // After autosave clears dirty flags, refresh Git status for gutter and panel.
   useEffect(() => {
     const dirtyCount = editor.tabs.filter((t) => t.dirty).length;
     if (
-      gitPanelActive &&
       prevDirtyCount.current > 0 &&
       dirtyCount < prevDirtyCount.current
     ) {
       git.scheduleRefresh();
     }
     prevDirtyCount.current = dirtyCount;
-  }, [editor.tabs, git.scheduleRefresh, gitPanelActive]);
+  }, [editor.tabs, git.scheduleRefresh]);
 
   const activePath = editor.activeTab?.path ?? null;
   const statusPath = activePath ?? "—";
@@ -547,7 +545,7 @@ function App() {
         onCloseProject={closeProject}
         onSave={async () => {
           const ok = await editor.saveActive();
-          if (ok && gitPanelActive) git.scheduleRefresh();
+          if (ok) git.scheduleRefresh();
           return ok;
         }}
         onPrefsChange={generalPrefs.setPrefs}
@@ -596,7 +594,7 @@ function App() {
               session.remapExpandedUnder(oldPath, newPath);
               session.ensureExpanded(destDirPath);
               await tree.refresh();
-              if (gitPanelActive) git.scheduleRefresh();
+              git.scheduleRefresh();
             }}
             onResize={panels.resizeSidebarBy}
             onResizeEnd={panels.persistLayout}
@@ -623,6 +621,15 @@ function App() {
               viewMode={viewMode.viewMode}
               onViewModeChange={viewMode.setViewMode}
               docsRoot={project.docsRoot}
+              gitGutter={
+                project.repoRoot && project.docsRoot
+                  ? {
+                      repoRoot: project.repoRoot,
+                      docsRoot: project.docsRoot,
+                      loadFileDiff: git.loadFileDiff,
+                    }
+                  : null
+              }
             />
           ) : (
             <Welcome
@@ -658,6 +665,13 @@ function App() {
                       void git.unstage(git.status.staged.map((f) => f.path)),
                     onCommit: () => void git.commit(),
                     onRefresh: () => void git.refresh(),
+                    onOpenFileDiff: openGitFileDiff,
+                    selectedDiff: gitDiffTarget
+                      ? {
+                          path: gitDiffTarget.file.path,
+                          scope: gitDiffTarget.scope,
+                        }
+                      : null,
                   }
                 : null
             }
@@ -747,7 +761,7 @@ function App() {
             editor.discardTabsUnder(target.path);
             setDeleteTarget(null);
             await tree.refresh();
-            if (gitPanelActive) git.scheduleRefresh();
+            git.scheduleRefresh();
           }}
         />
       ) : null}
@@ -769,7 +783,7 @@ function App() {
             session.ensureExpanded(parentOfPath(newPath));
             setRenameTarget(null);
             await tree.refresh();
-            if (gitPanelActive) git.scheduleRefresh();
+            git.scheduleRefresh();
           }}
         />
       ) : null}
@@ -780,6 +794,16 @@ function App() {
           onCancel={() => setPullModalOpen(false)}
           onConfirm={(mode) => void onPullConfirm(mode)}
           onResetToRemote={() => void onResetToRemote()}
+        />
+      ) : null}
+
+      {gitDiffTarget ? (
+        <GitFileDiffModal
+          target={gitDiffTarget}
+          busy={git.busy}
+          onClose={() => setGitDiffTarget(null)}
+          onLoadDiff={git.loadFileDiff}
+          onDiscard={handleGitDiscard}
         />
       ) : null}
 

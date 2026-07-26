@@ -7,7 +7,8 @@ use git2::{
 };
 
 use crate::domain::git::{
-    GitCommitSummary, GitError, GitFileStatus, GitStatusSnapshot, PullMode,
+    GitCommitSummary, GitDiffScope, GitError, GitFileDiff, GitFileStatus, GitStatusSnapshot,
+    PullMode,
 };
 
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
@@ -544,6 +545,171 @@ pub fn reset_to_remote(repo_root: &Path) -> Result<(), GitError> {
         .map_err(GitError::Operation)?;
     repo.reset(&commit, ResetType::Hard, Some(CheckoutBuilder::default().force()))
         .map_err(GitError::Operation)?;
+    Ok(())
+}
+
+fn is_binary_content(bytes: &[u8]) -> bool {
+    bytes.contains(&0)
+}
+
+fn blob_to_text(blob: &git2::Blob<'_>) -> (String, bool) {
+    let content = blob.content();
+    let binary = is_binary_content(content);
+    let text = if binary {
+        String::new()
+    } else {
+        String::from_utf8_lossy(content).into_owned()
+    };
+    (text, binary)
+}
+
+fn read_tree_blob(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+    path: &Path,
+) -> Option<(String, bool)> {
+    let entry = tree.get_path(path).ok()?;
+    let object = entry.to_object(repo).ok()?;
+    let blob = object.as_blob()?;
+    Some(blob_to_text(blob))
+}
+
+fn read_head_blob(repo: &Repository, path: &Path) -> Option<(String, bool)> {
+    let head = repo.head().ok()?;
+    let tree = head.peel_to_tree().ok()?;
+    read_tree_blob(repo, &tree, path)
+}
+
+fn read_index_blob(repo: &Repository, path: &Path) -> Option<(String, bool)> {
+    let index = repo.index().ok()?;
+    let entry = index.get_path(path, 0)?;
+    let blob = repo.find_blob(entry.id).ok()?;
+    Some(blob_to_text(&blob))
+}
+
+fn read_workdir_text(workdir: &Path, path: &Path) -> Option<(String, bool)> {
+    let full = workdir.join(path);
+    if !full.exists() {
+        return None;
+    }
+    let bytes = std::fs::read(&full).map_err(|_| ()).ok()?;
+    let binary = is_binary_content(&bytes);
+    let text = if binary {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+    Some((text, binary))
+}
+
+fn path_is_untracked(repo: &Repository, path: &str) -> Result<bool, GitError> {
+    let mut opts = StatusOptions::new();
+    opts.pathspec(path)
+        .include_untracked(true)
+        .recurse_untracked_dirs(false);
+    let statuses = repo.statuses(Some(&mut opts)).map_err(GitError::Operation)?;
+    Ok(statuses
+        .iter()
+        .any(|e| e.status().contains(Status::WT_NEW)))
+}
+
+pub fn file_diff(
+    repo_root: &Path,
+    path: &str,
+    scope: GitDiffScope,
+) -> Result<GitFileDiff, GitError> {
+    let rel = validate_relative_path(path)?;
+    let repo = open_repo(repo_root)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
+
+    let empty = (String::new(), false);
+
+    match scope {
+        GitDiffScope::Staged => {
+            let (original, orig_bin) = read_head_blob(&repo, rel).unwrap_or_else(|| empty.clone());
+            let (modified, mod_bin) = read_index_blob(&repo, rel).unwrap_or(empty);
+            Ok(GitFileDiff {
+                original,
+                modified,
+                original_label: "HEAD".into(),
+                modified_label: "Index".into(),
+                is_binary: orig_bin || mod_bin,
+            })
+        }
+        GitDiffScope::Unstaged => {
+            let in_index = read_index_blob(&repo, rel);
+            let (original, orig_bin) = in_index
+                .clone()
+                .or_else(|| read_head_blob(&repo, rel))
+                .unwrap_or_else(|| empty.clone());
+            let (modified, mod_bin) = read_workdir_text(workdir, rel).unwrap_or(empty);
+            let original_label = if in_index.is_some() {
+                "Index"
+            } else {
+                "HEAD"
+            };
+            Ok(GitFileDiff {
+                original,
+                modified,
+                original_label: original_label.into(),
+                modified_label: "Working tree".into(),
+                is_binary: orig_bin || mod_bin,
+            })
+        }
+    }
+}
+
+pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError> {
+    let rel = validate_relative_path(path)?;
+    let repo = open_repo(repo_root)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
+
+    if path_is_untracked(&repo, path)? {
+        let full = workdir.join(rel);
+        if full.is_dir() {
+            std::fs::remove_dir_all(&full)
+                .map_err(|e| GitError::Message(format!("failed to remove directory: {e}")))?;
+        } else if full.is_file() {
+            std::fs::remove_file(&full)
+                .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
+        }
+        return Ok(());
+    }
+
+    if repo.head().is_ok() {
+        let head_obj = repo
+            .head()
+            .map_err(GitError::Operation)?
+            .peel_to_commit()
+            .map_err(GitError::Operation)?
+            .into_object();
+        let tree = head_obj
+            .peel_to_tree()
+            .map_err(GitError::Operation)?;
+        let tree_obj = tree.as_object();
+        let mut checkout = CheckoutBuilder::new();
+        checkout.force().path(rel);
+        repo.checkout_tree(tree_obj, Some(&mut checkout))
+            .map_err(GitError::Operation)?;
+        repo.reset_default(Some(&head_obj), std::iter::once(rel))
+            .map_err(GitError::Operation)?;
+    } else {
+        let mut index = repo.index().map_err(GitError::Operation)?;
+        let _ = index.remove_path(rel);
+        index.write().map_err(GitError::Operation)?;
+        let full = workdir.join(rel);
+        if full.is_dir() {
+            std::fs::remove_dir_all(&full)
+                .map_err(|e| GitError::Message(format!("failed to remove directory: {e}")))?;
+        } else if full.is_file() {
+            std::fs::remove_file(&full)
+                .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
+        }
+    }
     Ok(())
 }
 

@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use crate::domain::git::{GitCommitSummary, GitError, GitStatusSnapshot, PullMode};
+use crate::domain::git::{
+    GitCommitSummary, GitDiffScope, GitError, GitFileDiff, GitStatusSnapshot, PullMode,
+};
 use crate::infra::git_repo;
 
 pub fn status(repo_root: &str) -> Result<GitStatusSnapshot, GitError> {
@@ -42,9 +44,22 @@ pub fn push(repo_root: &str) -> Result<(), GitError> {
     git_repo::push(Path::new(repo_root))
 }
 
+pub fn file_diff(
+    repo_root: &str,
+    path: &str,
+    scope: GitDiffScope,
+) -> Result<GitFileDiff, GitError> {
+    git_repo::file_diff(Path::new(repo_root), path, scope)
+}
+
+pub fn discard_file_changes(repo_root: &str, path: &str) -> Result<(), GitError> {
+    git_repo::discard_file_changes(Path::new(repo_root), path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::git::GitDiffScope;
     use git2::Repository;
     use std::fs;
     use std::process::Command;
@@ -208,5 +223,97 @@ mod tests {
         fs::remove_dir_all(&bare).ok();
         fs::remove_dir_all(&local).ok();
         fs::remove_dir_all(&other).ok();
+    }
+
+    #[test]
+    fn file_diff_unstaged_shows_index_vs_workdir() {
+        let root = temp_dir("diff-unstaged");
+        let root_str = root.to_str().unwrap();
+        init_repo(&root);
+        fs::write(root.join("a.txt"), "one\n").unwrap();
+        stage(root_str, &["a.txt".into()]).unwrap();
+        commit(root_str, "init").unwrap();
+
+        fs::write(root.join("a.txt"), "two\n").unwrap();
+
+        let diff = file_diff(root_str, "a.txt", GitDiffScope::Unstaged).unwrap();
+        assert_eq!(diff.original_label, "Index");
+        assert_eq!(diff.modified_label, "Working tree");
+        assert_eq!(diff.original, "one\n");
+        assert_eq!(diff.modified, "two\n");
+        assert!(!diff.is_binary);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn file_diff_staged_shows_head_vs_index() {
+        let root = temp_dir("diff-staged");
+        let root_str = root.to_str().unwrap();
+        init_repo(&root);
+        fs::write(root.join("a.txt"), "one\n").unwrap();
+        stage(root_str, &["a.txt".into()]).unwrap();
+        commit(root_str, "init").unwrap();
+
+        fs::write(root.join("a.txt"), "two\n").unwrap();
+        stage(root_str, &["a.txt".into()]).unwrap();
+
+        let diff = file_diff(root_str, "a.txt", GitDiffScope::Staged).unwrap();
+        assert_eq!(diff.original_label, "HEAD");
+        assert_eq!(diff.modified_label, "Index");
+        assert_eq!(diff.original, "one\n");
+        assert_eq!(diff.modified, "two\n");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn file_diff_untracked_has_empty_original() {
+        let root = temp_dir("diff-untracked");
+        let root_str = root.to_str().unwrap();
+        init_repo(&root);
+        fs::write(root.join("new.txt"), "hello\n").unwrap();
+
+        let diff = file_diff(root_str, "new.txt", GitDiffScope::Unstaged).unwrap();
+        assert!(diff.original.is_empty());
+        assert_eq!(diff.modified, "hello\n");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn discard_file_changes_restores_to_head() {
+        let root = temp_dir("discard");
+        let root_str = root.to_str().unwrap();
+        init_repo(&root);
+        fs::write(root.join("a.txt"), "one\n").unwrap();
+        stage(root_str, &["a.txt".into()]).unwrap();
+        commit(root_str, "init").unwrap();
+
+        fs::write(root.join("a.txt"), "two\n").unwrap();
+        stage(root_str, &["a.txt".into()]).unwrap();
+        assert_eq!(status(root_str).unwrap().staged.len(), 1);
+
+        discard_file_changes(root_str, "a.txt").unwrap();
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "one\n");
+        let snap = status(root_str).unwrap();
+        assert!(snap.staged.is_empty());
+        assert!(snap.unstaged.is_empty());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn discard_untracked_removes_file() {
+        let root = temp_dir("discard-untracked");
+        let root_str = root.to_str().unwrap();
+        init_repo(&root);
+        fs::write(root.join("new.txt"), "hello\n").unwrap();
+
+        discard_file_changes(root_str, "new.txt").unwrap();
+        assert!(!root.join("new.txt").exists());
+        assert!(status(root_str).unwrap().unstaged.is_empty());
+
+        fs::remove_dir_all(&root).ok();
     }
 }

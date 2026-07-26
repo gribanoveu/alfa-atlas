@@ -34,6 +34,23 @@ pub enum PullMode {
     Rebase,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GitDiffScope {
+    Staged,
+    Unstaged,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitFileDiff {
+    pub original: String,
+    pub modified: String,
+    pub original_label: String,
+    pub modified_label: String,
+    pub is_binary: bool,
+}
+
 #[derive(Debug, Error)]
 pub enum GitError {
     #[error("path is not a git repository: {0}")]

@@ -124,6 +124,8 @@ pub fn run() {
             commands::git::git_pull,
             commands::git::git_reset_to_remote,
             commands::git::git_push,
+            commands::git::git_file_diff,
+            commands::git::git_discard_file_changes,
             commands::project::list_docs_tree,
             commands::project::read_project_file,
             commands::project::resolve_asset_path,

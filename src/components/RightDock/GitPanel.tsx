@@ -6,7 +6,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import type { GitFileStatus } from "../../lib/git";
+import type { GitDiffScope, GitFileStatus } from "../../lib/git";
 import "./GitPanel.css";
 
 type GitPanelProps = {
@@ -25,6 +25,8 @@ type GitPanelProps = {
   onUnstageAll: () => void;
   onCommit: () => void;
   onRefresh: () => void;
+  onOpenFileDiff: (path: string, scope: GitDiffScope) => void;
+  selectedDiff?: { path: string; scope: GitDiffScope } | null;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -145,6 +147,8 @@ type FileRowProps = {
   actionLabel: string;
   actionIcon: "plus" | "minus";
   busy: boolean;
+  selected: boolean;
+  onOpenDiff: () => void;
   onAction: () => void;
 };
 
@@ -153,14 +157,27 @@ function GitFileRow({
   actionLabel,
   actionIcon,
   busy,
+  selected,
+  onOpenDiff,
   onAction,
 }: FileRowProps) {
   const { name, dir } = splitPath(file.path);
   const statusTitle = statusLabel(file.status);
   return (
-    <div className="git-file-row" title={file.path}>
-      <span className="git-file-name">{name}</span>
-      <span className="git-file-dir">{dir}</span>
+    <div
+      className={`git-file-row${selected ? " git-file-row-selected" : ""}`}
+      title={file.path}
+    >
+      <button
+        type="button"
+        className="git-file-main"
+        disabled={busy}
+        onClick={onOpenDiff}
+        aria-label={`Показать diff: ${file.path}`}
+      >
+        <span className="git-file-name">{name}</span>
+        <span className="git-file-dir">{dir}</span>
+      </button>
       <span className="git-file-trailing">
         <span
           className={`git-status git-status-${statusClass(file.status)}`}
@@ -175,7 +192,10 @@ function GitFileRow({
           title={actionLabel}
           aria-label={`${actionLabel}: ${file.path}`}
           disabled={busy}
-          onClick={onAction}
+          onClick={(event) => {
+            event.stopPropagation();
+            onAction();
+          }}
         >
           {actionIcon === "plus" ? (
             <Plus size={14} aria-hidden />
@@ -204,6 +224,8 @@ export function GitPanel({
   onUnstageAll,
   onCommit,
   onRefresh,
+  onOpenFileDiff,
+  selectedDiff = null,
 }: GitPanelProps) {
   const [changesOpen, setChangesOpen] = useState(true);
   const [stagedOpen, setStagedOpen] = useState(true);
@@ -256,6 +278,11 @@ export function GitPanel({
                 actionLabel="Добавить в Stage"
                 actionIcon="plus"
                 busy={busy}
+                selected={
+                  selectedDiff?.path === file.path &&
+                  selectedDiff.scope === "unstaged"
+                }
+                onOpenDiff={() => onOpenFileDiff(file.path, "unstaged")}
                 onAction={() => onStage(file.path)}
               />
             ))
@@ -291,6 +318,11 @@ export function GitPanel({
                 actionLabel="Убрать из Stage"
                 actionIcon="minus"
                 busy={busy}
+                selected={
+                  selectedDiff?.path === file.path &&
+                  selectedDiff.scope === "staged"
+                }
+                onOpenDiff={() => onOpenFileDiff(file.path, "staged")}
                 onAction={() => onUnstage(file.path)}
               />
             ))

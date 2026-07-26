@@ -2,9 +2,11 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import type { editor as MonacoEditor } from "monaco-editor";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useGitGutter } from "../../hooks/useGitGutter";
 import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
 import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
 import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
+import type { GitFileDiff } from "../../lib/git";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
 import type { EditorViewMode } from "../../types/viewMode";
@@ -12,6 +14,16 @@ import { DocumentPreview } from "../DocumentPreview/DocumentPreview";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { EditorTabs } from "./EditorTabs";
 import "./Editor.css";
+import "./GitGutter.css";
+
+type GitGutterConfig = {
+  repoRoot: string;
+  docsRoot: string;
+  loadFileDiff: (
+    path: string,
+    scope: "unstaged",
+  ) => Promise<GitFileDiff | null>;
+};
 
 type RevealRequest = {
   /** Уникальный id запроса, чтобы повторный клик по той же строке сработал. */
@@ -52,6 +64,7 @@ type EditorPaneProps = {
   viewMode: EditorViewMode;
   onViewModeChange: (mode: EditorViewMode) => void;
   docsRoot: string | null;
+  gitGutter?: GitGutterConfig | null;
 };
 
 const SPLIT_INITIAL_RATIO = 0.5;
@@ -77,6 +90,7 @@ export function EditorPane({
   viewMode,
   onViewModeChange,
   docsRoot,
+  gitGutter,
 }: EditorPaneProps) {
   const [monaco, setMonaco] = useState<typeof Monaco | null>(null);
   const [editor, setEditor] =
@@ -109,6 +123,19 @@ export function EditorPane({
     activeTab?.path ?? null,
     onOpenProblems,
   );
+
+  useGitGutter({
+    monaco,
+    editor,
+    activeTab,
+    viewMode,
+    repoRoot: gitGutter?.repoRoot ?? null,
+    docsRoot: gitGutter?.docsRoot ?? docsRoot,
+    loadFileDiff:
+      gitGutter?.loadFileDiff ??
+      (async () => null),
+    onContentChange: onChangeContent,
+  });
 
   const handleChange = useCallback(
     (value: string | undefined) => {
@@ -207,6 +234,7 @@ export function EditorPane({
     renderLineHighlight: "line",
     wordWrap: "on",
     glyphMargin: true,
+    lineDecorationsWidth: 11,
   };
 
   // Monaco монтируется единожды на активную вкладку и не размонтируется

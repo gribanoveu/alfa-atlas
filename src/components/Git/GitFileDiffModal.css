@@ -1,0 +1,92 @@
+.git-diff-backdrop {
+  padding: 16px;
+}
+
+.git-diff-modal {
+  width: min(960px, 100%);
+  height: min(720px, calc(100vh - 32px));
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 12px;
+}
+
+.git-diff-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+}
+
+.git-diff-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.git-diff-labels {
+  color: var(--text-1);
+}
+
+.git-diff-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.git-diff-close:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.git-diff-close:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.git-diff-body {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-0);
+}
+
+.git-diff-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.git-diff-error {
+  color: var(--danger, #e06c75);
+}
+
+.git-diff-actions {
+  flex: none;
+  justify-content: space-between;
+}
+
+.git-diff-discard-btn {
+  color: var(--danger, #e06c75);
+  border-color: color-mix(in srgb, var(--danger, #e06c75) 35%, var(--border));
+}
+
+.git-diff-discard-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #e06c75) 12%, var(--bg-2));
+}

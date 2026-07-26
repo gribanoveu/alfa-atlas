@@ -450,6 +450,35 @@ export function useEditorTabs(
     restoredForRoot.current = null;
   }, [flushDebounce]);
 
+  const reloadTabFromDisk = useCallback(
+    async (relativePath: string): Promise<boolean> => {
+      const root = docsRootRef.current;
+      const tab = tabsRef.current.find((t) => t.path === relativePath);
+      if (!root || !tab) return false;
+      try {
+        const content = await readProjectFile(root, relativePath);
+        setTabs((prev) => {
+          const next = prev.map((t) =>
+            t.id === tab.id
+              ? {
+                  ...t,
+                  content,
+                  savedContent: content,
+                  dirty: false,
+                }
+              : t,
+          );
+          tabsRef.current = next;
+          return next;
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [],
+  );
+
   return {
     tabs,
     activeTabId,
@@ -468,5 +497,6 @@ export function useEditorTabs(
     setCursor,
     error,
     reset,
+    reloadTabFromDisk,
   };
 }
