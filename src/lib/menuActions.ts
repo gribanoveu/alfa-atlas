@@ -9,6 +9,7 @@ export type MenuActionId =
   | "view.toggleRight"
   | "view.toggleBottom"
   | "git.toggleCommit"
+  | "git.createBranch"
   | "git.pull"
   | "git.push"
   | "tools.settings"

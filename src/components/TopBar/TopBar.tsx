@@ -27,6 +27,7 @@ type TopBarProps = {
   onToggleRight: () => void;
   onToggleBottom: () => void;
   onToggleGit: () => void;
+  onOpenBranches: () => void;
   onPull: () => void;
   onPush: () => void;
 };
@@ -48,6 +49,7 @@ export function TopBar({
   onToggleRight,
   onToggleBottom,
   onToggleGit,
+  onOpenBranches,
   onPull,
   onPush,
 }: TopBarProps) {
@@ -85,6 +87,9 @@ export function TopBar({
         case "git.toggleCommit":
           if (hasProject) onToggleGit();
           break;
+        case "git.createBranch":
+          if (hasProject) onOpenBranches();
+          break;
         case "git.pull":
           if (hasProject) onPull();
           break;
@@ -117,6 +122,7 @@ export function TopBar({
       onSave,
       onToggleBottom,
       onToggleGit,
+      onOpenBranches,
       onToggleRight,
       onToggleSidebar,
     ],

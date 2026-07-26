@@ -689,6 +689,7 @@ function App() {
         onToggleRight={toggleRightPanel}
         onToggleBottom={toggleBottomPanel}
         onToggleGit={toggleGitPanel}
+        onOpenBranches={() => layout.setRightTool(layout.activeTool === "branches" ? null : "branches")}
         onPull={openPullModal}
         onPush={() => void runPush()}
       />

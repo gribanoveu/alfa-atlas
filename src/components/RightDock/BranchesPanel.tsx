@@ -137,16 +137,16 @@ export function BranchesPanel({
           setNewBranchName(DEFAULT_BRANCH_PREFIX);
         }}
       >
-        <input
-          type="text"
-          className="branches-panel-input"
-          placeholder="doc/feature-name"
-          value={newBranchName}
-          disabled={busy}
-          spellCheck={false}
-          onChange={(event) => setNewBranchName(event.target.value)}
-        />
-        <div className="branches-panel-create-actions">
+        <div className="branches-panel-create-row">
+          <input
+            type="text"
+            className="branches-panel-input"
+            placeholder="doc/feature-name"
+            value={newBranchName}
+            disabled={busy}
+            spellCheck={false}
+            onChange={(event) => setNewBranchName(event.target.value)}
+          />
           <button
             type="submit"
             className="branches-panel-create-btn"

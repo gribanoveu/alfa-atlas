@@ -2,6 +2,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   GitCommitHorizontal,
+  GitFork,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
@@ -103,6 +104,13 @@ const MENUS: MenuDef[] = [
         label: "Commit…",
         action: "git.toggleCommit",
         icon: GitCommitHorizontal,
+      },
+      {
+        type: "item",
+        id: "create-branch",
+        label: "Create branch…",
+        action: "git.createBranch",
+        icon: GitFork,
       },
       {
         type: "item",

@@ -194,8 +194,15 @@
   background: var(--bg-1);
 }
 
+.branches-panel-create-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .branches-panel-input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   height: 28px;
   padding: 0 8px;
   border: 1px solid var(--border);
@@ -215,19 +222,17 @@
   opacity: 0.55;
 }
 
-.branches-panel-create-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
 .branches-panel-create-btn {
+  flex: none;
+  height: 28px;
   font-size: var(--font-ui);
   font-weight: 500;
-  padding: 4px 14px;
+  padding: 0 12px;
   border-radius: 3px;
   border: 1px solid transparent;
   background: var(--accent);
   color: #fff;
+  white-space: nowrap;
 }
 
 .branches-panel-create-btn:hover:not(:disabled) {
