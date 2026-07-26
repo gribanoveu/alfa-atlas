@@ -129,6 +129,8 @@ pub fn run() {
             commands::project::write_project_file,
             commands::project::create_project_file,
             commands::project::create_project_dir,
+            commands::project::delete_project_file,
+            commands::project::delete_project_dir,
             commands::layout::get_project_layout,
             commands::layout::save_project_layout,
             commands::workspace::get_workspace_state,

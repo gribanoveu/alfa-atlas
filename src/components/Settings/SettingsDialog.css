@@ -138,6 +138,15 @@
   color: var(--text-0);
 }
 
+.settings-lang-select {
+  max-width: 220px;
+}
+
+.settings-lang-select .clone-select-trigger:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .settings-number {
   width: 120px;
   font-size: 12.5px;

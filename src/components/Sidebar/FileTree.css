@@ -175,7 +175,9 @@
 }
 
 .file-tree-context-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
   padding: 6px 12px;
@@ -186,6 +188,30 @@
   border: none;
 }
 
+.file-tree-context-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+.file-tree-context-label {
+  flex: 1;
+  min-width: 0;
+}
+
 .file-tree-context-item:hover {
   background: var(--accent-dim);
+}
+
+.file-tree-context-item.danger {
+  color: var(--red-tag);
+}
+
+.file-tree-context-item.danger:hover {
+  background: var(--red-tag);
+  color: var(--bg-1);
 }

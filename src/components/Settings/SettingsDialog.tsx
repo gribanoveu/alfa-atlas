@@ -1,15 +1,17 @@
 import { openPath } from "@tauri-apps/plugin-opener";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AUTOSAVE_DELAY_LIMITS,
   clampAutosaveDelayMs,
   getGeneralPrefs,
   getSettingsPaths,
   setGeneralPrefs,
+  type ErrorLanguage,
   type GeneralPrefs,
   type SettingsPaths,
 } from "../../lib/prefs";
 import { SUPPORTED_FORMAT_LABELS } from "../../lib/supportedFiles";
+import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
 
 type SectionId = "general" | "editor" | "paths";
@@ -18,6 +20,11 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "Общие" },
   { id: "editor", label: "Редактор" },
   { id: "paths", label: "Пути" },
+];
+
+const ERROR_LANGUAGE_OPTIONS: { value: ErrorLanguage; label: string }[] = [
+  { value: "ru", label: "Русский" },
+  { value: "en", label: "English" },
 ];
 
 type SettingsDialogProps = {
@@ -37,6 +44,8 @@ export function SettingsDialog({
   const [paths, setPaths] = useState<SettingsPaths | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [langOpen, setLangOpen] = useState(false);
+  const langRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,11 +73,31 @@ export function SettingsDialog({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key !== "Escape") return;
+      if (langOpen) {
+        setLangOpen(false);
+        return;
+      }
+      onClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  }, [langOpen, onClose]);
+
+  useEffect(() => {
+    if (!langOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!langRef.current?.contains(event.target as Node)) {
+        setLangOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [langOpen]);
+
+  useEffect(() => {
+    setLangOpen(false);
+  }, [section]);
 
   const persistPrefs = useCallback(
     async (next: GeneralPrefs) => {
@@ -168,26 +197,60 @@ export function SettingsDialog({
                   </p>
                 </div>
                 <div className="settings-row">
-                  <label
+                  <span
                     className="settings-field-label"
-                    htmlFor="error-language"
+                    id="error-language-label"
                   >
                     Язык сообщений об ошибках
-                  </label>
-                  <select
-                    id="error-language"
-                    className="settings-select"
-                    value={prefs?.errorLanguage ?? "ru"}
-                    disabled={!prefs || busy}
-                    onChange={(event) =>
-                      patchPrefs({
-                        errorLanguage: event.target.value as "ru" | "en",
-                      })
-                    }
-                  >
-                    <option value="ru">Русский</option>
-                    <option value="en">English</option>
-                  </select>
+                  </span>
+                  <div className="clone-select settings-lang-select" ref={langRef}>
+                    <button
+                      type="button"
+                      id="error-language"
+                      className={`clone-select-trigger${langOpen ? " is-open" : ""}`}
+                      aria-haspopup="listbox"
+                      aria-expanded={langOpen}
+                      aria-labelledby="error-language-label"
+                      disabled={!prefs || busy}
+                      onClick={() => setLangOpen((open) => !open)}
+                    >
+                      <span className="clone-select-value">
+                        <span className="clone-select-path">
+                          {ERROR_LANGUAGE_OPTIONS.find(
+                            (o) => o.value === (prefs?.errorLanguage ?? "ru"),
+                          )?.label ?? "Русский"}
+                        </span>
+                      </span>
+                      <span className="clone-select-chevron" aria-hidden>
+                        ▾
+                      </span>
+                    </button>
+                    {langOpen ? (
+                      <div className="clone-select-menu" role="listbox">
+                        {ERROR_LANGUAGE_OPTIONS.map((option) => {
+                          const active =
+                            option.value === (prefs?.errorLanguage ?? "ru");
+                          return (
+                            <button
+                              key={option.value}
+                              type="button"
+                              role="option"
+                              aria-selected={active}
+                              className={`clone-select-option${active ? " is-active" : ""}`}
+                              onClick={() => {
+                                patchPrefs({ errorLanguage: option.value });
+                                setLangOpen(false);
+                              }}
+                            >
+                              <span className="clone-select-path">
+                                {option.label}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                   <p className="settings-hint">
                     Язык текста диагностик в панели «Проблемы» (битые include,
                     xref, изображения, циклы и т.п.). Применяется при следующей

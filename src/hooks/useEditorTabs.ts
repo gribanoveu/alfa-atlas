@@ -341,6 +341,27 @@ export function useEditorTabs(
     [prepareClose],
   );
 
+  const discardTabsUnder = useCallback((relativePath: string) => {
+    const prefix = relativePath.replace(/[/\\]+$/, "") + "/";
+    const isUnder = (tabPath: string) =>
+      tabPath === relativePath ||
+      tabPath.startsWith(prefix) ||
+      tabPath.startsWith(relativePath + "\\");
+    setTabs((prev) => {
+      const next = prev.filter((t) => !isUnder(t.path));
+      if (next.length === prev.length) return prev;
+      tabsRef.current = next;
+      const activeId = activeTabIdRef.current;
+      if (activeId && !next.some((t) => t.id === activeId)) {
+        const removedIndex = prev.findIndex((t) => t.id === activeId);
+        const fallback =
+          next[Math.max(0, removedIndex - 1)] ?? next[0] ?? null;
+        setActiveTabId(fallback?.id ?? null);
+      }
+      return next;
+    });
+  }, []);
+
   const updateActiveContent = useCallback(
     (content: string) => {
       if (!activeTabId) return;
@@ -399,6 +420,7 @@ export function useEditorTabs(
     closeTab,
     closeAllTabs,
     closeOtherTabs,
+    discardTabsUnder,
     openFile,
     restoreTabs,
     updateActiveContent,

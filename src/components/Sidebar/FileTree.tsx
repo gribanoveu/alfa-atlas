@@ -1,4 +1,4 @@
-import { FileText, Folder, FolderOpen } from "lucide-react";
+import { FilePlus, FileText, Folder, FolderOpen, FolderPlus, Trash2 } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -12,6 +12,11 @@ import "./FileTree.css";
 
 const EXTERNAL_FOLDER_NAME = "_external";
 
+export type FileTreeDeleteTarget = {
+  path: string;
+  isDir: boolean;
+};
+
 type FileTreeProps = {
   nodes: TreeNode[];
   rootName: string;
@@ -23,6 +28,7 @@ type FileTreeProps = {
   onOpenFile: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
+  onDelete: (target: FileTreeDeleteTarget) => void;
   onResizeExternal?: (delta: number) => void;
   onResizeExternalEnd?: () => void;
 };
@@ -34,17 +40,22 @@ type FileTreeNodeProps = {
   expandedDirs: ReadonlySet<string>;
   onToggleDir: (path: string) => void;
   onOpenFile: (path: string) => void;
-  onContextMenu: (event: ReactMouseEvent, parentPath: string) => void;
+  onContextMenu: (
+    event: ReactMouseEvent,
+    parentPath: string,
+    target: FileTreeDeleteTarget | null,
+  ) => void;
 };
 
 type ContextMenuState = {
   x: number;
   y: number;
   parentPath: string;
+  target: FileTreeDeleteTarget | null;
 };
 
 const MENU_WIDTH = 200;
-const MENU_HEIGHT = 72;
+const MENU_HEIGHT = 108;
 
 function parentOfFile(path: string): string {
   const parts = path.split(/[/\\]/);
@@ -70,7 +81,12 @@ function FileTreeNode({
           className="file-tree-row dir"
           style={{ paddingLeft: 4 + depth * 14 }}
           onClick={() => onToggleDir(node.path)}
-          onContextMenu={(event) => onContextMenu(event, node.path)}
+          onContextMenu={(event) =>
+            onContextMenu(event, node.path, {
+              path: node.path,
+              isDir: true,
+            })
+          }
         >
           <span className="file-tree-twist">{expanded ? "▾" : "▸"}</span>
           {expanded ? (
@@ -103,9 +119,14 @@ function FileTreeNode({
     <button
       type="button"
       className={`file-tree-row file${active ? " active" : ""}`}
-      style={{ paddingLeft: 4 + depth * 14 + 14 }}
+      style={{ paddingLeft: 4 + depth * 14 }}
       onClick={() => onOpenFile(node.path)}
-      onContextMenu={(event) => onContextMenu(event, parentOfFile(node.path))}
+      onContextMenu={(event) =>
+        onContextMenu(event, parentOfFile(node.path), {
+          path: node.path,
+          isDir: false,
+        })
+      }
       title={node.path}
     >
       <span className="file-tree-twist" />
@@ -139,6 +160,7 @@ export function FileTree({
   onOpenFile,
   onNewFile,
   onNewFolder,
+  onDelete,
   onResizeExternal,
   onResizeExternalEnd,
 }: FileTreeProps) {
@@ -186,13 +208,17 @@ export function FileTree({
     };
   }, [menu]);
 
-  const openContextMenu = (event: ReactMouseEvent, parentPath: string) => {
+  const openContextMenu = (
+    event: ReactMouseEvent,
+    parentPath: string,
+    target: FileTreeDeleteTarget | null,
+  ) => {
     event.preventDefault();
     event.stopPropagation();
     window.getSelection()?.removeAllRanges();
     const x = Math.min(event.clientX, window.innerWidth - MENU_WIDTH - 4);
     const y = Math.min(event.clientY, window.innerHeight - MENU_HEIGHT - 4);
-    setMenu({ x: Math.max(4, x), y: Math.max(4, y), parentPath });
+    setMenu({ x: Math.max(4, x), y: Math.max(4, y), parentPath, target });
   };
 
   return (
@@ -204,7 +230,7 @@ export function FileTree({
             style={{ paddingLeft: 4 }}
             title={rootPath}
             onClick={() => onToggleDir(".")}
-            onContextMenu={(event) => openContextMenu(event, ".")}
+            onContextMenu={(event) => openContextMenu(event, ".", null)}
           >
             <span className="file-tree-twist">{rootExpanded ? "▾" : "▸"}</span>
             {rootExpanded ? (
@@ -259,7 +285,10 @@ export function FileTree({
                 title={external.path}
                 onClick={() => onToggleDir(external.path)}
                 onContextMenu={(event) =>
-                  openContextMenu(event, external.path)
+                  openContextMenu(event, external.path, {
+                    path: external.path,
+                    isDir: true,
+                  })
                 }
               >
                 <span className="file-tree-twist">
@@ -320,7 +349,10 @@ export function FileTree({
               setMenu(null);
             }}
           >
-            Новый файл…
+            <span className="file-tree-context-icon" aria-hidden>
+              <FilePlus size={14} strokeWidth={1.75} />
+            </span>
+            <span className="file-tree-context-label">Новый файл…</span>
           </button>
           <button
             type="button"
@@ -331,8 +363,32 @@ export function FileTree({
               setMenu(null);
             }}
           >
-            Новая папка…
+            <span className="file-tree-context-icon" aria-hidden>
+              <FolderPlus size={14} strokeWidth={1.75} />
+            </span>
+            <span className="file-tree-context-label">Новая папка…</span>
           </button>
+          {menu.target ? (
+            (() => {
+              const target = menu.target;
+              return (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="file-tree-context-item danger"
+                  onClick={() => {
+                    onDelete(target);
+                    setMenu(null);
+                  }}
+                >
+                  <span className="file-tree-context-icon" aria-hidden>
+                    <Trash2 size={14} strokeWidth={1.75} />
+                  </span>
+                  <span className="file-tree-context-label">Удалить…</span>
+                </button>
+              );
+            })()
+          ) : null}
         </div>
       ) : null}
     </div>

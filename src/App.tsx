@@ -6,6 +6,7 @@ import { PullUpdateModal } from "./components/Git/PullUpdateModal";
 import { RightDock } from "./components/RightDock/RightDock";
 import { NewFileModal } from "./components/Sidebar/NewFileModal";
 import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
+import { DeleteConfirmModal } from "./components/Sidebar/DeleteConfirmModal";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
 import { TopBar } from "./components/TopBar/TopBar";
@@ -25,7 +26,8 @@ import {
   collectDirPaths,
   useWorkspaceSession,
 } from "./hooks/useWorkspaceSession";
-import { createProjectDir, createProjectFile } from "./lib/project";
+import { createProjectDir, createProjectFile, deleteProjectDir, deleteProjectFile } from "./lib/project";
+import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
 import { formatLabelFor, lineEndingLabelFor } from "./lib/supportedFiles";
 
 function joinParent(parentPath: string, name: string): string {
@@ -119,6 +121,7 @@ function App() {
   const [folderError, setFolderError] = useState<string | null>(null);
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [gitAlert, setGitAlert] = useState<string | null>(null);
   const [revealRequest, setRevealRequest] = useState<{
@@ -449,6 +452,7 @@ function App() {
             onOpenFile={(path) => void editor.openFile(path)}
             onNewFile={setNewFileParent}
             onNewFolder={setNewFolderParent}
+            onDelete={setDeleteTarget}
             onResize={panels.resizeSidebarBy}
             onResizeEnd={panels.persistLayout}
             onResizeExternal={panels.resizeExternalBy}
@@ -568,6 +572,24 @@ function App() {
             session.ensureExpanded(relativePath);
             setNewFolderParent(null);
             await tree.refresh();
+          }}
+        />
+      ) : null}
+
+      {deleteTarget !== null && project.docsRoot ? (
+        <DeleteConfirmModal
+          target={deleteTarget}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={async (target) => {
+            if (target.isDir) {
+              await deleteProjectDir(project.docsRoot!, target.path);
+            } else {
+              await deleteProjectFile(project.docsRoot!, target.path);
+            }
+            editor.discardTabsUnder(target.path);
+            setDeleteTarget(null);
+            await tree.refresh();
+            if (gitPanelActive) git.scheduleRefresh();
           }}
         />
       ) : null}

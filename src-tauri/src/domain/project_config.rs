@@ -29,6 +29,8 @@ pub enum ProjectError {
     Read(#[source] std::io::Error),
     #[error("failed to write file: {0}")]
     Write(#[source] std::io::Error),
+    #[error("failed to delete path: {0}")]
+    Delete(#[source] std::io::Error),
     #[error("failed to parse project config: {0}")]
     Parse(#[source] serde_json::Error),
     #[error("failed to serialize project config: {0}")]

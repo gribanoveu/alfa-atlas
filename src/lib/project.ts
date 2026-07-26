@@ -107,3 +107,17 @@ export function createProjectDir(
 ): Promise<void> {
   return invoke<void>("create_project_dir", { docsRoot, relativePath });
 }
+
+export function deleteProjectFile(
+  docsRoot: string,
+  relativePath: string,
+): Promise<void> {
+  return invoke<void>("delete_project_file", { docsRoot, relativePath });
+}
+
+export function deleteProjectDir(
+  docsRoot: string,
+  relativePath: string,
+): Promise<void> {
+  return invoke<void>("delete_project_dir", { docsRoot, relativePath });
+}

@@ -1,7 +1,7 @@
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import type { TreeNode } from "../../lib/project";
-import { FileTree } from "./FileTree";
+import { FileTree, type FileTreeDeleteTarget } from "./FileTree";
 import "./Sidebar.css";
 
 type SidebarProps = {
@@ -18,6 +18,7 @@ type SidebarProps = {
   onOpenFile: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
+  onDelete: (target: FileTreeDeleteTarget) => void;
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
   onResizeExternal?: (delta: number) => void;
@@ -42,6 +43,7 @@ export function Sidebar({
   onOpenFile,
   onNewFile,
   onNewFolder,
+  onDelete,
   onResize,
   onResizeEnd,
   onResizeExternal,
@@ -97,6 +99,7 @@ export function Sidebar({
               onOpenFile={onOpenFile}
               onNewFile={onNewFile}
               onNewFolder={onNewFolder}
+              onDelete={onDelete}
               onResizeExternal={onResizeExternal}
               onResizeExternalEnd={onResizeExternalEnd}
             />

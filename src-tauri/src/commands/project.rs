@@ -74,3 +74,13 @@ pub fn create_project_file(docs_root: String, relative_path: String) -> Result<(
 pub fn create_project_dir(docs_root: String, relative_path: String) -> Result<(), String> {
     docs_fs::create_project_dir(&docs_root, &relative_path).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn delete_project_file(docs_root: String, relative_path: String) -> Result<(), String> {
+    docs_fs::delete_project_file(&docs_root, &relative_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_project_dir(docs_root: String, relative_path: String) -> Result<(), String> {
+    docs_fs::delete_project_dir(&docs_root, &relative_path).map_err(|e| e.to_string())
+}
