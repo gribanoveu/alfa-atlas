@@ -93,7 +93,28 @@ fn default_autosave_delay_ms() -> u64 {
     DEFAULT_AUTOSAVE_DELAY_MS
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ErrorLanguage {
+    /// Сообщения диагностик на русском.
+    #[serde(rename = "ru")]
+    Ru,
+    /// Сообщения диагностик на английском.
+    #[serde(rename = "en")]
+    En,
+}
+
+impl Default for ErrorLanguage {
+    fn default() -> Self {
+        Self::Ru
+    }
+}
+
+fn default_error_language() -> ErrorLanguage {
+    ErrorLanguage::Ru
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralPrefs {
     #[serde(default = "default_true")]
@@ -106,6 +127,9 @@ pub struct GeneralPrefs {
     pub autosave_delay_ms: u64,
     #[serde(default = "default_true")]
     pub separate_external_folder: bool,
+    /// Язык сообщений диагностик (Проблемы в нижней панели).
+    #[serde(default = "default_error_language")]
+    pub error_language: ErrorLanguage,
 }
 
 impl GeneralPrefs {
@@ -127,6 +151,7 @@ impl Default for GeneralPrefs {
             save_on_tab_switch: true,
             autosave_delay_ms: DEFAULT_AUTOSAVE_DELAY_MS,
             separate_external_folder: true,
+            error_language: ErrorLanguage::Ru,
         }
     }
 }
@@ -265,6 +290,7 @@ mod tests {
         assert!(prefs.save_on_tab_switch);
         assert_eq!(prefs.autosave_delay_ms, DEFAULT_AUTOSAVE_DELAY_MS);
         assert!(prefs.separate_external_folder);
+        assert_eq!(prefs.error_language, ErrorLanguage::Ru);
     }
 
     #[test]
@@ -275,5 +301,13 @@ mod tests {
         }
         .clamped();
         assert_eq!(prefs.autosave_delay_ms, MIN_AUTOSAVE_DELAY_MS);
+    }
+
+    #[test]
+    fn deserializes_error_language_ru_and_en() {
+        let ru: GeneralPrefs = serde_json::from_str(r#"{"errorLanguage":"ru"}"#).unwrap();
+        assert_eq!(ru.error_language, ErrorLanguage::Ru);
+        let en: GeneralPrefs = serde_json::from_str(r#"{"errorLanguage":"en"}"#).unwrap();
+        assert_eq!(en.error_language, ErrorLanguage::En);
     }
 }

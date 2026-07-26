@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { AlertOkModal } from "./components/Git/AlertOkModal";
@@ -31,6 +31,33 @@ import { formatLabelFor, lineEndingLabelFor } from "./lib/supportedFiles";
 function joinParent(parentPath: string, name: string): string {
   if (!parentPath || parentPath === ".") return name;
   return `${parentPath.replace(/[/\\]+$/, "")}/${name}`;
+}
+
+/**
+ * Convert a `documentId` (a repo-relative `/`-joined index key, e.g.
+ * `src/docs/asciidoc/foo.adoc`) into a path relative to `docsRoot`
+ * (e.g. `foo.adoc`) — which is what `editor.openFile` expects.
+ *
+ * `repoRoot` and `docsRoot` are absolute filesystem paths. We compute the
+ * docsRoot suffix relative to repoRoot and strip it from `documentId`.
+ * If `documentId` doesn't start with that suffix, it's returned unchanged
+ * (best-effort fallback).
+ */
+function toDocsRelativePath(
+  documentId: string,
+  repoRoot: string,
+  docsRoot: string,
+): string {
+  if (!repoRoot || !docsRoot) return documentId;
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^[/\\]+/, "").replace(/[/\\]+$/, "");
+  const repo = norm(repoRoot);
+  const docs = norm(docsRoot);
+  // docsRoot-суффикс относительно repoRoot, например "src/docs/asciidoc".
+  let suffix = docs;
+  if (suffix.startsWith(repo + "/")) suffix = suffix.slice(repo.length + 1);
+  const doc = norm(documentId);
+  if (suffix && doc.startsWith(suffix + "/")) return doc.slice(suffix.length + 1);
+  return documentId;
 }
 
 function App() {
@@ -72,6 +99,13 @@ function App() {
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [gitAlert, setGitAlert] = useState<string | null>(null);
+  const [revealRequest, setRevealRequest] = useState<{
+    id: number;
+    line: number;
+    column: number;
+    severity: "error" | "warning";
+  } | null>(null);
+  const revealCounter = useRef(0);
   const skipNextPanelSync = useRef(false);
   const prevDirtyCount = useRef(0);
 
@@ -237,10 +271,64 @@ function App() {
 
   const openDiagnostic = useCallback(
     async (documentId: string, line: number, column: number) => {
-      await editor.openFile(documentId);
-      editor.setCursor({ line, column });
+      // Если Problems panel был свёрнут — раскрываем его (как в IDE: клик по
+      // проблеме не должен прятать сам список).
+      if (!layout.bottomTool) {
+        layout.setBottomToolId("problems");
+      }
+
+      const severity: "error" | "warning" = (() => {
+        const found = workspaceIndex.diagnostics.find(
+          (d) =>
+            d.document === documentId &&
+            d.line === line &&
+            d.column === column,
+        );
+        return found?.severity === "warning" ? "warning" : "error";
+      })();
+
+      const reveal = () => {
+        revealCounter.current += 1;
+        setRevealRequest({
+          id: revealCounter.current,
+          line,
+          column,
+          severity,
+        });
+      };
+
+      if (project.docsRoot && project.repoRoot) {
+        // `documentId` — это repo-relative ключ индекса (например
+        // `src/docs/asciidoc/foo.adoc`), а `editor.openFile` ожидает путь
+        // относительно docsRoot (`foo.adoc`). Считаем относительный суффикс.
+        const rel = toDocsRelativePath(
+          documentId,
+          project.repoRoot,
+          project.docsRoot,
+        );
+        try {
+          await editor.openFile(rel);
+          reveal();
+          return;
+        } catch {
+          // Путь не открылся — ниже общий fallback.
+        }
+      }
+      try {
+        await editor.openFile(documentId);
+        reveal();
+      } catch {
+        // Файл не существует (битый include) — тихо игнорируем, не показывая
+        // сырую os-ошибку. Пользователь уже видит диагностику в Problems.
+      }
     },
-    [editor],
+    [
+      editor,
+      layout,
+      project.docsRoot,
+      project.repoRoot,
+      workspaceIndex.diagnostics,
+    ],
   );
 
   useEffect(() => {
@@ -278,6 +366,30 @@ function App() {
     ? lineEndingLabelFor(editor.activeTab.content)
     : "—";
 
+  const errorCount = workspaceIndex.diagnostics.filter(
+    (d) => d.severity === "error",
+  ).length;
+  const warningCount = workspaceIndex.diagnostics.filter(
+    (d) => d.severity === "warning",
+  ).length;
+
+  // Диагностики приходят из бэкенда с `document` в repo-relative виде
+  // (`src/docs/asciidoc/foo.adoc`), а активный таб хранит docs-relative
+  // путь (`foo.adoc`). Приводим к единому виду для маркеров/подсветки.
+  const editorDiagnostics = useMemo(() => {
+    if (!project.docsRoot || !project.repoRoot) {
+      return workspaceIndex.diagnostics;
+    }
+    return workspaceIndex.diagnostics.map((d) => ({
+      ...d,
+      document: toDocsRelativePath(d.document, project.repoRoot!, project.docsRoot!),
+    }));
+  }, [workspaceIndex.diagnostics, project.docsRoot, project.repoRoot]);
+
+  const openProblems = useCallback(() => {
+    layout.setBottomToolId("problems");
+  }, [layout]);
+
   return (
     <div className="app" style={panelStyle}>
       <TopBar
@@ -286,6 +398,9 @@ function App() {
         projectRoot={project.repoRoot}
         hasProject={hasProject}
         gitBusy={git.busy}
+        errorCount={errorCount}
+        warningCount={warningCount}
+        onOpenProblems={openProblems}
         onOpenFolder={openFolder}
         onCloseProject={closeProject}
         onSave={async () => {
@@ -333,8 +448,9 @@ function App() {
               onCloseOtherTabs={editor.closeOtherTabs}
               onChangeContent={editor.updateActiveContent}
               onCursorChange={editor.setCursor}
-              diagnostics={workspaceIndex.diagnostics}
+              diagnostics={editorDiagnostics}
               completionsEnabled={workspaceIndex.status !== "idle"}
+              revealRequest={revealRequest}
             />
           ) : (
             <Welcome

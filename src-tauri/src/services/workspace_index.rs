@@ -779,6 +779,9 @@ impl WorkspaceIndex {
         }
         // Synthesize a parse error and run through the standard path so the
         // queue drains and the build can finish.
+        let lang = crate::infra::settings_store::load()
+            .map(|s| s.general.error_language)
+            .unwrap_or_default();
         let facts = AsciiDocFacts {
             anchors: vec![],
             includes: vec![],
@@ -786,7 +789,10 @@ impl WorkspaceIndex {
             attributes: vec![],
             images: vec![],
             parse_errors: vec![ParseErrorFact {
-                message: format!("parse timed out after {}s", PARSE_TIMEOUT_SECS),
+                message: crate::services::diagnostic_messages::parse_timeout(
+                    lang,
+                    PARSE_TIMEOUT_SECS,
+                ),
                 line: None,
                 severity: "error".to_string(),
             }],

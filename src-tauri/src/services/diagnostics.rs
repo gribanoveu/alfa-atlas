@@ -7,27 +7,42 @@
 
 use std::collections::HashSet;
 
+use crate::domain::settings::ErrorLanguage;
 use crate::domain::workspace_index::{
     Diagnostic, DiagnosticKind, DocumentId, Severity,
 };
+use crate::infra::settings_store;
+use crate::services::diagnostic_messages as msgs;
 use crate::services::workspace_index::WorkspaceIndex;
+
+/// Язык сообщений диагностик на этот проход. Читается из `GeneralPrefs` на
+/// каждом вызове `run_all`/`run_for`, чтобы смена настройки сразу применялась
+/// при следующем build. Ошибка чтения настроек тихо откатывается на `Ru`
+/// (значение по умолчанию) — диагностики важнее, чем язык.
+fn current_error_language() -> ErrorLanguage {
+    settings_store::load()
+        .map(|s| s.general.error_language)
+        .unwrap_or_default()
+}
 
 /// Recompute diagnostics for every document in the index.
 pub fn run_all(index: &WorkspaceIndex) {
+    let lang = current_error_language();
     let docs = index.documents_iter();
     for d in &docs {
-        let diags = diagnose_one_merged(index, &d.id);
+        let diags = diagnose_one_merged(index, &d.id, lang);
         index.set_diagnostics(&d.id, diags);
     }
 }
 
 /// Recompute diagnostics for `doc` and every document that depends on it.
 pub fn run_for(index: &WorkspaceIndex, doc: &DocumentId) {
+    let lang = current_error_language();
     let mut queue: Vec<DocumentId> = vec![doc.clone()];
     let mut seen: HashSet<DocumentId> = HashSet::new();
     seen.insert(doc.clone());
     while let Some(current) = queue.pop() {
-        let diags = diagnose_one_merged(index, &current);
+        let diags = diagnose_one_merged(index, &current, lang);
         index.set_diagnostics(&current, diags);
         for dep in index.dependents_of(&current) {
             if seen.insert(dep.clone()) {
@@ -41,8 +56,8 @@ pub fn run_for(index: &WorkspaceIndex, doc: &DocumentId) {
 /// to the document (from the frontend asciidoctor logger). `ParseError`s are
 /// orthogonal to include/xref/image checks and must survive `run_all` at the
 /// end of an async build.
-fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
-    let mut diags = diagnose_one(index, doc);
+fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId, lang: ErrorLanguage) -> Vec<Diagnostic> {
+    let mut diags = diagnose_one(index, doc, lang);
     diags.extend(
         index
             .get_diagnostics_for(doc)
@@ -52,7 +67,7 @@ fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnost
     diags
 }
 
-fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
+fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId, lang: ErrorLanguage) -> Vec<Diagnostic> {
     let mut out = Vec::new();
 
     // Missing include.
@@ -60,7 +75,7 @@ fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
         if !index.document_exists_by_relative(&inc.path) {
             out.push(Diagnostic {
                 kind: DiagnosticKind::MissingInclude,
-                message: format!("include target not found: {}", inc.path),
+                message: msgs::missing_include(lang, &inc.path),
                 document: doc.clone(),
                 line: inc.line,
                 column: inc.column,
@@ -77,7 +92,7 @@ fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
                 if !index.anchor_exists_in(doc, anchor) {
                     out.push(Diagnostic {
                         kind: DiagnosticKind::MissingXrefAnchor,
-                        message: format!("anchor not found in document: #{}", anchor),
+                        message: msgs::missing_xref_anchor_same_doc(lang, anchor),
                         document: doc.clone(),
                         line: r.line,
                         column: r.column,
@@ -90,7 +105,7 @@ fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
         if !index.document_exists_by_relative(&r.target_document) {
             out.push(Diagnostic {
                 kind: DiagnosticKind::MissingXrefDocument,
-                message: format!("xref target document not found: {}", r.target_document),
+                message: msgs::missing_xref_document(lang, &r.target_document),
                 document: doc.clone(),
                 line: r.line,
                 column: r.column,
@@ -103,7 +118,7 @@ fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
             if !index.anchor_exists_in(&target_id, anchor) {
                 out.push(Diagnostic {
                     kind: DiagnosticKind::MissingXrefAnchor,
-                    message: format!("anchor not found in {}: #{}", r.target_document, anchor),
+                    message: msgs::missing_xref_anchor(lang, &r.target_document, anchor),
                     document: doc.clone(),
                     line: r.line,
                     column: r.column,
@@ -118,7 +133,7 @@ fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
         if !index.image_exists(&img.path) {
             out.push(Diagnostic {
                 kind: DiagnosticKind::MissingImage,
-                message: format!("image not found: {}", img.path),
+                message: msgs::missing_image(lang, &img.path),
                 document: doc.clone(),
                 line: img.line,
                 column: 1,
@@ -132,7 +147,7 @@ fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
         if index.anchor_count(&a.id) > 1 {
             out.push(Diagnostic {
                 kind: DiagnosticKind::DuplicateAnchor,
-                message: format!("anchor id defined more than once: {}", a.id),
+                message: msgs::duplicate_anchor(lang, &a.id),
                 document: doc.clone(),
                 line: a.line,
                 column: a.column,
@@ -145,7 +160,7 @@ fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId) -> Vec<Diagnostic> {
     if let Some(cycle) = detect_cycle(index, doc) {
         out.push(Diagnostic {
             kind: DiagnosticKind::CircularInclude,
-            message: format!("circular include chain: {}", cycle.join(" -> ")),
+            message: msgs::circular_include(lang, &cycle),
             document: doc.clone(),
             line: 1,
             column: 1,

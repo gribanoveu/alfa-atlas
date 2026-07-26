@@ -167,6 +167,33 @@ export function SettingsDialog({
                     если путь к проекту сохранён.
                   </p>
                 </div>
+                <div className="settings-row">
+                  <label
+                    className="settings-field-label"
+                    htmlFor="error-language"
+                  >
+                    Язык сообщений об ошибках
+                  </label>
+                  <select
+                    id="error-language"
+                    className="settings-select"
+                    value={prefs?.errorLanguage ?? "ru"}
+                    disabled={!prefs || busy}
+                    onChange={(event) =>
+                      patchPrefs({
+                        errorLanguage: event.target.value as "ru" | "en",
+                      })
+                    }
+                  >
+                    <option value="ru">Русский</option>
+                    <option value="en">English</option>
+                  </select>
+                  <p className="settings-hint">
+                    Язык текста диагностик в панели «Проблемы» (битые include,
+                    xref, изображения, циклы и т.п.). Применяется при следующей
+                    переиндексации.
+                  </p>
+                </div>
               </>
             ) : null}
 

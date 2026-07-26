@@ -203,6 +203,10 @@ export function useEditorTabs(
       const existing = tabsRef.current.find((tab) => tab.path === relativePath);
       if (existing) {
         await switchToTab(existing.id);
+        // Сбрасываем ошибку от прошлой неудачной попытки открытия, иначе
+        // тост «failed to resolve path» остаётся висеть после успешного
+        // switchToTab.
+        setError(null);
         return;
       }
       try {
@@ -233,7 +237,10 @@ export function useEditorTabs(
         setActiveTabId(tab.id);
         setError(null);
       } catch (e) {
+        // Пробрасываем ошибку наружу, чтобы caller (например openDiagnostic)
+        // мог её перехватить и не оставлять «failed to resolve path» в toast.
         setError(e instanceof Error ? e.message : String(e));
+        throw e;
       }
     },
     [docsRoot, flushDebounce, saveTab, switchToTab],

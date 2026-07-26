@@ -1,11 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export type ErrorLanguage = "ru" | "en";
+
 export type GeneralPrefs = {
   restoreLastProject: boolean;
   autosaveEnabled: boolean;
   saveOnTabSwitch: boolean;
   autosaveDelayMs: number;
   separateExternalFolder: boolean;
+  errorLanguage: ErrorLanguage;
 };
 
 export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
@@ -14,6 +17,7 @@ export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
   saveOnTabSwitch: true,
   autosaveDelayMs: 1000,
   separateExternalFolder: true,
+  errorLanguage: "ru",
 };
 
 export const AUTOSAVE_DELAY_LIMITS = { min: 300, max: 10_000 } as const;

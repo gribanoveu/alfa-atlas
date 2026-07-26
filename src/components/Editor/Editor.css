@@ -122,3 +122,42 @@
   color: var(--text-2);
   cursor: default;
 }
+
+/* ── Glyph-margin diagnostics ─────────────────────────────────────── */
+
+/* Иконка в левом glyph-margin для строки с ошибкой/варнингом. Monaco
+   рендерит glyph-margin-классы внутри своей разметки, поэтому используем
+   ::before с inline-SVG (data-uri), чтобы не зависеть от порядка
+   инъекции внешних CSS-переменных. */
+.df-glyph-error::before,
+.df-glyph-warning::before {
+  content: "";
+  display: block;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0 3px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+
+.df-glyph-error::before {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%23ff5252'/><path d='M8 4v5' stroke='%23fff' stroke-width='1.6' stroke-linecap='round'/><circle cx='8' cy='11.6' r='1' fill='%23fff'/></svg>");
+}
+
+.df-glyph-warning::before {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 1.5L15 14H1z' fill='%23ffb300'/><path d='M8 6.5v3' stroke='%23000' stroke-width='1.6' stroke-linecap='round'/><circle cx='8' cy='11.2' r='0.9' fill='%23000'/></svg>");
+}
+
+/* Подсветка строки с диагностикой при клике из Problems panel. Класс
+   добавляется Monaco через `className` decoration, см. revealDiagnostic
+   в Editor.tsx. */
+.df-line-highlight-error {
+  background: rgba(255, 82, 82, 0.14) !important;
+  box-shadow: inset 3px 0 0 #ff5252;
+}
+
+.df-line-highlight-warning {
+  background: rgba(255, 179, 0, 0.14) !important;
+  box-shadow: inset 3px 0 0 #ffb300;
+}

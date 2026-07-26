@@ -1,4 +1,5 @@
 pub mod diagnostics;
+pub mod diagnostic_messages;
 pub mod docs_discovery;
 pub mod docs_fs;
 pub mod file_watcher;
