@@ -64,13 +64,6 @@ pub fn parse_timeout(lang: ErrorLanguage, secs: u64) -> String {
     }
 }
 
-pub fn ipc_submit_failed(lang: ErrorLanguage, reason: &str) -> String {
-    match lang {
-        ErrorLanguage::Ru => format!("ошибка IPC при отправке фактов: {reason}"),
-        ErrorLanguage::En => format!("IPC submit failed: {reason}"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
