@@ -20,6 +20,7 @@ import { useGitPanel } from "./hooks/useGitPanel";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
 import { useAsciiDocParser } from "./hooks/useAsciiDocParser";
+import { useEditorViewMode } from "./hooks/useEditorViewMode";
 import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
@@ -98,6 +99,7 @@ function App() {
   // can be drained.
   useAsciiDocParser();
   const layout = useWorkspaceLayout();
+  const viewMode = useEditorViewMode();
   const project = useProject();
   const generalPrefs = useGeneralPrefs();
   const panels = usePanelLayout(project.repoRoot, {
@@ -504,6 +506,9 @@ function App() {
               completionsEnabled={workspaceIndex.status !== "idle"}
               revealRequest={revealRequest}
               onOpenProblems={openProblems}
+              viewMode={viewMode.viewMode}
+              onViewModeChange={viewMode.setViewMode}
+              docsRoot={project.docsRoot}
             />
           ) : (
             <Welcome

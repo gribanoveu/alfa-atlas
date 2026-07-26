@@ -6,6 +6,21 @@
   background: var(--bg-editor);
 }
 
+.tabs-bar {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+  height: 34px;
+  flex: none;
+  background: var(--bg-0);
+}
+
+.tabs-bar .tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-bottom: none;
+}
+
 .tabs {
   display: flex;
   align-items: stretch;
@@ -76,6 +91,33 @@
   min-width: 0;
 }
 
+/* Split / render-only layouts */
+.editor-split {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.editor-split-pane {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+
+.editor-monaco-wrap {
+  height: 100%;
+  min-height: 0;
+}
+
+.editor-preview-wrap {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-editor);
+}
+
 .editor-empty {
   height: 100%;
   display: flex;
@@ -89,6 +131,37 @@
 
 .tabs-empty {
   min-height: 34px;
+}
+
+/* ── View mode switch ────────────────────────────────────────────── */
+
+.view-mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  flex: none;
+}
+
+.view-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  border-radius: 5px;
+  color: var(--text-2);
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.view-btn:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.view-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 .tab-context-menu {

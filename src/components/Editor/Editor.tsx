@@ -7,6 +7,9 @@ import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
 import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
+import type { EditorViewMode } from "../../types/viewMode";
+import { AsciiDocPreview } from "../AsciiDocPreview/AsciiDocPreview";
+import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { EditorTabs } from "./EditorTabs";
 import "./Editor.css";
 
@@ -34,7 +37,14 @@ type EditorPaneProps = {
   revealRequest: RevealRequest | null;
   /** Открыть панель «Проблемы» (по клику на индикатор ошибок в редакторе). */
   onOpenProblems: () => void;
+  viewMode: EditorViewMode;
+  onViewModeChange: (mode: EditorViewMode) => void;
+  docsRoot: string | null;
 };
+
+const SPLIT_INITIAL_RATIO = 0.5;
+const SPLIT_MIN_RATIO = 0.15;
+const SPLIT_MAX_RATIO = 0.85;
 
 export function EditorPane({
   tabs,
@@ -50,6 +60,9 @@ export function EditorPane({
   completionsEnabled,
   revealRequest,
   onOpenProblems,
+  viewMode,
+  onViewModeChange,
+  docsRoot,
 }: EditorPaneProps) {
   const [monaco, setMonaco] = useState<typeof Monaco | null>(null);
   const [editor, setEditor] =
@@ -149,6 +162,26 @@ export function EditorPane({
     glyphMargin: true,
   };
 
+  // Monaco монтируется единожды на активную вкладку и не размонтируется
+  // при переключении режимов просмотра — так сохраняются undo-стек и
+  // курсор. В режимах `render` он скрыт через `display: none`.
+  const monacoNode = activeTab ? (
+    <Editor
+      key={activeTab.id}
+      height="100%"
+      theme="vs-dark"
+      language={activeTab.language}
+      value={activeTab.content}
+      onChange={handleChange}
+      onMount={handleMount}
+      options={options}
+    />
+  ) : null;
+
+  const previewNode = activeTab ? (
+    <AsciiDocPreview content={activeTab.content} docsRoot={docsRoot} />
+  ) : null;
+
   return (
     <section className="editor-col">
       <EditorTabs
@@ -158,23 +191,78 @@ export function EditorPane({
         onClose={onCloseTab}
         onCloseAll={onCloseAllTabs}
         onCloseOthers={onCloseOtherTabs}
+        viewMode={viewMode}
+        onViewModeChange={onViewModeChange}
       />
-      <div className="editor-body">
+      <div className={`editor-body editor-body-${viewMode}`}>
         {activeTab ? (
-          <Editor
-            key={activeTab.id}
-            height="100%"
-            theme="vs-dark"
-            language={activeTab.language}
-            value={activeTab.content}
-            onChange={handleChange}
-            onMount={handleMount}
-            options={options}
-          />
+          viewMode === "split" ? (
+            <SplitLayout
+              monacoNode={monacoNode}
+              previewNode={previewNode}
+            />
+          ) : viewMode === "render" ? (
+            <>
+              <div className="editor-monaco-wrap" style={{ display: "none" }}>
+                {monacoNode}
+              </div>
+              <div className="editor-preview-wrap">{previewNode}</div>
+            </>
+          ) : (
+            <div className="editor-monaco-wrap">{monacoNode}</div>
+          )
         ) : (
           <div className="editor-empty">Откройте файл в дереве документации</div>
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Split-раскладка: Monaco слева, превью справа, между ними —
+ * PanelResizeHandle. Пропорция хранится в EditorPane (не персистится).
+ */
+function SplitLayout({
+  monacoNode,
+  previewNode,
+}: {
+  monacoNode: React.ReactNode;
+  previewNode: React.ReactNode;
+}) {
+  const [ratio, setRatio] = useState(SPLIT_INITIAL_RATIO);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const onResize = useCallback((delta: number) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const width = el.getBoundingClientRect().width;
+    if (width <= 0) return;
+    setRatio((prev) => {
+      const next = prev + delta / width;
+      return Math.min(SPLIT_MAX_RATIO, Math.max(SPLIT_MIN_RATIO, next));
+    });
+  }, []);
+
+  return (
+    <div className="editor-split" ref={containerRef}>
+      <div
+        className="editor-split-pane editor-monaco-wrap"
+        style={{ flex: `0 0 ${ratio * 100}%`, minWidth: 0 }}
+      >
+        {monacoNode}
+      </div>
+      <PanelResizeHandle
+        direction="horizontal"
+        onResize={onResize}
+        ariaLabel="Изменить ширину панелей"
+      />
+      <div
+        className="editor-split-pane editor-preview-wrap"
+        style={{ flex: `1 1 ${1 - ratio}%`, minWidth: 0 }}
+      >
+        {previewNode}
+      </div>
+    </div>
   );
 }

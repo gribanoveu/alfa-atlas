@@ -5,7 +5,9 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { Columns2, Code, Eye } from "lucide-react";
 import type { EditorTab } from "../../hooks/useEditorTabs";
+import type { EditorViewMode } from "../../types/viewMode";
 
 type EditorTabsProps = {
   tabs: EditorTab[];
@@ -14,7 +16,19 @@ type EditorTabsProps = {
   onClose: (id: string) => void;
   onCloseAll: () => void;
   onCloseOthers: (id: string) => void;
+  viewMode: EditorViewMode;
+  onViewModeChange: (mode: EditorViewMode) => void;
 };
+
+const VIEW_MODE_BUTTONS: {
+  mode: EditorViewMode;
+  icon: typeof Code;
+  label: string;
+}[] = [
+  { mode: "source", icon: Code, label: "Исходный код" },
+  { mode: "split", icon: Columns2, label: "Сплит" },
+  { mode: "render", icon: Eye, label: "Рендер" },
+];
 
 type ContextMenuState = {
   x: number;
@@ -32,6 +46,8 @@ export function EditorTabs({
   onClose,
   onCloseAll,
   onCloseOthers,
+  viewMode,
+  onViewModeChange,
 }: EditorTabsProps) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -72,7 +88,12 @@ export function EditorTabs({
   }, [menu]);
 
   if (tabs.length === 0) {
-    return <div className="tabs tabs-empty" />;
+    return (
+      <div className="tabs-bar">
+        <div className="tabs tabs-empty" />
+        <ViewModeSwitch viewMode={viewMode} onViewModeChange={onViewModeChange} />
+      </div>
+    );
   }
 
   const openContextMenu = (event: ReactMouseEvent, tabId: string) => {
@@ -86,84 +107,113 @@ export function EditorTabs({
   };
 
   return (
-    <div className="tabs">
-      {tabs.map((tab) => {
-        const active = tab.id === activeTabId;
+    <div className="tabs-bar">
+      <div className="tabs">
+        {tabs.map((tab) => {
+          const active = tab.id === activeTabId;
 
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            className={`tab ${active ? "active" : ""}`}
-            onClick={() => onSelect(tab.id)}
-            onContextMenu={(event) => openContextMenu(event, tab.id)}
-          >
-            {tab.title}
-            {tab.dirty ? <span className="dot-mod tab-dot" /> : null}
-            <span
-              className="close"
-              role="button"
-              tabIndex={0}
-              onClick={(event) => {
-                event.stopPropagation();
-                onClose(tab.id);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              className={`tab ${active ? "active" : ""}`}
+              onClick={() => onSelect(tab.id)}
+              onContextMenu={(event) => openContextMenu(event, tab.id)}
+            >
+              {tab.title}
+              {tab.dirty ? <span className="dot-mod tab-dot" /> : null}
+              <span
+                className="close"
+                role="button"
+                tabIndex={0}
+                onClick={(event) => {
                   event.stopPropagation();
                   onClose(tab.id);
-                }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.stopPropagation();
+                    onClose(tab.id);
+                  }
+                }}
+              >
+                ×
+              </span>
+            </button>
+          );
+        })}
+
+        {menu ? (
+          <div
+            ref={menuRef}
+            className="tab-context-menu"
+            role="menu"
+            style={{ left: menu.x, top: menu.y }}
+          >
+            <button
+              type="button"
+              role="menuitem"
+              className="tab-context-item"
+              onClick={() => {
+                onClose(menu.tabId);
+                setMenu(null);
               }}
             >
-              ×
-            </span>
-          </button>
-        );
-      })}
+              Закрыть
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="tab-context-item"
+              onClick={() => {
+                onCloseAll();
+                setMenu(null);
+              }}
+            >
+              Закрыть все
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="tab-context-item"
+              disabled={tabs.length <= 1}
+              onClick={() => {
+                onCloseOthers(menu.tabId);
+                setMenu(null);
+              }}
+            >
+              Закрыть все, кроме этой
+            </button>
+          </div>
+        ) : null}
+      </div>
+      <ViewModeSwitch viewMode={viewMode} onViewModeChange={onViewModeChange} />
+    </div>
+  );
+}
 
-      {menu ? (
-        <div
-          ref={menuRef}
-          className="tab-context-menu"
-          role="menu"
-          style={{ left: menu.x, top: menu.y }}
+function ViewModeSwitch({
+  viewMode,
+  onViewModeChange,
+}: {
+  viewMode: EditorViewMode;
+  onViewModeChange: (mode: EditorViewMode) => void;
+}) {
+  return (
+    <div className="view-mode-switch" role="group" aria-label="Режим просмотра">
+      {VIEW_MODE_BUTTONS.map(({ mode, icon: Icon, label }) => (
+        <button
+          key={mode}
+          type="button"
+          className={`view-btn ${viewMode === mode ? "active" : ""}`}
+          onClick={() => onViewModeChange(mode)}
+          title={label}
+          aria-pressed={viewMode === mode}
+          aria-label={label}
         >
-          <button
-            type="button"
-            role="menuitem"
-            className="tab-context-item"
-            onClick={() => {
-              onClose(menu.tabId);
-              setMenu(null);
-            }}
-          >
-            Закрыть
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="tab-context-item"
-            onClick={() => {
-              onCloseAll();
-              setMenu(null);
-            }}
-          >
-            Закрыть все
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="tab-context-item"
-            disabled={tabs.length <= 1}
-            onClick={() => {
-              onCloseOthers(menu.tabId);
-              setMenu(null);
-            }}
-          >
-            Закрыть все, кроме этой
-          </button>
-        </div>
-      ) : null}
+          <Icon size={14} />
+        </button>
+      ))}
     </div>
   );
 }
