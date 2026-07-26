@@ -179,7 +179,11 @@ export function EditorPane({
   ) : null;
 
   const previewNode = activeTab ? (
-    <AsciiDocPreview content={activeTab.content} docsRoot={docsRoot} />
+    <AsciiDocPreview
+      content={activeTab.content}
+      docsRoot={docsRoot}
+      monaco={monaco}
+    />
   ) : null;
 
   return (

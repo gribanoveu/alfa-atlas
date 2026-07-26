@@ -1,3 +1,4 @@
+import type * as Monaco from "monaco-editor";
 import { useAsciiDocRender } from "../../hooks/useAsciiDocRender";
 import { AscBlockList } from "./AscBlockList";
 import { InlineHtml } from "./InlineHtml";
@@ -6,6 +7,8 @@ import "./AsciiDocPreview.css";
 type AsciiDocPreviewProps = {
   content: string;
   docsRoot: string | null;
+  /** Monaco namespace — нужен для подсветки кода в AscCodeBlock. */
+  monaco: typeof Monaco | null;
 };
 
 /**
@@ -13,8 +16,12 @@ type AsciiDocPreviewProps = {
  * React-компонентами проекта. Состояния: загрузка, ошибка парсинга, пусто,
  * готово.
  */
-export function AsciiDocPreview({ content, docsRoot }: AsciiDocPreviewProps) {
-  const { doc, error, parsing } = useAsciiDocRender(content, true);
+export function AsciiDocPreview({
+  content,
+  docsRoot,
+  monaco,
+}: AsciiDocPreviewProps) {
+  const { doc, error, parsing } = useAsciiDocRender(content, true, docsRoot);
 
   if (parsing && !doc) {
     return (
@@ -45,7 +52,7 @@ export function AsciiDocPreview({ content, docsRoot }: AsciiDocPreviewProps) {
           <InlineHtml html={docTitle} />
         </h1>
       ) : null}
-      <AscBlockList blocks={blocks} docsRoot={docsRoot} />
+      <AscBlockList blocks={blocks} docsRoot={docsRoot} monaco={monaco} />
     </div>
   );
 }

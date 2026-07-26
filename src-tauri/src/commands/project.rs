@@ -57,6 +57,11 @@ pub fn read_project_file(docs_root: String, relative_path: String) -> Result<Str
 }
 
 #[tauri::command]
+pub fn resolve_asset_path(docs_root: String, relative_path: String) -> Result<String, String> {
+    docs_fs::resolve_asset_path(&docs_root, &relative_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn write_project_file(
     docs_root: String,
     relative_path: String,

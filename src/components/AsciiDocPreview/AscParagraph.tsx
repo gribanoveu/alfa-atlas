@@ -1,30 +1,24 @@
 import type { AbstractBlock } from "./types";
 import { InlineHtml } from "./InlineHtml";
 import { AscBlockList } from "./AscBlockList";
+import { useBlockContent } from "./useBlockContent";
 
 /**
- * Блок-параграф. Текст с inline-подстановками asciidoctor уже вернул HTML
- * через `getText()`, рендерим его в <p>. Если у параграфа есть вложенные
- * блоки (например, `role` с вложенным контентом) — обходим их тоже.
+ * Блок-параграф. asciidoctor применяет inline-подстановки (bold/mono/links)
+ * асинхронно через `content()` — забираем их через `useBlockContent` и
+ * рендерим в `<p>`. Если у параграфа есть вложенные блоки — обходим их тоже.
  */
 export function AscParagraph({ block }: { block: AbstractBlock }) {
-  const text = safeGetText(block);
+  const html = useBlockContent(block);
   const blocks = block.getBlocks();
   return (
     <div className="asc-paragraph">
-      {text !== null ? (
+      {html ? (
         <p>
-          <InlineHtml html={text} />
+          <InlineHtml html={html} />
         </p>
       ) : null}
       {blocks.length > 0 ? <AscBlockList blocks={blocks} /> : null}
     </div>
   );
-}
-
-function safeGetText(block: AbstractBlock): string | null {
-  // Block имеет `getText()` только для параграфов/листинг-подобных узлов;
-  // для составных блоков возвращаем null, чтобы не падать.
-  const fn = (block as unknown as { getText?: () => string | null }).getText;
-  return typeof fn === "function" ? fn.call(block) : null;
 }

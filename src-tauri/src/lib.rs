@@ -126,6 +126,7 @@ pub fn run() {
             commands::git::git_push,
             commands::project::list_docs_tree,
             commands::project::read_project_file,
+            commands::project::resolve_asset_path,
             commands::project::write_project_file,
             commands::project::create_project_file,
             commands::project::create_project_dir,

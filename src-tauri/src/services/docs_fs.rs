@@ -84,6 +84,25 @@ pub fn read_project_file(docs_root: &str, relative_path: &str) -> Result<String,
     fs::read_to_string(&canonical).map_err(ProjectError::Read)
 }
 
+/// Resolve an asset (e.g. image) referenced from a docs file into a
+/// canonical absolute filesystem path. Mirrors `read_project_file`'s
+/// path validation (`join_relative` rejects `..`, `ensure_under`
+/// canonicalizes and confirms containment under `docs_root`), but
+/// intentionally skips the `is_supported_file` filter — image
+/// extensions (.png/.jpg/...) are not in the supported-doc list.
+///
+/// The frontend turns the returned path into a WebView-loadable URL via
+/// Tauri's `convertFileSrc`.
+pub fn resolve_asset_path(docs_root: &str, relative_path: &str) -> Result<String, ProjectError> {
+    let root = resolve_docs_root(docs_root)?;
+    let joined = paths::join_relative(&root, relative_path)?;
+    let canonical = paths::ensure_under(&root, &joined)?;
+    if !canonical.is_file() {
+        return Err(ProjectError::NotFound(relative_path.to_string()));
+    }
+    Ok(canonical.to_string_lossy().into_owned())
+}
+
 pub fn write_project_file(
     docs_root: &str,
     relative_path: &str,
@@ -327,6 +346,31 @@ mod tests {
         // Deleting the docs root itself is rejected.
         let err = delete_project_dir(root.to_str().unwrap(), ".").unwrap_err();
         assert!(matches!(err, ProjectError::InvalidName(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn resolve_asset_path_returns_canonical_for_existing_file() {
+        let root = temp_dir();
+        create_project_dir(root.to_str().unwrap(), "img").unwrap();
+        let img = root.join("img").join("screenshot.png");
+        fs::write(&img, b"png-bytes").unwrap();
+
+        let resolved = resolve_asset_path(root.to_str().unwrap(), "img/screenshot.png").unwrap();
+        assert_eq!(PathBuf::from(&resolved).canonicalize().unwrap(), img.canonicalize().unwrap());
+
+        // Missing file → NotFound.
+        let err = resolve_asset_path(root.to_str().unwrap(), "img/missing.png").unwrap_err();
+        assert!(matches!(err, ProjectError::NotFound(_)));
+
+        // Path traversal rejected by join_relative.
+        let err = resolve_asset_path(root.to_str().unwrap(), "../outside.png").unwrap_err();
+        assert!(matches!(err, ProjectError::PathEscape(_)));
+
+        // Directories are not valid assets.
+        let err = resolve_asset_path(root.to_str().unwrap(), "img").unwrap_err();
+        assert!(matches!(err, ProjectError::NotFound(_)));
 
         fs::remove_dir_all(&root).ok();
     }

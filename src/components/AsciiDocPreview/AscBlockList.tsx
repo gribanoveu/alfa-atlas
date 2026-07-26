@@ -1,3 +1,4 @@
+import type * as Monaco from "monaco-editor";
 import type { AbstractBlock, List, Section } from "./types";
 import { AscAdmonition } from "./AscAdmonition";
 import { AscCodeBlock } from "./AscCodeBlock";
@@ -13,6 +14,7 @@ import type { AscTable as AscTableType } from "./types";
 type AscBlockListProps = {
   blocks: AbstractBlock[];
   docsRoot?: string | null;
+  monaco?: typeof Monaco | null;
 };
 
 /**
@@ -20,11 +22,15 @@ type AscBlockListProps = {
  * React-компонентом по `getContext()`. Для неизвестных контекстов —
  * fallback: рендерим вложенные блоки (если есть) или исходный текст.
  */
-export function AscBlockList({ blocks, docsRoot = null }: AscBlockListProps) {
+export function AscBlockList({
+  blocks,
+  docsRoot = null,
+  monaco = null,
+}: AscBlockListProps) {
   return (
     <>
       {blocks.map((block, i) => (
-        <AscBlock key={i} block={block} docsRoot={docsRoot} />
+        <AscBlock key={i} block={block} docsRoot={docsRoot} monaco={monaco} />
       ))}
     </>
   );
@@ -33,9 +39,11 @@ export function AscBlockList({ blocks, docsRoot = null }: AscBlockListProps) {
 function AscBlock({
   block,
   docsRoot,
+  monaco,
 }: {
   block: AbstractBlock;
   docsRoot: string | null;
+  monaco: typeof Monaco | null;
 }) {
   const ctx = block.getContext();
 
@@ -55,7 +63,7 @@ function AscBlock({
     case "admonition":
       return <AscAdmonition block={block} />;
     case "listing":
-      return <AscCodeBlock block={block} />;
+      return <AscCodeBlock block={block} monaco={monaco} />;
     case "literal":
       return <AscLiteral block={block} />;
     case "image":
@@ -65,27 +73,40 @@ function AscBlock({
     case "example":
       return (
         <div className="asc-example">
-          <AscBlockList blocks={block.getBlocks()} docsRoot={docsRoot} />
+          <AscBlockList
+            blocks={block.getBlocks()}
+            docsRoot={docsRoot}
+            monaco={monaco}
+          />
         </div>
       );
     case "sidebar":
       return (
         <aside className="asc-sidebar">
           {block.title ? <div className="asc-sidebar-title">{block.title}</div> : null}
-          <AscBlockList blocks={block.getBlocks()} docsRoot={docsRoot} />
+          <AscBlockList
+            blocks={block.getBlocks()}
+            docsRoot={docsRoot}
+            monaco={monaco}
+          />
         </aside>
       );
     case "pass":
-      // Raw content pass-through — пропускаем.
-      return null;
+      return <AscPass block={block} />;
     case "floating_title":
       return block.title ? (
         <h2 className="asc-floating-title">{block.title}</h2>
       ) : null;
     case "open":
-      return <AscBlockList blocks={block.getBlocks()} docsRoot={docsRoot} />;
+      return (
+        <AscBlockList
+          blocks={block.getBlocks()}
+          docsRoot={docsRoot}
+          monaco={monaco}
+        />
+      );
     default:
-      return <AscUnknownBlock block={block} docsRoot={docsRoot} />;
+      return <AscUnknownBlock block={block} docsRoot={docsRoot} monaco={monaco} />;
   }
 }
 
@@ -115,15 +136,44 @@ function safeGetText(block: AbstractBlock): string | null {
 function AscUnknownBlock({
   block,
   docsRoot,
+  monaco,
 }: {
   block: AbstractBlock;
   docsRoot: string | null;
+  monaco: typeof Monaco | null;
 }) {
   const text = safeGetText(block);
   return (
     <div className="asc-unknown" data-context={block.getContext()}>
       {text ? <p>{text}</p> : null}
-      <AscBlockList blocks={block.getBlocks()} docsRoot={docsRoot} />
+      <AscBlockList
+        blocks={block.getBlocks()}
+        docsRoot={docsRoot}
+        monaco={monaco}
+      />
     </div>
   );
+}
+
+/**
+ * Pass-блок (`++++ … ++++`) — raw passthrough: HTML/SVG/<details>, который
+ * автор явно вставил в документ. asciidoctor разбивает `++++ <details> ++++
+ * … ++++ </details> ++++` на несколько последовательных pass-блоков, поэтому
+ * рендерим `getSource()` каждого через `dangerouslySetInnerHTML` — браузер
+ * вебвью сам сбалансирует открывающие/закрывающие теги.
+ */
+function AscPass({ block }: { block: AbstractBlock }) {
+  const html = safeGetSource(block);
+  if (!html) return null;
+  return (
+    <div
+      className="asc-pass"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+function safeGetSource(block: AbstractBlock): string | null {
+  const fn = (block as unknown as { getSource?: () => string }).getSource;
+  return typeof fn === "function" ? fn.call(block) : null;
 }

@@ -190,6 +190,10 @@
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--text-0);
+  /* `colorize`-вывод Monaco содержит \n внутри HTML — сохраняем переносы.
+     У `<pre>` это дефолт, но фиксируем явно на случай переопределений. */
+  white-space: pre;
+  tab-size: 2;
 }
 
 .asc-code code,
@@ -282,6 +286,14 @@
   color: var(--text-1);
 }
 
+.asc-image-placeholder-error {
+  border-color: var(--red-tag);
+}
+
+.asc-image-placeholder-error .asc-image-placeholder-icon {
+  color: var(--red-tag);
+}
+
 .asc-image-caption {
   margin-top: 6px;
   font-size: 12px;
@@ -322,6 +334,11 @@
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-0);
+}
+
+/* Pass-through raw HTML (++++ … ++++): <details>, SVG и т.п. */
+.asc-pass {
+  margin: 14px 0;
 }
 
 .asc-sidebar {

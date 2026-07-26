@@ -82,6 +82,18 @@ export function readProjectFile(
   return invoke<string>("read_project_file", { docsRoot, relativePath });
 }
 
+/**
+ * Validate an asset path (e.g. image) against docsRoot on the backend and
+ * return a canonical absolute filesystem path. The frontend turns it into
+ * a WebView-loadable URL via `convertFileSrc` from `@tauri-apps/api/core`.
+ */
+export function resolveAssetPath(
+  docsRoot: string,
+  relativePath: string,
+): Promise<string> {
+  return invoke<string>("resolve_asset_path", { docsRoot, relativePath });
+}
+
 export function writeProjectFile(
   docsRoot: string,
   relativePath: string,

@@ -1,11 +1,22 @@
+import { useEffect, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { resolveAssetPath } from "../../lib/project";
 import type { AbstractBlock } from "./types";
+
+type LoadState =
+  | { kind: "loading" }
+  | { kind: "loaded"; src: string }
+  | { kind: "error"; message: string };
+
+const EXTERNAL_RE = /^https?:\/\//i;
 
 /**
  * Блок изображения `image::target[alt]`.
  *
- * На первом этапе показывается alt-текст как плейсхолдер. Ресолвинг пути
- * против docsRoot и подгрузка бинарного ассета через Tauri asset-protocol
- * — follow-up (требует `core:asset` capability и проверки путей).
+ * Локальные пути резолвятся против docsRoot через backend-команду
+ * `resolve_asset_path` (валидация `..` и containment), затем превращаются
+ * в WebView-loadable URL через `convertFileSrc`. Внешние `http(s)://`
+ * и `data:` URL отдаются напрямую.
  */
 export function AscImage({
   block,
@@ -17,15 +28,57 @@ export function AscImage({
   const target = block.getAttribute("target") as string | null;
   const alt = (block.getAttribute("alt") as string | null) ?? target ?? "image";
 
-  const src = resolveImageSrc(target, docsRoot);
+  const [state, setState] = useState<LoadState>({ kind: "loading" });
+
+  useEffect(() => {
+    if (!target) {
+      setState({ kind: "error", message: "no target" });
+      return;
+    }
+    // Внешние URL и data: — синхронный passthrough, без backend-валидации.
+    if (EXTERNAL_RE.test(target) || target.startsWith("data:")) {
+      setState({ kind: "loaded", src: target });
+      return;
+    }
+    if (!docsRoot) {
+      setState({ kind: "error", message: "docsRoot unknown" });
+      return;
+    }
+
+    let cancelled = false;
+    setState({ kind: "loading" });
+    resolveAssetPath(docsRoot, target)
+      .then((canonical) => {
+        if (cancelled) return;
+        setState({ kind: "loaded", src: convertFileSrc(canonical) });
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setState({
+          kind: "error",
+          message: e instanceof Error ? e.message : String(e),
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [target, docsRoot]);
 
   return (
     <figure className="asc-image">
-      {src ? (
-        <img src={src} alt={alt} />
+      {state.kind === "loaded" ? (
+        <img src={state.src} alt={alt} />
       ) : (
-        <div className="asc-image-placeholder" title={target ?? undefined}>
-          <span className="asc-image-placeholder-icon">[image]</span>
+        <div
+          className={`asc-image-placeholder ${
+            state.kind === "error" ? "asc-image-placeholder-error" : ""
+          }`}
+          title={target ?? undefined}
+        >
+          <span className="asc-image-placeholder-icon">
+            {state.kind === "error" ? "[image error]" : "[image]"}
+          </span>
           <span className="asc-image-placeholder-alt">{alt}</span>
         </div>
       )}
@@ -34,17 +87,4 @@ export function AscImage({
       ) : null}
     </figure>
   );
-}
-
-function resolveImageSrc(
-  target: string | null,
-  _docsRoot: string | null,
-): string | null {
-  if (!target) return null;
-  // Внешние URL и data: — отдаём как есть.
-  if (/^https?:\/\//i.test(target) || target.startsWith("data:")) {
-    return target;
-  }
-  // Локальные изображения требуют asset-protocol — пока не поддерживается.
-  return null;
 }
