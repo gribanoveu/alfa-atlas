@@ -21,6 +21,14 @@ type RevealRequest = {
   severity: "error" | "warning";
 };
 
+type InsertRequest = {
+  /** Уникальный id запроса, чтобы повторная вставка того же шаблона сработала. */
+  id: number;
+  /** Вкладка, для которой запрошена вставка — защита от повторного срабатывания при remount. */
+  tabId: string;
+  text: string;
+};
+
 type EditorPaneProps = {
   tabs: EditorTab[];
   activeTabId: string | null;
@@ -35,6 +43,8 @@ type EditorPaneProps = {
   completionsEnabled: boolean;
   /** Запрос на переход к строке с диагностикой (из Problems panel). */
   revealRequest: RevealRequest | null;
+  /** Запрос на вставку AsciiDoc-шаблона в позицию курсора. */
+  insertRequest: InsertRequest | null;
   /** Открыть панель «Проблемы» (по клику на индикатор ошибок в редакторе). */
   onOpenProblems: () => void;
   /** Клик по xref-ссылке в превью AsciiDoc (path#anchor или #anchor). */
@@ -61,6 +71,7 @@ export function EditorPane({
   diagnostics,
   completionsEnabled,
   revealRequest,
+  insertRequest,
   onOpenProblems,
   onOpenXref,
   viewMode,
@@ -71,6 +82,7 @@ export function EditorPane({
   const [editor, setEditor] =
     useState<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const highlightRef = useRef<string[]>([]);
+  const lastHandledInsertIdRef = useRef(0);
 
   const handleMount: OnMount = useCallback(
     (editorInstance, monacoInstance) => {
@@ -152,6 +164,38 @@ export function EditorPane({
     }, 2500);
     return () => window.clearTimeout(timer);
   }, [editor, monaco, revealRequest]);
+
+  // Реакция на запрос «вставить AsciiDoc-шаблон в позицию курсора».
+  useEffect(() => {
+    if (!editor || !monaco || !insertRequest || !activeTabId) return;
+    if (insertRequest.tabId !== activeTabId) return;
+    if (insertRequest.id === lastHandledInsertIdRef.current) return;
+
+    lastHandledInsertIdRef.current = insertRequest.id;
+
+    const selection = editor.getSelection();
+    const position = editor.getPosition();
+    if (!position) return;
+
+    const range =
+      selection ??
+      new monaco.Range(
+        position.lineNumber,
+        position.column,
+        position.lineNumber,
+        position.column,
+      );
+
+    editor.executeEdits("asciidoc-snippet", [
+      {
+        range,
+        text: insertRequest.text,
+        forceMoveMarkers: true,
+      },
+    ]);
+    editor.pushUndoStop();
+    editor.focus();
+  }, [editor, monaco, insertRequest, activeTabId]);
 
   const options: MonacoEditor.IStandaloneEditorConstructionOptions = {
     fontFamily: "'JetBrains Mono', ui-monospace, monospace",

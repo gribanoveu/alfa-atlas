@@ -50,6 +50,12 @@ export function isSupportedFile(path: string): boolean {
   return (SUPPORTED_EXTENSIONS as readonly string[]).includes(ext);
 }
 
+/** True when the path is an AsciiDoc document (`.adoc` or `.asciidoc`). */
+export function isAsciiDocPath(path: string): boolean {
+  const ext = extensionOf(path);
+  return ext === ".adoc" || ext === ".asciidoc";
+}
+
 /** Monaco language id for a supported path; unknown → plaintext. */
 export function monacoLanguageFor(path: string): string {
   switch (extensionOf(path)) {

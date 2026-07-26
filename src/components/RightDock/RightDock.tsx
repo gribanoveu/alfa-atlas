@@ -11,6 +11,7 @@ import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import { CommitHistoryPanel } from "./CommitHistoryPanel";
 import { GitPanel } from "./GitPanel";
+import { AsciiDocPanel } from "./AsciiDocPanel";
 import "./RightDock.css";
 
 const TOOLS: {
@@ -71,6 +72,10 @@ type RightDockProps = {
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
   git?: GitPanelViewProps | null;
+  asciidoc?: {
+    canInsert: boolean;
+    onInsert: (text: string) => void;
+  } | null;
 };
 
 export function RightDock({
@@ -80,6 +85,7 @@ export function RightDock({
   onResize,
   onResizeEnd,
   git,
+  asciidoc,
 }: RightDockProps) {
   const open = Boolean(activeTool);
   const active = TOOLS.find((tool) => tool.id === activeTool);
@@ -135,6 +141,11 @@ export function RightDock({
                 busy={git.busy}
                 error={git.error}
                 onRefresh={git.onRefresh}
+              />
+            ) : active.id === "asciidoc" && asciidoc ? (
+              <AsciiDocPanel
+                canInsert={asciidoc.canInsert}
+                onInsert={asciidoc.onInsert}
               />
             ) : (
               <div className="panel-empty">{active.empty}</div>

@@ -30,7 +30,7 @@ import {
 } from "./hooks/useWorkspaceSession";
 import { createProjectDir, createProjectFile, deleteProjectDir, deleteProjectFile, renameProjectDir, renameProjectFile } from "./lib/project";
 import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
-import { formatLabelFor, lineEndingLabelFor } from "./lib/supportedFiles";
+import { formatLabelFor, isAsciiDocPath, lineEndingLabelFor } from "./lib/supportedFiles";
 import { RenameModal } from "./components/Sidebar/RenameModal";
 
 function joinParent(parentPath: string, name: string): string {
@@ -188,7 +188,13 @@ function App() {
     column: number;
     severity: "error" | "warning";
   } | null>(null);
+  const [insertRequest, setInsertRequest] = useState<{
+    id: number;
+    tabId: string;
+    text: string;
+  } | null>(null);
   const revealCounter = useRef(0);
+  const insertCounter = useRef(0);
   const skipNextPanelSync = useRef(false);
   const prevDirtyCount = useRef(0);
 
@@ -518,6 +524,17 @@ function App() {
     layout.setBottomToolId("problems");
   }, [layout]);
 
+  const canInsertAsciiDoc = Boolean(
+    editor.activeTab && isAsciiDocPath(editor.activeTab.path),
+  );
+
+  const handleInsertSnippet = useCallback((text: string) => {
+    const tabId = editor.activeTabId;
+    if (!tabId) return;
+    insertCounter.current += 1;
+    setInsertRequest({ id: insertCounter.current, tabId, text });
+  }, [editor.activeTabId]);
+
   return (
     <div className="app" style={panelStyle}>
       <TopBar
@@ -600,6 +617,7 @@ function App() {
               diagnostics={editorDiagnostics}
               completionsEnabled={workspaceIndex.status !== "idle"}
               revealRequest={revealRequest}
+              insertRequest={insertRequest}
               onOpenProblems={openProblems}
               onOpenXref={openXref}
               viewMode={viewMode.viewMode}
@@ -640,6 +658,14 @@ function App() {
                       void git.unstage(git.status.staged.map((f) => f.path)),
                     onCommit: () => void git.commit(),
                     onRefresh: () => void git.refresh(),
+                  }
+                : null
+            }
+            asciidoc={
+              hasProject
+                ? {
+                    canInsert: canInsertAsciiDoc,
+                    onInsert: handleInsertSnippet,
                   }
                 : null
             }
