@@ -15,8 +15,8 @@ const TOOLS: ToolMeta[] = [
   },
   {
     id: "formatting",
-    label: "Форматирование",
-    empty: "Проблем форматирования нет",
+    label: "Стандарты",
+    empty: "Проблем с тех-стандартами для текущего asciidoc документа нет",
   },
   {
     id: "problems",
