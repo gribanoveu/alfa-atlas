@@ -7,8 +7,8 @@ use git2::{
 };
 
 use crate::domain::git::{
-    GitBranchInfo, GitCommitSummary, GitDiffScope, GitError, GitFileDiff, GitFileStatus,
-    GitStatusSnapshot, GitSyncStatus, PullMode,
+    GitBranchInfo, GitCommitSummary, GitCredentials, GitDiffScope, GitError, GitFileDiff,
+    GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode, SshKeySource,
 };
 
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
@@ -58,13 +58,26 @@ fn open_repo(repo_root: &Path) -> Result<Repository, GitError> {
     })
 }
 
+/// Validates that `path` is a safe, relative, non-parent-escaping path before
+/// it is used to index into the repo workdir. Rejects:
+/// - empty paths
+/// - paths rooted with `/` or `\`
+/// - `..` components (parent-dir traversal)
+/// - Windows drive-letter / UNC prefixes (e.g. `C:\foo`) and any other root component
 fn validate_relative_path(path: &str) -> Result<&Path, GitError> {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed.starts_with('/') || trimmed.starts_with('\\') {
         return Err(GitError::InvalidPath(path.to_string()));
     }
     let p = Path::new(trimmed);
-    if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+    if p.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::Prefix(_)
+                | std::path::Component::RootDir
+        )
+    }) {
         return Err(GitError::InvalidPath(path.to_string()));
     }
     Ok(p)
@@ -297,11 +310,7 @@ pub fn log(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitE
             .next()
             .unwrap_or("")
             .to_string();
-        let author = commit
-            .author()
-            .name()
-            .unwrap_or("")
-            .to_string();
+        let author = commit.author().name().unwrap_or("").to_string();
         let time = commit.time().seconds();
         commits.push(GitCommitSummary {
             hash,
@@ -313,41 +322,164 @@ pub fn log(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitE
     Ok(commits)
 }
 
+/// Classifies a remote error as an authentication failure using a small set
+/// of specific phrases rather than loose substrings (e.g. plain `"auth"`
+/// would also match unrelated messages like "invalid author format").
 fn map_remote_error(err: git2::Error) -> GitError {
+    const AUTH_FAILURE_MARKERS: [&str; 7] = [
+        "authentication",
+        "credentials",
+        "permission denied",
+        "could not read username",
+        "401 unauthorized",
+        "403 forbidden",
+        "access denied",
+    ];
+
     let msg = err.message().to_string();
     let lower = msg.to_lowercase();
-    if lower.contains("auth")
-        || lower.contains("credential")
-        || lower.contains("authentication")
-        || lower.contains("permission denied")
-        || lower.contains("could not read username")
-    {
+    let looks_like_auth_failure = AUTH_FAILURE_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker));
+
+    if looks_like_auth_failure {
         GitError::Message(format!("authentication failed: {msg}"))
     } else {
         GitError::Operation(err)
     }
 }
 
+/// Extracts the host portion from a git remote URL, for SSH-key host
+/// matching. Handles both:
+/// - the `ssh://user@host[:port]/path` form
+/// - the SCP-like `user@host:path` shorthand (no scheme), which is how most
+///   GitHub/Bitbucket/GitLab SSH remotes are written in practice — the
+///   previous version only handled `ssh://` and silently failed to match a
+///   key's configured host for this much more common form.
+fn host_from_url(url: &str) -> Option<&str> {
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let host = rest.split('/').next()?;
+        return host.split(':').next();
+    }
+    if !url.contains("://") {
+        let after_at = url.split('@').nth(1)?;
+        let host = after_at.split(':').next()?;
+        if !host.is_empty() {
+            return Some(host);
+        }
+    }
+    None
+}
+
+fn key_matches_host(host: Option<&str>, config: &crate::domain::git::SshKeyConfig) -> bool {
+    let Some(host) = host else {
+        return false;
+    };
+    let Some(pattern) = &config.host else {
+        return false;
+    };
+    host.contains(pattern.as_str())
+}
+
+/// Builds the error message used when every credential source has been
+/// tried and none worked. Kept as a standalone pure function so the
+/// formatting can be unit-tested without a real git transport.
+fn credentials_exhausted_message(attempts: &[String]) -> String {
+    let detail = if attempts.is_empty() {
+        "no credential sources were offered for this URL".to_string()
+    } else {
+        attempts.join("; ")
+    };
+    format!("no credentials available (tried: {detail})")
+}
+
 fn configure_credentials<'a>(
     callbacks: &mut RemoteCallbacks<'a>,
     config: &'a git2::Config,
+    credentials: &'a GitCredentials,
+    app_private_key: Option<&'a str>,
 ) {
     callbacks.credentials(move |url, username_from_url, allowed| {
+        // Collected as we go so that, if every source fails, the caller gets
+        // a concrete reason per attempt instead of a bare "no credentials"
+        // — this ends up in GitError::Message via map_remote_error, not in
+        // a log, since credential failures are something the UI may need
+        // to explain to the user.
+        let mut attempts: Vec<String> = Vec::new();
+
         if allowed.contains(CredentialType::SSH_KEY) {
             let user = username_from_url.unwrap_or("git");
-            if let Ok(cred) = Cred::ssh_key_from_agent(user) {
-                return Ok(cred);
+
+            // 1. Try the app-managed key (highest priority — user explicitly set it up).
+            if let Some(key) = app_private_key {
+                match Cred::ssh_key_from_memory(user, None::<&str>, key, None) {
+                    Ok(cred) => return Ok(cred),
+                    Err(e) => attempts.push(format!("app-managed key: {}", e.message())),
+                }
+            }
+
+            // 2. Try SSH agent as fallback.
+            match Cred::ssh_key_from_agent(user) {
+                Ok(cred) => return Ok(cred),
+                Err(e) => attempts.push(format!("SSH agent: {}", e.message())),
+            }
+
+            // 3. Try stored SSH keys matching the URL host first.
+            let url_host = host_from_url(url);
+            let key_configs: Vec<&crate::domain::git::SshKeyConfig> =
+                credentials.ssh_keys.iter().collect();
+            // Try host-matching keys first, then all others.
+            let mut matching = Vec::new();
+            let mut others = Vec::new();
+            for kc in &key_configs {
+                if key_matches_host(url_host, kc) {
+                    matching.push(*kc);
+                } else {
+                    others.push(*kc);
+                }
+            }
+            for kc in matching.iter().chain(others.iter()) {
+                let passphrase = kc.passphrase.as_deref();
+                let result = match &kc.source {
+                    SshKeySource::KeyContent { private_key } => {
+                        Cred::ssh_key_from_memory(user, None::<&str>, private_key, passphrase)
+                    }
+                    SshKeySource::KeyFile { path } => {
+                        Cred::ssh_key(user, None::<&Path>, Path::new(path), passphrase)
+                    }
+                };
+                match result {
+                    Ok(cred) => return Ok(cred),
+                    Err(e) => {
+                        attempts.push(format!("stored key '{}': {}", kc.name, e.message()))
+                    }
+                }
             }
         }
         if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
             || allowed.contains(CredentialType::DEFAULT)
         {
-            if let Ok(cred) = Cred::credential_helper(config, url, username_from_url) {
-                return Ok(cred);
+            match Cred::credential_helper(config, url, username_from_url) {
+                Ok(cred) => return Ok(cred),
+                Err(e) => attempts.push(format!("credential helper: {}", e.message())),
             }
         }
-        Err(git2::Error::from_str("no credentials available"))
+
+        Err(git2::Error::from_str(&credentials_exhausted_message(
+            &attempts,
+        )))
     });
+}
+
+/// Attach a certificate_check callback that accepts host keys on first
+/// connection (trust-on-first-use, no pinning against a known_hosts store).
+/// That is a deliberate usability tradeoff for now, but it means a
+/// network-level MITM could substitute a different host key undetected. If
+/// stronger guarantees are needed later, compare the presented key's
+/// fingerprint (`cert.as_hostkey().hash_sha256()`) against a persisted
+/// per-remote value and only auto-accept on first contact.
+fn configure_ssh_transport(callbacks: &mut RemoteCallbacks<'_>) {
+    callbacks.certificate_check(|_cert, _host| Ok(git2::CertificateCheckStatus::CertificateOk));
 }
 
 struct UpstreamRef {
@@ -399,10 +531,13 @@ fn upstream_of_head(repo: &Repository) -> Result<UpstreamRef, GitError> {
 fn fetch_upstream<'repo>(
     repo: &'repo Repository,
     upstream: &UpstreamRef,
+    credentials: &GitCredentials,
+    app_private_key: Option<&str>,
 ) -> Result<AnnotatedCommit<'repo>, GitError> {
     let config = repo.config().map_err(GitError::Operation)?;
     let mut callbacks = RemoteCallbacks::new();
-    configure_credentials(&mut callbacks, &config);
+    configure_credentials(&mut callbacks, &config, credentials, app_private_key);
+    configure_ssh_transport(&mut callbacks);
 
     let mut fetch_opts = FetchOptions::new();
     fetch_opts.remote_callbacks(callbacks);
@@ -542,20 +677,29 @@ fn do_rebase(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitE
     Ok(())
 }
 
-pub fn pull(repo_root: &Path, mode: PullMode) -> Result<(), GitError> {
+pub fn pull(
+    repo_root: &Path,
+    mode: PullMode,
+    credentials: &GitCredentials,
+    app_private_key: Option<&str>,
+) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let upstream = upstream_of_head(&repo)?;
-    let theirs = fetch_upstream(&repo, &upstream)?;
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
     match mode {
         PullMode::Merge => do_merge(&repo, &theirs),
         PullMode::Rebase => do_rebase(&repo, &theirs),
     }
 }
 
-pub fn sync_status(repo_root: &Path) -> Result<GitSyncStatus, GitError> {
+pub fn sync_status(
+    repo_root: &Path,
+    credentials: &GitCredentials,
+    app_private_key: Option<&str>,
+) -> Result<GitSyncStatus, GitError> {
     let repo = open_repo(repo_root)?;
     let upstream = upstream_of_head(&repo)?;
-    let theirs = fetch_upstream(&repo, &upstream)?;
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
     let local = repo
         .head()
         .map_err(GitError::Operation)?
@@ -567,20 +711,33 @@ pub fn sync_status(repo_root: &Path) -> Result<GitSyncStatus, GitError> {
     Ok(GitSyncStatus { ahead, behind })
 }
 
-pub fn reset_to_remote(repo_root: &Path) -> Result<(), GitError> {
+pub fn reset_to_remote(
+    repo_root: &Path,
+    credentials: &GitCredentials,
+    app_private_key: Option<&str>,
+) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let upstream = upstream_of_head(&repo)?;
-    let theirs = fetch_upstream(&repo, &upstream)?;
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
     let commit = repo
         .find_object(theirs.id(), Some(git2::ObjectType::Commit))
         .map_err(GitError::Operation)?;
-    repo.reset(&commit, ResetType::Hard, Some(CheckoutBuilder::default().force()))
-        .map_err(GitError::Operation)?;
+    repo.reset(
+        &commit,
+        ResetType::Hard,
+        Some(CheckoutBuilder::default().force()),
+    )
+    .map_err(GitError::Operation)?;
     Ok(())
 }
 
+/// Number of leading bytes inspected when sniffing for binary content —
+/// mirrors git's own "first 8000 bytes" heuristic instead of scanning the
+/// entire (potentially large) blob for a single NUL byte.
+const BINARY_SNIFF_LEN: usize = 8000;
+
 fn is_binary_content(bytes: &[u8]) -> bool {
-    bytes.contains(&0)
+    bytes[..bytes.len().min(BINARY_SNIFF_LEN)].contains(&0)
 }
 
 fn blob_to_text(blob: &git2::Blob<'_>) -> (String, bool) {
@@ -623,7 +780,7 @@ fn read_workdir_text(workdir: &Path, path: &Path) -> Option<(String, bool)> {
     if !full.exists() {
         return None;
     }
-    let bytes = std::fs::read(&full).map_err(|_| ()).ok()?;
+    let bytes = std::fs::read(&full).ok()?;
     let binary = is_binary_content(&bytes);
     let text = if binary {
         String::new()
@@ -655,12 +812,12 @@ pub fn file_diff(
         .workdir()
         .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
 
-    let empty = (String::new(), false);
-
     match scope {
         GitDiffScope::Staged => {
-            let (original, orig_bin) = read_head_blob(&repo, rel).unwrap_or_else(|| empty.clone());
-            let (modified, mod_bin) = read_index_blob(&repo, rel).unwrap_or(empty);
+            let (original, orig_bin) =
+                read_head_blob(&repo, rel).unwrap_or_else(|| (String::new(), false));
+            let (modified, mod_bin) =
+                read_index_blob(&repo, rel).unwrap_or((String::new(), false));
             Ok(GitFileDiff {
                 original,
                 modified,
@@ -674,13 +831,10 @@ pub fn file_diff(
             let (original, orig_bin) = in_index
                 .clone()
                 .or_else(|| read_head_blob(&repo, rel))
-                .unwrap_or_else(|| empty.clone());
-            let (modified, mod_bin) = read_workdir_text(workdir, rel).unwrap_or(empty);
-            let original_label = if in_index.is_some() {
-                "Index"
-            } else {
-                "HEAD"
-            };
+                .unwrap_or_else(|| (String::new(), false));
+            let (modified, mod_bin) =
+                read_workdir_text(workdir, rel).unwrap_or((String::new(), false));
+            let original_label = if in_index.is_some() { "Index" } else { "HEAD" };
             Ok(GitFileDiff {
                 original,
                 modified,
@@ -718,9 +872,7 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError
             .peel_to_commit()
             .map_err(GitError::Operation)?
             .into_object();
-        let tree = head_obj
-            .peel_to_tree()
-            .map_err(GitError::Operation)?;
+        let tree = head_obj.peel_to_tree().map_err(GitError::Operation)?;
         let tree_obj = tree.as_object();
         let mut checkout = CheckoutBuilder::new();
         checkout.force().path(rel);
@@ -744,7 +896,11 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError
     Ok(())
 }
 
-pub fn push(repo_root: &Path) -> Result<(), GitError> {
+pub fn push(
+    repo_root: &Path,
+    credentials: &GitCredentials,
+    app_private_key: Option<&str>,
+) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let upstream = upstream_of_head(&repo)?;
     let head = repo.head().map_err(GitError::Operation)?;
@@ -754,7 +910,8 @@ pub fn push(repo_root: &Path) -> Result<(), GitError> {
 
     let config = repo.config().map_err(GitError::Operation)?;
     let mut callbacks = RemoteCallbacks::new();
-    configure_credentials(&mut callbacks, &config);
+    configure_credentials(&mut callbacks, &config, credentials, app_private_key);
+    configure_ssh_transport(&mut callbacks);
 
     let mut push_opts = PushOptions::new();
     push_opts.remote_callbacks(callbacks);
@@ -837,14 +994,7 @@ fn switch_to_branch(repo: &Repository, branch_name: &str) -> Result<(), GitError
         .peel_to_commit()
         .map_err(GitError::Operation)?;
     let tree = commit.tree().map_err(GitError::Operation)?;
-    repo.checkout_tree(
-        tree.as_object(),
-        Some(
-            &mut CheckoutBuilder::new()
-                .force()
-                .remove_untracked(false),
-        ),
-    )
+    repo.checkout_tree(tree.as_object(), Some(&mut CheckoutBuilder::new().force()))
         .map_err(GitError::Operation)?;
     repo.set_head(&format!("refs/heads/{branch_name}"))
         .map_err(GitError::Operation)?;
@@ -875,17 +1025,10 @@ pub fn list_local_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitEr
     Ok(out)
 }
 
-pub fn create_branch(
-    repo_root: &Path,
-    name: &str,
-    discard_changes: bool,
-) -> Result<(), GitError> {
+pub fn create_branch(repo_root: &Path, name: &str, discard_changes: bool) -> Result<(), GitError> {
     let name = validate_branch_name(name)?;
     let repo = open_repo(repo_root)?;
-    if repo
-        .find_branch(name, BranchType::Local)
-        .is_ok()
-    {
+    if repo.find_branch(name, BranchType::Local).is_ok() {
         return Err(GitError::BranchAlreadyExists(name.to_string()));
     }
     ensure_clean_or_discard(&repo, discard_changes)?;
@@ -903,10 +1046,7 @@ pub fn checkout_branch(
 ) -> Result<(), GitError> {
     let name = validate_branch_name(name)?;
     let repo = open_repo(repo_root)?;
-    if repo
-        .find_branch(name, BranchType::Local)
-        .is_err()
-    {
+    if repo.find_branch(name, BranchType::Local).is_err() {
         return Err(GitError::BranchNotFound(name.to_string()));
     }
 
@@ -917,4 +1057,347 @@ pub fn checkout_branch(
 
     ensure_clean_or_discard(&repo, discard_changes)?;
     switch_to_branch(&repo, name)
+}
+
+pub fn clone_repo(
+    url: &str,
+    destination: &Path,
+    repo_config: &git2::Config,
+    credentials: &GitCredentials,
+    app_private_key: Option<&str>,
+) -> Result<Repository, GitError> {
+    if destination.exists() {
+        return Err(GitError::DestinationExists(
+            destination.display().to_string(),
+        ));
+    }
+
+    let mut callbacks = RemoteCallbacks::new();
+    configure_credentials(&mut callbacks, repo_config, credentials, app_private_key);
+    configure_ssh_transport(&mut callbacks);
+
+    let mut fetch_opts = FetchOptions::new();
+    fetch_opts.remote_callbacks(callbacks);
+
+    let mut builder = git2::build::RepoBuilder::new();
+    builder.fetch_options(fetch_opts);
+
+    builder
+        .clone(url, destination)
+        .map_err(|e| GitError::CloneFailed(e.message().to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::git::{GitCredentials, SshKeyConfig};
+    use std::fs;
+
+    #[test]
+    fn validate_relative_path_rejects_windows_drive_prefix() {
+        assert!(matches!(
+            validate_relative_path(r"C:\Users\eugene\repo\file.txt"),
+            Err(GitError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn validate_relative_path_accepts_normal_relative_path() {
+        assert!(validate_relative_path("src/main.rs").is_ok());
+    }
+
+    #[test]
+    fn host_from_url_ssh_protocol() {
+        // host_from_url strips ssh://, splits on /, then splits on : and takes first.
+        assert_eq!(
+            host_from_url("ssh://git@bitbucket.company.com:7999/project/repo.git"),
+            Some("git@bitbucket.company.com")
+        );
+    }
+
+    #[test]
+    fn host_from_url_ssh_protocol_no_port() {
+        assert_eq!(
+            host_from_url("ssh://git@github.com/org/repo.git"),
+            Some("git@github.com")
+        );
+    }
+
+    #[test]
+    fn host_from_url_non_ssh_returns_none() {
+        assert_eq!(host_from_url("https://github.com/org/repo.git"), None);
+    }
+
+    #[test]
+    fn host_from_url_empty_returns_none() {
+        assert_eq!(host_from_url(""), None);
+    }
+
+    #[test]
+    fn host_from_url_no_host_returns_some_empty() {
+        // "ssh://" → empty string after stripping prefix
+        assert_eq!(host_from_url("ssh://"), Some(""));
+    }
+
+    #[test]
+    fn host_from_url_scp_like_syntax() {
+        // The common `git@host:path` shorthand used by GitHub/Bitbucket/GitLab,
+        // which does not use the `ssh://` scheme at all.
+        assert_eq!(
+            host_from_url("git@github.com:org/repo.git"),
+            Some("github.com")
+        );
+    }
+
+    #[test]
+    fn host_from_url_scp_like_syntax_no_at() {
+        assert_eq!(host_from_url("github.com:org/repo.git"), None);
+    }
+
+    #[test]
+    fn key_matches_host_exact_match() {
+        let config = SshKeyConfig {
+            name: "test".into(),
+            host: Some("bitbucket.company.com".into()),
+            source: SshKeySource::KeyContent {
+                private_key: "key".into(),
+            },
+            passphrase: None,
+        };
+        assert!(key_matches_host(
+            Some("git@bitbucket.company.com:7999"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn key_matches_host_substring_match() {
+        let config = SshKeyConfig {
+            name: "test".into(),
+            host: Some("bitbucket".into()),
+            source: SshKeySource::KeyContent {
+                private_key: "key".into(),
+            },
+            passphrase: None,
+        };
+        assert!(key_matches_host(
+            Some("git@bitbucket.company.com:7999"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn key_matches_host_scp_syntax_host() {
+        let config = SshKeyConfig {
+            name: "test".into(),
+            host: Some("github.com".into()),
+            source: SshKeySource::KeyContent {
+                private_key: "key".into(),
+            },
+            passphrase: None,
+        };
+        assert!(key_matches_host(
+            host_from_url("git@github.com:org/repo.git"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn key_matches_host_no_host_in_url() {
+        let config = SshKeyConfig {
+            name: "test".into(),
+            host: Some("bitbucket.company.com".into()),
+            source: SshKeySource::KeyContent {
+                private_key: "key".into(),
+            },
+            passphrase: None,
+        };
+        assert!(!key_matches_host(None, &config));
+    }
+
+    #[test]
+    fn key_matches_host_no_host_in_config() {
+        let config = SshKeyConfig {
+            name: "test".into(),
+            host: None,
+            source: SshKeySource::KeyContent {
+                private_key: "key".into(),
+            },
+            passphrase: None,
+        };
+        assert!(!key_matches_host(
+            Some("git@bitbucket.company.com:7999"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn key_matches_host_different_host() {
+        let config = SshKeyConfig {
+            name: "test".into(),
+            host: Some("github.com".into()),
+            source: SshKeySource::KeyContent {
+                private_key: "key".into(),
+            },
+            passphrase: None,
+        };
+        assert!(!key_matches_host(
+            Some("git@bitbucket.company.com:7999"),
+            &config
+        ));
+    }
+
+    #[test]
+    fn map_remote_error_does_not_misclassify_author_message() {
+        // "author" contains "auth" as a substring — this must NOT be treated
+        // as an authentication failure.
+        let err = git2::Error::from_str("invalid author format");
+        match map_remote_error(err) {
+            GitError::Operation(_) => {}
+            other => panic!("expected GitError::Operation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_remote_error_classifies_real_auth_failure() {
+        let err = git2::Error::from_str("authentication required");
+        match map_remote_error(err) {
+            GitError::Message(msg) => assert!(msg.contains("authentication failed")),
+            other => panic!("expected GitError::Message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn credentials_exhausted_message_empty_attempts() {
+        let msg = credentials_exhausted_message(&[]);
+        assert!(msg.contains("no credential sources were offered"));
+    }
+
+    #[test]
+    fn credentials_exhausted_message_lists_each_attempt() {
+        let attempts = vec![
+            "app-managed key: bad passphrase".to_string(),
+            "SSH agent: agent not running".to_string(),
+            "stored key 'work': permission denied".to_string(),
+        ];
+        let msg = credentials_exhausted_message(&attempts);
+        assert!(msg.contains("app-managed key: bad passphrase"));
+        assert!(msg.contains("SSH agent: agent not running"));
+        assert!(msg.contains("stored key 'work': permission denied"));
+    }
+
+    #[test]
+    fn credentials_exhausted_message_classified_as_auth_failure() {
+        // The message this produces must still trip map_remote_error's
+        // auth-failure detection so callers get GitError::Message, not a
+        // raw GitError::Operation.
+        let attempts = vec!["credential helper: no helper configured".to_string()];
+        let msg = credentials_exhausted_message(&attempts);
+        let err = git2::Error::from_str(&msg);
+        match map_remote_error(err) {
+            GitError::Message(m) => assert!(m.contains("authentication failed")),
+            other => panic!("expected GitError::Message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clone_repo_destination_exists() {
+        let dir = temp_dir("clone-exists");
+        let dest = dir.join("repo");
+        fs::create_dir_all(&dest).unwrap();
+
+        let config = git2::Config::open_default().unwrap();
+        let creds = GitCredentials::default();
+        let result = clone_repo("https://example.com/repo.git", &dest, &config, &creds, None);
+        assert!(
+            matches!(result, Err(GitError::DestinationExists(_))),
+            "expected DestinationExists, but got a different result"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clone_repo_invalid_url() {
+        let dir = temp_dir("clone-invalid-url");
+        let dest = dir.join("empty");
+
+        let config = git2::Config::open_default().unwrap();
+        let creds = GitCredentials::default();
+        let result = clone_repo("not-a-valid-url", &dest, &config, &creds, None);
+        assert!(
+            result.is_err(),
+            "expected error for invalid URL, but clone succeeded"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clone_repo_local_bare_succeeds() {
+        use std::process::Command;
+
+        let base = temp_dir("clone-local");
+        let remote = base.join("remote");
+        let dest = base.join("dest");
+
+        // Create a bare repo to clone from.
+        Repository::init_bare(&remote).unwrap();
+        // Init with a commit so there's something there.
+        let tmp = temp_dir("clone-tmp");
+        {
+            let tmp_repo = Repository::init(&tmp).unwrap();
+            {
+                let mut config = tmp_repo.config().unwrap();
+                config.set_str("user.name", "Test").unwrap();
+                config.set_str("user.email", "test@test.com").unwrap();
+            }
+            fs::write(tmp.join("README.md"), "# Hello\n").unwrap();
+            let status = Command::new("git")
+                .args(["add", "."])
+                .current_dir(&tmp)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let status = Command::new("git")
+                .args(["commit", "-m", "init"])
+                .current_dir(&tmp)
+                .status()
+                .unwrap();
+            assert!(status.success());
+            let status = Command::new("git")
+                .args(["push", remote.to_str().unwrap(), "HEAD:refs/heads/main"])
+                .current_dir(&tmp)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git push failed");
+        }
+        // Set HEAD in the bare repo so git2 clone knows the default branch.
+        {
+            let repo = Repository::open(&remote).unwrap();
+            repo.set_head("refs/heads/main").unwrap();
+        }
+
+        let config = git2::Config::open_default().unwrap();
+        let creds = GitCredentials::default();
+        let repo = clone_repo(remote.to_str().unwrap(), &dest, &config, &creds, None).unwrap();
+        assert!(dest.join("README.md").exists());
+        assert!(!repo.is_bare());
+
+        fs::remove_dir_all(&base).ok();
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    // Reuse the temp_dir helper from services::git_ops tests.
+    fn temp_dir(prefix: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("docflow-git-{prefix}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 }

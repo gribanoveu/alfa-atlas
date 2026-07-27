@@ -1,15 +1,25 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
+import { gitClone } from "../../lib/git";
+import type { OpenedProject } from "../../lib/git";
 import "./CloneRepoModal.css";
 
 type CloneRepoModalProps = {
   onClose: () => void;
+  onOpened?: (project: OpenedProject) => void;
+  onOpenSettings?: () => void;
 };
 
-export function CloneRepoModal({ onClose }: CloneRepoModalProps) {
+export function CloneRepoModal({
+  onClose,
+  onOpened,
+  onOpenSettings,
+}: CloneRepoModalProps) {
   const [url, setUrl] = useState("");
   const [destination, setDestination] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+  const [cloning, setCloning] = useState(false);
+  const [needsAuth, setNeedsAuth] = useState(false);
 
   const pickDestination = async () => {
     const selected = await open({
@@ -21,10 +31,32 @@ export function CloneRepoModal({ onClose }: CloneRepoModalProps) {
     setDestination(selected);
   };
 
-  const submit = () => {
-    setMessage(
-      "Клонирование репозитория будет подключено позже. Сейчас можно открыть уже существующую папку.",
-    );
+  const submit = async () => {
+    setMessage(null);
+    setNeedsAuth(false);
+    setCloning(true);
+    try {
+      setMessage("Клонирование...");
+      const project = await gitClone(url.trim(), destination.trim());
+      setCloning(false);
+      onOpened?.(project);
+    } catch (e) {
+      setCloning(false);
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.startsWith("no_ssh_credentials:")) {
+        setNeedsAuth(true);
+        setMessage(
+          "Аутентификация не настроена. Добавьте SSH ключ в настройках, чтобы продолжить.",
+        );
+      } else {
+        setMessage(msg);
+      }
+    }
+  };
+
+  const handleOpenSettings = () => {
+    onClose();
+    onOpenSettings?.();
   };
 
   return (
@@ -47,11 +79,12 @@ export function CloneRepoModal({ onClose }: CloneRepoModalProps) {
           <span className="clone-modal-label">URL репозитория</span>
           <input
             className="clone-modal-input"
-            type="url"
-            placeholder="https://github.com/org/repo.git"
+            type="text"
+            placeholder="git@bitbucket.company.com:project/repo.git"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
             autoFocus
+            disabled={cloning}
           />
         </label>
 
@@ -64,30 +97,55 @@ export function CloneRepoModal({ onClose }: CloneRepoModalProps) {
               placeholder="Выберите папку…"
               value={destination}
               onChange={(event) => setDestination(event.target.value)}
+              disabled={cloning}
             />
             <button
               type="button"
               className="clone-modal-browse"
               onClick={() => void pickDestination()}
+              disabled={cloning}
             >
               Обзор…
             </button>
           </div>
         </label>
 
-        {message ? <div className="clone-modal-message">{message}</div> : null}
+        {message ? (
+          <div
+            className={`clone-modal-message${cloning ? " is-busy" : ""}`}
+          >
+            {message}
+          </div>
+        ) : null}
+
+        {needsAuth && onOpenSettings ? (
+          <div className="clone-modal-actions">
+            <button
+              type="button"
+              className="clone-modal-btn primary"
+              onClick={handleOpenSettings}
+            >
+              Открыть настройки
+            </button>
+          </div>
+        ) : null}
 
         <div className="clone-modal-actions">
-          <button type="button" className="clone-modal-btn" onClick={onClose}>
+          <button
+            type="button"
+            className="clone-modal-btn"
+            onClick={onClose}
+            disabled={cloning}
+          >
             Отмена
           </button>
           <button
             type="button"
             className="clone-modal-btn primary"
-            onClick={submit}
-            disabled={!url.trim() || !destination.trim()}
+            onClick={() => void submit()}
+            disabled={!url.trim() || !destination.trim() || cloning}
           >
-            Клонировать
+            {cloning ? "Клонирование…" : "Клонировать"}
           </button>
         </div>
       </div>

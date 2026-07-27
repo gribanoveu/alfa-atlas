@@ -34,4 +34,8 @@ serde_yaml = "0.9"
 regex = "1"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 tauri-plugin-mcp-bridge = "0.12.0"
+keyring = "3"
+aes-gcm = "0.10"
+rand = "0.8"
+ssh-key = { version = "0.6", features = ["ed25519"] }
 

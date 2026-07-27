@@ -149,6 +149,7 @@ export function useProject() {
     ready,
     error,
     pendingOpen,
+    applyOpened,
     openFolderDialog,
     beginOpenPath,
     confirmPendingOpen,

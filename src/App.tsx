@@ -717,6 +717,9 @@ function App() {
             setFolderError(e instanceof Error ? e.message : String(e));
           }
         }}
+        onCloneProject={async (cloned) => {
+          await project.applyOpened(cloned.root, cloned.docsRoot);
+        }}
       />
       <div className="workspace">
         <div className={mainClassName}>
@@ -798,6 +801,9 @@ function App() {
             <Welcome
               onOpenFolder={openFolder}
               onOpenRecent={openRecent}
+              onCloneProject={async (cloned) => {
+                await project.applyOpened(cloned.root, cloned.docsRoot);
+              }}
               error={project.ready ? (folderError ?? project.error) : null}
             />
           )}

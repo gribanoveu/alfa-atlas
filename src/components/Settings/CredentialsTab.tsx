@@ -1,0 +1,321 @@
+import { useState, useEffect, useCallback } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import {
+  gitGetCredentials,
+  gitSaveCredentials,
+  gitGetKeyStatus,
+  gitGenerateKey,
+  gitImportKey,
+  type GitCredentials,
+  type SshKeyConfig,
+  type AppKeyStatus,
+} from "../../lib/git";
+import { AddSshKeyModal } from "./AddSshKeyModal";
+import "./CredentialsTab.css";
+
+export function CredentialsTab() {
+  const [credentials, setCredentials] = useState<GitCredentials | null>(null);
+  const [keyStatus, setKeyStatus] = useState<AppKeyStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editIndex, setEditIndex] = useState<number | null>(null);
+  const [keyGenBusy, setKeyGenBusy] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [creds, status] = await Promise.all([
+          gitGetCredentials(),
+          gitGetKeyStatus(),
+        ]);
+        if (!cancelled) {
+          setCredentials(creds);
+          setKeyStatus(status);
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persist = async (creds: GitCredentials) => {
+    setCredentials(creds);
+    setBusy(true);
+    try {
+      await gitSaveCredentials(creds);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      const current = await gitGetCredentials().catch(() => credentials);
+      if (current) setCredentials(current);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = (index: number) => {
+    if (!credentials) return;
+    const keys = [...credentials.sshKeys];
+    keys.splice(index, 1);
+    void persist({ sshKeys: keys });
+  };
+
+  const handleSave = (config: SshKeyConfig) => {
+    if (!credentials) return;
+    if (editIndex !== null) {
+      const keys = [...credentials.sshKeys];
+      keys[editIndex] = config;
+      void persist({ sshKeys: keys });
+    } else {
+      void persist({ sshKeys: [...credentials.sshKeys, config] });
+    }
+    setShowAddModal(false);
+    setEditIndex(null);
+  };
+
+  const openAdd = () => {
+    setEditIndex(null);
+    setShowAddModal(true);
+  };
+
+  const openEdit = (index: number) => {
+    setEditIndex(index);
+    setShowAddModal(true);
+  };
+
+  const handleGenerateKey = async () => {
+    setKeyGenBusy(true);
+    setError(null);
+    try {
+      const status = await gitGenerateKey();
+      setKeyStatus(status);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setKeyGenBusy(false);
+    }
+  };
+
+  const handleImportKey = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        title: "Выберите файл приватного SSH ключа",
+      });
+      if (selected === null || Array.isArray(selected)) return;
+      setKeyGenBusy(true);
+      setError(null);
+      try {
+        const status = await gitImportKey(selected);
+        setKeyStatus(status);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setKeyGenBusy(false);
+      }
+    } catch {
+      // dialog cancelled
+    }
+  };
+
+  const handleCopyPublicKey = useCallback(async () => {
+    if (!keyStatus?.publicKey) return;
+    try {
+      await navigator.clipboard.writeText(keyStatus.publicKey);
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2000);
+    } catch {
+      // clipboard not available
+    }
+  }, [keyStatus?.publicKey]);
+
+  if (!credentials || !keyStatus) {
+    return (
+      <div className="credentials-tab">
+        {error ? (
+          <div className="settings-error">{error}</div>
+        ) : (
+          <p>Загрузка...</p>
+        )}
+      </div>
+    );
+  }
+
+  const editKey =
+    editIndex !== null ? credentials.sshKeys[editIndex] ?? null : null;
+
+  return (
+    <div className="credentials-tab">
+      {/* Section 1: App Key */}
+      <div className="credentials-section-title">Ключ приложения</div>
+      <p className="credentials-lead">
+        Docflow использует Ed25519 SSH ключ для авторизации в Git. Закрытый
+        ключ хранится зашифрованным, ключ шифрования — в системной связке
+        ключей. Скопируйте открытый ключ и добавьте его в ваш Git-провайдер
+        (GitHub, Bitbucket и т.д.) как доверенный.
+      </p>
+
+      {!keyStatus.exists ? (
+        <div className="credentials-app-key-none">
+          <p className="credentials-empty">
+            SSH ключ не настроен. Сгенерируйте новый ключ или импортируйте
+            существующий.
+          </p>
+          <div className="credentials-actions">
+            <button
+              type="button"
+              className="settings-btn primary"
+              disabled={keyGenBusy}
+              onClick={() => void handleGenerateKey()}
+            >
+              {keyGenBusy ? "Генерация..." : "Сгенерировать ключ"}
+            </button>
+            <button
+              type="button"
+              className="settings-btn"
+              disabled={keyGenBusy}
+              onClick={() => void handleImportKey()}
+            >
+              Импортировать из файла...
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="credentials-app-key">
+          <div className="credentials-app-key-header">
+            <span className="credentials-app-key-badge">
+              {keyStatus.isImported ? "Импортированный ключ" : "Сгенерированный ключ"}
+            </span>
+            {keyStatus.privateKeyAvailable ? (
+              <span className="credentials-app-key-status ok">
+                Активен
+              </span>
+            ) : (
+              <span className="credentials-app-key-status error">
+                Не удалось расшифровать закрытый ключ
+              </span>
+            )}
+          </div>
+          <label className="clone-modal-field">
+            <span className="clone-modal-label">Открытый ключ</span>
+            <textarea
+              className="clone-modal-input ssh-key-textarea"
+              value={keyStatus.publicKey}
+              readOnly
+              rows={3}
+            />
+          </label>
+          <div className="credentials-actions">
+            <button
+              type="button"
+              className="settings-btn primary"
+              onClick={handleCopyPublicKey}
+            >
+              {copyFeedback ? "Скопировано!" : "Копировать"}
+            </button>
+            <button
+              type="button"
+              className="settings-btn"
+              disabled={keyGenBusy}
+              onClick={() => void handleGenerateKey()}
+            >
+              {keyGenBusy ? "Генерация..." : "Перегенерировать"}
+            </button>
+            <button
+              type="button"
+              className="settings-btn"
+              disabled={keyGenBusy}
+              onClick={() => void handleImportKey()}
+            >
+              Импортировать из файла...
+            </button>
+          </div>
+        </div>
+      )}
+
+      <hr className="credentials-divider" />
+
+      {/* Section 2: Additional Keys */}
+      <div className="credentials-section-title">
+        Дополнительные SSH ключи
+      </div>
+      <p className="credentials-lead">
+        Дополнительные SSH ключи для специфичных хостов. Приоритет: ключ приложения,
+        затем SSH-агент, затем ключи из этого списка.
+      </p>
+
+      {credentials.sshKeys.length === 0 ? (
+        <p className="credentials-empty">Нет сохранённых SSH ключей.</p>
+      ) : (
+        <div className="credentials-list">
+          {credentials.sshKeys.map((key, index) => (
+            <div key={index} className="credentials-item">
+              <div className="credentials-item-info">
+                <span className="credentials-item-name">{key.name}</span>
+                {key.host ? (
+                  <span className="credentials-item-host">{key.host}</span>
+                ) : null}
+                <span className="credentials-item-type">
+                  {key.source.kind === "keyContent"
+                    ? "Содержимое ключа"
+                    : `Файл: ${key.source.path.slice(-30)}`}
+                </span>
+              </div>
+              <div className="credentials-item-actions">
+                <button
+                  type="button"
+                  className="settings-link-btn"
+                  disabled={busy}
+                  onClick={() => openEdit(index)}
+                >
+                  Изменить
+                </button>
+                <button
+                  type="button"
+                  className="settings-link-btn danger"
+                  disabled={busy}
+                  onClick={() => handleDelete(index)}
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="credentials-actions">
+        <button
+          type="button"
+          className="settings-btn primary"
+          disabled={busy}
+          onClick={openAdd}
+        >
+          Добавить SSH ключ
+        </button>
+      </div>
+
+      {showAddModal ? (
+        <AddSshKeyModal
+          initial={editKey}
+          onSave={handleSave}
+          onClose={() => {
+            setShowAddModal(false);
+            setEditIndex(null);
+          }}
+        />
+      ) : null}
+
+      {error ? <div className="settings-error">{error}</div> : null}
+    </div>
+  );
+}

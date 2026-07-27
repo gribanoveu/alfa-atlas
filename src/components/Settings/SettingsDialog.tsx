@@ -16,14 +16,16 @@ import {
 import { SUPPORTED_FORMAT_LABELS } from "../../lib/supportedFiles";
 import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
+import { CredentialsTab } from "./CredentialsTab";
 
-type SectionId = "general" | "editor" | "formats" | "paths";
+export type SectionId = "general" | "editor" | "formats" | "paths" | "credentials";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "Общие" },
   { id: "editor", label: "Редактор" },
   { id: "formats", label: "Файлы" },
   { id: "paths", label: "Пути" },
+  { id: "credentials", label: "Git" },
 ];
 
 type FontSizePrefKey =
@@ -74,14 +76,16 @@ type SettingsDialogProps = {
   onClose: () => void;
   onCloseProject?: () => Promise<void>;
   onPrefsChange?: (prefs: GeneralPrefs) => void;
+  initialSection?: SectionId;
 };
 
 export function SettingsDialog({
   projectRoot,
   onClose,
   onPrefsChange,
+  initialSection,
 }: SettingsDialogProps) {
-  const [section, setSection] = useState<SectionId>("general");
+  const [section, setSection] = useState<SectionId>(initialSection ?? "general");
   const [prefs, setPrefs] = useState<GeneralPrefs | null>(null);
   const [paths, setPaths] = useState<SettingsPaths | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -543,6 +547,8 @@ export function SettingsDialog({
                 </div>
               </>
             ) : null}
+
+            {section === "credentials" ? <CredentialsTab /> : null}
 
             {error ? <div className="settings-error">{error}</div> : null}
           </div>

@@ -5,7 +5,9 @@ import { useCallback, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
 import type { GeneralPrefs } from "../../lib/prefs";
+import type { OpenedProject } from "../../lib/git";
 import { SettingsDialog } from "../Settings/SettingsDialog";
+import type { SectionId } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
 import { AboutModal } from "./AboutModal";
 import { MenuBar } from "./MenuBar";
@@ -37,6 +39,7 @@ type TopBarProps = {
   canGoBack?: boolean;
   canGoForward?: boolean;
   onSelectProject?: (root: string) => void;
+  onCloneProject?: (project: OpenedProject) => Promise<void>;
 };
 
 export function TopBar({
@@ -64,10 +67,12 @@ export function TopBar({
   canGoBack = false,
   canGoForward = false,
   onSelectProject,
+  onCloneProject,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
 
   const onAction = useCallback(
@@ -116,6 +121,7 @@ export function TopBar({
           if (hasProject) onPush();
           break;
         case "tools.settings":
+          setSettingsInitialSection(undefined);
           setSettingsOpen(true);
           break;
         case "help.about":
@@ -218,13 +224,31 @@ export function TopBar({
       </header>
 
       {aboutOpen ? <AboutModal onClose={() => setAboutOpen(false)} /> : null}
-      {cloneOpen ? <CloneRepoModal onClose={() => setCloneOpen(false)} /> : null}
+      {cloneOpen ? (
+        <CloneRepoModal
+          onClose={() => setCloneOpen(false)}
+          onOpenSettings={() => {
+            setSettingsInitialSection("credentials");
+            setSettingsOpen(true);
+          }}
+          onOpened={async (project) => {
+            setCloneOpen(false);
+            if (onCloneProject) {
+              await onCloneProject(project);
+            }
+          }}
+        />
+      ) : null}
       {settingsOpen ? (
         <SettingsDialog
           projectRoot={projectRoot}
-          onClose={() => setSettingsOpen(false)}
+          onClose={() => {
+            setSettingsOpen(false);
+            setSettingsInitialSection(undefined);
+          }}
           onCloseProject={onCloseProject}
           onPrefsChange={onPrefsChange}
+          initialSection={settingsInitialSection}
         />
       ) : null}
     </>

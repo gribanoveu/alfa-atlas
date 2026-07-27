@@ -4,6 +4,7 @@ import {
   listRecentProjects,
   removeRecentProject,
   type RecentProject,
+  type OpenedProject,
 } from "../../lib/project";
 import { CloneRepoModal } from "./CloneRepoModal";
 import "./Welcome.css";
@@ -11,10 +12,12 @@ import "./Welcome.css";
 type WelcomeProps = {
   onOpenFolder: () => Promise<unknown>;
   onOpenRecent: (root: string) => Promise<unknown>;
+  onCloneProject?: (project: OpenedProject) => Promise<unknown>;
+  onOpenSettings?: () => void;
   error?: string | null;
 };
 
-export function Welcome({ onOpenFolder, onOpenRecent, error }: WelcomeProps) {
+export function Welcome({ onOpenFolder, onOpenRecent, onCloneProject, onOpenSettings, error }: WelcomeProps) {
   const [busy, setBusy] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -154,7 +157,16 @@ export function Welcome({ onOpenFolder, onOpenRecent, error }: WelcomeProps) {
       </div>
 
       {cloneOpen ? (
-        <CloneRepoModal onClose={() => setCloneOpen(false)} />
+        <CloneRepoModal
+          onClose={() => setCloneOpen(false)}
+          onOpenSettings={onOpenSettings}
+          onOpened={async (project) => {
+            setCloneOpen(false);
+            if (onCloneProject) {
+              await onCloneProject(project);
+            }
+          }}
+        />
       ) : null}
     </section>
   );

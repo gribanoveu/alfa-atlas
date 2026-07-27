@@ -47,6 +47,33 @@ export type GitSyncStatus = {
   behind: number;
 };
 
+export type SshKeySource =
+  | { kind: "keyContent"; privateKey: string }
+  | { kind: "keyFile"; path: string };
+
+export type SshKeyConfig = {
+  name: string;
+  host?: string;
+  source: SshKeySource;
+  passphrase?: string;
+};
+
+export type GitCredentials = {
+  sshKeys: SshKeyConfig[];
+};
+
+export type AppKeyStatus = {
+  exists: boolean;
+  publicKey: string;
+  privateKeyAvailable: boolean;
+  isImported: boolean;
+};
+
+export type OpenedProject = {
+  root: string;
+  docsRoot: string;
+};
+
 export function gitStatus(repoRoot: string): Promise<GitStatusSnapshot> {
   return invoke<GitStatusSnapshot>("git_status", { repoRoot });
 }
@@ -122,4 +149,33 @@ export function gitCheckoutBranch(
   discardChanges = false,
 ): Promise<void> {
   return invoke<void>("git_checkout_branch", { repoRoot, name, discardChanges });
+}
+
+export function gitGetCredentials(): Promise<GitCredentials> {
+  return invoke<GitCredentials>("git_get_credentials");
+}
+
+export function gitSaveCredentials(
+  credentials: GitCredentials,
+): Promise<void> {
+  return invoke<void>("git_save_credentials", { credentials });
+}
+
+export function gitClone(
+  url: string,
+  destination: string,
+): Promise<OpenedProject> {
+  return invoke<OpenedProject>("git_clone", { url, destination });
+}
+
+export function gitGetKeyStatus(): Promise<AppKeyStatus> {
+  return invoke<AppKeyStatus>("git_get_key_status");
+}
+
+export function gitGenerateKey(): Promise<AppKeyStatus> {
+  return invoke<AppKeyStatus>("git_generate_key");
+}
+
+export function gitImportKey(sourcePath: string): Promise<AppKeyStatus> {
+  return invoke<AppKeyStatus>("git_import_key", { sourcePath });
 }
