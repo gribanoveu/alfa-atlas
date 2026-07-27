@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, FolderOpen } from "lucide-react";
 import { useCallback, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
@@ -191,9 +191,7 @@ export function TopBar({
               aria-expanded={recentDropdownOpen}
               aria-haspopup="menu"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M9 2v20M15 2v6a3 3 0 0 1-3 3H6M9 8h.01" />
-              </svg>
+              <FolderOpen size={14} />
               <b>{repoName}</b>
             </button>
             {recentDropdownOpen ? (
