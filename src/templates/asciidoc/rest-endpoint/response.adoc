@@ -1,0 +1,21 @@
+[#endpoint-create-document,role="endpoint"]
+--
+++++
+<details>
+<summary><b>Получение списка документов</b></summary>
+++++
+
+[role="response-example"]
+[source,json,options="nowrap"]
+----
+{
+  "id": "DOC-99341",
+  "status": "DRAFT",
+  "createdAt": 1690490787
+}
+----
+
+++++
+</details>
+++++
+--

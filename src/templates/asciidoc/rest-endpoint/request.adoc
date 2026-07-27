@@ -1,0 +1,171 @@
+[#endpoint-get-documents,role="endpoint"]
+--
+++++
+<details>
+<summary><b>Получение списка документов</b></summary>
+
+// { Оформляем мета-информацию как скрипт для скрытия с рендера, нужно для кастомного компонента }
+<script type="application/yaml" id="endpoint-meta" hidden>
+method: GET
+endpoint: /corp-router/api/v1/documents/{organizationId}
+host: "https://corp-gateway-test/corp-name"
+tags:
+  - bookkeeping
+  - documents
+version: "1.0"
+</script>
+++++
+
+[discrete#path-params]
+=== Параметры пути (path-params)
+|===
+| *Параметр* | *Формат* | *Обязательный* | *Описание* | *Варианты значений*
+| organizationId
+| string
+| required
+| Идентификатор организации (upin/cus)
+| UBBWQQ
+|===
+
+[discrete#headers]
+=== Заголовки
+|===
+| *Заголовок* | *Обязательный* | *Описание* | *Варианты значений*
+| Authorization
+| required
+| Bearer-токен пользователя
+| Bearer eyJhbGciOiJIUzI1NiIs...
+
+| Content-Type
+| required
+| Тип содержимого тела запроса
+| application/json
+|===
+
+[discrete#body-params]
+=== Параметры тела запроса (body)
+|===
+| *Параметр* | *Формат* | *Обязательный* | *Описание* | *Варианты значений*
+| type
+| string
+| required
+| Тип документа
+| INVOICE, ACT, CONTRACT
+
+| status
+| string
+| optional
+| Начальный статус документа (default: DRAFT)
+| DRAFT, SENT
+
+| comment
+| string
+| optional
+| Комментарий к документу
+|
+
+| items
+| array
+| required
+| Список позиций документа
+|
+
+| items[].name
+| string
+| required
+| Наименование позиции
+|
+
+| items[].amount
+| number
+| required
+| Сумма по позиции
+|
+|===
+
+[#request-body-example,role="request-body-example"]
+[discrete#request-body-example-heading]
+=== Тело запроса (JSON)
+
+[source,json,options="nowrap"]
+----
+{
+  "type": "INVOICE",
+  "status": "DRAFT",
+  "comment": "Счёт за услуги",
+  "items": [
+    {
+      "name": "Консультационные услуги",
+      "amount": 15000
+    }
+  ]
+}
+----
+
+[discrete#request-example-heading]
+=== Пример запроса (curl)
+
+[#request-example,role="request-example"]
+[source,bash,options="nowrap"]
+----
+curl -X POST "https://corp-gateway-test/corp-name/api/v1/documents/UBYKPQ" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "INVOICE",
+    "status": "DRAFT",
+    "comment": "Счёт за услуги",
+    "items": [
+      {
+        "name": "Консультационные услуги",
+        "amount": 15000
+      }
+    ]
+  }'
+----
+
+[discrete#response-params]
+=== Параметры ответа
+|===
+| *Параметр* | *Формат* | *Описание*
+| id
+| string
+| Идентификатор созданного документа
+
+| status
+| string
+| Статус документа
+
+| createdAt
+| UNIX datetime
+| Дата создания
+|===
+
+[#response-example,role="response-example"]
+[source,json,options="nowrap"]
+----
+{
+  "id": "DOC-99341",
+  "status": "DRAFT",
+  "createdAt": 1690490787
+}
+----
+
+[discrete#errors]
+=== Возможные ошибки
+|===
+| *Код* | *Описание*
+| 400
+| Невалидное тело запроса
+
+| 401
+| Не передан или недействителен токен
+
+| 404
+| Организация не найдена
+|===
+
+++++
+</details>
+++++
+--
