@@ -176,7 +176,7 @@ function createPopupDom(handlers: {
   const cancelBtn = document.createElement("button");
   cancelBtn.type = "button";
   cancelBtn.className = "git-gutter-popup-cancel";
-  cancelBtn.textContent = "Отмена";
+  cancelBtn.textContent = "Закрыть";
   cancelBtn.addEventListener("click", (event) => {
     event.stopPropagation();
     handlers.onCancel();

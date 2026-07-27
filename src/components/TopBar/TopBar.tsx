@@ -1,5 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
@@ -30,6 +31,10 @@ type TopBarProps = {
   onOpenBranches: () => void;
   onPull: () => void;
   onPush: () => void;
+  onGoBack?: () => void;
+  onGoForward?: () => void;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
 };
 
 export function TopBar({
@@ -52,6 +57,10 @@ export function TopBar({
   onOpenBranches,
   onPull,
   onPush,
+  onGoBack,
+  onGoForward,
+  canGoBack = false,
+  canGoForward = false,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
@@ -83,6 +92,12 @@ export function TopBar({
           break;
         case "view.toggleBottom":
           onToggleBottom();
+          break;
+        case "nav.goBack":
+          onGoBack?.();
+          break;
+        case "nav.goForward":
+          onGoForward?.();
           break;
         case "git.toggleCommit":
           if (hasProject) onToggleGit();
@@ -116,6 +131,8 @@ export function TopBar({
     [
       hasProject,
       onCloseProject,
+      onGoBack,
+      onGoForward,
       onOpenFolder,
       onPull,
       onPush,
@@ -135,9 +152,31 @@ export function TopBar({
           onAction={onAction}
           hasProject={hasProject}
           gitBusy={gitBusy}
+          canGoBack={canGoBack}
+          canGoForward={canGoForward}
         />
         <div className="topbar-spacer" />
         <div className="topbar-right">
+          <div className="topbar-nav-buttons">
+            <button
+              type="button"
+              className="nav-btn"
+              disabled={!canGoBack}
+              title="Назад"
+              onClick={onGoBack}
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <button
+              type="button"
+              className="nav-btn"
+              disabled={!canGoForward}
+              title="Вперёд"
+              onClick={onGoForward}
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
           <div className="repo-chip">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M9 2v20M15 2v6a3 3 0 0 1-3 3H6M9 8h.01" />

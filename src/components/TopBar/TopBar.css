@@ -101,6 +101,33 @@
   -webkit-app-region: no-drag;
 }
 
+.topbar-nav-buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  color: var(--text-1);
+  -webkit-app-region: no-drag;
+}
+
+.nav-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.nav-btn:disabled {
+  color: var(--text-2);
+  cursor: default;
+}
+
 .repo-chip {
   display: flex;
   align-items: center;

@@ -8,6 +8,8 @@ export type MenuActionId =
   | "view.toggleSidebar"
   | "view.toggleRight"
   | "view.toggleBottom"
+  | "nav.goBack"
+  | "nav.goForward"
   | "git.toggleCommit"
   | "git.createBranch"
   | "git.pull"

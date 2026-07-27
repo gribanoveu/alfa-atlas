@@ -59,6 +59,11 @@ export function useEditorTabs(
   const [hydrated, setHydrated] = useState(false);
   const restoredForRoot = useRef<string | null>(null);
 
+  // Navigation history (like IntelliJ IDEA back/forward)
+  const MAX_HISTORY = 50;
+  const [backStack, setBackStack] = useState<string[]>([]);
+  const [forwardStack, setForwardStack] = useState<string[]>([]);
+
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const activeTabIdRef = useRef(activeTabId);
@@ -68,6 +73,10 @@ export function useEditorTabs(
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backStackRef = useRef(backStack);
+  backStackRef.current = backStack;
+  const forwardStackRef = useRef(forwardStack);
+  forwardStackRef.current = forwardStack;
 
   const clearDebounce = useCallback(() => {
     if (debounceTimerRef.current !== null) {
@@ -197,11 +206,29 @@ export function useEditorTabs(
     return tabs.find((tab) => tab.id === activeTabId) ?? null;
   }, [tabs, activeTabId]);
 
+  const pushToHistory = useCallback((path: string) => {
+    const current = backStackRef.current;
+    if (current.length > 0 && current[current.length - 1] === path) return;
+    let next = [...current, path];
+    if (next.length > MAX_HISTORY) next = next.slice(next.length - MAX_HISTORY);
+    setBackStack(next);
+  }, []);
+
   const openFile = useCallback(
-    async (relativePath: string) => {
+    async (relativePath: string, opts?: { addToHistory?: boolean }) => {
+      const addToHistory = opts?.addToHistory ?? true;
       if (!docsRoot) return;
       const existing = tabsRef.current.find((tab) => tab.path === relativePath);
       if (existing) {
+        if (addToHistory && activeTabIdRef.current) {
+          const currentPath = tabsRef.current.find(
+            (t) => t.id === activeTabIdRef.current,
+          )?.path;
+          if (currentPath) {
+            pushToHistory(currentPath);
+          }
+          setForwardStack([]);
+        }
         await switchToTab(existing.id);
         // Сбрасываем ошибку от прошлой неудачной попытки открытия, иначе
         // тост «failed to resolve path» остаётся висеть после успешного
@@ -229,6 +256,15 @@ export function useEditorTabs(
             if (!ok) return;
           }
         }
+        if (addToHistory && currentId) {
+          const currentPath = tabsRef.current.find(
+            (t) => t.id === currentId,
+          )?.path;
+          if (currentPath) {
+            pushToHistory(currentPath);
+          }
+          setForwardStack([]);
+        }
         setTabs((prev) => {
           const next = [...prev, tab];
           tabsRef.current = next;
@@ -243,8 +279,46 @@ export function useEditorTabs(
         throw e;
       }
     },
-    [docsRoot, flushDebounce, saveTab, switchToTab],
+    [docsRoot, flushDebounce, saveTab, switchToTab, pushToHistory],
   );
+
+  const goBack = useCallback(async () => {
+    const stack = backStackRef.current;
+    if (stack.length === 0) return;
+    const current = tabsRef.current.find(
+      (t) => t.id === activeTabIdRef.current,
+    );
+    const currentPath = current?.path ?? null;
+    const prevPath = stack[stack.length - 1];
+    setBackStack((s) => s.slice(0, -1));
+    if (currentPath) {
+      setForwardStack((s) => {
+        const next = [...s, currentPath];
+        return next.length > MAX_HISTORY
+          ? next.slice(next.length - MAX_HISTORY)
+          : next;
+      });
+    }
+    await openFile(prevPath, { addToHistory: false });
+  }, [openFile]);
+
+  const goForward = useCallback(async () => {
+    const stack = forwardStackRef.current;
+    if (stack.length === 0) return;
+    const current = tabsRef.current.find(
+      (t) => t.id === activeTabIdRef.current,
+    );
+    const currentPath = current?.path ?? null;
+    const nextPath = stack[stack.length - 1];
+    setForwardStack((s) => s.slice(0, -1));
+    if (currentPath) {
+      pushToHistory(currentPath);
+    }
+    await openFile(nextPath, { addToHistory: false });
+  }, [openFile, pushToHistory]);
+
+  const canGoBack = backStack.length > 0;
+  const canGoForward = forwardStack.length > 0;
 
   const restoreTabs = useCallback(
     async (openTabs: string[], activeTab: string | null) => {
@@ -448,6 +522,8 @@ export function useEditorTabs(
     setError(null);
     setHydrated(false);
     restoredForRoot.current = null;
+    setBackStack([]);
+    setForwardStack([]);
   }, [flushDebounce]);
 
   const reloadTabFromDisk = useCallback(
@@ -537,5 +613,9 @@ export function useEditorTabs(
     reloadTabFromDisk,
     saveAllDirtyTabs,
     reloadAllOpenTabs,
+    goBack,
+    goForward,
+    canGoBack,
+    canGoForward,
   };
 }

@@ -90,8 +90,18 @@ const MENUS: MenuDef[] = [
     label: "Навигация",
     items: [
       { type: "item", id: "goto", label: "Перейти к файлу…", disabled: true },
-      { type: "item", id: "back", label: "Назад", disabled: true },
-      { type: "item", id: "forward", label: "Вперёд", disabled: true },
+      {
+        type: "item",
+        id: "back",
+        label: "Назад",
+        action: "nav.goBack",
+      },
+      {
+        type: "item",
+        id: "forward",
+        label: "Вперёд",
+        action: "nav.goForward",
+      },
     ],
   },
   {
@@ -176,26 +186,47 @@ type MenuBarProps = {
   onAction: (action: MenuActionId) => void;
   hasProject?: boolean;
   gitBusy?: boolean;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
 };
 
 export function MenuBar({
   onAction,
   hasProject = false,
   gitBusy = false,
+  canGoBack = false,
+  canGoForward = false,
 }: MenuBarProps) {
   const [openId, setOpenId] = useState<string | null>(null);
   const rootRef = useRef<HTMLElement>(null);
 
   const menus = MENUS.map((menu) => {
-    if (menu.id !== "git") return menu;
-    return {
-      ...menu,
-      items: menu.items.map((item) =>
-        item.type === "item"
-          ? { ...item, disabled: !hasProject || gitBusy }
-          : item,
-      ),
-    };
+    if (menu.id === "git") {
+      return {
+        ...menu,
+        items: menu.items.map((item) =>
+          item.type === "item"
+            ? { ...item, disabled: !hasProject || gitBusy }
+            : item,
+        ),
+      };
+    }
+    if (menu.id === "nav") {
+      return {
+        ...menu,
+        items: menu.items.map((item): MenuItem => {
+          if (item.type !== "item") return item;
+          if (item.id === "back") {
+            return { ...item, disabled: !canGoBack };
+          }
+          if (item.id === "forward") {
+            return { ...item, disabled: !canGoForward };
+          }
+          return item;
+        }),
+      };
+    }
+    return menu;
   });
 
   useEffect(() => {

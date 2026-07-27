@@ -608,11 +608,24 @@ function App() {
             if (ok) git.scheduleRefresh();
           });
         }
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.altKey) {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          void editor.goBack();
+          return;
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          void editor.goForward();
+          return;
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [editor.saveActive, git.scheduleRefresh, hasProject]);
+  }, [editor.saveActive, editor.goBack, editor.goForward, git.scheduleRefresh, hasProject]);
 
   // After autosave clears dirty flags, refresh Git status for gutter and panel.
   useEffect(() => {
@@ -692,6 +705,10 @@ function App() {
         onOpenBranches={() => layout.setRightTool(layout.activeTool === "branches" ? null : "branches")}
         onPull={openPullModal}
         onPush={() => void runPush()}
+        onGoBack={() => void editor.goBack()}
+        onGoForward={() => void editor.goForward()}
+        canGoBack={editor.canGoBack}
+        canGoForward={editor.canGoForward}
       />
       <div className="workspace">
         <div className={mainClassName}>
