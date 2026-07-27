@@ -709,6 +709,14 @@ function App() {
         onGoForward={() => void editor.goForward()}
         canGoBack={editor.canGoBack}
         canGoForward={editor.canGoForward}
+        onSelectProject={async (root) => {
+          await closeProject();
+          try {
+            await project.beginOpenPath(root);
+          } catch (e) {
+            setFolderError(e instanceof Error ? e.message : String(e));
+          }
+        }}
       />
       <div className="workspace">
         <div className={mainClassName}>

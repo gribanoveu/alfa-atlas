@@ -9,6 +9,7 @@ import { SettingsDialog } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
 import { AboutModal } from "./AboutModal";
 import { MenuBar } from "./MenuBar";
+import { RecentProjectsDropdown } from "./RecentProjectsDropdown";
 import "./TopBar.css";
 
 type TopBarProps = {
@@ -35,6 +36,7 @@ type TopBarProps = {
   onGoForward?: () => void;
   canGoBack?: boolean;
   canGoForward?: boolean;
+  onSelectProject?: (root: string) => void;
 };
 
 export function TopBar({
@@ -61,10 +63,12 @@ export function TopBar({
   onGoForward,
   canGoBack = false,
   canGoForward = false,
+  onSelectProject,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
 
   const onAction = useCallback(
     (action: MenuActionId) => {
@@ -177,11 +181,30 @@ export function TopBar({
               <ChevronRight size={16} />
             </button>
           </div>
-          <div className="repo-chip">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 2v20M15 2v6a3 3 0 0 1-3 3H6M9 8h.01" />
-            </svg>
-            <b>{repoName}</b>
+          <div className="repo-chip-wrapper">
+            <button
+              type="button"
+              className="repo-chip"
+              onClick={() =>
+                setRecentDropdownOpen(!recentDropdownOpen)
+              }
+              aria-expanded={recentDropdownOpen}
+              aria-haspopup="menu"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M9 2v20M15 2v6a3 3 0 0 1-3 3H6M9 8h.01" />
+              </svg>
+              <b>{repoName}</b>
+            </button>
+            {recentDropdownOpen ? (
+              <RecentProjectsDropdown
+                onSelect={(root) => {
+                  setRecentDropdownOpen(false);
+                  onSelectProject?.(root);
+                }}
+                onClose={() => setRecentDropdownOpen(false)}
+              />
+            ) : null}
           </div>
           <button
             type="button"

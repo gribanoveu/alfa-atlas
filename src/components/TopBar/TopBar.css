@@ -138,6 +138,12 @@
   border-radius: 5px;
   font-size: var(--font-ui-sm);
   color: var(--text-1);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.repo-chip:hover {
+  background: var(--bg-2);
 }
 
 .repo-chip svg {
@@ -148,6 +154,10 @@
 .repo-chip b {
   color: var(--text-0);
   font-weight: 500;
+}
+
+.repo-chip-wrapper {
+  position: relative;
 }
 
 .branch-chip {
