@@ -1,4 +1,5 @@
 import {
+  ExternalLink,
   FilePlus,
   FileText,
   Folder,
@@ -40,6 +41,7 @@ type FileTreeProps = {
   onRename: (target: FileTreeDeleteTarget) => void;
   onDelete: (target: FileTreeDeleteTarget) => void;
   onMove: (source: FileTreeDeleteTarget, destDirPath: string) => void;
+  onRevealInExplorer: (path: string) => void;
   onResizeExternal?: (delta: number) => void;
   onResizeExternalEnd?: () => void;
 };
@@ -73,7 +75,7 @@ type ContextMenuState = {
 };
 
 const MENU_WIDTH = 200;
-const MENU_HEIGHT = 148;
+const MENU_HEIGHT = 184;
 
 function parentOfFile(path: string): string {
   const parts = path.split(/[/\\]/);
@@ -235,6 +237,7 @@ export function FileTree({
   onRename,
   onDelete,
   onMove,
+  onRevealInExplorer,
   onResizeExternal,
   onResizeExternalEnd,
 }: FileTreeProps) {
@@ -528,6 +531,22 @@ export function FileTree({
               const target = menu.target;
               return (
                 <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="file-tree-context-item"
+                    onClick={() => {
+                      onRevealInExplorer(target.path);
+                      setMenu(null);
+                    }}
+                  >
+                    <span className="file-tree-context-icon" aria-hidden>
+                      <ExternalLink size={14} strokeWidth={1.75} />
+                    </span>
+                    <span className="file-tree-context-label">
+                      Открыть в проводнике
+                    </span>
+                  </button>
                   <button
                     type="button"
                     role="menuitem"

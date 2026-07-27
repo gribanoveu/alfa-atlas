@@ -2,6 +2,8 @@ import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import type { TreeNode } from "../../lib/project";
 import { FileTree, type FileTreeDeleteTarget } from "./FileTree";
+import { openPath } from "@tauri-apps/plugin-opener";
+import { useCallback } from "react";
 import "./Sidebar.css";
 
 type SidebarProps = {
@@ -53,6 +55,15 @@ export function Sidebar({
   onResizeExternal,
   onResizeExternalEnd,
 }: SidebarProps) {
+  const handleRevealInExplorer = useCallback(
+    (relativePath: string) => {
+      if (!docsRoot) return;
+      const absolutePath = docsRoot.replace(/[/\\]+$/, "") + "/" + relativePath;
+      openPath(absolutePath).catch(() => {});
+    },
+    [docsRoot],
+  );
+
   if (!open) {
     return (
       <aside className="sidebar sidebar-collapsed">
@@ -106,6 +117,7 @@ export function Sidebar({
               onRename={onRename}
               onDelete={onDelete}
               onMove={onMove}
+              onRevealInExplorer={handleRevealInExplorer}
               onResizeExternal={onResizeExternal}
               onResizeExternalEnd={onResizeExternalEnd}
             />
