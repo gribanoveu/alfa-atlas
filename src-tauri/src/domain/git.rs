@@ -93,11 +93,28 @@ pub struct SshKeyConfig {
 }
 
 /// Collection of git credentials stored by the app.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitCredentials {
     #[serde(default)]
     pub ssh_keys: Vec<SshKeyConfig>,
+    /// When true, accept any SSH host key on first connection (trust-on-first-use).
+    /// When false, rely on ~/.ssh/known_hosts for host verification.
+    #[serde(default = "default_true")]
+    pub trust_all_ssh_host_keys: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for GitCredentials {
+    fn default() -> Self {
+        Self {
+            ssh_keys: Vec::new(),
+            trust_all_ssh_host_keys: true,
+        }
+    }
 }
 
 /// Status of the app-managed SSH key.
@@ -238,10 +255,12 @@ mod tests {
     fn git_credentials_serialization_empty() {
         let creds = GitCredentials::default();
         let json = serde_json::to_string(&creds).unwrap();
-        assert_eq!(json, r#"{"sshKeys":[]}"#);
+        assert_eq!(json, r#"{"sshKeys":[],"trustAllSshHostKeys":true}"#);
 
-        let parsed: GitCredentials = serde_json::from_str(&json).unwrap();
+        // Deserializing the legacy format (without the field) defaults trust_all_ssh_host_keys to true.
+        let parsed: GitCredentials = serde_json::from_str(r#"{"sshKeys":[]}"#).unwrap();
         assert!(parsed.ssh_keys.is_empty());
+        assert!(parsed.trust_all_ssh_host_keys); // serde default = true
     }
 
     #[test]
@@ -265,6 +284,7 @@ mod tests {
                     passphrase: Some("pw".into()),
                 },
             ],
+            trust_all_ssh_host_keys: true,
         };
         let json = serde_json::to_string(&creds).unwrap();
         assert!(json.contains("Key1"));

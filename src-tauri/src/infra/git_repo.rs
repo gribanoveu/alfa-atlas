@@ -478,8 +478,12 @@ fn configure_credentials<'a>(
 /// stronger guarantees are needed later, compare the presented key's
 /// fingerprint (`cert.as_hostkey().hash_sha256()`) against a persisted
 /// per-remote value and only auto-accept on first contact.
-fn configure_ssh_transport(callbacks: &mut RemoteCallbacks<'_>) {
-    callbacks.certificate_check(|_cert, _host| Ok(git2::CertificateCheckStatus::CertificateOk));
+fn configure_ssh_transport(callbacks: &mut RemoteCallbacks<'_>, trust_all: bool) {
+    if trust_all {
+        callbacks.certificate_check(|_cert, _host| Ok(git2::CertificateCheckStatus::CertificateOk));
+    } else {
+        callbacks.certificate_check(|_cert, _host| Ok(git2::CertificateCheckStatus::CertificatePassthrough));
+    }
 }
 
 struct UpstreamRef {
@@ -537,9 +541,9 @@ fn fetch_upstream<'repo>(
     let config = repo.config().map_err(GitError::Operation)?;
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, &config, credentials, app_private_key);
-    configure_ssh_transport(&mut callbacks);
+    configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
 
-    let mut fetch_opts = FetchOptions::new();
+    let mut fetch_opts = FetchOptions::new(); // fetch_upstream
     fetch_opts.remote_callbacks(callbacks);
 
     let mut remote = repo
@@ -911,7 +915,7 @@ pub fn push(
     let config = repo.config().map_err(GitError::Operation)?;
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, &config, credentials, app_private_key);
-    configure_ssh_transport(&mut callbacks);
+    configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
 
     let mut push_opts = PushOptions::new();
     push_opts.remote_callbacks(callbacks);
@@ -1074,9 +1078,9 @@ pub fn clone_repo(
 
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, repo_config, credentials, app_private_key);
-    configure_ssh_transport(&mut callbacks);
+    configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
 
-    let mut fetch_opts = FetchOptions::new();
+    let mut fetch_opts = FetchOptions::new(); // clone
     fetch_opts.remote_callbacks(callbacks);
 
     let mut builder = git2::build::RepoBuilder::new();

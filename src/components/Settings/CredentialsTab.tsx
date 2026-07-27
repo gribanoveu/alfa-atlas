@@ -23,6 +23,11 @@ export function CredentialsTab() {
   const [keyGenBusy, setKeyGenBusy] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
 
+  const handleToggleTrustAll = () => {
+    if (!credentials) return;
+    void persist({ ...credentials, trustAllSshHostKeys: !credentials.trustAllSshHostKeys });
+  };
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -66,7 +71,7 @@ export function CredentialsTab() {
     if (!credentials) return;
     const keys = [...credentials.sshKeys];
     keys.splice(index, 1);
-    void persist({ sshKeys: keys });
+    void persist({ ...credentials, sshKeys: keys });
   };
 
   const handleSave = (config: SshKeyConfig) => {
@@ -74,9 +79,9 @@ export function CredentialsTab() {
     if (editIndex !== null) {
       const keys = [...credentials.sshKeys];
       keys[editIndex] = config;
-      void persist({ sshKeys: keys });
+      void persist({ ...credentials, sshKeys: keys });
     } else {
-      void persist({ sshKeys: [...credentials.sshKeys, config] });
+      void persist({ ...credentials, sshKeys: [...credentials.sshKeys, config] });
     }
     setShowAddModal(false);
     setEditIndex(null);
@@ -244,7 +249,26 @@ export function CredentialsTab() {
 
       <hr className="credentials-divider" />
 
-      {/* Section 2: Additional Keys */}
+      {/* Section: SSH host key verification */}
+      <div className="credentials-section-title">Проверка SSH хостов</div>
+      <label className="credentials-checkbox-label">
+        <input
+          type="checkbox"
+          checked={credentials.trustAllSshHostKeys}
+          onChange={handleToggleTrustAll}
+          disabled={busy}
+          className="credentials-checkbox"
+        />
+        <span>Принимать все SSH сертификаты (Trust-On-First-Use)</span>
+      </label>
+      <p className="credentials-lead">
+        Когда включено, приложение принимает любой SSH ключ хоста при первом
+        подключении. Когда выключено, используется стандартная проверка через{" "}
+        <code>~/.ssh/known_hosts</code>. Отключите для максимальной
+        безопасности, если у вас настроен файл known_hosts.
+      </p>
+
+      <hr className="credentials-divider" />
       <div className="credentials-section-title">
         Дополнительные SSH ключи
       </div>

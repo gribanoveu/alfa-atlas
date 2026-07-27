@@ -60,6 +60,7 @@ export type SshKeyConfig = {
 
 export type GitCredentials = {
   sshKeys: SshKeyConfig[];
+  trustAllSshHostKeys: boolean;
 };
 
 export type AppKeyStatus = {
