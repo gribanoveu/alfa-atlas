@@ -718,7 +718,7 @@ function App() {
           }
         }}
         onCloneProject={async (cloned) => {
-          await project.applyOpened(cloned.root, cloned.docsRoot);
+          project.submitProbe(cloned);
         }}
       />
       <div className="workspace">
@@ -802,7 +802,7 @@ function App() {
               onOpenFolder={openFolder}
               onOpenRecent={openRecent}
               onCloneProject={async (cloned) => {
-                await project.applyOpened(cloned.root, cloned.docsRoot);
+                project.submitProbe(cloned);
               }}
               error={project.ready ? (folderError ?? project.error) : null}
             />

@@ -99,6 +99,11 @@ export function useProject() {
     setPendingOpen(null);
   }, []);
 
+  /** Accept a pre-computed ProbeResult (e.g. from a clone) and show the confirm modal. */
+  const submitProbe = useCallback((probe: PendingOpen) => {
+    setPendingOpen(probe);
+  }, []);
+
   const openFolderDialog = useCallback(async () => {
     const selected = await open({
       directory: true,
@@ -154,6 +159,7 @@ export function useProject() {
     beginOpenPath,
     confirmPendingOpen,
     cancelPendingOpen,
+    submitProbe,
     closeProject,
     refreshBranch,
     setBranchFromGit,

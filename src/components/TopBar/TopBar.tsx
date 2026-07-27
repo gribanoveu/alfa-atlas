@@ -5,7 +5,7 @@ import { useCallback, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
 import type { GeneralPrefs } from "../../lib/prefs";
-import type { OpenedProject } from "../../lib/git";
+import type { ProbeResult } from "../../lib/git";
 import { SettingsDialog } from "../Settings/SettingsDialog";
 import type { SectionId } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
@@ -39,7 +39,7 @@ type TopBarProps = {
   canGoBack?: boolean;
   canGoForward?: boolean;
   onSelectProject?: (root: string) => void;
-  onCloneProject?: (project: OpenedProject) => Promise<void>;
+  onCloneProject?: (probe: ProbeResult) => Promise<void>;
 };
 
 export function TopBar({
@@ -231,10 +231,10 @@ export function TopBar({
             setSettingsInitialSection("credentials");
             setSettingsOpen(true);
           }}
-          onOpened={async (project) => {
+          onOpened={async (probe) => {
             setCloneOpen(false);
             if (onCloneProject) {
-              await onCloneProject(project);
+              await onCloneProject(probe);
             }
           }}
         />

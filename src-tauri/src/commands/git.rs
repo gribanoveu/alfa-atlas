@@ -2,7 +2,7 @@ use crate::domain::git::{
     AppKeyStatus, GitBranchInfo, GitCommitSummary, GitCredentials, GitDiffScope, GitFileDiff,
     GitStatusSnapshot, GitSyncStatus, PullMode,
 };
-use crate::domain::project_config::OpenedProject;
+use crate::domain::project_config::ProbeResult;
 use crate::services::{git_clone, git_credentials, git_ops};
 
 #[tauri::command]
@@ -130,12 +130,12 @@ pub fn git_import_key(source_path: String) -> Result<AppKeyStatus, String> {
 }
 
 #[tauri::command]
-pub async fn git_clone(url: String, destination: String) -> Result<OpenedProject, String> {
+pub async fn git_clone(url: String, destination: String) -> Result<ProbeResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         git_clone::clone_repository(&url, &destination)?;
 
-        // Auto-open the cloned repo.
-        // We need to find the docs root after cloning.
+        // After cloning, probe the repo to find docs root candidates.
+        // The frontend will show ConfirmOpenProjectModal for the user to pick.
         let dest_path = std::path::Path::new(&destination);
         let canonical = dest_path
             .canonicalize()
@@ -143,13 +143,7 @@ pub async fn git_clone(url: String, destination: String) -> Result<OpenedProject
         let repo_root = crate::infra::git_repo::discover_repo_root(&canonical);
         let repo_root_str = repo_root.to_string_lossy().into_owned();
 
-        // Probe to find docs root
-        let probe = crate::services::project_open::probe_open_path(&repo_root_str)
-            .map_err(|e| e.to_string())?;
-
-        let docs_root = probe.suggested_docs_root.unwrap_or(repo_root_str.clone());
-
-        crate::services::project_open::open_project(&repo_root_str, &docs_root)
+        crate::services::project_open::probe_open_path(&repo_root_str)
             .map_err(|e| e.to_string())
     })
     .await

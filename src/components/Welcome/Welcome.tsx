@@ -4,15 +4,15 @@ import {
   listRecentProjects,
   removeRecentProject,
   type RecentProject,
-  type OpenedProject,
 } from "../../lib/project";
+import type { ProbeResult } from "../../lib/git";
 import { CloneRepoModal } from "./CloneRepoModal";
 import "./Welcome.css";
 
 type WelcomeProps = {
   onOpenFolder: () => Promise<unknown>;
   onOpenRecent: (root: string) => Promise<unknown>;
-  onCloneProject?: (project: OpenedProject) => Promise<unknown>;
+  onCloneProject?: (probe: ProbeResult) => Promise<unknown>;
   onOpenSettings?: () => void;
   error?: string | null;
 };

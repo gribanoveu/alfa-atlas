@@ -70,11 +70,6 @@ export type AppKeyStatus = {
   isImported: boolean;
 };
 
-export type OpenedProject = {
-  root: string;
-  docsRoot: string;
-};
-
 export function gitStatus(repoRoot: string): Promise<GitStatusSnapshot> {
   return invoke<GitStatusSnapshot>("git_status", { repoRoot });
 }
@@ -162,11 +157,15 @@ export function gitSaveCredentials(
   return invoke<void>("git_save_credentials", { credentials });
 }
 
+import { type ProbeResult } from "./project";
+
+export type { ProbeResult };
+
 export function gitClone(
   url: string,
   destination: string,
-): Promise<OpenedProject> {
-  return invoke<OpenedProject>("git_clone", { url, destination });
+): Promise<ProbeResult> {
+  return invoke<ProbeResult>("git_clone", { url, destination });
 }
 
 export function gitGetKeyStatus(): Promise<AppKeyStatus> {

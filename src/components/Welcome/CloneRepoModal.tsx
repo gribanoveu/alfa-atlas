@@ -1,12 +1,12 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { gitClone } from "../../lib/git";
-import type { OpenedProject } from "../../lib/git";
+import type { ProbeResult } from "../../lib/git";
 import "./CloneRepoModal.css";
 
 type CloneRepoModalProps = {
   onClose: () => void;
-  onOpened?: (project: OpenedProject) => void;
+  onOpened?: (probe: ProbeResult) => void;
   onOpenSettings?: () => void;
 };
 

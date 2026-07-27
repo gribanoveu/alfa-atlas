@@ -11,6 +11,7 @@ import {
   type AppKeyStatus,
 } from "../../lib/git";
 import { AddSshKeyModal } from "./AddSshKeyModal";
+import "../Welcome/CloneRepoModal.css";
 import "./CredentialsTab.css";
 
 export function CredentialsTab() {
@@ -22,6 +23,7 @@ export function CredentialsTab() {
   const [editIndex, setEditIndex] = useState<number | null>(null);
   const [keyGenBusy, setKeyGenBusy] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false);
 
   const handleToggleTrustAll = () => {
     if (!credentials) return;
@@ -231,7 +233,7 @@ export function CredentialsTab() {
               type="button"
               className="settings-btn"
               disabled={keyGenBusy}
-              onClick={() => void handleGenerateKey()}
+              onClick={() => setShowRegenerateConfirm(true)}
             >
               {keyGenBusy ? "Генерация..." : "Перегенерировать"}
             </button>
@@ -337,6 +339,50 @@ export function CredentialsTab() {
             setEditIndex(null);
           }}
         />
+      ) : null}
+
+      {showRegenerateConfirm ? (
+        <div
+          className="clone-modal-backdrop"
+          role="presentation"
+          onClick={() => setShowRegenerateConfirm(false)}
+        >
+          <div
+            className="clone-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="clone-modal-title">
+              Перегенерировать ключ приложения?
+            </div>
+            <div className="clone-modal-message">
+              Текущий SSH ключ приложения будет заменён новым. Старый открытый
+              ключ станет недействительным — доступ ко всем Git-репозиториям,
+              где он был добавлен, пропадёт. После генерации потребуется
+              заново добавить новый открытый ключ в настройки Git-провайдера.
+            </div>
+            <div className="clone-modal-actions">
+              <button
+                type="button"
+                className="clone-modal-btn"
+                onClick={() => setShowRegenerateConfirm(false)}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="clone-modal-btn primary danger"
+                onClick={() => {
+                  setShowRegenerateConfirm(false);
+                  void handleGenerateKey();
+                }}
+              >
+                Перегенерировать
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {error ? <div className="settings-error">{error}</div> : null}
