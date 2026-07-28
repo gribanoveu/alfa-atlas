@@ -91,7 +91,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("docflow-paths-{nanos}"));
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-paths-{nanos}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

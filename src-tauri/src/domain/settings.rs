@@ -3,8 +3,8 @@ use thiserror::Error;
 
 /// Default and minimum logical window size used on first launch
 /// and as a floor when restoring a saved size.
-pub const DEFAULT_WINDOW_WIDTH: f64 = 800.0;
-pub const DEFAULT_WINDOW_HEIGHT: f64 = 600.0;
+pub const DEFAULT_WINDOW_WIDTH: f64 = 1100.0;
+pub const DEFAULT_WINDOW_HEIGHT: f64 = 800.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct WindowState {
@@ -58,7 +58,7 @@ pub const MAX_RECENT_PROJECTS: usize = 10;
 pub struct ProjectSettings {
     #[serde(default)]
     pub root: Option<String>,
-    /// MRU absolute paths (index 0 = most recent). Global `~/.docflow/settings.json` only.
+    /// MRU absolute paths (index 0 = most recent). Global `~/.alfa-atlas/settings.json` only.
     #[serde(default)]
     pub recent: Vec<String>,
 }

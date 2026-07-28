@@ -11,7 +11,7 @@ const MIN_SUPPORTED_FOR_DENSITY: usize = 2;
 
 const SKIP_DIRS: &[&str] = &[
     ".git",
-    ".docflow",
+    ".alfa-atlas",
     "node_modules",
     "target",
     "dist",
@@ -242,7 +242,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("docflow-disc-{nanos}"));
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-disc-{nanos}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

@@ -8,7 +8,7 @@ use serde::Serialize;
 pub struct SettingsPaths {
     pub user_settings_dir: String,
     pub project_root: Option<String>,
-    pub project_docflow_dir: Option<String>,
+    pub project_config_dir: Option<String>,
 }
 
 #[tauri::command]
@@ -30,13 +30,13 @@ pub fn get_settings_paths() -> Result<SettingsPaths, String> {
 
     let settings = settings_store::load().map_err(|e| e.to_string())?;
     let project_root = settings.project.root.clone();
-    let project_docflow_dir = project_root
+    let project_config_dir = project_root
         .as_ref()
-        .map(|root| std::path::Path::new(root).join(".docflow").to_string_lossy().into_owned());
+        .map(|root| std::path::Path::new(root).join(".alfa-atlas").to_string_lossy().into_owned());
 
     Ok(SettingsPaths {
         user_settings_dir,
         project_root,
-        project_docflow_dir,
+        project_config_dir,
     })
 }

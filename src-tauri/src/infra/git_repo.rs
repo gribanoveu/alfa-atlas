@@ -1400,7 +1400,7 @@ mod tests {
             .as_nanos();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
-            .join(format!("docflow-git-{prefix}-{nanos}"));
+            .join(format!("alfa-atlas-git-{prefix}-{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

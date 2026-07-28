@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn parses_attribute() {
-        let parsed = parse(":product-name: DocFlow\n");
+        let parsed = parse(":product-name: AlfaAtlas\n");
         assert_eq!(parsed.attributes.len(), 1);
         assert_eq!(parsed.attributes[0].name, "product-name");
         assert_eq!(parsed.attributes[0].value, "DocFlow");

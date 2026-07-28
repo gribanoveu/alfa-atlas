@@ -78,7 +78,7 @@ export function Welcome({ onOpenFolder, onOpenRecent, onCloneProject, onOpenSett
         <header className="welcome-brand">
           <div className="welcome-brand-row">
             <span className="welcome-dot" />
-            <h1 className="welcome-title">docflow</h1>
+            <h1 className="welcome-title">Alfa Atlas</h1>
           </div>
           <p className="welcome-subtitle">
             Добро пожаловать в редактор документации.

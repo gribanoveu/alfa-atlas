@@ -165,10 +165,9 @@ export function CredentialsTab() {
       {/* Section 1: App Key */}
       <div className="credentials-section-title">Ключ приложения</div>
       <p className="credentials-lead">
-        Docflow использует Ed25519 SSH ключ для авторизации в Git. Закрытый
-        ключ хранится зашифрованным, ключ шифрования — в системной связке
-        ключей. Скопируйте открытый ключ и добавьте его в ваш Git-провайдер
-        (GitHub, Bitbucket и т.д.) как доверенный.
+        Atlas использует Ed25519 SSH ключ для авторизации в Git. 
+        Закрытый ключ хранится зашифрованным. Для авторизации приложения в Git, 
+        необходимо добавить его в раздел SSH и GPG ключей в вашем аккаунте Bitbucket, GitHub, GitLab и т.д.
       </p>
 
       {!keyStatus.exists ? (

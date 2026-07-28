@@ -1,8 +1,8 @@
-# docflow
+# Alfa Atlas
 
 Desktop-редактор документации, работающий с git-репозиториями.
 
-- Идентификатор: `com.eugene.docflow`
+- Идентификатор: `com.eugene.alfa-atlas`
 - Стек: **Tauri v2**, React + TypeScript, Rust
 - Package manager: **bun**
 

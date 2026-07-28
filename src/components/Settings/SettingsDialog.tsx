@@ -489,8 +489,8 @@ export function SettingsDialog({
               <>
                 <div className="settings-section-title">Поддерживаемые форматы</div>
                 <p className="settings-lead">
-                  Docflow открывает и редактирует файлы с перечисленными
-                  расширениями. Список задаётся приложением и не настраивается.
+                  Alfa Atlas открывает и редактирует файлы со следующими
+                  расширениями.
                 </p>
                 <div className="settings-formats">
                   {SUPPORTED_FORMAT_LABELS.map((label) => (
@@ -507,7 +507,7 @@ export function SettingsDialog({
                 <div className="settings-section-title">Пути</div>
                 <div className="settings-row">
                   <span className="settings-hint" style={{ paddingLeft: 0 }}>
-                    Папка настроек пользователя (~/.docflow)
+                    Папка настроек пользователя (~/.alfa-atlas)
                   </span>
                   <div className="settings-path">
                     {paths?.userSettingsDir ?? "…"}
@@ -525,14 +525,14 @@ export function SettingsDialog({
                 </div>
                 <div className="settings-row">
                   <span className="settings-hint" style={{ paddingLeft: 0 }}>
-                    Настройки проекта (.docflow)
+                    Настройки проекта (.alfa-atlas)
                   </span>
                   <div
-                    className={`settings-path${!paths?.projectDocflowDir && !projectRoot ? " empty" : ""}`}
+                    className={`settings-path${!paths?.projectConfigDir && !projectRoot ? " empty" : ""}`}
                   >
                     {projectRoot
-                      ? `${projectRoot.replace(/[/\\]+$/, "")}/.docflow`
-                      : (paths?.projectDocflowDir ?? "—")}
+                      ? `${projectRoot.replace(/[/\\]+$/, "")}/.alfa-atlas`
+                      : (paths?.projectConfigDir ?? "—")}
                   </div>
                 </div>
                 <div className="settings-actions">

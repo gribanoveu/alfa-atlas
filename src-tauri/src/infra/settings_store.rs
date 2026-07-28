@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::domain::settings::{AppSettings, SettingsError};
 
-const SETTINGS_DIR_NAME: &str = ".docflow";
+const SETTINGS_DIR_NAME: &str = ".alfa-atlas";
 const SETTINGS_FILE_NAME: &str = "settings.json";
 
 pub fn settings_dir() -> Result<PathBuf, SettingsError> {
@@ -15,7 +15,7 @@ pub fn settings_path() -> Result<PathBuf, SettingsError> {
     Ok(settings_dir()?.join(SETTINGS_FILE_NAME))
 }
 
-/// Loads settings from `~/.docflow/settings.json`.
+/// Loads settings from `~/.alfa-atlas/settings.json`.
 /// Missing file yields `AppSettings::default()`.
 pub fn load() -> Result<AppSettings, SettingsError> {
     let path = settings_path()?;

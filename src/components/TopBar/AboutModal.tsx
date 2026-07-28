@@ -20,7 +20,7 @@ export function AboutModal({ onClose }: AboutModalProps) {
       >
         <div className="about-modal-brand">
           <span className="about-modal-dot" />
-          <h2 id="about-modal-title">docflow</h2>
+          <h2 id="about-modal-title">Alfa Atlas</h2>
         </div>
         <p className="about-modal-version">Версия {appConfig.version}</p>
         <p className="about-modal-desc">

@@ -9,8 +9,8 @@
     {
       "identifier": "opener:allow-open-path",
       "allow": [
-        { "path": "$HOME/.docflow" },
-        { "path": "$HOME/.docflow/**" },
+        { "path": "$HOME/.alfa-atlas" },
+        { "path": "$HOME/.alfa-atlas/**" },
         { "path": "**" }
       ]
     },

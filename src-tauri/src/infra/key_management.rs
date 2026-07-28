@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::domain::git::{AppKeyStatus, KeyConfig};
 use crate::infra::settings_store;
 
-const KEYRING_SERVICE: &str = "com.eugene.docflow";
+const KEYRING_SERVICE: &str = "com.eugene.alfa-atlas";
 const KEYRING_USER: &str = "encryption-key";
 const KEY_CONFIG_FILE: &str = "key_config.json";
 const ENCRYPTED_KEY_FILE: &str = "id_ed25519.enc";
@@ -34,7 +34,7 @@ fn enc_key_file_path() -> Result<PathBuf, String> {
 }
 
 /// Retrieves or creates a 256-bit AES key. The authoritative store is a file
-/// at `~/.docflow/.enc_key` (0o600).  The OS keyring is written as a secondary
+/// at `~/.alfa-atlas/.enc_key` (0o600).  The OS keyring is written as a secondary
 /// store but never relied upon for retrieval — macOS silently rejects keychain
 /// writes from unsigned binaries (showing no prompt), so the file must be the
 /// source of truth.
@@ -53,7 +53,7 @@ fn get_or_create_encryption_key() -> Result<[u8; 32], String> {
 fn keyring_set_if_empty(key: &[u8; 32]) -> Result<(), String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
         .map_err(|e| {
-            eprintln!("[docflow] keyring::Entry::new failed: {e}");
+            eprintln!("[alfa-atlas] keyring::Entry::new failed: {e}");
             return format!("{e}");
         })?;
 
@@ -64,18 +64,18 @@ fn keyring_set_if_empty(key: &[u8; 32]) -> Result<(), String> {
         }
         Ok(_) | Err(keyring::Error::NoEntry) => {
             entry.set_secret(key).map_err(|e| {
-                eprintln!("[docflow] keyring set_secret failed (non-fatal): {e}");
+                eprintln!("[alfa-atlas] keyring set_secret failed (non-fatal): {e}");
                 format!("{e}")
             })
         }
         Err(e) => {
-            eprintln!("[docflow] keyring get_secret failed (non-fatal): {e}");
+            eprintln!("[alfa-atlas] keyring get_secret failed (non-fatal): {e}");
             Err(format!("{e}"))
         }
     }
 }
 
-/// File-based fallback: reads or creates `~/.docflow/.enc_key` (0o600 permissions).
+/// File-based fallback: reads or creates `~/.alfa-atlas/.enc_key` (0o600 permissions).
 fn file_key_get_or_create() -> Result<[u8; 32], String> {
     let path = enc_key_file_path()?;
 
@@ -85,7 +85,7 @@ fn file_key_get_or_create() -> Result<[u8; 32], String> {
         let key: [u8; 32] = bytes
             .try_into()
             .map_err(|_| "stored encryption key has wrong length".to_string())?;
-        eprintln!("[docflow] using encryption key from file fallback");
+        eprintln!("[alfa-atlas] using encryption key from file fallback");
         return Ok(key);
     }
 
@@ -112,7 +112,7 @@ fn file_key_get_or_create() -> Result<[u8; 32], String> {
         }
     }
 
-    eprintln!("[docflow] created new encryption key in file fallback");
+    eprintln!("[alfa-atlas] created new encryption key in file fallback");
     Ok(key)
 }
 
@@ -162,7 +162,7 @@ fn generate_ed25519_keypair() -> Result<(String, String), String> {
     Ok((private_openssh.to_string(), public_openssh))
 }
 
-/// Loads the key config from `~/.docflow/key_config.json`.
+/// Loads the key config from `~/.alfa-atlas/key_config.json`.
 /// Returns `KeyConfig::default()` if the file does not exist.
 pub fn load_key_config() -> Result<KeyConfig, String> {
     let path = key_config_path()?;
@@ -176,7 +176,7 @@ pub fn load_key_config() -> Result<KeyConfig, String> {
     Ok(config)
 }
 
-/// Saves the key config to `~/.docflow/key_config.json`.
+/// Saves the key config to `~/.alfa-atlas/key_config.json`.
 fn save_key_config(config: &KeyConfig) -> Result<(), String> {
     let path = key_config_path()?;
     if let Some(dir) = path.parent() {
@@ -213,16 +213,16 @@ pub fn ensure_app_key_exists() -> Result<AppKeyStatus, String> {
                     if decrypt_private_key(&encrypted, &key).is_ok() {
                         decryptable = true;
                     } else {
-                        eprintln!("[docflow] app key decryption failed — regenerating");
+                        eprintln!("[alfa-atlas] app key decryption failed — regenerating");
                     }
                 }
                 Err(e) => {
-                    eprintln!("[docflow] failed to read encrypted key: {e} — regenerating");
+                    eprintln!("[alfa-atlas] failed to read encrypted key: {e} — regenerating");
                 }
             }
         }
         Err(e) => {
-            eprintln!("[docflow] failed to get encryption key from keyring: {e} — regenerating");
+            eprintln!("[alfa-atlas] failed to get encryption key from keyring: {e} — regenerating");
         }
     }
 
@@ -314,7 +314,7 @@ pub fn get_decrypted_private_key() -> Option<String> {
     let config = match load_key_config() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[docflow] get_decrypted_private_key: failed to load key config: {e}");
+            eprintln!("[alfa-atlas] get_decrypted_private_key: failed to load key config: {e}");
             return None;
         }
     };
@@ -324,21 +324,21 @@ pub fn get_decrypted_private_key() -> Option<String> {
     let enc_path = match encrypted_key_path(&config.encrypted_private_key_path) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[docflow] get_decrypted_private_key: failed to resolve encrypted key path: {e}");
+            eprintln!("[alfa-atlas] get_decrypted_private_key: failed to resolve encrypted key path: {e}");
             return None;
         }
     };
     let encrypted = match fs::read(&enc_path) {
         Ok(data) => data,
         Err(e) => {
-            eprintln!("[docflow] get_decrypted_private_key: failed to read encrypted key at {}: {e}", enc_path.display());
+            eprintln!("[alfa-atlas] get_decrypted_private_key: failed to read encrypted key at {}: {e}", enc_path.display());
             return None;
         }
     };
     let key = match get_or_create_encryption_key() {
         Ok(k) => k,
         Err(e) => {
-            eprintln!("[docflow] get_decrypted_private_key: encryption key unavailable: {e}");
+            eprintln!("[alfa-atlas] get_decrypted_private_key: encryption key unavailable: {e}");
             return None;
         }
     };
@@ -346,12 +346,12 @@ pub fn get_decrypted_private_key() -> Option<String> {
         Ok(plain) => match String::from_utf8(plain) {
             Ok(s) => Some(s),
             Err(e) => {
-                eprintln!("[docflow] get_decrypted_private_key: decrypted data is not valid UTF-8: {e}");
+                eprintln!("[alfa-atlas] get_decrypted_private_key: decrypted data is not valid UTF-8: {e}");
                 None
             }
         },
         Err(e) => {
-            eprintln!("[docflow] get_decrypted_private_key: decryption failed: {e}");
+            eprintln!("[alfa-atlas] get_decrypted_private_key: decryption failed: {e}");
             None
         }
     }

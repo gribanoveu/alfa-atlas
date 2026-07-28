@@ -61,7 +61,7 @@ export function clampGeneralPrefs(prefs: GeneralPrefs): GeneralPrefs {
 export type SettingsPaths = {
   userSettingsDir: string;
   projectRoot: string | null;
-  projectDocflowDir: string | null;
+  projectConfigDir: string | null;
 };
 
 export function getGeneralPrefs(): Promise<GeneralPrefs> {

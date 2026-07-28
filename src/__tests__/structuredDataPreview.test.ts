@@ -33,9 +33,9 @@ describe("fileExtensions structured data", () => {
 
 describe("structuredDataUtils", () => {
   test("parseStructuredData parses valid json", () => {
-    const result = parseStructuredData('{"name":"docflow","count":2}', "app.json");
+    const result = parseStructuredData('{"name":"alfa-atlas","count":2}', "app.json");
     expect(result.error).toBeNull();
-    expect(result.data).toEqual({ name: "docflow", count: 2 });
+    expect(result.data).toEqual({ name: "alfa-atlas", count: 2 });
   });
 
   test("parseStructuredData returns error for invalid json", () => {

@@ -3,7 +3,7 @@ import type * as Monaco from "monaco-editor";
 import { useEffect, useRef } from "react";
 import type { Diagnostic } from "../lib/workspaceIndex";
 
-const WIDGET_ID = "docflow.errors-indicator";
+const WIDGET_ID = "alfa-atlas.errors-indicator";
 
 /**
  * Индикатор количества ошибок/предупреждений в правом верхнем углу редактора

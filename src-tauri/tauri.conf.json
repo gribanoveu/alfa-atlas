@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "docflow",
+  "productName": "Alfa Atlas",
   "version": "0.1.0",
-  "identifier": "com.eugene.docflow",
+  "identifier": "com.eugene.alfa-atlas",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "docflow",
+        "title": "Alfa Atlas",
         "width": 800,
         "height": 600,
         "minWidth": 800,

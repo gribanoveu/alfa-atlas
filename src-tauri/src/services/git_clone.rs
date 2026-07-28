@@ -64,7 +64,7 @@ mod tests {
             .as_nanos();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
-            .join(format!("docflow-clone-svc-{prefix}-{nanos}"));
+            .join(format!("alfa-atlas-clone-svc-{prefix}-{nanos}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

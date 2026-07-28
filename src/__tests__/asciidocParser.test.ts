@@ -126,9 +126,9 @@ describe("extractFacts", () => {
   });
 
   test("attribute entry", async () => {
-    const facts = await extractFacts(":product-name: DocFlow\n");
+    const facts = await extractFacts(":product-name: AlfaAtlas\n");
     expect(facts.attributes).toEqual([
-      { name: "product-name", value: "DocFlow", line: 1 },
+      { name: "product-name", value: "AlfaAtlas", line: 1 },
     ]);
   });
 
@@ -141,7 +141,7 @@ describe("extractFacts", () => {
 
   test("multiple constructs in one document", async () => {
     const content = [
-      ":product-name: DocFlow",
+      ":product-name: AlfaAtlas",
       "",
       "[[intro]]",
       "= Introduction",

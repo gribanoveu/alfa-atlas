@@ -53,6 +53,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "alfa-atlas"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "dashmap",
+ "dirs",
+ "git2",
+ "ignore",
+ "keyring",
+ "notify",
+ "pulldown-cmark",
+ "rand 0.8.7",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "ssh-key",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-mcp-bridge",
+ "tauri-plugin-opener",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -955,33 +982,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "docflow"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "dashmap",
- "dirs",
- "git2",
- "ignore",
- "keyring",
- "notify",
- "pulldown-cmark",
- "rand 0.8.7",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "ssh-key",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-mcp-bridge",
- "tauri-plugin-opener",
- "thiserror 2.0.19",
- "tokio",
 ]
 
 [[package]]

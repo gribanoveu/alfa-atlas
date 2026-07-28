@@ -146,7 +146,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("docflow-watcher-{nanos}"));
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-watcher-{nanos}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

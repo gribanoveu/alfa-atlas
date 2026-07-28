@@ -7,8 +7,8 @@ description: Working with the docflow desktop app (Tauri v2 + React/TypeScript +
 
 ## Project identity
 
-- Name: **docflow**
-- Identifier: `com.eugene.docflow`
+- Name: **Alfa Atlas**
+- Identifier: `com.eugene.alfa-atlas`
 - Frontend: TypeScript + React, built and run with **bun** (not npm/pnpm/yarn — always use `bun`/`bunx`)
 - Backend: Rust (Tauri v2)
 - Purpose: a documentation editor that works directly with Git repositories (see project notes for scope)
@@ -16,7 +16,7 @@ description: Working with the docflow desktop app (Tauri v2 + React/TypeScript +
 ## Project layout
 
 ```
-docflow/
+alfa-atlas/
 ├── src/                   # React frontend
 │   ├── components/
 │   ├── hooks/
@@ -111,7 +111,7 @@ When a new Tauri plugin is added (`cargo add tauri-plugin-fs`, etc.), it also ne
 
 ## Git / filesystem access from Rust
 
-Since docflow's core feature is reading/writing a Git working tree:
+Since Alfa Atlas's core feature is reading/writing a Git working tree:
 
 - Prefer the `git2` crate (libgit2 bindings) over shelling out to `git` for anything programmatic (diffing, reading blobs, listing branches) — it's faster, doesn't depend on the user's PATH, and errors are typed.
 - Shelling out (`std::process::Command`) is acceptable for actions you don't want to reimplement (e.g. invoking a configured merge/diff tool), but keep it isolated to one module.
@@ -129,4 +129,4 @@ Since docflow's core feature is reading/writing a Git working tree:
 - Forgetting to register a new command in `generate_handler![]` → frontend gets a runtime "command not found" error, not a compile error.
 - Forgetting the capability/permission entry for a new plugin → command call resolves but silently does nothing or errors at runtime.
 - Non-`Send` types held across `.await` in an async command → compile error; keep Rust state behind `Mutex`/`RwLock` wrapped in `tauri::State`, and don't hold the guard across an await point.
-- Path separators/case-sensitivity differences across OSes — always go through `std::path::Path`/`PathBuf`, never manual string concatenation, since docflow needs to behave on macOS/Windows/Linux alike.
+- Path separators/case-sensitivity differences across OSes — always go through `std::path::Path`/`PathBuf`, never manual string concatenation, since Alfa Atlas needs to behave on macOS/Windows/Linux alike.

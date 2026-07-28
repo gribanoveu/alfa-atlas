@@ -1020,7 +1020,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("docflow-wi-{nanos}"));
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-wi-{nanos}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

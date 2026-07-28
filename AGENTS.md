@@ -4,9 +4,9 @@ Context for AI coding agents (Claude Code and others) working in this repository
 
 ## Project
 
-**docflow** — a documentation editor that works directly with Git repositories.
+**Alfa Atlas** — a documentation editor that works directly with Git repositories.
 
-- Identifier: `com.eugene.docflow`
+- Identifier: `com.eugene.alfa-atlas`
 - Stack: Tauri v2, React + TypeScript frontend, Rust backend
 - Package manager: **bun** — always use `bun`/`bunx`, never `npm`/`pnpm`/`yarn`
 
