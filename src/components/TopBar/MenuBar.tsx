@@ -3,6 +3,7 @@ import {
   ArrowUpFromLine,
   GitCommitHorizontal,
   GitFork,
+  GitBranch,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
@@ -25,12 +26,6 @@ const MENUS: MenuDef[] = [
         id: "open-folder",
         label: "Открыть папку…",
         action: "file.openFolder",
-      },
-      {
-        type: "item",
-        id: "clone",
-        label: "Клонировать репозиторий…",
-        action: "file.cloneRepo",
       },
       { type: "separator" },
       {
@@ -108,6 +103,14 @@ const MENUS: MenuDef[] = [
     id: "git",
     label: "Git",
     items: [
+      {
+        type: "item",
+        id: "clone",
+        label: "Клонировать репозиторий…",
+        action: "git.cloneRepo",
+        icon: GitBranch,
+      },
+      { type: "separator" },
       {
         type: "item",
         id: "commit",
@@ -204,11 +207,11 @@ export function MenuBar({
     if (menu.id === "git") {
       return {
         ...menu,
-        items: menu.items.map((item) =>
-          item.type === "item"
-            ? { ...item, disabled: !hasProject || gitBusy }
-            : item,
-        ),
+        items: menu.items.map((item) => {
+            if (item.type !== "item") return item;
+            if (item.id === "clone") return item;
+            return { ...item, disabled: !hasProject || gitBusy };
+          }),
       };
     }
     if (menu.id === "nav") {

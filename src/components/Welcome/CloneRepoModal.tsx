@@ -1,8 +1,19 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { gitClone } from "../../lib/git";
 import type { ProbeResult } from "../../lib/git";
+import { checkPathExists } from "../../lib/project";
 import "./CloneRepoModal.css";
+
+function getRepoName(url: string): string | null {
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  const withoutGit = trimmed.endsWith(".git") ? trimmed.slice(0, -4) : trimmed;
+  const last = withoutGit.split("/").pop() ?? "";
+  if (!last) return null;
+  const colonIdx = last.lastIndexOf(":");
+  return colonIdx >= 0 ? last.slice(colonIdx + 1) : last;
+}
 
 type CloneRepoModalProps = {
   onClose: () => void;
@@ -16,10 +27,22 @@ export function CloneRepoModal({
   onOpenSettings,
 }: CloneRepoModalProps) {
   const [url, setUrl] = useState("");
-  const [destination, setDestination] = useState("");
+  const [baseDir, setBaseDir] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [cloning, setCloning] = useState(false);
   const [needsAuth, setNeedsAuth] = useState(false);
+  const [conflict, setConflict] = useState(false);
+
+  const repoName = useMemo(() => getRepoName(url), [url]);
+
+  const destination = repoName
+    ? `${baseDir}/${repoName}`
+    : baseDir;
+
+  const handleDestinationChange = (value: string) => {
+    const lastSlash = value.lastIndexOf("/");
+    setBaseDir(lastSlash > 0 ? value.slice(0, lastSlash) : value);
+  };
 
   const pickDestination = async () => {
     const selected = await open({
@@ -28,8 +51,25 @@ export function CloneRepoModal({
       title: "Папка для клонирования",
     });
     if (selected === null || Array.isArray(selected)) return;
-    setDestination(selected);
+    setBaseDir(selected);
   };
+
+  useEffect(() => {
+    if (!destination) {
+      setConflict(false);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      checkPathExists(destination).then((result) => {
+        if (!cancelled) setConflict(result.exists);
+      });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [destination]);
 
   const submit = async () => {
     setMessage(null);
@@ -58,6 +98,9 @@ export function CloneRepoModal({
     onClose();
     onOpenSettings?.();
   };
+
+  const canSubmit =
+    !url.trim() || !baseDir.trim() || !repoName || cloning || conflict;
 
   return (
     <div
@@ -96,7 +139,7 @@ export function CloneRepoModal({
               type="text"
               placeholder="Выберите папку…"
               value={destination}
-              onChange={(event) => setDestination(event.target.value)}
+              onChange={(event) => handleDestinationChange(event.target.value)}
               disabled={cloning}
             />
             <button
@@ -108,6 +151,11 @@ export function CloneRepoModal({
               Обзор…
             </button>
           </div>
+          {conflict ? (
+            <div className="clone-modal-hint" style={{ color: "var(--danger)" }}>
+              Папка уже существует. Выберите другое расположение.
+            </div>
+          ) : null}
         </label>
 
         {message ? (
@@ -143,7 +191,7 @@ export function CloneRepoModal({
             type="button"
             className="clone-modal-btn primary"
             onClick={() => void submit()}
-            disabled={!url.trim() || !destination.trim() || cloning}
+            disabled={canSubmit}
           >
             {cloning ? "Клонирование…" : "Клонировать"}
           </button>

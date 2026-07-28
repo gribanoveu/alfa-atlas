@@ -32,6 +32,12 @@ export type RecentProject = {
   name: string;
 };
 
+export type PathExistsResult = {
+  exists: boolean;
+  isDir: boolean;
+  isNonEmpty: boolean;
+};
+
 export function probeOpenPath(path: string): Promise<ProbeResult> {
   return invoke<ProbeResult>("probe_open_path", { path });
 }
@@ -156,4 +162,8 @@ export function renameProjectDir(
     fromRelative: fromPath,
     toRelative: toPath,
   });
+}
+
+export function checkPathExists(path: string): Promise<PathExistsResult> {
+  return invoke<PathExistsResult>("check_path_exists", { path });
 }

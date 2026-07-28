@@ -12,6 +12,7 @@ export type MenuActionId =
   | "nav.goForward"
   | "git.toggleCommit"
   | "git.createBranch"
+  | "git.cloneRepo"
   | "git.pull"
   | "git.push"
   | "tools.settings"

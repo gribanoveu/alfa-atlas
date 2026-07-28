@@ -109,3 +109,25 @@ pub fn rename_project_dir(
     docs_fs::rename_project_dir(&docs_root, &from_relative, &to_relative)
         .map_err(|e| e.to_string())
 }
+
+/// Result of checking whether a path exists on disk.
+#[derive(serde::Serialize)]
+pub struct PathExistsResult {
+    pub exists: bool,
+    pub is_dir: bool,
+    pub is_non_empty: bool,
+}
+
+#[tauri::command]
+pub fn check_path_exists(path: String) -> Result<PathExistsResult, String> {
+    let p = std::path::Path::new(&path);
+    Ok(PathExistsResult {
+        exists: p.exists(),
+        is_dir: p.is_dir(),
+        is_non_empty: p
+            .read_dir()
+            .ok()
+            .map(|mut d| d.next().is_some())
+            .unwrap_or(false),
+    })
+}

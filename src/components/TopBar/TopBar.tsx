@@ -82,6 +82,7 @@ export function TopBar({
           void onOpenFolder();
           break;
         case "file.cloneRepo":
+        case "git.cloneRepo":
           setCloneOpen(true);
           break;
         case "file.save":
