@@ -81,25 +81,6 @@ const MENUS: MenuDef[] = [
     ],
   },
   {
-    id: "nav",
-    label: "Навигация",
-    items: [
-      { type: "item", id: "goto", label: "Перейти к файлу…", disabled: true },
-      {
-        type: "item",
-        id: "back",
-        label: "Назад",
-        action: "nav.goBack",
-      },
-      {
-        type: "item",
-        id: "forward",
-        label: "Вперёд",
-        action: "nav.goForward",
-      },
-    ],
-  },
-  {
     id: "git",
     label: "Git",
     items: [
@@ -189,16 +170,12 @@ type MenuBarProps = {
   onAction: (action: MenuActionId) => void;
   hasProject?: boolean;
   gitBusy?: boolean;
-  canGoBack?: boolean;
-  canGoForward?: boolean;
 };
 
 export function MenuBar({
   onAction,
   hasProject = false,
   gitBusy = false,
-  canGoBack = false,
-  canGoForward = false,
 }: MenuBarProps) {
   const [openId, setOpenId] = useState<string | null>(null);
   const rootRef = useRef<HTMLElement>(null);
@@ -212,21 +189,6 @@ export function MenuBar({
             if (item.id === "clone") return item;
             return { ...item, disabled: !hasProject || gitBusy };
           }),
-      };
-    }
-    if (menu.id === "nav") {
-      return {
-        ...menu,
-        items: menu.items.map((item): MenuItem => {
-          if (item.type !== "item") return item;
-          if (item.id === "back") {
-            return { ...item, disabled: !canGoBack };
-          }
-          if (item.id === "forward") {
-            return { ...item, disabled: !canGoForward };
-          }
-          return item;
-        }),
       };
     }
     return menu;

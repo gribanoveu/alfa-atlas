@@ -163,8 +163,6 @@ export function TopBar({
           onAction={onAction}
           hasProject={hasProject}
           gitBusy={gitBusy}
-          canGoBack={canGoBack}
-          canGoForward={canGoForward}
         />
         <div className="topbar-spacer" />
         <div className="topbar-right">
