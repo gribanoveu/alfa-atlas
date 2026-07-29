@@ -362,9 +362,17 @@ export function useEditorTabs(
 
   const selectTab = useCallback(
     (id: string) => {
+      if (id === activeTabIdRef.current) return;
+      const currentPath = tabsRef.current.find(
+        (t) => t.id === activeTabIdRef.current,
+      )?.path;
+      if (currentPath) {
+        pushToHistory(currentPath);
+        setForwardStack([]);
+      }
       void switchToTab(id);
     },
-    [switchToTab],
+    [switchToTab, pushToHistory],
   );
 
   const closeTab = useCallback(
