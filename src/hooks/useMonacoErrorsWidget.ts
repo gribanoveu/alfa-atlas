@@ -84,7 +84,7 @@ export function useMonacoErrorsWidget(
     } else {
       el.innerHTML = renderIcon("clean");
     }
-  }, [diagnostics, activePath]);
+  }, [diagnostics, activePath, editor]);
 }
 
 function renderIcon(kind: "error" | "warning" | "clean"): string {
