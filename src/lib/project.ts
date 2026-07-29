@@ -164,6 +164,30 @@ export function renameProjectDir(
   });
 }
 
+export function copyProjectFile(
+  docsRoot: string,
+  fromPath: string,
+  toPath: string,
+): Promise<void> {
+  return invoke<void>("copy_project_file", {
+    docsRoot,
+    fromRelative: fromPath,
+    toRelative: toPath,
+  });
+}
+
+export function copyProjectDir(
+  docsRoot: string,
+  fromPath: string,
+  toPath: string,
+): Promise<void> {
+  return invoke<void>("copy_project_dir", {
+    docsRoot,
+    fromRelative: fromPath,
+    toRelative: toPath,
+  });
+}
+
 export function checkPathExists(path: string): Promise<PathExistsResult> {
   return invoke<PathExistsResult>("check_path_exists", { path });
 }

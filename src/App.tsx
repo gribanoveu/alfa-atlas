@@ -33,7 +33,8 @@ import {
   collectDirPaths,
   useWorkspaceSession,
 } from "./hooks/useWorkspaceSession";
-import { createProjectDir, createProjectFile, deleteProjectDir, deleteProjectFile, renameProjectDir, renameProjectFile } from "./lib/project";
+import { copyProjectDir, copyProjectFile, createProjectDir, createProjectFile, deleteProjectDir, deleteProjectFile, readProjectFile, renameProjectDir, renameProjectFile } from "./lib/project";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
 import { formatLabelFor, isAsciiDocPath, lineEndingLabelFor } from "./lib/supportedFiles";
 import { toDocsRelativePath, toRepoRelativePath } from "./lib/paths";
@@ -42,6 +43,19 @@ import { RenameModal } from "./components/Sidebar/RenameModal";
 function joinParent(parentPath: string, name: string): string {
   if (!parentPath || parentPath === ".") return name;
   return `${parentPath.replace(/[/\\]+$/, "")}/${name}`;
+}
+
+/** Append " copy" to a name. For files it goes before the extension
+ * (`report.adoc` → `report copy.adoc`) so the copy keeps a supported
+ * extension; for directories it goes at the very end. */
+function withCopySuffix(name: string, isDir: boolean): string {
+  if (!isDir) {
+    const dot = name.lastIndexOf(".");
+    if (dot > 0) {
+      return `${name.slice(0, dot)} copy${name.slice(dot)}`;
+    }
+  }
+  return `${name} copy`;
 }
 
 function parentOfPath(path: string): string {
@@ -137,6 +151,7 @@ function App() {
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
+  const [copiedItem, setCopiedItem] = useState<FileTreeDeleteTarget | null>(null);
   const [renameTarget, setRenameTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [resetRemoteConfirmOpen, setResetRemoteConfirmOpen] = useState(false);
@@ -757,6 +772,40 @@ function App() {
               }
               editor.remapTabsUnder(oldPath, newPath);
               session.remapExpandedUnder(oldPath, newPath);
+              session.ensureExpanded(destDirPath);
+              await tree.refresh();
+              git.scheduleRefresh();
+            }}
+            onCopy={async (target) => {
+              if (!target.isDir && project.docsRoot) {
+                try {
+                  const content = await readProjectFile(project.docsRoot, target.path);
+                  await writeText(content);
+                } catch {
+                  // системный буфер недоступен — внутреннее копирование всё равно работает
+                }
+              }
+              setCopiedItem(target);
+            }}
+            copiedItem={copiedItem}
+            onPaste={async (destDirPath) => {
+              if (!project.docsRoot || !copiedItem) return;
+              const name = copiedItem.path.split(/[/\\]/).filter(Boolean).pop();
+              if (!name) return;
+              const newPath = joinParent(
+                destDirPath,
+                withCopySuffix(name, copiedItem.isDir),
+              );
+              try {
+                if (copiedItem.isDir) {
+                  await copyProjectDir(project.docsRoot, copiedItem.path, newPath);
+                } else {
+                  await copyProjectFile(project.docsRoot, copiedItem.path, newPath);
+                }
+              } catch (e) {
+                setFolderError(e instanceof Error ? e.message : String(e));
+                return;
+              }
               session.ensureExpanded(destDirPath);
               await tree.refresh();
               git.scheduleRefresh();

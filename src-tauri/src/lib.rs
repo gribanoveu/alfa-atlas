@@ -153,6 +153,8 @@ pub fn run() {
             commands::project::delete_project_dir,
             commands::project::rename_project_file,
             commands::project::rename_project_dir,
+            commands::project::copy_project_file,
+            commands::project::copy_project_dir,
             commands::project::check_path_exists,
             commands::layout::get_project_layout,
             commands::layout::save_project_layout,

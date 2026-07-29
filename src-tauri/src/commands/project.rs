@@ -110,6 +110,26 @@ pub fn rename_project_dir(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn copy_project_file(
+    docs_root: String,
+    from_relative: String,
+    to_relative: String,
+) -> Result<(), String> {
+    docs_fs::copy_project_file(&docs_root, &from_relative, &to_relative)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn copy_project_dir(
+    docs_root: String,
+    from_relative: String,
+    to_relative: String,
+) -> Result<(), String> {
+    docs_fs::copy_project_dir(&docs_root, &from_relative, &to_relative)
+        .map_err(|e| e.to_string())
+}
+
 /// Result of checking whether a path exists on disk.
 #[derive(serde::Serialize)]
 pub struct PathExistsResult {

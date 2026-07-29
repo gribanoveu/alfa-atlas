@@ -254,6 +254,88 @@ pub fn rename_project_dir(
     fs::rename(&from_canonical, &to_canonical).map_err(ProjectError::Rename)
 }
 
+/// Copy a file under docs root to a new path. Fails if the source is
+/// missing, the destination already exists, or the new name is not a
+/// supported file type.
+pub fn copy_project_file(
+    docs_root: &str,
+    from_relative: &str,
+    to_relative: &str,
+) -> Result<(), ProjectError> {
+    validate_relative_name(from_relative)?;
+    validate_relative_name(to_relative)?;
+    let root = resolve_docs_root(docs_root)?;
+    let from_joined = paths::join_relative(&root, from_relative)?;
+    let from_canonical = paths::ensure_under(&root, &from_joined)?;
+    if !from_canonical.is_file() {
+        return Err(ProjectError::NotFound(from_relative.to_string()));
+    }
+    let to_joined = paths::join_relative(&root, to_relative)?;
+    let to_canonical = paths::ensure_under(&root, &to_joined)?;
+    if !is_supported_file(&to_canonical.to_string_lossy()) {
+        return Err(ProjectError::UnsupportedFile(to_relative.to_string()));
+    }
+    if to_canonical.exists() {
+        return Err(ProjectError::AlreadyExists(to_relative.to_string()));
+    }
+    fs::copy(&from_canonical, &to_canonical)
+        .map(|_| ())
+        .map_err(ProjectError::Copy)
+}
+
+/// Copy a directory under docs root (recursively) to a new path. Fails if
+/// the source is missing, the destination already exists, the source is the
+/// docs root itself, or the destination is nested inside the source (which
+/// would make the recursive copy walk its own output).
+pub fn copy_project_dir(
+    docs_root: &str,
+    from_relative: &str,
+    to_relative: &str,
+) -> Result<(), ProjectError> {
+    validate_relative_name(from_relative)?;
+    validate_relative_name(to_relative)?;
+    let root = resolve_docs_root(docs_root)?;
+    let from_joined = paths::join_relative(&root, from_relative)?;
+    let from_canonical = paths::ensure_under(&root, &from_joined)?;
+    if from_canonical == root {
+        return Err(ProjectError::InvalidName(from_relative.to_string()));
+    }
+    if !from_canonical.is_dir() {
+        return Err(ProjectError::NotFound(from_relative.to_string()));
+    }
+    let to_joined = paths::join_relative(&root, to_relative)?;
+    if to_joined.exists() {
+        return Err(ProjectError::AlreadyExists(to_relative.to_string()));
+    }
+    if to_joined.starts_with(&from_canonical) {
+        return Err(ProjectError::PathEscape(to_relative.to_string()));
+    }
+
+    copy_dir_recursive(&from_canonical, &to_joined)?;
+
+    let to_canonical = to_joined.canonicalize().map_err(ProjectError::Canonicalize)?;
+    if !to_canonical.starts_with(&root) {
+        let _ = fs::remove_dir_all(&to_canonical);
+        return Err(ProjectError::PathEscape(to_relative.to_string()));
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(from: &Path, to: &Path) -> Result<(), ProjectError> {
+    fs::create_dir_all(to).map_err(ProjectError::CreateDir)?;
+    for entry in fs::read_dir(from).map_err(ProjectError::Read)? {
+        let entry = entry.map_err(ProjectError::Read)?;
+        let file_type = entry.file_type().map_err(ProjectError::Read)?;
+        let dest = to.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), &dest).map_err(ProjectError::Copy)?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_relative_name(relative_path: &str) -> Result<(), ProjectError> {
     let trimmed = relative_path.trim();
     if trimmed.is_empty() || trimmed == "." {
@@ -433,6 +515,90 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, ProjectError::NotFound(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn copy_file_duplicates_content() {
+        let root = temp_dir();
+        create_project_dir(root.to_str().unwrap(), "folder").unwrap();
+        create_project_file(root.to_str().unwrap(), "folder/note.adoc").unwrap();
+        fs::write(root.join("folder/note.adoc"), "hello").unwrap();
+
+        copy_project_file(
+            root.to_str().unwrap(),
+            "folder/note.adoc",
+            "folder/note copy.adoc",
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("folder/note copy.adoc")).unwrap(),
+            "hello"
+        );
+        // Original untouched.
+        assert_eq!(
+            fs::read_to_string(root.join("folder/note.adoc")).unwrap(),
+            "hello"
+        );
+
+        // Copying onto an existing destination fails.
+        let err = copy_project_file(
+            root.to_str().unwrap(),
+            "folder/note.adoc",
+            "folder/note copy.adoc",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ProjectError::AlreadyExists(_)));
+
+        // Copying a missing source fails.
+        let err = copy_project_file(
+            root.to_str().unwrap(),
+            "folder/missing.adoc",
+            "folder/other.adoc",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ProjectError::NotFound(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn copy_dir_duplicates_tree_recursively() {
+        let root = temp_dir();
+        create_project_dir(root.to_str().unwrap(), "folder").unwrap();
+        create_project_dir(root.to_str().unwrap(), "folder/nested").unwrap();
+        create_project_file(root.to_str().unwrap(), "folder/note.adoc").unwrap();
+        create_project_file(root.to_str().unwrap(), "folder/nested/inner.adoc").unwrap();
+        fs::write(root.join("folder/note.adoc"), "top").unwrap();
+        fs::write(root.join("folder/nested/inner.adoc"), "deep").unwrap();
+
+        copy_project_dir(root.to_str().unwrap(), "folder", "folder copy").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.join("folder copy/note.adoc")).unwrap(),
+            "top"
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("folder copy/nested/inner.adoc")).unwrap(),
+            "deep"
+        );
+        // Original untouched.
+        assert!(root.join("folder/note.adoc").exists());
+
+        // Copying onto an existing destination fails.
+        let err = copy_project_dir(root.to_str().unwrap(), "folder", "folder copy").unwrap_err();
+        assert!(matches!(err, ProjectError::AlreadyExists(_)));
+
+        // Copying the docs root itself is rejected.
+        let err = copy_project_dir(root.to_str().unwrap(), ".", "root copy").unwrap_err();
+        assert!(matches!(err, ProjectError::InvalidName(_)));
+
+        // Copying a directory into its own subtree is rejected (would recurse
+        // into its own output).
+        let err =
+            copy_project_dir(root.to_str().unwrap(), "folder", "folder/self-copy").unwrap_err();
+        assert!(matches!(err, ProjectError::PathEscape(_)));
 
         fs::remove_dir_all(&root).ok();
     }

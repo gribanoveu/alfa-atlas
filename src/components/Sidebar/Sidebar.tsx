@@ -1,9 +1,8 @@
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
-import { readProjectFile, type TreeNode } from "../../lib/project";
+import type { TreeNode } from "../../lib/project";
 import { FileTree, type FileTreeDeleteTarget } from "./FileTree";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useCallback } from "react";
 import "./Sidebar.css";
 
@@ -24,6 +23,9 @@ type SidebarProps = {
   onRename: (target: FileTreeDeleteTarget) => void;
   onDelete: (target: FileTreeDeleteTarget) => void;
   onMove: (source: FileTreeDeleteTarget, destDirPath: string) => void;
+  onCopy: (target: FileTreeDeleteTarget) => void;
+  onPaste: (destDirPath: string) => void;
+  copiedItem: FileTreeDeleteTarget | null;
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
   onResizeExternal?: (delta: number) => void;
@@ -51,6 +53,9 @@ export function Sidebar({
   onRename,
   onDelete,
   onMove,
+  onCopy,
+  onPaste,
+  copiedItem,
   onResize,
   onResizeEnd,
   onResizeExternal,
@@ -61,19 +66,6 @@ export function Sidebar({
       if (!docsRoot) return;
       const absolutePath = docsRoot.replace(/[/\\]+$/, "") + "/" + relativePath;
       openPath(absolutePath).catch(() => {});
-    },
-    [docsRoot],
-  );
-
-  const handleCopyFileContent = useCallback(
-    async (relativePath: string) => {
-      if (!docsRoot) return;
-      try {
-        const content = await readProjectFile(docsRoot, relativePath);
-        await writeText(content);
-      } catch {
-        // тихо игнорируем — как в CredentialsTab.handleCopyPublicKey
-      }
     },
     [docsRoot],
   );
@@ -132,7 +124,9 @@ export function Sidebar({
               onDelete={onDelete}
               onMove={onMove}
               onRevealInExplorer={handleRevealInExplorer}
-              onCopyFileContent={handleCopyFileContent}
+              onCopy={onCopy}
+              onPaste={onPaste}
+              copiedItem={copiedItem}
               onResizeExternal={onResizeExternal}
               onResizeExternalEnd={onResizeExternalEnd}
             />

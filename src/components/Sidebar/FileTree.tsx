@@ -1,4 +1,5 @@
 import {
+  ClipboardPaste,
   Copy,
   ExternalLink,
   FilePlus,
@@ -43,7 +44,9 @@ type FileTreeProps = {
   onDelete: (target: FileTreeDeleteTarget) => void;
   onMove: (source: FileTreeDeleteTarget, destDirPath: string) => void;
   onRevealInExplorer: (path: string) => void;
-  onCopyFileContent: (path: string) => void;
+  onCopy: (target: FileTreeDeleteTarget) => void;
+  onPaste: (destDirPath: string) => void;
+  copiedItem: FileTreeDeleteTarget | null;
   onResizeExternal?: (delta: number) => void;
   onResizeExternalEnd?: () => void;
 };
@@ -240,7 +243,9 @@ export function FileTree({
   onDelete,
   onMove,
   onRevealInExplorer,
-  onCopyFileContent,
+  onCopy,
+  onPaste,
+  copiedItem,
   onResizeExternal,
   onResizeExternalEnd,
 }: FileTreeProps) {
@@ -529,6 +534,26 @@ export function FileTree({
             </span>
             <span className="file-tree-context-label">Новая папка…</span>
           </button>
+          {copiedItem &&
+          !(copiedItem.isDir && isSelfOrDescendant(copiedItem, menu.parentPath)) ? (
+            <>
+              <div className="file-tree-context-sep" role="separator" />
+              <button
+                type="button"
+                role="menuitem"
+                className="file-tree-context-item"
+                onClick={() => {
+                  onPaste(menu.parentPath);
+                  setMenu(null);
+                }}
+              >
+                <span className="file-tree-context-icon" aria-hidden>
+                  <ClipboardPaste size={14} strokeWidth={1.75} />
+                </span>
+                <span className="file-tree-context-label">Вставить</span>
+              </button>
+            </>
+          ) : null}
           {menu.target ? (
             (() => {
               const target = menu.target;
@@ -550,24 +575,23 @@ export function FileTree({
                       Открыть в проводнике
                     </span>
                   </button>
-                  {!target.isDir ? (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="file-tree-context-item"
-                      onClick={() => {
-                        onCopyFileContent(target.path);
-                        setMenu(null);
-                      }}
-                    >
-                      <span className="file-tree-context-icon" aria-hidden>
-                        <Copy size={14} strokeWidth={1.75} />
-                      </span>
-                      <span className="file-tree-context-label">
-                        Копировать
-                      </span>
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="file-tree-context-item"
+                    onClick={() => {
+                      onCopy(target);
+                      setMenu(null);
+                    }}
+                  >
+                    <span className="file-tree-context-icon" aria-hidden>
+                      <Copy size={14} strokeWidth={1.75} />
+                    </span>
+                    <span className="file-tree-context-label">
+                      Копировать
+                    </span>
+                  </button>
+                  <div className="file-tree-context-sep" role="separator" />
                   <button
                     type="button"
                     role="menuitem"

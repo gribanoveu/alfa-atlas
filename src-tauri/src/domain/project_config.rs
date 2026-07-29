@@ -33,6 +33,8 @@ pub enum ProjectError {
     Delete(#[source] std::io::Error),
     #[error("failed to rename path: {0}")]
     Rename(#[source] std::io::Error),
+    #[error("failed to copy path: {0}")]
+    Copy(#[source] std::io::Error),
     #[error("failed to parse project config: {0}")]
     Parse(#[source] serde_json::Error),
     #[error("failed to serialize project config: {0}")]
