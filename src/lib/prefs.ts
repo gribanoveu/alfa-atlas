@@ -13,6 +13,7 @@ export type GeneralPrefs = {
   sidebarFontSizePx: number;
   editorFontSizePx: number;
   previewFontSizePx: number;
+  lastCloneDir: string | null;
 };
 
 export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
@@ -26,6 +27,7 @@ export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
   sidebarFontSizePx: 12,
   editorFontSizePx: 13,
   previewFontSizePx: 14,
+  lastCloneDir: null,
 };
 
 export const AUTOSAVE_DELAY_LIMITS = { min: 300, max: 10_000 } as const;

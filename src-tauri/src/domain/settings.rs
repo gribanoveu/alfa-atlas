@@ -166,6 +166,9 @@ pub struct GeneralPrefs {
     pub editor_font_size_px: f32,
     #[serde(default = "default_preview_font_size_px")]
     pub preview_font_size_px: f32,
+    /// Последняя выбранная папка для клонирования репозитория (без имени репозитория).
+    #[serde(default)]
+    pub last_clone_dir: Option<String>,
 }
 
 impl GeneralPrefs {
@@ -196,6 +199,7 @@ impl Default for GeneralPrefs {
             sidebar_font_size_px: DEFAULT_SIDEBAR_FONT_SIZE_PX,
             editor_font_size_px: DEFAULT_EDITOR_FONT_SIZE_PX,
             preview_font_size_px: DEFAULT_PREVIEW_FONT_SIZE_PX,
+            last_clone_dir: None,
         }
     }
 }
@@ -363,6 +367,13 @@ mod tests {
         assert_eq!(prefs.sidebar_font_size_px, DEFAULT_SIDEBAR_FONT_SIZE_PX);
         assert_eq!(prefs.editor_font_size_px, DEFAULT_EDITOR_FONT_SIZE_PX);
         assert_eq!(prefs.preview_font_size_px, DEFAULT_PREVIEW_FONT_SIZE_PX);
+    }
+
+    #[test]
+    fn deserializes_legacy_general_without_last_clone_dir() {
+        let prefs: GeneralPrefs =
+            serde_json::from_str(r#"{"restoreLastProject":false}"#).unwrap();
+        assert_eq!(prefs.last_clone_dir, None);
     }
 
     #[test]

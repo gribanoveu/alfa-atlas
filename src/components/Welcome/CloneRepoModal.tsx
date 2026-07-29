@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { gitClone } from "../../lib/git";
 import type { ProbeResult } from "../../lib/git";
 import { checkPathExists } from "../../lib/project";
+import { getGeneralPrefs, setGeneralPrefs } from "../../lib/prefs";
 import "./CloneRepoModal.css";
 
 function getRepoName(url: string): string | null {
@@ -44,6 +45,14 @@ export function CloneRepoModal({
     setBaseDir(lastSlash > 0 ? value.slice(0, lastSlash) : value);
   };
 
+  useEffect(() => {
+    getGeneralPrefs()
+      .then((prefs) => {
+        if (prefs.lastCloneDir) setBaseDir(prefs.lastCloneDir);
+      })
+      .catch(() => {});
+  }, []);
+
   const pickDestination = async () => {
     const selected = await open({
       directory: true,
@@ -52,6 +61,12 @@ export function CloneRepoModal({
     });
     if (selected === null || Array.isArray(selected)) return;
     setBaseDir(selected);
+    try {
+      const current = await getGeneralPrefs();
+      await setGeneralPrefs({ ...current, lastCloneDir: selected });
+    } catch {
+      // ignore persistence failure — selection still applies to this session
+    }
   };
 
   useEffect(() => {
