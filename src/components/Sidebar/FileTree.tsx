@@ -1,4 +1,5 @@
 import {
+  Copy,
   ExternalLink,
   FilePlus,
   FileText,
@@ -42,6 +43,7 @@ type FileTreeProps = {
   onDelete: (target: FileTreeDeleteTarget) => void;
   onMove: (source: FileTreeDeleteTarget, destDirPath: string) => void;
   onRevealInExplorer: (path: string) => void;
+  onCopyFileContent: (path: string) => void;
   onResizeExternal?: (delta: number) => void;
   onResizeExternalEnd?: () => void;
 };
@@ -238,6 +240,7 @@ export function FileTree({
   onDelete,
   onMove,
   onRevealInExplorer,
+  onCopyFileContent,
   onResizeExternal,
   onResizeExternalEnd,
 }: FileTreeProps) {
@@ -547,6 +550,24 @@ export function FileTree({
                       Открыть в проводнике
                     </span>
                   </button>
+                  {!target.isDir ? (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="file-tree-context-item"
+                      onClick={() => {
+                        onCopyFileContent(target.path);
+                        setMenu(null);
+                      }}
+                    >
+                      <span className="file-tree-context-icon" aria-hidden>
+                        <Copy size={14} strokeWidth={1.75} />
+                      </span>
+                      <span className="file-tree-context-label">
+                        Копировать
+                      </span>
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     role="menuitem"

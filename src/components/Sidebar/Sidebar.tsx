@@ -1,8 +1,9 @@
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
-import type { TreeNode } from "../../lib/project";
+import { readProjectFile, type TreeNode } from "../../lib/project";
 import { FileTree, type FileTreeDeleteTarget } from "./FileTree";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useCallback } from "react";
 import "./Sidebar.css";
 
@@ -64,6 +65,19 @@ export function Sidebar({
     [docsRoot],
   );
 
+  const handleCopyFileContent = useCallback(
+    async (relativePath: string) => {
+      if (!docsRoot) return;
+      try {
+        const content = await readProjectFile(docsRoot, relativePath);
+        await writeText(content);
+      } catch {
+        // тихо игнорируем — как в CredentialsTab.handleCopyPublicKey
+      }
+    },
+    [docsRoot],
+  );
+
   if (!open) {
     return (
       <aside className="sidebar sidebar-collapsed">
@@ -118,6 +132,7 @@ export function Sidebar({
               onDelete={onDelete}
               onMove={onMove}
               onRevealInExplorer={handleRevealInExplorer}
+              onCopyFileContent={handleCopyFileContent}
               onResizeExternal={onResizeExternal}
               onResizeExternalEnd={onResizeExternalEnd}
             />

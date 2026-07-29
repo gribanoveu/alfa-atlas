@@ -76,7 +76,8 @@ fn persist_window_state(window: &Window) {
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
 
     // MCP bridge plugin — debug-only, so the Cursor Tauri MCP server can
     // inspect the running app for diagnostics. No effect in production builds.
