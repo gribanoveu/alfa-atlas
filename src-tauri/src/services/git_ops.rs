@@ -74,7 +74,7 @@ pub fn discard_file_changes(repo_root: &str, path: &str) -> Result<(), GitError>
 }
 
 pub fn list_branches(repo_root: &str) -> Result<Vec<GitBranchInfo>, GitError> {
-    git_repo::list_local_branches(Path::new(repo_root))
+    git_repo::list_branches(Path::new(repo_root))
 }
 
 pub fn create_branch(
@@ -91,4 +91,12 @@ pub fn checkout_branch(
     discard_changes: bool,
 ) -> Result<(), GitError> {
     git_repo::checkout_branch(Path::new(repo_root), name, discard_changes)
+}
+
+pub fn checkout_remote_branch(
+    repo_root: &str,
+    name: &str,
+    discard_changes: bool,
+) -> Result<(), GitError> {
+    git_repo::checkout_remote_branch(Path::new(repo_root), name, discard_changes)
 }

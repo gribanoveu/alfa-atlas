@@ -96,6 +96,35 @@
   padding: 4px 0;
 }
 
+.branches-panel-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  width: 100%;
+  padding: 6px 10px 4px;
+  border: none;
+  background: transparent;
+  font-size: var(--font-ui-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+}
+
+.branches-panel-group-title:hover {
+  color: var(--text-1);
+}
+
+.branches-panel-twist {
+  flex: none;
+  width: 10px;
+  font-size: calc(var(--font-ui-xs) * 0.9);
+  line-height: 1;
+  color: var(--text-2);
+}
+
 .branches-panel-list {
   list-style: none;
   margin: 0;

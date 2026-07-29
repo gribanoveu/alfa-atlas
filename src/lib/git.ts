@@ -33,6 +33,7 @@ export type GitFileDiff = {
 export type GitBranchInfo = {
   name: string;
   isCurrent: boolean;
+  isRemote: boolean;
 };
 
 export function hasTrackedGitChanges(status: GitStatusSnapshot): boolean {
@@ -145,6 +146,18 @@ export function gitCheckoutBranch(
   discardChanges = false,
 ): Promise<void> {
   return invoke<void>("git_checkout_branch", { repoRoot, name, discardChanges });
+}
+
+export function gitCheckoutRemoteBranch(
+  repoRoot: string,
+  name: string,
+  discardChanges = false,
+): Promise<void> {
+  return invoke<void>("git_checkout_remote_branch", {
+    repoRoot,
+    name,
+    discardChanges,
+  });
 }
 
 export function gitGetCredentials(): Promise<GitCredentials> {

@@ -56,6 +56,7 @@ pub struct GitFileDiff {
 pub struct GitBranchInfo {
     pub name: String,
     pub is_current: bool,
+    pub is_remote: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

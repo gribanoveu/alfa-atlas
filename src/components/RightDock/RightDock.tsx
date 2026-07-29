@@ -85,7 +85,7 @@ export type BranchesPanelViewProps = {
   branches: GitBranchInfo[];
   busy: boolean;
   error: string | null;
-  onCheckout: (name: string) => void;
+  onCheckout: (branch: GitBranchInfo) => void;
   onCreateBranch: (name: string) => void;
   onRefresh: () => void;
 };

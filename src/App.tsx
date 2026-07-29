@@ -15,7 +15,7 @@ import { StatusBar } from "./components/StatusBar/StatusBar";
 import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
-import type { GitDiffScope, GitFileStatus, PullMode } from "./lib/git";
+import type { GitBranchInfo, GitDiffScope, GitFileStatus, PullMode } from "./lib/git";
 import { gitSyncStatus, hasTrackedGitChanges } from "./lib/git";
 import { useBranches } from "./hooks/useBranches";
 import { useDocsTree } from "./hooks/useDocsTree";
@@ -56,6 +56,14 @@ function withCopySuffix(name: string, isDir: boolean): string {
     }
   }
   return `${name} copy`;
+}
+
+/** Local branch name a remote branch checkout would create/switch to
+ * (`origin/feature-x` → `feature-x`), mirroring the Rust-side logic in
+ * `checkout_remote_branch`. */
+function localNameFromRemoteBranch(remoteBranchName: string): string {
+  const idx = remoteBranchName.indexOf("/");
+  return idx < 0 ? remoteBranchName : remoteBranchName.slice(idx + 1);
 }
 
 function parentOfPath(path: string): string {
@@ -158,6 +166,7 @@ function App() {
   const [branchSwitchBlocked, setBranchSwitchBlocked] = useState<{
     kind: "checkout" | "create";
     branchName: string;
+    isRemote?: boolean;
   } | null>(null);
   const [gitAlert, setGitAlert] = useState<{
     message: string;
@@ -395,10 +404,12 @@ function App() {
   }, [editor.reloadAllOpenTabs, git, project.refreshBranch, tree]);
 
   const performCheckout = useCallback(
-    async (name: string, discardChanges: boolean) => {
-      const ok = await branches.checkoutBranch(name, discardChanges);
+    async (name: string, discardChanges: boolean, isRemote: boolean) => {
+      const ok = isRemote
+        ? await branches.checkoutRemoteBranch(name, discardChanges)
+        : await branches.checkoutBranch(name, discardChanges);
       if (!ok) return;
-      project.setBranchFromGit(name);
+      project.setBranchFromGit(isRemote ? localNameFromRemoteBranch(name) : name);
       await refreshAfterBranchChange();
     },
     [branches, project.setBranchFromGit, refreshAfterBranchChange],
@@ -415,7 +426,7 @@ function App() {
   );
 
   const handleCheckoutBranch = useCallback(
-    async (name: string) => {
+    async (branch: GitBranchInfo) => {
       const saved = await editor.saveAllDirtyTabs();
       if (!saved) {
         setGitAlert({
@@ -424,10 +435,14 @@ function App() {
         return;
       }
       if (hasTrackedGitChanges(git.status)) {
-        setBranchSwitchBlocked({ kind: "checkout", branchName: name });
+        setBranchSwitchBlocked({
+          kind: "checkout",
+          branchName: branch.name,
+          isRemote: branch.isRemote,
+        });
         return;
       }
-      await performCheckout(name, false);
+      await performCheckout(branch.name, false, branch.isRemote);
     },
     [editor.saveAllDirtyTabs, git.status, performCheckout],
   );
@@ -452,10 +467,10 @@ function App() {
 
   const handleDiscardAndSwitchBranch = useCallback(async () => {
     if (!branchSwitchBlocked) return;
-    const { kind, branchName } = branchSwitchBlocked;
+    const { kind, branchName, isRemote } = branchSwitchBlocked;
     setBranchSwitchBlocked(null);
     if (kind === "checkout") {
-      await performCheckout(branchName, true);
+      await performCheckout(branchName, true, isRemote ?? false);
     } else {
       await performCreateBranch(branchName, true);
     }
@@ -908,7 +923,7 @@ function App() {
                     branches: branches.branches,
                     busy: branches.busy,
                     error: branches.error,
-                    onCheckout: (name) => void handleCheckoutBranch(name),
+                    onCheckout: (branch) => void handleCheckoutBranch(branch),
                     onCreateBranch: (name) => void handleCreateBranch(name),
                     onRefresh: () => void branches.refresh(),
                   }

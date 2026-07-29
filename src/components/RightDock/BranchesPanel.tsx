@@ -1,4 +1,4 @@
-import { GitFork, RefreshCw } from "lucide-react";
+import { Cloud, GitFork, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { GitBranchInfo } from "../../lib/git";
 import "./BranchesPanel.css";
@@ -10,7 +10,7 @@ export type BranchesPanelProps = {
   branches: GitBranchInfo[];
   busy: boolean;
   error: string | null;
-  onCheckout: (name: string) => void;
+  onCheckout: (branch: GitBranchInfo) => void;
   onCreateBranch: (name: string) => void;
   onRefresh: () => void;
 };
@@ -24,6 +24,56 @@ function splitBranchName(name: string): { leaf: string; prefix: string } {
   };
 }
 
+function sortWithCurrentFirst(branches: GitBranchInfo[]): GitBranchInfo[] {
+  const current = branches.find((branch) => branch.isCurrent);
+  const others = branches
+    .filter((branch) => !branch.isCurrent)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  return current ? [current, ...others] : others;
+}
+
+function BranchList({
+  branches,
+  busy,
+  icon: Icon,
+  onCheckout,
+}: {
+  branches: GitBranchInfo[];
+  busy: boolean;
+  icon: typeof GitFork;
+  onCheckout: (branch: GitBranchInfo) => void;
+}) {
+  return (
+    <ul className="branches-panel-list" role="list">
+      {branches.map((branch) => {
+        const { leaf, prefix } = splitBranchName(branch.name);
+        return (
+          <li key={`${branch.isRemote ? "remote" : "local"}:${branch.name}`}>
+            <button
+              type="button"
+              className={`branches-panel-item${branch.isCurrent ? " is-current" : ""}`}
+              disabled={busy || branch.isCurrent}
+              title={branch.name}
+              onClick={() => onCheckout(branch)}
+            >
+              <Icon className="branches-panel-item-icon" size={13} aria-hidden />
+              <span className="branches-panel-item-text">
+                <span className="branches-panel-item-leaf">{leaf}</span>
+                {prefix ? (
+                  <span className="branches-panel-item-prefix">{prefix}</span>
+                ) : null}
+              </span>
+              {branch.isCurrent ? (
+                <span className="branches-panel-badge">текущая</span>
+              ) : null}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function BranchesPanel({
   currentBranch,
   branches,
@@ -35,22 +85,36 @@ export function BranchesPanel({
 }: BranchesPanelProps) {
   const [newBranchName, setNewBranchName] = useState(DEFAULT_BRANCH_PREFIX);
   const [search, setSearch] = useState("");
+  const [localCollapsed, setLocalCollapsed] = useState(false);
+  const [remoteCollapsed, setRemoteCollapsed] = useState(false);
 
-  const sortedBranches = useMemo(() => {
-    const current = branches.find((branch) => branch.isCurrent);
-    const others = branches
-      .filter((branch) => !branch.isCurrent)
-      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-    return current ? [current, ...others] : others;
-  }, [branches]);
+  const localBranches = useMemo(
+    () => sortWithCurrentFirst(branches.filter((branch) => !branch.isRemote)),
+    [branches],
+  );
+  const remoteBranches = useMemo(
+    () =>
+      branches
+        .filter((branch) => branch.isRemote)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
+    [branches],
+  );
 
-  const filteredBranches = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return sortedBranches;
-    return sortedBranches.filter((branch) =>
-      branch.name.toLowerCase().includes(query),
-    );
-  }, [search, sortedBranches]);
+  const query = search.trim().toLowerCase();
+  const filteredLocal = useMemo(
+    () =>
+      query
+        ? localBranches.filter((branch) => branch.name.toLowerCase().includes(query))
+        : localBranches,
+    [localBranches, query],
+  );
+  const filteredRemote = useMemo(
+    () =>
+      query
+        ? remoteBranches.filter((branch) => branch.name.toLowerCase().includes(query))
+        : remoteBranches,
+    [remoteBranches, query],
+  );
 
   const canCreate = newBranchName.trim().length > 0 && !busy;
 
@@ -58,7 +122,7 @@ export function BranchesPanel({
     <div className="branches-panel" id="branches-panel">
       <div className="branches-panel-toolbar">
         <span className="branches-panel-toolbar-title">
-          Локальные ветки
+          Ветки
           <span className="branches-panel-toolbar-count">({branches.length})</span>
         </span>
         <button
@@ -86,44 +150,54 @@ export function BranchesPanel({
       </div>
 
       <div className="branches-panel-scroll">
-        {filteredBranches.length === 0 ? (
+        <button
+          type="button"
+          className="branches-panel-group-title"
+          aria-expanded={!localCollapsed}
+          onClick={() => setLocalCollapsed((v) => !v)}
+        >
+          <span className="branches-panel-twist">{localCollapsed ? "▸" : "▾"}</span>
+          Локальные / Local
+          <span className="branches-panel-toolbar-count">({filteredLocal.length})</span>
+        </button>
+        {localCollapsed ? null : filteredLocal.length === 0 ? (
           <div className="branches-panel-empty">
-            {branches.length === 0
+            {localBranches.length === 0
               ? "Нет локальных веток"
               : "Ничего не найдено по запросу"}
           </div>
         ) : (
-          <ul className="branches-panel-list" role="list">
-            {filteredBranches.map((branch) => {
-              const { leaf, prefix } = splitBranchName(branch.name);
-              return (
-                <li key={branch.name}>
-                  <button
-                    type="button"
-                    className={`branches-panel-item${branch.isCurrent ? " is-current" : ""}`}
-                    disabled={busy || branch.isCurrent}
-                    title={branch.name}
-                    onClick={() => onCheckout(branch.name)}
-                  >
-                    <GitFork
-                      className="branches-panel-item-icon"
-                      size={13}
-                      aria-hidden
-                    />
-                    <span className="branches-panel-item-text">
-                      <span className="branches-panel-item-leaf">{leaf}</span>
-                      {prefix ? (
-                        <span className="branches-panel-item-prefix">{prefix}</span>
-                      ) : null}
-                    </span>
-                    {branch.isCurrent ? (
-                      <span className="branches-panel-badge">текущая</span>
-                    ) : null}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <BranchList
+            branches={filteredLocal}
+            busy={busy}
+            icon={GitFork}
+            onCheckout={onCheckout}
+          />
+        )}
+
+        <button
+          type="button"
+          className="branches-panel-group-title"
+          aria-expanded={!remoteCollapsed}
+          onClick={() => setRemoteCollapsed((v) => !v)}
+        >
+          <span className="branches-panel-twist">{remoteCollapsed ? "▸" : "▾"}</span>
+          Удалённые / Remote
+          <span className="branches-panel-toolbar-count">({filteredRemote.length})</span>
+        </button>
+        {remoteCollapsed ? null : filteredRemote.length === 0 ? (
+          <div className="branches-panel-empty">
+            {remoteBranches.length === 0
+              ? "Нет удалённых веток"
+              : "Ничего не найдено по запросу"}
+          </div>
+        ) : (
+          <BranchList
+            branches={filteredRemote}
+            busy={busy}
+            icon={Cloud}
+            onCheckout={onCheckout}
+          />
         )}
       </div>
 

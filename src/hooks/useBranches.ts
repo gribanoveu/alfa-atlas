@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   gitCheckoutBranch,
+  gitCheckoutRemoteBranch,
   gitCreateBranch,
   gitListBranches,
   type GitBranchInfo,
@@ -78,6 +79,14 @@ export function useBranches(
     [repoRoot, run],
   );
 
+  const checkoutRemoteBranch = useCallback(
+    (name: string, discardChanges = false) => {
+      if (!repoRoot) return Promise.resolve(false);
+      return run(() => gitCheckoutRemoteBranch(repoRoot, name, discardChanges));
+    },
+    [repoRoot, run],
+  );
+
   return {
     branches,
     busy,
@@ -85,5 +94,6 @@ export function useBranches(
     refresh,
     createBranch,
     checkoutBranch,
+    checkoutRemoteBranch,
   };
 }

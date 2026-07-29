@@ -137,6 +137,7 @@ pub fn run() {
             commands::git::git_list_branches,
             commands::git::git_create_branch,
             commands::git::git_checkout_branch,
+            commands::git::git_checkout_remote_branch,
             commands::git::git_get_credentials,
             commands::git::git_save_credentials,
             commands::git::git_get_key_status,

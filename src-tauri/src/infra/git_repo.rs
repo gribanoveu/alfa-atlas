@@ -1005,15 +1005,17 @@ fn switch_to_branch(repo: &Repository, branch_name: &str) -> Result<(), GitError
     Ok(())
 }
 
-pub fn list_local_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
+/// List local branches and remote-tracking branches (e.g. `origin/feature-x`).
+/// The symbolic `origin/HEAD` ref is skipped — it's not a real branch.
+pub fn list_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
     let repo = open_repo(repo_root)?;
     let current = branch_name(&repo);
-    let branches = repo
+    let mut out = Vec::new();
+
+    let locals = repo
         .branches(Some(BranchType::Local))
         .map_err(GitError::Operation)?;
-
-    let mut out = Vec::new();
-    for branch_result in branches {
+    for branch_result in locals {
         let (branch, _) = branch_result.map_err(GitError::Operation)?;
         let name = branch
             .name()
@@ -1022,10 +1024,30 @@ pub fn list_local_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitEr
             .to_string();
         out.push(GitBranchInfo {
             is_current: current.as_deref() == Some(name.as_str()),
+            is_remote: false,
             name,
         });
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let remotes = repo
+        .branches(Some(BranchType::Remote))
+        .map_err(GitError::Operation)?;
+    for branch_result in remotes {
+        let (branch, _) = branch_result.map_err(GitError::Operation)?;
+        let Some(name) = branch.name().map_err(GitError::Operation)? else {
+            continue;
+        };
+        if name.rsplit('/').next() == Some("HEAD") {
+            continue;
+        }
+        out.push(GitBranchInfo {
+            name: name.to_string(),
+            is_current: false,
+            is_remote: true,
+        });
+    }
+
+    out.sort_by(|a, b| a.is_remote.cmp(&b.is_remote).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
 }
 
@@ -1061,6 +1083,49 @@ pub fn checkout_branch(
 
     ensure_clean_or_discard(&repo, discard_changes)?;
     switch_to_branch(&repo, name)
+}
+
+/// Check out a remote-tracking branch (e.g. `origin/feature-x`). If a local
+/// branch with the same short name (`feature-x`) doesn't exist yet, it is
+/// created tracking the remote branch; otherwise the existing local branch
+/// is checked out as-is (mirrors `git checkout <remote-shorthand>`).
+pub fn checkout_remote_branch(
+    repo_root: &Path,
+    remote_branch_name: &str,
+    discard_changes: bool,
+) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let remote_branch = repo
+        .find_branch(remote_branch_name, BranchType::Remote)
+        .map_err(|_| GitError::BranchNotFound(remote_branch_name.to_string()))?;
+
+    let local_name = remote_branch_name
+        .split_once('/')
+        .map(|(_, rest)| rest)
+        .unwrap_or(remote_branch_name);
+    let local_name = validate_branch_name(local_name)?.to_string();
+
+    let current = branch_name(&repo);
+    if current.as_deref() == Some(local_name.as_str()) {
+        return Ok(());
+    }
+
+    ensure_clean_or_discard(&repo, discard_changes)?;
+
+    if repo.find_branch(&local_name, BranchType::Local).is_err() {
+        let commit = remote_branch
+            .get()
+            .peel_to_commit()
+            .map_err(GitError::Operation)?;
+        let mut local_branch = repo
+            .branch(&local_name, &commit, false)
+            .map_err(GitError::Operation)?;
+        local_branch
+            .set_upstream(Some(remote_branch_name))
+            .map_err(GitError::Operation)?;
+    }
+
+    switch_to_branch(&repo, &local_name)
 }
 
 pub fn clone_repo(
