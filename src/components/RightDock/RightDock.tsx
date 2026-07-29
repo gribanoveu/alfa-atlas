@@ -72,7 +72,7 @@ export type GitPanelViewProps = {
   error: string | null;
   onStage: (path: string) => void;
   onUnstage: (path: string) => void;
-  onStageAll: () => void;
+  onStageAll: (paths: string[]) => void;
   onUnstageAll: () => void;
   onCommit: () => void;
   onRefresh: () => void;
@@ -88,6 +88,7 @@ export type BranchesPanelViewProps = {
   onCheckout: (branch: GitBranchInfo) => void;
   onCreateBranch: (name: string) => void;
   onRefresh: () => void;
+  onFetch: () => void;
 };
 
 type RightDockProps = {
@@ -185,6 +186,7 @@ export function RightDock({
                 onCheckout={branches.onCheckout}
                 onCreateBranch={branches.onCreateBranch}
                 onRefresh={branches.onRefresh}
+                onFetch={branches.onFetch}
               />
             ) : (
               <div className="panel-empty">{active.empty}</div>

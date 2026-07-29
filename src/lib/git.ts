@@ -34,6 +34,8 @@ export type GitBranchInfo = {
   name: string;
   isCurrent: boolean;
   isRemote: boolean;
+  /** Commits on the upstream not yet pulled locally; null if no upstream. */
+  behind: number | null;
 };
 
 export function hasTrackedGitChanges(status: GitStatusSnapshot): boolean {
@@ -130,6 +132,10 @@ export function gitDiscardFileChanges(
 
 export function gitListBranches(repoRoot: string): Promise<GitBranchInfo[]> {
   return invoke<GitBranchInfo[]>("git_list_branches", { repoRoot });
+}
+
+export function gitFetchBranches(repoRoot: string): Promise<void> {
+  return invoke<void>("git_fetch_branches", { repoRoot });
 }
 
 export function gitCreateBranch(

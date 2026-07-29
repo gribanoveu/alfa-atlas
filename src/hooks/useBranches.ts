@@ -3,6 +3,7 @@ import {
   gitCheckoutBranch,
   gitCheckoutRemoteBranch,
   gitCreateBranch,
+  gitFetchBranches,
   gitListBranches,
   type GitBranchInfo,
 } from "../lib/git";
@@ -87,6 +88,11 @@ export function useBranches(
     [repoRoot, run],
   );
 
+  const fetchBranches = useCallback(() => {
+    if (!repoRoot) return Promise.resolve(false);
+    return run(() => gitFetchBranches(repoRoot));
+  }, [repoRoot, run]);
+
   return {
     branches,
     busy,
@@ -95,5 +101,6 @@ export function useBranches(
     createBranch,
     checkoutBranch,
     checkoutRemoteBranch,
+    fetchBranches,
   };
 }

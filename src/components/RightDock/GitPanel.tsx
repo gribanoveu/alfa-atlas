@@ -21,7 +21,7 @@ type GitPanelProps = {
   error: string | null;
   onStage: (path: string) => void;
   onUnstage: (path: string) => void;
-  onStageAll: () => void;
+  onStageAll: (paths: string[]) => void;
   onUnstageAll: () => void;
   onCommit: () => void;
   onRefresh: () => void;
@@ -228,8 +228,11 @@ export function GitPanel({
   selectedDiff = null,
 }: GitPanelProps) {
   const [changesOpen, setChangesOpen] = useState(true);
+  const [newFilesOpen, setNewFilesOpen] = useState(true);
   const [stagedOpen, setStagedOpen] = useState(true);
   const emptyChanges = staged.length === 0 && unstaged.length === 0;
+  const modifiedUnstaged = unstaged.filter((file) => file.status !== "?");
+  const newFiles = unstaged.filter((file) => file.status === "?");
 
   return (
     <div className="git-panel">
@@ -249,29 +252,72 @@ export function GitPanel({
       <div className="git-panel-scroll">
         <GitGroup
           title="Changes / Изменения"
-          hint="Файлы, которые ещё не добавлены в коммит"
-          count={unstaged.length}
+          hint="Изменённые файлы, которые ещё не добавлены в коммит"
+          count={modifiedUnstaged.length}
           open={changesOpen}
           onToggle={() => setChangesOpen((v) => !v)}
           headerAction={
-            unstaged.length > 0
+            modifiedUnstaged.length > 0
               ? {
                   label: "Добавить все в Stage",
-                  onClick: onStageAll,
+                  onClick: () =>
+                    onStageAll(modifiedUnstaged.map((f) => f.path)),
                   icon: "plus",
                   disabled: busy,
                 }
               : undefined
           }
         >
-          {unstaged.length === 0 ? (
+          {modifiedUnstaged.length === 0 ? (
             <div className="git-empty">
               {emptyChanges
                 ? "Пока нет несохранённых правок в git"
-                : "Все изменения уже в Stage"}
+                : "Нет изменённых файлов"}
             </div>
           ) : (
-            unstaged.map((file) => (
+            modifiedUnstaged.map((file) => (
+              <GitFileRow
+                key={`u:${file.path}`}
+                file={file}
+                actionLabel="Добавить в Stage"
+                actionIcon="plus"
+                busy={busy}
+                selected={
+                  selectedDiff?.path === file.path &&
+                  selectedDiff.scope === "unstaged"
+                }
+                onOpenDiff={() => onOpenFileDiff(file.path, "unstaged")}
+                onAction={() => onStage(file.path)}
+              />
+            ))
+          )}
+        </GitGroup>
+
+        <div className="git-section-divider" role="separator" />
+
+        <GitGroup
+          title="New files / Новые файлы"
+          hint="Новые файлы, которые ещё не отслеживаются git"
+          count={newFiles.length}
+          open={newFilesOpen}
+          onToggle={() => setNewFilesOpen((v) => !v)}
+          headerAction={
+            newFiles.length > 0
+              ? {
+                  label: "Добавить все в Stage",
+                  onClick: () => onStageAll(newFiles.map((f) => f.path)),
+                  icon: "plus",
+                  disabled: busy,
+                }
+              : undefined
+          }
+        >
+          {newFiles.length === 0 ? (
+            <div className="git-empty">
+              {emptyChanges ? "Пока нет новых файлов" : "Нет новых файлов"}
+            </div>
+          ) : (
+            newFiles.map((file) => (
               <GitFileRow
                 key={`u:${file.path}`}
                 file={file}

@@ -77,6 +77,13 @@ pub fn list_branches(repo_root: &str) -> Result<Vec<GitBranchInfo>, GitError> {
     git_repo::list_branches(Path::new(repo_root))
 }
 
+pub fn fetch_branches(repo_root: &str) -> Result<(), GitError> {
+    let credentials = git_credentials_store::load()
+        .map_err(|e| GitError::Message(e.to_string()))?;
+    let app_private_key = key_management::get_decrypted_private_key();
+    git_repo::fetch_branches(Path::new(repo_root), &credentials, app_private_key.as_deref())
+}
+
 pub fn create_branch(
     repo_root: &str,
     name: &str,

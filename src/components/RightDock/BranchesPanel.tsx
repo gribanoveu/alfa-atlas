@@ -1,4 +1,12 @@
-import { Cloud, GitFork, RefreshCw } from "lucide-react";
+import {
+  ArrowDownCircle,
+  ChevronDown,
+  ChevronRight,
+  Cloud,
+  CloudDownload,
+  GitFork,
+  RefreshCw,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import type { GitBranchInfo } from "../../lib/git";
 import "./BranchesPanel.css";
@@ -13,6 +21,7 @@ export type BranchesPanelProps = {
   onCheckout: (branch: GitBranchInfo) => void;
   onCreateBranch: (name: string) => void;
   onRefresh: () => void;
+  onFetch: () => void;
 };
 
 function splitBranchName(name: string): { leaf: string; prefix: string } {
@@ -63,6 +72,14 @@ function BranchList({
                   <span className="branches-panel-item-prefix">{prefix}</span>
                 ) : null}
               </span>
+              {branch.behind ? (
+                <span
+                  className="branches-panel-update"
+                  title={`Доступно обновление: ${branch.behind} новых коммит(ов) на удалённой ветке`}
+                >
+                  <ArrowDownCircle size={12} aria-hidden />
+                </span>
+              ) : null}
               {branch.isCurrent ? (
                 <span className="branches-panel-badge">текущая</span>
               ) : null}
@@ -82,6 +99,7 @@ export function BranchesPanel({
   onCheckout,
   onCreateBranch,
   onRefresh,
+  onFetch,
 }: BranchesPanelProps) {
   const [newBranchName, setNewBranchName] = useState(DEFAULT_BRANCH_PREFIX);
   const [search, setSearch] = useState("");
@@ -125,16 +143,28 @@ export function BranchesPanel({
           Ветки
           <span className="branches-panel-toolbar-count">({branches.length})</span>
         </span>
-        <button
-          type="button"
-          className="branches-icon-btn"
-          title="Обновить список"
-          aria-label="Обновить список веток"
-          disabled={busy}
-          onClick={onRefresh}
-        >
-          <RefreshCw size={14} aria-hidden />
-        </button>
+        <div className="branches-panel-toolbar-actions">
+          <button
+            type="button"
+            className="branches-icon-btn"
+            title="Загрузить обновления с сервера (git fetch)"
+            aria-label="Загрузить обновления веток с сервера"
+            disabled={busy}
+            onClick={onFetch}
+          >
+            <CloudDownload size={14} aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="branches-icon-btn"
+            title="Обновить список локально"
+            aria-label="Обновить список веток локально"
+            disabled={busy}
+            onClick={onRefresh}
+          >
+            <RefreshCw size={14} aria-hidden />
+          </button>
+        </div>
       </div>
 
       <div className="branches-panel-search-wrap">
@@ -150,16 +180,24 @@ export function BranchesPanel({
       </div>
 
       <div className="branches-panel-scroll">
-        <button
-          type="button"
-          className="branches-panel-group-title"
-          aria-expanded={!localCollapsed}
-          onClick={() => setLocalCollapsed((v) => !v)}
-        >
-          <span className="branches-panel-twist">{localCollapsed ? "▸" : "▾"}</span>
-          Локальные / Local
-          <span className="branches-panel-toolbar-count">({filteredLocal.length})</span>
-        </button>
+        <div className="branches-panel-group-head">
+          <button
+            type="button"
+            className="branches-panel-group-toggle"
+            aria-expanded={!localCollapsed}
+            onClick={() => setLocalCollapsed((v) => !v)}
+          >
+            {localCollapsed ? (
+              <ChevronRight className="branches-panel-group-chevron" size={14} aria-hidden />
+            ) : (
+              <ChevronDown className="branches-panel-group-chevron" size={14} aria-hidden />
+            )}
+            <span className="branches-panel-group-title">
+              Локальные / Local
+              <span className="branches-panel-group-count">({filteredLocal.length})</span>
+            </span>
+          </button>
+        </div>
         {localCollapsed ? null : filteredLocal.length === 0 ? (
           <div className="branches-panel-empty">
             {localBranches.length === 0
@@ -175,16 +213,24 @@ export function BranchesPanel({
           />
         )}
 
-        <button
-          type="button"
-          className="branches-panel-group-title"
-          aria-expanded={!remoteCollapsed}
-          onClick={() => setRemoteCollapsed((v) => !v)}
-        >
-          <span className="branches-panel-twist">{remoteCollapsed ? "▸" : "▾"}</span>
-          Удалённые / Remote
-          <span className="branches-panel-toolbar-count">({filteredRemote.length})</span>
-        </button>
+        <div className="branches-panel-group-head">
+          <button
+            type="button"
+            className="branches-panel-group-toggle"
+            aria-expanded={!remoteCollapsed}
+            onClick={() => setRemoteCollapsed((v) => !v)}
+          >
+            {remoteCollapsed ? (
+              <ChevronRight className="branches-panel-group-chevron" size={14} aria-hidden />
+            ) : (
+              <ChevronDown className="branches-panel-group-chevron" size={14} aria-hidden />
+            )}
+            <span className="branches-panel-group-title">
+              Удалённые / Remote
+              <span className="branches-panel-group-count">({filteredRemote.length})</span>
+            </span>
+          </button>
+        </div>
         {remoteCollapsed ? null : filteredRemote.length === 0 ? (
           <div className="branches-panel-empty">
             {remoteBranches.length === 0

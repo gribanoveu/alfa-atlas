@@ -57,6 +57,9 @@ pub struct GitBranchInfo {
     pub name: String,
     pub is_current: bool,
     pub is_remote: bool,
+    /// Commits present on the branch's upstream but not yet pulled locally.
+    /// `None` when the branch has no upstream (or is itself a remote branch).
+    pub behind: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use git2::{
-    build::CheckoutBuilder, AnnotatedCommit, BranchType, Cred, CredentialType, FetchOptions,
-    MergeOptions, PushOptions, RemoteCallbacks, Repository, ResetType, Signature, Status,
-    StatusOptions, StatusShow,
+    build::CheckoutBuilder, AnnotatedCommit, Branch, BranchType, Cred, CredentialType,
+    FetchOptions, MergeOptions, PushOptions, RemoteCallbacks, Repository, ResetType, Signature,
+    Status, StatusOptions, StatusShow,
 };
 
 use crate::domain::git::{
@@ -1022,9 +1022,11 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
             .map_err(GitError::Operation)?
             .ok_or_else(|| GitError::Message("branch has invalid name".into()))?
             .to_string();
+        let behind = branch_behind_count(&repo, &branch);
         out.push(GitBranchInfo {
             is_current: current.as_deref() == Some(name.as_str()),
             is_remote: false,
+            behind,
             name,
         });
     }
@@ -1044,11 +1046,55 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
             name: name.to_string(),
             is_current: false,
             is_remote: true,
+            behind: None,
         });
     }
 
     out.sort_by(|a, b| a.is_remote.cmp(&b.is_remote).then_with(|| a.name.cmp(&b.name)));
     Ok(out)
+}
+
+/// Commits present on `branch`'s upstream (remote-tracking ref) that aren't
+/// on `branch` yet — i.e. updates not pulled locally. `None` when the branch
+/// has no upstream, or either tip can't be resolved (e.g. unborn branch).
+/// Purely local: reflects the state as of the last fetch, not live network
+/// data — call `fetch_branches` first to refresh it.
+fn branch_behind_count(repo: &Repository, branch: &Branch<'_>) -> Option<usize> {
+    let upstream = branch.upstream().ok()?;
+    let local_oid = branch.get().target()?;
+    let upstream_oid = upstream.get().target()?;
+    let (_, behind) = repo.graph_ahead_behind(local_oid, upstream_oid).ok()?;
+    Some(behind)
+}
+
+/// Fetch every branch from every configured remote, updating the local
+/// remote-tracking refs (`refs/remotes/<remote>/*`) without touching the
+/// working tree or the current branch. Powers the branches panel's "fetch"
+/// action and keeps the per-branch `behind` count accurate.
+pub fn fetch_branches(
+    repo_root: &Path,
+    credentials: &GitCredentials,
+    app_private_key: Option<&str>,
+) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let config = repo.config().map_err(GitError::Operation)?;
+    let remote_names = repo.remotes().map_err(GitError::Operation)?;
+
+    for name in remote_names.iter() {
+        let Ok(Some(name)) = name else { continue };
+        let mut callbacks = RemoteCallbacks::new();
+        configure_credentials(&mut callbacks, &config, credentials, app_private_key);
+        configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
+
+        let mut fetch_opts = FetchOptions::new();
+        fetch_opts.remote_callbacks(callbacks);
+
+        let mut remote = repo.find_remote(name).map_err(map_remote_error)?;
+        remote
+            .fetch(&[] as &[&str], Some(&mut fetch_opts), None)
+            .map_err(map_remote_error)?;
+    }
+    Ok(())
 }
 
 pub fn create_branch(repo_root: &Path, name: &str, discard_changes: bool) -> Result<(), GitError> {

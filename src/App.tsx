@@ -905,8 +905,7 @@ function App() {
                     error: git.error,
                     onStage: (path) => void git.stage([path]),
                     onUnstage: (path) => void git.unstage([path]),
-                    onStageAll: () =>
-                      void git.stage(git.status.unstaged.map((f) => f.path)),
+                    onStageAll: (paths) => void git.stage(paths),
                     onUnstageAll: () =>
                       void git.unstage(git.status.staged.map((f) => f.path)),
                     onCommit: () => void git.commit(),
@@ -939,6 +938,7 @@ function App() {
                     onCheckout: (branch) => void handleCheckoutBranch(branch),
                     onCreateBranch: (name) => void handleCreateBranch(name),
                     onRefresh: () => void branches.refresh(),
+                    onFetch: () => void branches.fetchBranches(),
                   }
                 : null
             }

@@ -86,6 +86,15 @@ pub fn git_list_branches(repo_root: String) -> Result<Vec<GitBranchInfo>, String
 }
 
 #[tauri::command]
+pub async fn git_fetch_branches(repo_root: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_ops::fetch_branches(&repo_root).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub fn git_create_branch(
     repo_root: String,
     name: String,
