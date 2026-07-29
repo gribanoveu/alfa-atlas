@@ -156,6 +156,7 @@ function App() {
     active: Boolean(project.repoRoot),
   });
   const [folderError, setFolderError] = useState<string | null>(null);
+  const [dismissedToastMessage, setDismissedToastMessage] = useState<string | null>(null);
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
@@ -709,6 +710,18 @@ function App() {
     setInsertRequest({ id: insertCounter.current, tabId, text });
   }, [editor.activeTabId]);
 
+  const toastMessage = editor.error ?? folderError;
+  const visibleToastMessage =
+    toastMessage && toastMessage !== dismissedToastMessage ? toastMessage : null;
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timer = setTimeout(() => {
+      setDismissedToastMessage(toastMessage);
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
+
   return (
     <div className="app" style={panelStyle}>
       <TopBar
@@ -1085,9 +1098,17 @@ function App() {
         />
       ) : null}
 
-      {editor.error || folderError ? (
+      {visibleToastMessage ? (
         <div className="app-toast" role="status">
-          {editor.error ?? folderError}
+          <span className="app-toast-message">{visibleToastMessage}</span>
+          <button
+            type="button"
+            className="app-toast-close"
+            onClick={() => setDismissedToastMessage(toastMessage)}
+            aria-label="Закрыть"
+          >
+            ×
+          </button>
         </div>
       ) : null}
     </div>
