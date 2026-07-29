@@ -17,6 +17,11 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn apply_window_state(window: &tauri::WebviewWindow, state: WindowState) {
     let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(
         DEFAULT_WINDOW_WIDTH,
@@ -107,6 +112,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            exit_app,
             commands::project::probe_open_path,
             commands::project::open_project,
             commands::project::open_cached_project,

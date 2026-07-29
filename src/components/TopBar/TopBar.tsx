@@ -1,5 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, FolderOpen } from "lucide-react";
 import { useCallback, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
@@ -92,7 +92,7 @@ export function TopBar({
           if (hasProject) void onCloseProject();
           break;
         case "file.exit":
-          void getCurrentWindow().close();
+          void invoke("exit_app");
           break;
         case "view.toggleSidebar":
           onToggleSidebar();
