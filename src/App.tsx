@@ -521,6 +521,25 @@ function App() {
     [git, syncEditorAfterGitDiscard],
   );
 
+  const handleGitSaveContent = useCallback(
+    async (repoRelativePath: string, scope: GitDiffScope, content: string) => {
+      const ok = await git.applyDiffContent(repoRelativePath, scope, content);
+      if (!ok) return false;
+      // "staged" writes straight into the index, leaving the working tree
+      // (and any open editor tab, which reflects the working tree) untouched.
+      if (scope === "unstaged" && project.repoRoot && project.docsRoot) {
+        const docsRel = toDocsRelativePath(
+          repoRelativePath,
+          project.repoRoot,
+          project.docsRoot,
+        );
+        await editor.reloadTabFromDisk(docsRel);
+      }
+      return true;
+    },
+    [git, editor, project.docsRoot, project.repoRoot],
+  );
+
   const openDiagnostic = useCallback(
     async (documentId: string, line: number, column: number) => {
       // Если Problems panel был свёрнут — раскрываем его (как в IDE: клик по
@@ -1086,6 +1105,7 @@ function App() {
           onClose={() => setGitDiffTarget(null)}
           onLoadDiff={git.loadFileDiff}
           onDiscard={handleGitDiscard}
+          onSaveContent={handleGitSaveContent}
         />
       ) : null}
 

@@ -73,6 +73,15 @@ pub fn discard_file_changes(repo_root: &str, path: &str) -> Result<(), GitError>
     git_repo::discard_file_changes(Path::new(repo_root), path)
 }
 
+pub fn apply_diff_content(
+    repo_root: &str,
+    path: &str,
+    scope: GitDiffScope,
+    content: &str,
+) -> Result<(), GitError> {
+    git_repo::apply_diff_content(Path::new(repo_root), path, scope, content)
+}
+
 pub fn list_branches(repo_root: &str) -> Result<Vec<GitBranchInfo>, GitError> {
     git_repo::list_branches(Path::new(repo_root))
 }

@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use git2::{
     build::CheckoutBuilder, AnnotatedCommit, Branch, BranchType, Cred, CredentialType,
-    FetchOptions, MergeOptions, PushOptions, RemoteCallbacks, Repository, ResetType, Signature,
-    Status, StatusOptions, StatusShow,
+    FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions, RemoteCallbacks, Repository,
+    ResetType, Signature, Status, StatusOptions, StatusShow,
 };
 
 use crate::domain::git::{
@@ -848,6 +848,62 @@ pub fn file_diff(
             })
         }
     }
+}
+
+/// Write `content` as the new state for `path` at the given diff `scope`,
+/// enabling partial (hunk-level) revert from the diff view — mirrors
+/// IDEA's per-chunk "revert" arrows, which edit the modified pane and save
+/// it back rather than discarding the whole file. For `Unstaged`, `content`
+/// is written straight to the working tree file (the diff's "modified" side
+/// is the workdir). For `Staged`, `content` is written as a new blob into
+/// the index at that path, without touching the working tree (the diff's
+/// "modified" side is the index) — so it doesn't disturb any separate
+/// unstaged edits already sitting in the workdir for the same file.
+pub fn apply_diff_content(
+    repo_root: &Path,
+    path: &str,
+    scope: GitDiffScope,
+    content: &str,
+) -> Result<(), GitError> {
+    let rel = validate_relative_path(path)?;
+    let repo = open_repo(repo_root)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
+
+    match scope {
+        GitDiffScope::Unstaged => {
+            let full = workdir.join(rel);
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| GitError::Message(format!("failed to create directory: {e}")))?;
+            }
+            std::fs::write(&full, content)
+                .map_err(|e| GitError::Message(format!("failed to write file: {e}")))?;
+        }
+        GitDiffScope::Staged => {
+            let blob_id = repo.blob(content.as_bytes()).map_err(GitError::Operation)?;
+            let mut index = repo.index().map_err(GitError::Operation)?;
+            let mode = index.get_path(rel, 0).map(|e| e.mode).unwrap_or(0o100644);
+            let entry = IndexEntry {
+                ctime: IndexTime::new(0, 0),
+                mtime: IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode,
+                uid: 0,
+                gid: 0,
+                file_size: content.len() as u32,
+                id: blob_id,
+                flags: 0,
+                flags_extended: 0,
+                path: path.as_bytes().to_vec(),
+            };
+            index.add(&entry).map_err(GitError::Operation)?;
+            index.write().map_err(GitError::Operation)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError> {

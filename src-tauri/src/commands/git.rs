@@ -81,6 +81,16 @@ pub fn git_discard_file_changes(repo_root: String, path: String) -> Result<(), S
 }
 
 #[tauri::command]
+pub fn git_apply_diff_content(
+    repo_root: String,
+    path: String,
+    scope: GitDiffScope,
+    content: String,
+) -> Result<(), String> {
+    git_ops::apply_diff_content(&repo_root, &path, scope, &content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn git_list_branches(repo_root: String) -> Result<Vec<GitBranchInfo>, String> {
     git_ops::list_branches(&repo_root).map_err(|e| e.to_string())
 }

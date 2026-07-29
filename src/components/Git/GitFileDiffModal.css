@@ -33,6 +33,11 @@
   color: var(--text-1);
 }
 
+.git-diff-hint {
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+}
+
 .git-diff-close {
   flex: none;
   width: 28px;
@@ -64,6 +69,14 @@
   background: var(--bg-0);
 }
 
+/* Force both diff panes to look identical: Monaco's `scrollbar.vertical:
+ * "hidden"` option doesn't reliably apply to the read-only original side in
+ * side-by-side diff mode, so hide the scrollbar track directly. Wheel/
+ * trackpad scrolling keeps working — this only removes the visual bar. */
+.git-diff-body .monaco-scrollable-element > .scrollbar {
+  display: none !important;
+}
+
 .git-diff-placeholder {
   display: flex;
   align-items: center;
@@ -80,6 +93,11 @@
 .git-diff-actions {
   flex: none;
   justify-content: space-between;
+}
+
+.git-diff-actions-right {
+  display: flex;
+  gap: 8px;
 }
 
 .git-diff-discard-btn {

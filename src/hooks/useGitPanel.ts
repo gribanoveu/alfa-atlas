@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  gitApplyDiffContent,
   gitCommit,
   gitDiscardFileChanges,
   gitFileDiff,
@@ -220,6 +221,25 @@ export function useGitPanel(
     [refresh, repoRoot],
   );
 
+  const applyDiffContent = useCallback(
+    async (path: string, scope: GitDiffScope, content: string): Promise<boolean> => {
+      if (!repoRoot) return false;
+      setBusy(true);
+      try {
+        await gitApplyDiffContent(repoRoot, path, scope, content);
+        await refresh();
+        setError(null);
+        return true;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return false;
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh, repoRoot],
+  );
+
   const canCommit =
     status.staged.length > 0 && description.trim().length > 0 && !busy;
 
@@ -243,5 +263,6 @@ export function useGitPanel(
     push,
     loadFileDiff,
     discardFileChanges,
+    applyDiffContent,
   };
 }

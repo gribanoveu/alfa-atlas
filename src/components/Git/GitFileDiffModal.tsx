@@ -1,5 +1,5 @@
-import { DiffEditor } from "@monaco-editor/react";
-import { useEffect, useRef, useState } from "react";
+import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { GitDiffScope, GitFileDiff, GitFileStatus } from "../../lib/git";
 import { monacoLanguageFor } from "../../lib/supportedFiles";
 import "../Welcome/CloneRepoModal.css";
@@ -12,6 +12,11 @@ type GitFileDiffModalProps = {
   onClose: () => void;
   onLoadDiff: (path: string, scope: GitDiffScope) => Promise<GitFileDiff | null>;
   onDiscard: (path: string) => Promise<boolean>;
+  onSaveContent: (
+    path: string,
+    scope: GitDiffScope,
+    content: string,
+  ) => Promise<boolean>;
 };
 
 export function GitFileDiffModal({
@@ -21,12 +26,15 @@ export function GitFileDiffModal({
   onClose,
   onLoadDiff,
   onDiscard,
+  onSaveContent,
 }: GitFileDiffModalProps) {
   const [diff, setDiff] = useState<GitFileDiff | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
+  const [saving, setSaving] = useState(false);
   const editorWrapRef = useRef<HTMLDivElement>(null);
+  const diffEditorRef = useRef<Parameters<DiffOnMount>[0] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,11 +70,11 @@ export function GitFileDiffModal({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy && !discarding) onClose();
+      if (event.key === "Escape" && !busy && !discarding && !saving) onClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [busy, discarding, onClose]);
+  }, [busy, discarding, saving, onClose]);
 
   const handleDiscard = async () => {
     const confirmed = window.confirm(
@@ -85,8 +93,70 @@ export function GitFileDiffModal({
     }
   };
 
+  const handleSave = async () => {
+    const editor = diffEditorRef.current;
+    if (!editor) return;
+    const content = editor.getModifiedEditor().getValue();
+
+    setSaving(true);
+    setError(null);
+    try {
+      const ok = await onSaveContent(target.file.path, target.scope, content);
+      if (!ok) {
+        setError("Не удалось сохранить изменения");
+        return;
+      }
+      // Reload the diff so the view reflects the new saved state (reverted
+      // hunks now show as unchanged) instead of leaving the stale original
+      // diff on screen.
+      const result = await onLoadDiff(target.file.path, target.scope);
+      if (result) setDiff(result);
+      else onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const language = monacoLanguageFor(target.file.path);
-  const actionBusy = busy || discarding;
+  const actionBusy = busy || discarding || saving;
+
+  // Stable reference: @monaco-editor/react calls diffEditor.updateOptions()
+  // on every prop change after mount, which is otherwise on every render
+  // if this object were an inline literal — repeatedly re-applying the
+  // scrollbar visibility option was flipping the left pane's scrollbar back
+  // to visible. Only editorFontSizePx ever actually changes here.
+  const diffEditorOptions = useMemo(
+    () => ({
+      readOnly: false,
+      originalEditable: false,
+      renderSideBySide: true,
+      renderMarginRevertIcon: true,
+      // Monaco's newer hover-based "gutter menu" takes over the revert UI
+      // by default and hides the classic always-visible revert arrows set
+      // via renderMarginRevertIcon above — switch it off to get them back.
+      renderGutterMenu: false,
+      // Keep both panes' gutter width identical (the modified side needs
+      // glyph margin space for the revert arrows anyway) so wrapped lines
+      // stay aligned and both sides scroll in lockstep.
+      glyphMargin: true,
+      automaticLayout: true,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      wordWrap: "on" as const,
+      fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+      fontSize: editorFontSizePx,
+      renderOverviewRuler: false,
+      scrollbar: {
+        useShadows: false,
+        vertical: "hidden" as const,
+        horizontal: "hidden" as const,
+        verticalScrollbarSize: 0,
+        horizontalScrollbarSize: 0,
+        handleMouseWheel: true,
+      },
+    }),
+    [editorFontSizePx],
+  );
 
   return (
     <div
@@ -116,6 +186,10 @@ export function GitFileDiffModal({
                   {diff.originalLabel} ↔ {diff.modifiedLabel}
                 </span>
               ) : null}
+              <span className="git-diff-hint">
+                Нажмите на стрелку слева от изменённого блока в правой панели,
+                чтобы откатить только его
+              </span>
             </div>
           </div>
           <button
@@ -145,17 +219,10 @@ export function GitFileDiffModal({
               language={language}
               original={diff.original}
               modified={diff.modified}
-              options={{
-                readOnly: true,
-                renderSideBySide: true,
-                automaticLayout: true,
-                minimap: { enabled: false },
-                scrollBeyondLastLine: false,
-                wordWrap: "on",
-                fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-                fontSize: editorFontSizePx,
-                renderOverviewRuler: false,
+              onMount={(editor) => {
+                diffEditorRef.current = editor;
               }}
+              options={diffEditorOptions}
             />
           ) : null}
         </div>
@@ -170,14 +237,25 @@ export function GitFileDiffModal({
           >
             Отменить изменения
           </button>
-          <button
-            type="button"
-            className="clone-modal-btn clone-modal-btn-primary"
-            disabled={actionBusy}
-            onClick={onClose}
-          >
-            Закрыть
-          </button>
+          <div className="git-diff-actions-right">
+            <button
+              type="button"
+              className="clone-modal-btn"
+              disabled={actionBusy}
+              onClick={onClose}
+            >
+              Закрыть
+            </button>
+            <button
+              type="button"
+              className="clone-modal-btn primary"
+              disabled={actionBusy || loading || diff?.isBinary === true}
+              onClick={() => void handleSave()}
+              title="Сохранить содержимое из окна сравнения (после отката отдельных изменений)"
+            >
+              {saving ? "Сохранение…" : "Сохранить"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

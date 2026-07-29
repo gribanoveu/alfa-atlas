@@ -130,6 +130,15 @@ export function gitDiscardFileChanges(
   return invoke<void>("git_discard_file_changes", { repoRoot, path });
 }
 
+export function gitApplyDiffContent(
+  repoRoot: string,
+  path: string,
+  scope: GitDiffScope,
+  content: string,
+): Promise<void> {
+  return invoke<void>("git_apply_diff_content", { repoRoot, path, scope, content });
+}
+
 export function gitListBranches(repoRoot: string): Promise<GitBranchInfo[]> {
   return invoke<GitBranchInfo[]>("git_list_branches", { repoRoot });
 }
