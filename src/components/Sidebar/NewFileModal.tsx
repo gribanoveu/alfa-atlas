@@ -18,8 +18,8 @@ type NewFileModalProps = {
 const TEMPLATE_OPTIONS: { value: AsciidocFileTemplate | null; label: string }[] = [
   { value: null, label: "Нет" },
   { value: "method", label: "Документация на метод" },
-  { value: "response", label: "Ответ" },
-  { value: "request", label: "Запрос" },
+  { value: "response", label: "Ответ от сервиса" },
+  { value: "request", label: "Запрос к сервису" },
 ];
 
 function stripMatchingExtension(name: string, ext: string): string {
