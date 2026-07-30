@@ -128,6 +128,22 @@
   cursor: default;
 }
 
+.unpushed-indicator-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 6px;
+  border-radius: 5px;
+  color: var(--orange);
+  -webkit-app-region: no-drag;
+}
+
+.unpushed-indicator-btn:hover {
+  background: var(--bg-2);
+}
+
 .repo-chip {
   display: flex;
   align-items: center;

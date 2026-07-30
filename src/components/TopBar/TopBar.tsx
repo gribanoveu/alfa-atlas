@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronLeft, ChevronRight, FolderOpen } from "lucide-react";
+import { ChevronLeft, ChevronRight, CloudUpload, FolderOpen } from "lucide-react";
 import { useCallback, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
@@ -38,6 +38,8 @@ type TopBarProps = {
   onGoForward?: () => void;
   canGoBack?: boolean;
   canGoForward?: boolean;
+  hasUnpushedChanges?: boolean;
+  onOpenPushConfirm?: () => void;
   onSelectProject?: (root: string) => void;
   onCloneProject?: (probe: ProbeResult) => Promise<void>;
 };
@@ -66,6 +68,8 @@ export function TopBar({
   onGoForward,
   canGoBack = false,
   canGoForward = false,
+  hasUnpushedChanges = false,
+  onOpenPushConfirm,
   onSelectProject,
   onCloneProject,
 }: TopBarProps) {
@@ -186,6 +190,17 @@ export function TopBar({
               <ChevronRight size={16} />
             </button>
           </div>
+          {hasUnpushedChanges ? (
+            <button
+              type="button"
+              className="unpushed-indicator-btn"
+              title="Есть неотправленные изменения — отправить на сервер"
+              aria-label="Есть неотправленные изменения — отправить на сервер"
+              onClick={onOpenPushConfirm}
+            >
+              <CloudUpload size={16} />
+            </button>
+          ) : null}
           <div className="repo-chip-wrapper">
             <button
               type="button"

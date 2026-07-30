@@ -22,6 +22,9 @@ const EMPTY_STATUS: GitStatusSnapshot = {
   staged: [],
   unstaged: [],
   branch: null,
+  hasCommits: false,
+  hasUpstream: false,
+  ahead: 0,
 };
 
 type UseGitPanelOptions = {

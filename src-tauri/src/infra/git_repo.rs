@@ -131,6 +131,62 @@ fn tracked_workdir_status_letter(status: Status) -> Option<&'static str> {
     }
 }
 
+struct UnpushedStatus {
+    has_commits: bool,
+    has_upstream: bool,
+    ahead: usize,
+}
+
+/// Local-only check (no network) for commits on HEAD that haven't been pushed.
+/// `has_upstream` is false for a branch that has never been pushed, in which
+/// case every commit on it counts as unpushed regardless of `ahead` (which
+/// only reflects the upstream comparison and is `0` when there's no upstream).
+fn unpushed_status(repo: &Repository) -> UnpushedStatus {
+    let empty = UnpushedStatus {
+        has_commits: false,
+        has_upstream: false,
+        ahead: 0,
+    };
+    let Ok(head) = repo.head() else {
+        return empty;
+    };
+    if !head.is_branch() {
+        return empty;
+    }
+    let Some(local_oid) = head.target() else {
+        return empty;
+    };
+    let Ok(branch_name) = head.shorthand() else {
+        return UnpushedStatus {
+            has_commits: true,
+            ..empty
+        };
+    };
+    let Ok(branch) = repo.find_branch(branch_name, BranchType::Local) else {
+        return UnpushedStatus {
+            has_commits: true,
+            ..empty
+        };
+    };
+    let Ok(upstream) = branch.upstream() else {
+        return UnpushedStatus {
+            has_commits: true,
+            ..empty
+        };
+    };
+    let ahead = upstream
+        .get()
+        .target()
+        .and_then(|upstream_oid| repo.graph_ahead_behind(local_oid, upstream_oid).ok())
+        .map(|(ahead, _)| ahead)
+        .unwrap_or(0);
+    UnpushedStatus {
+        has_commits: true,
+        has_upstream: true,
+        ahead,
+    }
+}
+
 pub fn status(repo_root: &Path) -> Result<GitStatusSnapshot, GitError> {
     let repo = open_repo(repo_root)?;
     let mut opts = StatusOptions::new();
@@ -166,10 +222,15 @@ pub fn status(repo_root: &Path) -> Result<GitStatusSnapshot, GitError> {
     staged.sort_by(|a, b| a.path.cmp(&b.path));
     unstaged.sort_by(|a, b| a.path.cmp(&b.path));
 
+    let unpushed = unpushed_status(&repo);
+
     Ok(GitStatusSnapshot {
         staged,
         unstaged,
         branch: branch_name(&repo),
+        has_commits: unpushed.has_commits,
+        has_upstream: unpushed.has_upstream,
+        ahead: unpushed.ahead,
     })
 }
 
@@ -1673,6 +1734,84 @@ mod tests {
         // Bare remote should have received the commit.
         let remote_repo = Repository::open(&remote).unwrap();
         assert!(remote_repo.head().is_ok());
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    fn commit_file(repo: &Repository, name: &str, content: &str, message: &str) {
+        fs::write(repo.workdir().unwrap().join(name), content).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(name)).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = commit_signature(repo).unwrap();
+        let parents: Vec<_> = repo.head().ok().and_then(|h| h.peel_to_commit().ok()).into_iter().collect();
+        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+            .unwrap();
+    }
+
+    #[test]
+    fn unpushed_status_reports_no_commits_on_fresh_repo() {
+        let dir = temp_dir("unpushed-empty");
+        let repo = Repository::init(&dir).unwrap();
+
+        let status = unpushed_status(&repo);
+        assert!(!status.has_commits);
+        assert!(!status.has_upstream);
+        assert_eq!(status.ahead, 0);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unpushed_status_reports_has_commits_without_upstream() {
+        let dir = temp_dir("unpushed-no-upstream");
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "first");
+
+        let status = unpushed_status(&repo);
+        assert!(status.has_commits);
+        assert!(!status.has_upstream);
+        assert_eq!(status.ahead, 0);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unpushed_status_reports_ahead_count_with_upstream() {
+        let base = temp_dir("unpushed-ahead");
+        let remote = base.join("remote");
+        let local = base.join("local");
+
+        Repository::init_bare(&remote).unwrap();
+        let repo = Repository::init(&local).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "first");
+        repo.remote("origin", remote.to_str().unwrap()).unwrap();
+        push(&local, &GitCredentials::default(), None).unwrap();
+
+        // In sync right after the initial push.
+        let status = unpushed_status(&repo);
+        assert!(status.has_commits);
+        assert!(status.has_upstream);
+        assert_eq!(status.ahead, 0);
+
+        // One more local commit, not yet pushed.
+        commit_file(&repo, "b.txt", "two", "second");
+        let status = unpushed_status(&repo);
+        assert!(status.has_upstream);
+        assert_eq!(status.ahead, 1);
 
         fs::remove_dir_all(&base).ok();
     }

@@ -9,7 +9,18 @@ export type GitStatusSnapshot = {
   staged: GitFileStatus[];
   unstaged: GitFileStatus[];
   branch: string | null;
+  /** Whether HEAD resolves to a commit (false on a brand-new, empty repo). */
+  hasCommits: boolean;
+  /** Whether the current branch has an upstream remote-tracking branch configured. */
+  hasUpstream: boolean;
+  /** Commits on HEAD not yet on the upstream (local-only; 0 when hasUpstream is false). */
+  ahead: number;
 };
+
+export function hasUnpushedCommits(status: GitStatusSnapshot): boolean {
+  if (!status.hasCommits) return false;
+  return !status.hasUpstream || status.ahead > 0;
+}
 
 export type GitCommitSummary = {
   hash: string;

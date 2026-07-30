@@ -5,6 +5,7 @@ import { AlertOkModal } from "./components/Git/AlertOkModal";
 import { GitFileDiffModal } from "./components/Git/GitFileDiffModal";
 import { CheckoutBlockedModal } from "./components/Git/CheckoutBlockedModal";
 import { PullUpdateModal } from "./components/Git/PullUpdateModal";
+import { PushConfirmModal } from "./components/Git/PushConfirmModal";
 import { ResetRemoteConfirmModal } from "./components/Git/ResetRemoteConfirmModal";
 import { RightDock } from "./components/RightDock/RightDock";
 import { NewFileModal } from "./components/Sidebar/NewFileModal";
@@ -16,7 +17,7 @@ import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
 import type { GitBranchInfo, GitDiffScope, GitFileStatus, PullMode } from "./lib/git";
-import { gitSyncStatus, hasTrackedGitChanges } from "./lib/git";
+import { gitSyncStatus, hasTrackedGitChanges, hasUnpushedCommits } from "./lib/git";
 import { useBranches } from "./hooks/useBranches";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
@@ -157,6 +158,8 @@ function App() {
   });
   const [folderError, setFolderError] = useState<string | null>(null);
   const [dismissedToastMessage, setDismissedToastMessage] = useState<string | null>(null);
+  const [successToast, setSuccessToast] = useState<{ id: number; message: string } | null>(null);
+  const successToastCounter = useRef(0);
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
@@ -164,6 +167,7 @@ function App() {
   const [renameTarget, setRenameTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [resetRemoteConfirmOpen, setResetRemoteConfirmOpen] = useState(false);
+  const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
   const [branchSwitchBlocked, setBranchSwitchBlocked] = useState<{
     kind: "checkout" | "create";
     branchName: string;
@@ -265,6 +269,7 @@ function App() {
     .join(" ");
 
   const hasProject = Boolean(project.docsRoot && project.repoRoot);
+  const hasUnpushedChanges = hasProject && hasUnpushedCommits(git.status);
   const workspaceIndex = useWorkspaceIndex(project.repoRoot, {
     active: hasProject,
   });
@@ -311,7 +316,15 @@ function App() {
         return;
       }
       const err = await git.push();
-      if (err) setGitAlert({ message: err });
+      if (err) {
+        setGitAlert({ message: err });
+      } else {
+        successToastCounter.current += 1;
+        setSuccessToast({
+          id: successToastCounter.current,
+          message: "Изменения отправлены на сервер",
+        });
+      }
     } catch (e) {
       setGitAlert({
         message: e instanceof Error ? e.message : String(e),
@@ -334,6 +347,11 @@ function App() {
     setPullModalOpen(false);
     if (err) setGitAlert({ message: err });
   }, [git]);
+
+  const onPushConfirm = useCallback(async () => {
+    setPushConfirmOpen(false);
+    await runPush();
+  }, [runPush]);
 
   const panelStyle = {
     ["--sidebar-width" as string]: `${panels.layout.sidebarWidth}px`,
@@ -741,6 +759,24 @@ function App() {
     return () => clearTimeout(timer);
   }, [toastMessage]);
 
+  useEffect(() => {
+    if (!successToast) return;
+    const timer = setTimeout(() => {
+      setSuccessToast((current) => (current?.id === successToast.id ? null : current));
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [successToast]);
+
+  const activeToast = successToast
+    ? { message: successToast.message, variant: "success" as const, onClose: () => setSuccessToast(null) }
+    : visibleToastMessage
+      ? {
+          message: visibleToastMessage,
+          variant: "error" as const,
+          onClose: () => setDismissedToastMessage(toastMessage),
+        }
+      : null;
+
   return (
     <div className="app" style={panelStyle}>
       <TopBar
@@ -771,6 +807,8 @@ function App() {
         onGoForward={() => void editor.goForward()}
         canGoBack={editor.canGoBack}
         canGoForward={editor.canGoForward}
+        hasUnpushedChanges={hasUnpushedChanges}
+        onOpenPushConfirm={() => setPushConfirmOpen(true)}
         onSelectProject={async (root) => {
           await closeProject();
           try {
@@ -1092,6 +1130,17 @@ function App() {
         />
       ) : null}
 
+      {pushConfirmOpen ? (
+        <PushConfirmModal
+          branchName={project.branchName}
+          hasUpstream={git.status.hasUpstream}
+          ahead={git.status.ahead}
+          busy={git.busy}
+          onCancel={() => setPushConfirmOpen(false)}
+          onConfirm={() => void onPushConfirm()}
+        />
+      ) : null}
+
       {branchSwitchBlocked ? (
         <CheckoutBlockedModal
           branchName={branchSwitchBlocked.branchName}
@@ -1127,13 +1176,16 @@ function App() {
         />
       ) : null}
 
-      {visibleToastMessage ? (
-        <div className="app-toast" role="status">
-          <span className="app-toast-message">{visibleToastMessage}</span>
+      {activeToast ? (
+        <div
+          className={`app-toast ${activeToast.variant === "success" ? "app-toast-success" : ""}`}
+          role="status"
+        >
+          <span className="app-toast-message">{activeToast.message}</span>
           <button
             type="button"
             className="app-toast-close"
-            onClick={() => setDismissedToastMessage(toastMessage)}
+            onClick={activeToast.onClose}
             aria-label="Закрыть"
           >
             ×

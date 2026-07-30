@@ -15,6 +15,14 @@ pub struct GitStatusSnapshot {
     pub staged: Vec<GitFileStatus>,
     pub unstaged: Vec<GitFileStatus>,
     pub branch: Option<String>,
+    /// Whether HEAD resolves to a commit (false on a brand-new, empty repo).
+    pub has_commits: bool,
+    /// Whether the current branch has an upstream remote-tracking branch configured.
+    pub has_upstream: bool,
+    /// Commits on HEAD not yet on the upstream (purely local — reflects the
+    /// last fetch, not live network state). Only meaningful when `has_upstream`
+    /// is true; `0` otherwise.
+    pub ahead: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
