@@ -48,7 +48,7 @@ export function PullUpdateModal({
               onChange={() => setMode("merge")}
             />
             <span>
-              Объединить изменения с сервера с вашими (merge)
+              Объединить изменения с сервера с вашими (merge) - рекомендуется
             </span>
           </label>
           <label className="pull-update-option">
