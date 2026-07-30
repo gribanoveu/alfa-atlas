@@ -852,7 +852,9 @@ function App() {
         gitBusy={git.busy}
         branchesPanelOpen={layout.activeTool === "branches"}
         branchBusy={branches.busy}
-        onBranchChipClick={() => layout.setRightTool("branches")}
+        onBranchChipClick={() =>
+          layout.setRightTool(layout.activeTool === "branches" ? null : "branches")
+        }
         onOpenFolder={openFolder}
         onCloseProject={closeProject}
         onSave={async () => {
