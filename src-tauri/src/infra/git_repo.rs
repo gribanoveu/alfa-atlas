@@ -702,7 +702,12 @@ pub fn sync_status(
     app_private_key: Option<&str>,
 ) -> Result<GitSyncStatus, GitError> {
     let repo = open_repo(repo_root)?;
-    let upstream = upstream_of_head(&repo)?;
+    let upstream = match upstream_of_head(&repo) {
+        Ok(upstream) => upstream,
+        // No upstream yet (e.g. a brand-new local branch) — nothing to be behind on.
+        Err(GitError::NoUpstream) => return Ok(GitSyncStatus { ahead: 0, behind: 0 }),
+        Err(e) => return Err(e),
+    };
     let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
     let local = repo
         .head()
@@ -956,18 +961,33 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError
     Ok(())
 }
 
-pub fn push(
-    repo_root: &Path,
+/// Pick the remote to push a newly-tracked branch to: `origin` if present,
+/// the sole remote if there's exactly one, otherwise ambiguous.
+fn default_remote_name(repo: &Repository) -> Result<String, GitError> {
+    let remotes = repo.remotes().map_err(GitError::Operation)?;
+    let names: Vec<&str> = remotes.iter().filter_map(|r| r.ok().flatten()).collect();
+    if names.contains(&"origin") {
+        return Ok("origin".to_string());
+    }
+    match names.as_slice() {
+        [] => Err(GitError::Message(
+            "repository has no configured remote".into(),
+        )),
+        [only] => Ok((*only).to_string()),
+        _ => Err(GitError::Message(
+            "multiple remotes configured; set an upstream branch manually before pushing".into(),
+        )),
+    }
+}
+
+fn push_refspec(
+    repo: &Repository,
+    remote_name: &str,
+    local_branch: &str,
+    remote_branch: &str,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
 ) -> Result<(), GitError> {
-    let repo = open_repo(repo_root)?;
-    let upstream = upstream_of_head(&repo)?;
-    let head = repo.head().map_err(GitError::Operation)?;
-    let local_branch = head
-        .shorthand()
-        .map_err(|_| GitError::Message("cannot determine current branch".into()))?;
-
     let config = repo.config().map_err(GitError::Operation)?;
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, &config, credentials, app_private_key);
@@ -976,17 +996,60 @@ pub fn push(
     let mut push_opts = PushOptions::new();
     push_opts.remote_callbacks(callbacks);
 
-    let mut remote = repo
-        .find_remote(&upstream.remote_name)
-        .map_err(map_remote_error)?;
-    let refspec = format!(
-        "refs/heads/{local_branch}:refs/heads/{}",
-        upstream.remote_branch
-    );
+    let mut remote = repo.find_remote(remote_name).map_err(map_remote_error)?;
+    let refspec = format!("refs/heads/{local_branch}:refs/heads/{remote_branch}");
     remote
         .push(&[refspec.as_str()], Some(&mut push_opts))
-        .map_err(map_remote_error)?;
-    Ok(())
+        .map_err(map_remote_error)
+}
+
+pub fn push(
+    repo_root: &Path,
+    credentials: &GitCredentials,
+    app_private_key: Option<&str>,
+) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let head = repo.head().map_err(GitError::Operation)?;
+    if !head.is_branch() {
+        return Err(GitError::Message(
+            "detached HEAD: check out a branch before pushing".into(),
+        ));
+    }
+    let local_branch = head
+        .shorthand()
+        .map_err(|_| GitError::Message("cannot determine current branch".into()))?
+        .to_string();
+
+    match upstream_of_head(&repo) {
+        Ok(upstream) => push_refspec(
+            &repo,
+            &upstream.remote_name,
+            &local_branch,
+            &upstream.remote_branch,
+            credentials,
+            app_private_key,
+        ),
+        // No upstream yet — push to a sensible default remote and start tracking it,
+        // mirroring `git push -u origin <branch>`.
+        Err(GitError::NoUpstream) => {
+            let remote_name = default_remote_name(&repo)?;
+            push_refspec(
+                &repo,
+                &remote_name,
+                &local_branch,
+                &local_branch,
+                credentials,
+                app_private_key,
+            )?;
+            let mut branch = repo
+                .find_branch(&local_branch, BranchType::Local)
+                .map_err(GitError::Operation)?;
+            branch
+                .set_upstream(Some(&format!("{remote_name}/{local_branch}")))
+                .map_err(GitError::Operation)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn validate_branch_name(name: &str) -> Result<&str, GitError> {
@@ -1557,6 +1620,61 @@ mod tests {
 
         fs::remove_dir_all(&base).ok();
         fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn push_sets_upstream_when_missing() {
+        let base = temp_dir("push-no-upstream");
+        let remote = base.join("remote");
+        let local = base.join("local");
+
+        Repository::init_bare(&remote).unwrap();
+
+        let repo = Repository::init(&local).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        fs::write(local.join("README.md"), "# Hello\n").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("README.md")).unwrap();
+            index.write().unwrap();
+            let tree_oid = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_oid).unwrap();
+            let sig = commit_signature(&repo).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
+        }
+        repo.remote("origin", remote.to_str().unwrap()).unwrap();
+
+        // Precondition: freshly committed branch has no upstream yet.
+        assert!(matches!(
+            upstream_of_head(&repo),
+            Err(GitError::NoUpstream)
+        ));
+
+        let creds = GitCredentials::default();
+        push(&local, &creds, None).unwrap();
+
+        let branch = repo.find_branch("main", BranchType::Local).ok().or_else(|| {
+            let name = branch_name(&repo)?;
+            repo.find_branch(&name, BranchType::Local).ok()
+        });
+        let branch = branch.expect("local branch should exist after push");
+        let upstream = branch.upstream().expect("upstream should now be set");
+        assert!(upstream
+            .name()
+            .unwrap()
+            .unwrap()
+            .starts_with("origin/"));
+
+        // Bare remote should have received the commit.
+        let remote_repo = Repository::open(&remote).unwrap();
+        assert!(remote_repo.head().is_ok());
+
+        fs::remove_dir_all(&base).ok();
     }
 
     // Reuse the temp_dir helper from services::git_ops tests.
