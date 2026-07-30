@@ -116,6 +116,70 @@
   background: color-mix(in srgb, var(--green) 15%, transparent);
 }
 
+/* Tints the Conflicts section so it reads as "needs attention". */
+.git-group-conflict .git-group-body {
+  background: color-mix(in srgb, var(--red-tag) 12%, transparent);
+}
+
+.git-group-conflict .git-group-title {
+  color: var(--red-tag);
+}
+
+.git-conflict-file-row {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.git-conflict-resolved-banner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  padding: 4px 8px 8px 22px;
+}
+
+.git-conflict-finish-btn {
+  font-size: var(--font-ui-sm);
+  padding: 3px 10px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
+}
+
+.git-conflict-finish-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.git-conflict-abort-row {
+  padding: 4px 8px 6px 22px;
+}
+
+.git-conflict-abort-btn {
+  font-size: var(--font-ui-sm);
+  padding: 3px 10px;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--red-tag) 45%, var(--border));
+  background: transparent;
+  color: var(--red-tag);
+}
+
+.git-conflict-abort-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red-tag) 12%, var(--bg-2));
+}
+
+.git-conflict-abort-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .git-empty {
   font-size: var(--font-ui-sm);
   color: var(--text-2);

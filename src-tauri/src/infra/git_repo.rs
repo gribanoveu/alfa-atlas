@@ -3,12 +3,12 @@ use std::path::{Path, PathBuf};
 use git2::{
     build::CheckoutBuilder, AnnotatedCommit, Branch, BranchType, Cred, CredentialType, Delta,
     DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions, RemoteCallbacks,
-    Repository, ResetType, Signature, Status, StatusOptions, StatusShow,
+    Repository, RepositoryState, ResetType, Signature, Status, StatusOptions, StatusShow,
 };
 
 use crate::domain::git::{
-    GitBranchInfo, GitCommitSummary, GitCredentials, GitDiffScope, GitError, GitFileDiff,
-    GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode, SshKeySource,
+    GitBranchInfo, GitCommitSummary, GitConflictFile, GitCredentials, GitDiffScope, GitError,
+    GitFileDiff, GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode, SshKeySource,
 };
 
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
@@ -199,12 +199,20 @@ pub fn status(repo_root: &Path) -> Result<GitStatusSnapshot, GitError> {
 
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
+    let mut conflicted = Vec::new();
 
     for entry in statuses.iter() {
         let Ok(path) = entry.path() else {
             continue;
         };
         let status = entry.status();
+        if status.contains(Status::CONFLICTED) {
+            conflicted.push(GitFileStatus {
+                path: path.to_string(),
+                status: "U".to_string(),
+            });
+            continue;
+        }
         if let Some(letter) = index_status_letter(status) {
             staged.push(GitFileStatus {
                 path: path.to_string(),
@@ -221,16 +229,19 @@ pub fn status(repo_root: &Path) -> Result<GitStatusSnapshot, GitError> {
 
     staged.sort_by(|a, b| a.path.cmp(&b.path));
     unstaged.sort_by(|a, b| a.path.cmp(&b.path));
+    conflicted.sort_by(|a, b| a.path.cmp(&b.path));
 
     let unpushed = unpushed_status(&repo);
 
     Ok(GitStatusSnapshot {
         staged,
         unstaged,
+        conflicted,
         branch: branch_name(&repo),
         has_commits: unpushed.has_commits,
         has_upstream: unpushed.has_upstream,
         ahead: unpushed.ahead,
+        merge_in_progress: repo.state() == RepositoryState::Merge,
     })
 }
 
@@ -761,7 +772,9 @@ fn do_merge(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitEr
 
         let mut index = repo.index().map_err(GitError::Operation)?;
         if index.has_conflicts() {
-            let _ = repo.cleanup_state();
+            // Leave MERGE_HEAD/MERGE_MSG and the conflict-marked working tree
+            // files in place — the caller resolves conflicts and finishes
+            // (or aborts) the merge explicitly instead of us reverting here.
             return Err(GitError::MergeConflict);
         }
 
@@ -854,6 +867,161 @@ pub fn pull(
         PullMode::Merge => do_merge(&repo, &theirs),
         PullMode::Rebase => do_rebase(&repo, &theirs),
     }
+}
+
+/// Reads the current on-disk content (with `<<<<<<<`/`=======`/`>>>>>>>`
+/// markers already written by the failed merge's checkout) for a conflicted
+/// path, for display in a resolution editor.
+pub fn conflict_file_content(repo_root: &Path, path: &str) -> Result<GitConflictFile, GitError> {
+    let rel = validate_relative_path(path)?;
+    let repo = open_repo(repo_root)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
+    let (content, _binary) = read_workdir_text(workdir, rel)
+        .ok_or_else(|| GitError::Message(format!("файл не найден: {path}")))?;
+    Ok(GitConflictFile {
+        path: path.to_string(),
+        content,
+    })
+}
+
+fn contains_conflict_markers(content: &str) -> bool {
+    content.lines().any(|line| {
+        line.starts_with("<<<<<<< ")
+            || line == "<<<<<<<"
+            || line.starts_with(">>>>>>> ")
+            || line == ">>>>>>>"
+            || line == "======="
+    })
+}
+
+/// Marks a conflicted path resolved: writes `content` to the working tree
+/// and stages it (removing the index's conflict stages). Rejects content
+/// that still contains conflict markers so a half-resolved file can't be
+/// silently committed.
+pub fn resolve_conflict(repo_root: &Path, path: &str, content: &str) -> Result<(), GitError> {
+    let rel = validate_relative_path(path)?;
+    if contains_conflict_markers(content) {
+        return Err(GitError::Message(
+            "в файле остались маркеры конфликта — разрешите все блоки перед сохранением".into(),
+        ));
+    }
+
+    let repo = open_repo(repo_root)?;
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
+    let full = workdir.join(rel);
+    if let Some(parent) = full.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| GitError::Message(format!("failed to create directory: {e}")))?;
+    }
+    std::fs::write(&full, content)
+        .map_err(|e| GitError::Message(format!("failed to write file: {e}")))?;
+
+    let mut index = repo.index().map_err(GitError::Operation)?;
+    index.add_path(rel).map_err(GitError::Operation)?;
+    index.write().map_err(GitError::Operation)?;
+    Ok(())
+}
+
+/// Creates the merge commit once every conflict has been resolved, using
+/// the same two parents (HEAD + MERGE_HEAD) and default message a normal
+/// `git merge` would have used, then clears the merge state.
+pub fn finish_merge(repo_root: &Path) -> Result<String, GitError> {
+    let mut repo = open_repo(repo_root)?;
+    if repo.state() != RepositoryState::Merge {
+        return Err(GitError::Message("нет активного слияния".into()));
+    }
+
+    let mut index = repo.index().map_err(GitError::Operation)?;
+    if index.has_conflicts() {
+        let remaining: Vec<String> = index
+            .conflicts()
+            .map_err(GitError::Operation)?
+            .filter_map(|c| c.ok())
+            .filter_map(|c| {
+                c.our
+                    .or(c.their)
+                    .or(c.ancestor)
+                    .and_then(|e| String::from_utf8(e.path).ok())
+            })
+            .collect();
+        return Err(GitError::Message(format!(
+            "остались неразрешённые конфликты: {}",
+            remaining.join(", ")
+        )));
+    }
+
+    let mut their_oids = Vec::new();
+    repo.mergehead_foreach(|oid| {
+        their_oids.push(*oid);
+        true
+    })
+    .map_err(GitError::Operation)?;
+    let their_oid = *their_oids
+        .first()
+        .ok_or_else(|| GitError::Message("MERGE_HEAD пуст".into()))?;
+
+    let tree_oid = index.write_tree().map_err(GitError::Operation)?;
+    let tree = repo.find_tree(tree_oid).map_err(GitError::Operation)?;
+    let sig = commit_signature(&repo)?;
+    let head_commit = repo
+        .head()
+        .map_err(GitError::Operation)?
+        .peel_to_commit()
+        .map_err(GitError::Operation)?;
+    let their_commit = repo.find_commit(their_oid).map_err(GitError::Operation)?;
+
+    let message = repo
+        .message()
+        .unwrap_or_else(|_| "Merge remote-tracking branch".into());
+
+    let oid = repo
+        .commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            message.trim(),
+            &tree,
+            &[&head_commit, &their_commit],
+        )
+        .map_err(GitError::Operation)?;
+    repo.cleanup_state().map_err(GitError::Operation)?;
+
+    let full = oid.to_string();
+    Ok(full[..7.min(full.len())].to_string())
+}
+
+/// Abandons an in-progress merge: resets the index and working tree back to
+/// HEAD (discarding conflict-marked files) and clears MERGE_HEAD/MERGE_MSG.
+/// Equivalent to `git merge --abort`.
+///
+/// Also accepts the case where the index holds conflicted entries without a
+/// formal `RepositoryState::Merge` (no MERGE_HEAD) — e.g. an interrupted
+/// merge — since that leaves the user with no other way to discard the
+/// conflict from the app.
+pub fn abort_merge(repo_root: &Path) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let has_conflicts = repo
+        .index()
+        .map_err(GitError::Operation)?
+        .has_conflicts();
+    if repo.state() != RepositoryState::Merge && !has_conflicts {
+        return Err(GitError::Message("нет активного слияния".into()));
+    }
+    let head = repo
+        .head()
+        .map_err(GitError::Operation)?
+        .peel_to_commit()
+        .map_err(GitError::Operation)?;
+    let mut checkout = CheckoutBuilder::new();
+    checkout.force();
+    repo.reset(head.as_object(), ResetType::Hard, Some(&mut checkout))
+        .map_err(GitError::Operation)?;
+    repo.cleanup_state().map_err(GitError::Operation)?;
+    Ok(())
 }
 
 pub fn sync_status(
@@ -2029,5 +2197,231 @@ mod tests {
             .join(format!("alfa-atlas-git-{prefix}-{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Sets up a repo with a diverging local branch, then merges `theirs`
+    /// into HEAD so a genuine content conflict on `a.txt` is produced —
+    /// mirrors what `pull(..., PullMode::Merge, ...)` does against a remote.
+    fn setup_conflicting_merge(dir: &Path) -> Repository {
+        let repo = Repository::init(dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "base\n", "init");
+        let base_branch = branch_name(&repo).unwrap();
+
+        repo.branch(
+            "theirs",
+            &repo.head().unwrap().peel_to_commit().unwrap(),
+            false,
+        )
+        .unwrap();
+        commit_file(&repo, "a.txt", "ours\n", "ours change");
+
+        repo.set_head("refs/heads/theirs").unwrap();
+        repo.checkout_head(Some(CheckoutBuilder::default().force()))
+            .unwrap();
+        commit_file(&repo, "a.txt", "theirs\n", "theirs change");
+        let theirs_id = repo.head().unwrap().peel_to_commit().unwrap().id();
+
+        repo.set_head(&format!("refs/heads/{base_branch}")).unwrap();
+        repo.checkout_head(Some(CheckoutBuilder::default().force()))
+            .unwrap();
+
+        {
+            let theirs_ann = repo.find_annotated_commit(theirs_id).unwrap();
+            let err = do_merge(&repo, &theirs_ann).unwrap_err();
+            assert!(matches!(err, GitError::MergeConflict));
+        }
+        repo
+    }
+
+    #[test]
+    fn conflicted_merge_leaves_merge_state_and_marker_file() {
+        let dir = temp_dir("conflict-setup");
+        let repo = setup_conflicting_merge(&dir);
+
+        assert_eq!(repo.state(), RepositoryState::Merge);
+        let index = repo.index().unwrap();
+        assert!(index.has_conflicts());
+
+        let on_disk = std::fs::read_to_string(dir.join("a.txt")).unwrap();
+        assert!(on_disk.contains("<<<<<<<"));
+        assert!(on_disk.contains("======="));
+        assert!(on_disk.contains(">>>>>>>"));
+
+        let status = status(&dir).unwrap();
+        assert_eq!(status.conflicted.len(), 1);
+        assert_eq!(status.conflicted[0].path, "a.txt");
+        assert_eq!(status.conflicted[0].status, "U");
+        assert!(status.staged.is_empty());
+        assert!(status.unstaged.is_empty());
+        assert!(status.merge_in_progress);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_conflict_rejects_remaining_markers() {
+        let dir = temp_dir("conflict-reject-markers");
+        setup_conflicting_merge(&dir);
+
+        let err = resolve_conflict(&dir, "a.txt", "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> theirs\n")
+            .unwrap_err();
+        assert!(matches!(err, GitError::Message(_)));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_conflict_then_finish_merge_creates_two_parent_commit() {
+        let dir = temp_dir("conflict-finish");
+        let repo = setup_conflicting_merge(&dir);
+        let ours_head = repo.head().unwrap().peel_to_commit().unwrap();
+
+        resolve_conflict(&dir, "a.txt", "resolved\n").unwrap();
+
+        let after_resolve = status(&dir).unwrap();
+        assert!(after_resolve.conflicted.is_empty());
+        assert!(after_resolve.merge_in_progress);
+
+        let short_hash = finish_merge(&dir).unwrap();
+        assert_eq!(short_hash.len(), 7);
+
+        assert_eq!(repo.state(), RepositoryState::Clean);
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.parent_count(), 2);
+        assert_eq!(head.parent(0).unwrap().id(), ours_head.id());
+
+        let content = std::fs::read_to_string(dir.join("a.txt")).unwrap();
+        assert_eq!(content, "resolved\n");
+
+        let after_finish = status(&dir).unwrap();
+        assert!(after_finish.conflicted.is_empty());
+        assert!(!after_finish.merge_in_progress);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn abort_merge_restores_head_content_and_clears_state() {
+        let dir = temp_dir("conflict-abort");
+        let repo = setup_conflicting_merge(&dir);
+        let ours_head = repo.head().unwrap().peel_to_commit().unwrap();
+
+        abort_merge(&dir).unwrap();
+
+        assert_eq!(repo.state(), RepositoryState::Clean);
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.id(), ours_head.id());
+
+        let content = std::fs::read_to_string(dir.join("a.txt")).unwrap();
+        assert_eq!(content, "ours\n");
+
+        let after_abort = status(&dir).unwrap();
+        assert!(after_abort.conflicted.is_empty());
+        assert!(!after_abort.merge_in_progress);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Reproduces the state a user can end up in outside a clean `do_merge`
+    /// call — e.g. an interrupted merge — where the index still holds
+    /// conflicted entries but `MERGE_HEAD` is gone, so `repo.state()` reports
+    /// `Clean` instead of `Merge`. Before this fix, `abort_merge` refused to
+    /// run in this case (guarded on `RepositoryState::Merge` alone), leaving
+    /// the user with conflicted files and no way to clear them from the app.
+    #[test]
+    fn abort_merge_recovers_conflicted_index_without_merge_head() {
+        let dir = temp_dir("conflict-abort-no-merge-head");
+        let repo = setup_conflicting_merge(&dir);
+        let ours_head = repo.head().unwrap().peel_to_commit().unwrap();
+
+        // Simulate MERGE_HEAD having been lost while the index conflict
+        // remains — `cleanup_state` clears MERGE_HEAD/MERGE_MSG but leaves
+        // the index and working tree untouched.
+        repo.cleanup_state().unwrap();
+        assert_eq!(repo.state(), RepositoryState::Clean);
+
+        let before_abort = status(&dir).unwrap();
+        assert_eq!(before_abort.conflicted.len(), 1);
+        assert!(!before_abort.merge_in_progress);
+
+        abort_merge(&dir).unwrap();
+
+        assert_eq!(repo.state(), RepositoryState::Clean);
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.id(), ours_head.id());
+
+        let content = std::fs::read_to_string(dir.join("a.txt")).unwrap();
+        assert_eq!(content, "ours\n");
+
+        let after_abort = status(&dir).unwrap();
+        assert!(after_abort.conflicted.is_empty());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// End-to-end reproduction of what the app does when the user clicks
+    /// Git → "Обновить проект" → merge: two clones of a bare remote diverge
+    /// on the same line of the same file, one side is pushed, and `pull()`
+    /// is called on the other exactly as `git_ops::pull` calls it.
+    #[test]
+    fn pull_merge_through_full_fetch_path_leaves_conflict_resolvable() {
+        let base = temp_dir("pull-conflict-e2e");
+        let remote = base.join("remote");
+        let local_a = base.join("a");
+        let local_b = base.join("b");
+
+        Repository::init_bare(&remote).unwrap();
+
+        let repo_a = Repository::init(&local_a).unwrap();
+        {
+            let mut config = repo_a.config().unwrap();
+            config.set_str("user.name", "A").unwrap();
+            config.set_str("user.email", "a@test.com").unwrap();
+        }
+        commit_file(&repo_a, "a.txt", "base\n", "init");
+        repo_a.remote("origin", remote.to_str().unwrap()).unwrap();
+        let creds = GitCredentials::default();
+        push(&local_a, &creds, None).unwrap();
+
+        let repo_b = Repository::clone(remote.to_str().unwrap(), &local_b).unwrap();
+        {
+            let mut config = repo_b.config().unwrap();
+            config.set_str("user.name", "B").unwrap();
+            config.set_str("user.email", "b@test.com").unwrap();
+        }
+
+        // A changes a.txt and pushes.
+        commit_file(&repo_a, "a.txt", "from A\n", "A change");
+        push(&local_a, &creds, None).unwrap();
+
+        // B changes the same line locally without pulling first, then pulls.
+        commit_file(&repo_b, "a.txt", "from B\n", "B change");
+
+        let err = pull(&local_b, PullMode::Merge, &creds, None).unwrap_err();
+        assert!(matches!(err, GitError::MergeConflict), "expected MergeConflict, got {err:?}");
+
+        assert_eq!(repo_b.state(), RepositoryState::Merge);
+        let status_b = status(&local_b).unwrap();
+        assert_eq!(status_b.conflicted.len(), 1);
+        assert_eq!(status_b.conflicted[0].path, "a.txt");
+        assert!(status_b.merge_in_progress);
+
+        let on_disk = std::fs::read_to_string(local_b.join("a.txt")).unwrap();
+        assert!(on_disk.contains("<<<<<<<"));
+
+        resolve_conflict(&local_b, "a.txt", "resolved\n").unwrap();
+        let hash = finish_merge(&local_b).unwrap();
+        assert_eq!(hash.len(), 7);
+
+        let after = status(&local_b).unwrap();
+        assert!(after.conflicted.is_empty());
+        assert!(!after.merge_in_progress);
+
+        fs::remove_dir_all(&base).ok();
     }
 }

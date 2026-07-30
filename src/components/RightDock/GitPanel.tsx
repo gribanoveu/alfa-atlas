@@ -12,6 +12,8 @@ import "./GitPanel.css";
 type GitPanelProps = {
   staged: GitFileStatus[];
   unstaged: GitFileStatus[];
+  conflicted: GitFileStatus[];
+  mergeInProgress: boolean;
   jiraKey: string;
   onJiraKeyChange: (value: string) => void;
   description: string;
@@ -26,6 +28,9 @@ type GitPanelProps = {
   onCommit: () => void;
   onRefresh: () => void;
   onOpenFileDiff: (path: string, scope: GitDiffScope) => void;
+  onOpenConflict: (path: string) => void;
+  onAbortMerge: () => void;
+  onFinishMerge: () => void;
   selectedDiff?: { path: string; scope: GitDiffScope } | null;
 };
 
@@ -89,7 +94,7 @@ type GroupProps = {
     icon: "plus" | "minus";
     disabled?: boolean;
   };
-  tone?: "stage";
+  tone?: "stage" | "conflict";
   children: ReactNode;
 };
 
@@ -210,9 +215,41 @@ function GitFileRow({
   );
 }
 
+function GitConflictFileRow({
+  file,
+  busy,
+  onOpen,
+}: {
+  file: GitFileStatus;
+  busy: boolean;
+  onOpen: () => void;
+}) {
+  const { name, dir } = splitPath(file.path);
+  return (
+    <button
+      type="button"
+      className="git-file-row git-conflict-file-row"
+      disabled={busy}
+      onClick={onOpen}
+      title={file.path}
+      aria-label={`Разрешить конфликт: ${file.path}`}
+    >
+      <span className="git-file-main">
+        <span className="git-file-name">{name}</span>
+        <span className="git-file-dir">{dir}</span>
+      </span>
+      <span className="git-status git-status-U" title="Конфликт" aria-label="Конфликт">
+        U
+      </span>
+    </button>
+  );
+}
+
 export function GitPanel({
   staged,
   unstaged,
+  conflicted,
+  mergeInProgress,
   jiraKey,
   onJiraKeyChange,
   description,
@@ -227,11 +264,15 @@ export function GitPanel({
   onCommit,
   onRefresh,
   onOpenFileDiff,
+  onOpenConflict,
+  onAbortMerge,
+  onFinishMerge,
   selectedDiff = null,
 }: GitPanelProps) {
   const [changesOpen, setChangesOpen] = useState(true);
   const [newFilesOpen, setNewFilesOpen] = useState(true);
   const [stagedOpen, setStagedOpen] = useState(true);
+  const [conflictsOpen, setConflictsOpen] = useState(true);
   const emptyChanges = staged.length === 0 && unstaged.length === 0;
   const modifiedUnstaged = unstaged.filter((file) => file.status !== "?");
   const newFiles = unstaged.filter((file) => file.status === "?");
@@ -252,6 +293,54 @@ export function GitPanel({
       </div>
 
       <div className="git-panel-scroll">
+        {mergeInProgress || conflicted.length > 0 ? (
+          <>
+            <GitGroup
+              title="Конфликты слияния"
+              hint="Файлы с неразрешёнными конфликтами — откройте и разрешите каждый"
+              count={conflicted.length}
+              open={conflictsOpen}
+              onToggle={() => setConflictsOpen((v) => !v)}
+              tone="conflict"
+            >
+              {conflicted.length === 0 ? (
+                <div className="git-conflict-resolved-banner">
+                  Все конфликты разрешены, но слияние не завершилось автоматически.
+                  <button
+                    type="button"
+                    className="git-conflict-finish-btn"
+                    disabled={busy}
+                    onClick={onFinishMerge}
+                  >
+                    Завершить слияние
+                  </button>
+                </div>
+              ) : (
+                conflicted.map((file) => (
+                  <GitConflictFileRow
+                    key={`c:${file.path}`}
+                    file={file}
+                    busy={busy}
+                    onOpen={() => onOpenConflict(file.path)}
+                  />
+                ))
+              )}
+              <div className="git-conflict-abort-row">
+                <button
+                  type="button"
+                  className="git-conflict-abort-btn"
+                  disabled={busy}
+                  onClick={onAbortMerge}
+                  title="Откатить слияние и вернуть файлы к состоянию до pull"
+                >
+                  Отменить слияние
+                </button>
+              </div>
+            </GitGroup>
+            <div className="git-section-divider" role="separator" />
+          </>
+        ) : null}
+
         <GitGroup
           title="Changes / Изменения"
           hint="Изменённые файлы, которые ещё не добавлены в коммит"

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { AlertOkModal } from "./components/Git/AlertOkModal";
+import { GitConflictModal } from "./components/Git/GitConflictModal";
 import { GitFileDiffModal } from "./components/Git/GitFileDiffModal";
 import { GitCommitFileDiffModal } from "./components/Git/GitCommitFileDiffModal";
 import { CheckoutBlockedModal } from "./components/Git/CheckoutBlockedModal";
@@ -206,6 +207,7 @@ function App() {
     file: GitFileStatus;
     scope: GitDiffScope;
   } | null>(null);
+  const [conflictTarget, setConflictTarget] = useState<string | null>(null);
   const [commitFileDiffTarget, setCommitFileDiffTarget] = useState<{
     commitHash: string;
     file: GitFileStatus;
@@ -314,6 +316,15 @@ function App() {
     }
   }, [layout.activeTool, hasProject, git.refresh]);
 
+  const prevConflictCount = useRef(0);
+  useEffect(() => {
+    const count = git.status.conflicted.length;
+    if (count > 0 && prevConflictCount.current === 0) {
+      layout.setRightTool("git");
+    }
+    prevConflictCount.current = count;
+  }, [git.status.conflicted.length, layout]);
+
   const cursorLabel = hasProject
     ? `Ln ${editor.cursor.line}, Col ${editor.cursor.column}`
     : "Ln 1, Col 1";
@@ -368,9 +379,19 @@ function App() {
 
   const onPullConfirm = useCallback(
     async (mode: PullMode) => {
-      const err = await git.pull(mode);
+      const result = await git.pull(mode);
       setPullModalOpen(false);
-      if (err) setGitAlert({ message: err });
+      if (result.status === "error") {
+        setGitAlert({ message: result.message });
+      } else if (result.status === "ok") {
+        successToastCounter.current += 1;
+        setSuccessToast({
+          id: successToastCounter.current,
+          message: "Проект обновлён",
+        });
+      }
+      // "conflict" is surfaced via the Git panel's "Конфликты слияния"
+      // section (git.status.conflicted), which auto-opens — no alert here.
     },
     [git],
   );
@@ -540,6 +561,53 @@ function App() {
     },
     [git.status.staged, git.status.unstaged],
   );
+
+  const openConflict = useCallback((path: string) => {
+    setConflictTarget(path);
+  }, []);
+
+  const onResolveConflict = useCallback(
+    async (path: string, content: string) => {
+      const result = await git.resolveConflict(path, content);
+      if (result.mergeFinished) {
+        successToastCounter.current += 1;
+        setSuccessToast({
+          id: successToastCounter.current,
+          message: result.commitHash
+            ? `Слияние завершено, создан коммит ${result.commitHash}`
+            : "Слияние завершено",
+        });
+      }
+      return result;
+    },
+    [git],
+  );
+
+  const onAbortMerge = useCallback(async () => {
+    const confirmed = window.confirm(
+      "Отменить слияние? Файлы вернутся к состоянию до обновления, изменения с сервера будут отброшены.",
+    );
+    if (!confirmed) return;
+    const ok = await git.abortMerge();
+    if (ok) {
+      successToastCounter.current += 1;
+      setSuccessToast({
+        id: successToastCounter.current,
+        message: "Слияние отменено",
+      });
+    }
+  }, [git]);
+
+  const onFinishMergeRetry = useCallback(async () => {
+    const ok = await git.finishMerge();
+    if (ok) {
+      successToastCounter.current += 1;
+      setSuccessToast({
+        id: successToastCounter.current,
+        message: "Слияние завершено",
+      });
+    }
+  }, [git]);
 
   const openCommitFileDiff = useCallback(
     (commitHash: string, file: GitFileStatus) => {
@@ -1022,6 +1090,8 @@ function App() {
                 ? {
                     staged: git.status.staged,
                     unstaged: git.status.unstaged,
+                    conflicted: git.status.conflicted,
+                    mergeInProgress: git.status.mergeInProgress,
                     jiraKey: git.jiraKey,
                     onJiraKeyChange: git.setJiraKey,
                     description: git.description,
@@ -1037,6 +1107,9 @@ function App() {
                     onCommit: () => void git.commit(),
                     onRefresh: () => void git.refresh(),
                     onOpenFileDiff: openGitFileDiff,
+                    onOpenConflict: openConflict,
+                    onAbortMerge: () => void onAbortMerge(),
+                    onFinishMerge: () => void onFinishMergeRetry(),
                     selectedDiff: gitDiffTarget
                       ? {
                           path: gitDiffTarget.file.path,
@@ -1251,6 +1324,17 @@ function App() {
           onLoadDiff={git.loadFileDiff}
           onDiscard={handleGitDiscard}
           onSaveContent={handleGitSaveContent}
+        />
+      ) : null}
+
+      {conflictTarget ? (
+        <GitConflictModal
+          path={conflictTarget}
+          busy={git.busy}
+          editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
+          onClose={() => setConflictTarget(null)}
+          onLoadContent={git.loadConflictFile}
+          onResolve={onResolveConflict}
         />
       ) : null}
 

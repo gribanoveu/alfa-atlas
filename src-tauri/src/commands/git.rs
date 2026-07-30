@@ -1,6 +1,6 @@
 use crate::domain::git::{
-    AppKeyStatus, GitBranchInfo, GitCommitSummary, GitCredentials, GitDiffScope, GitFileDiff,
-    GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode,
+    AppKeyStatus, GitBranchInfo, GitCommitSummary, GitConflictFile, GitCredentials, GitDiffScope,
+    GitFileDiff, GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::domain::project_config::ProbeResult;
 use crate::services::{git_clone, git_credentials, git_ops};
@@ -46,6 +46,33 @@ pub async fn git_reset_to_remote(repo_root: String) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn git_conflict_file_content(
+    repo_root: String,
+    path: String,
+) -> Result<GitConflictFile, String> {
+    git_ops::conflict_file_content(&repo_root, &path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_resolve_conflict(
+    repo_root: String,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    git_ops::resolve_conflict(&repo_root, &path, &content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_finish_merge(repo_root: String) -> Result<String, String> {
+    git_ops::finish_merge(&repo_root).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_abort_merge(repo_root: String) -> Result<(), String> {
+    git_ops::abort_merge(&repo_root).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

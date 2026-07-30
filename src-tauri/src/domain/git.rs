@@ -14,6 +14,11 @@ pub struct GitFileStatus {
 pub struct GitStatusSnapshot {
     pub staged: Vec<GitFileStatus>,
     pub unstaged: Vec<GitFileStatus>,
+    /// Files with unresolved merge conflicts (status "U"). Computed from the
+    /// index's conflict stages directly — independent of `merge_in_progress`,
+    /// since the index can hold conflicted entries even without a MERGE_HEAD
+    /// (e.g. an interrupted merge, or state staged outside a `git merge`).
+    pub conflicted: Vec<GitFileStatus>,
     pub branch: Option<String>,
     /// Whether HEAD resolves to a commit (false on a brand-new, empty repo).
     pub has_commits: bool,
@@ -23,6 +28,16 @@ pub struct GitStatusSnapshot {
     /// last fetch, not live network state). Only meaningful when `has_upstream`
     /// is true; `0` otherwise.
     pub ahead: usize,
+    /// Whether a merge was left unfinished by a conflict (MERGE_HEAD present).
+    pub merge_in_progress: bool,
+}
+
+/// A conflicted file's current on-disk content, including conflict markers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitConflictFile {
+    pub path: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

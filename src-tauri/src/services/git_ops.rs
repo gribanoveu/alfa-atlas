@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use crate::domain::git::{
-    GitBranchInfo, GitCommitSummary, GitDiffScope, GitError, GitFileDiff, GitFileStatus,
-    GitStatusSnapshot, GitSyncStatus, PullMode,
+    GitBranchInfo, GitCommitSummary, GitConflictFile, GitDiffScope, GitError, GitFileDiff,
+    GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::infra::{git_credentials_store, git_repo, key_management};
 
@@ -38,6 +38,22 @@ pub fn pull(repo_root: &str, mode: PullMode) -> Result<(), GitError> {
         .map_err(|e| GitError::Message(e.to_string()))?;
     let app_private_key = key_management::get_decrypted_private_key();
     git_repo::pull(Path::new(repo_root), mode, &credentials, app_private_key.as_deref())
+}
+
+pub fn conflict_file_content(repo_root: &str, path: &str) -> Result<GitConflictFile, GitError> {
+    git_repo::conflict_file_content(Path::new(repo_root), path)
+}
+
+pub fn resolve_conflict(repo_root: &str, path: &str, content: &str) -> Result<(), GitError> {
+    git_repo::resolve_conflict(Path::new(repo_root), path, content)
+}
+
+pub fn finish_merge(repo_root: &str) -> Result<String, GitError> {
+    git_repo::finish_merge(Path::new(repo_root))
+}
+
+pub fn abort_merge(repo_root: &str) -> Result<(), GitError> {
+    git_repo::abort_merge(Path::new(repo_root))
 }
 
 pub fn sync_status(repo_root: &str) -> Result<GitSyncStatus, GitError> {

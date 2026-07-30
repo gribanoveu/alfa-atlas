@@ -1,0 +1,159 @@
+.git-conflict-counter {
+  font-weight: 600;
+  color: var(--red-tag);
+}
+
+.git-conflict-counter-clear {
+  color: var(--green);
+}
+
+.git-conflict-hint-footer {
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+}
+
+.git-conflict-hint-footer.git-diff-error {
+  color: var(--danger, #e06c75);
+}
+
+.git-status-U {
+  color: var(--red-tag);
+}
+
+/* The 3-pane merge view needs more room than a regular diff modal. */
+.git-conflict-modal {
+  width: min(1600px, 96vw);
+}
+
+.git-conflict-body {
+  padding: 0;
+}
+
+.conflict-merge-grid {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1.15fr 1fr;
+  gap: 1px;
+  background: var(--border);
+}
+
+.conflict-merge-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-0);
+}
+
+.conflict-merge-pane-head {
+  flex: none;
+  padding: 6px 10px;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-0);
+  border-bottom: 1px solid var(--border);
+}
+
+.conflict-pane-ours {
+  background: color-mix(in srgb, var(--accent) 20%, var(--bg-1));
+}
+
+.conflict-pane-theirs {
+  background: color-mix(in srgb, var(--orange) 20%, var(--bg-1));
+}
+
+.conflict-pane-result {
+  background: var(--bg-1);
+  color: var(--text-1);
+}
+
+.conflict-merge-pane-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Read-only reference panes: dim the lines that came from a conflict block
+ * so it's clear which parts of the full file are actually in question. */
+.conflict-range-ours {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.conflict-range-theirs {
+  background: color-mix(in srgb, var(--orange) 16%, transparent);
+}
+
+/* The single placeholder line left in the (editable) result pane in place of
+ * a conflict block's raw marker lines — the toolbar view zone renders right
+ * below it. */
+.conflict-placeholder-line {
+  background: color-mix(in srgb, var(--yellow) 22%, transparent);
+}
+
+/* The row that replaces raw `<<<<<<<` / `=======` / `>>>>>>>` marker lines
+ * inside the (editable) result pane — a Monaco view zone, so it scrolls in
+ * lockstep with the surrounding text automatically.
+ *
+ * `position: relative` + `z-index` is required: Monaco's own cursor/overlay
+ * layers render above `.view-zones` in the editor's stacking order, so
+ * without this the zone's buttons are visually on top but pointer events
+ * land on the editor underneath instead (symptom: clicking just places a
+ * text cursor). */
+.conflict-zone {
+  position: relative;
+  z-index: 20;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0 4px;
+  /* Monaco sets an inline `display: block` on the zone's dom node itself as
+   * part of its own positioning — inline styles beat a stylesheet rule at
+   * equal weight, so this needs `!important` to actually take effect. */
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  background: color-mix(in srgb, var(--yellow) 14%, var(--bg-editor));
+  border-top: 1px solid color-mix(in srgb, var(--yellow) 45%, var(--border));
+  border-bottom: 1px solid color-mix(in srgb, var(--yellow) 45%, var(--border));
+  pointer-events: none;
+}
+
+.conflict-edge-group {
+  display: flex;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.conflict-edge-btn {
+  width: 22px;
+  height: 22px;
+  line-height: 20px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-0);
+  font-weight: 700;
+  text-align: center;
+}
+
+.conflict-edge-btn:hover {
+  filter: brightness(1.2);
+}
+
+.conflict-edge-left .conflict-edge-accept,
+.conflict-edge-right .conflict-edge-reject {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.conflict-edge-left .conflict-edge-accept:hover,
+.conflict-edge-right .conflict-edge-reject:hover {
+  background: color-mix(in srgb, var(--accent) 30%, var(--bg-2));
+}
+
+.conflict-edge-right .conflict-edge-accept,
+.conflict-edge-left .conflict-edge-reject {
+  border-color: color-mix(in srgb, var(--orange) 55%, var(--border));
+}
+
+.conflict-edge-right .conflict-edge-accept:hover,
+.conflict-edge-left .conflict-edge-reject:hover {
+  background: color-mix(in srgb, var(--orange) 30%, var(--bg-2));
+}

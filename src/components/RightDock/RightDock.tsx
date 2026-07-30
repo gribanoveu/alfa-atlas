@@ -61,6 +61,8 @@ const TOOL_STRIPE_GROUPS: RightTool[][] = [
 export type GitPanelViewProps = {
   staged: GitFileStatus[];
   unstaged: GitFileStatus[];
+  conflicted: GitFileStatus[];
+  mergeInProgress: boolean;
   jiraKey: string;
   onJiraKeyChange: (value: string) => void;
   description: string;
@@ -75,6 +77,9 @@ export type GitPanelViewProps = {
   onCommit: () => void;
   onRefresh: () => void;
   onOpenFileDiff: (path: string, scope: GitDiffScope) => void;
+  onOpenConflict: (path: string) => void;
+  onAbortMerge: () => void;
+  onFinishMerge: () => void;
   selectedDiff?: { path: string; scope: GitDiffScope } | null;
 };
 
@@ -147,6 +152,8 @@ export function RightDock({
               <GitPanel
                 staged={git.staged}
                 unstaged={git.unstaged}
+                conflicted={git.conflicted}
+                mergeInProgress={git.mergeInProgress}
                 jiraKey={git.jiraKey}
                 onJiraKeyChange={git.onJiraKeyChange}
                 description={git.description}
@@ -161,6 +168,9 @@ export function RightDock({
                 onCommit={git.onCommit}
                 onRefresh={git.onRefresh}
                 onOpenFileDiff={git.onOpenFileDiff}
+                onOpenConflict={git.onOpenConflict}
+                onAbortMerge={git.onAbortMerge}
+                onFinishMerge={git.onFinishMerge}
                 selectedDiff={git.selectedDiff}
               />
             ) : activeTool === "asciidoc" && asciidoc ? (

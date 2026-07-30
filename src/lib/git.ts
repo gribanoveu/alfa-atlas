@@ -8,6 +8,8 @@ export type GitFileStatus = {
 export type GitStatusSnapshot = {
   staged: GitFileStatus[];
   unstaged: GitFileStatus[];
+  /** Files with unresolved merge conflicts (status "U"). Only populated while mergeInProgress is true. */
+  conflicted: GitFileStatus[];
   branch: string | null;
   /** Whether HEAD resolves to a commit (false on a brand-new, empty repo). */
   hasCommits: boolean;
@@ -15,6 +17,13 @@ export type GitStatusSnapshot = {
   hasUpstream: boolean;
   /** Commits on HEAD not yet on the upstream (local-only; 0 when hasUpstream is false). */
   ahead: number;
+  /** Whether a merge was left unfinished by a conflict (MERGE_HEAD present). */
+  mergeInProgress: boolean;
+};
+
+export type GitConflictFile = {
+  path: string;
+  content: string;
 };
 
 export function hasUnpushedCommits(status: GitStatusSnapshot): boolean {
@@ -112,6 +121,29 @@ export function gitLog(
 
 export function gitPull(repoRoot: string, mode: PullMode): Promise<void> {
   return invoke<void>("git_pull", { repoRoot, mode });
+}
+
+export function gitConflictFileContent(
+  repoRoot: string,
+  path: string,
+): Promise<GitConflictFile> {
+  return invoke<GitConflictFile>("git_conflict_file_content", { repoRoot, path });
+}
+
+export function gitResolveConflict(
+  repoRoot: string,
+  path: string,
+  content: string,
+): Promise<void> {
+  return invoke<void>("git_resolve_conflict", { repoRoot, path, content });
+}
+
+export function gitFinishMerge(repoRoot: string): Promise<string> {
+  return invoke<string>("git_finish_merge", { repoRoot });
+}
+
+export function gitAbortMerge(repoRoot: string): Promise<void> {
+  return invoke<void>("git_abort_merge", { repoRoot });
 }
 
 export function gitResetToRemote(repoRoot: string): Promise<void> {

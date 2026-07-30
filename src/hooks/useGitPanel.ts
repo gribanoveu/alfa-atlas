@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  gitAbortMerge,
   gitApplyDiffContent,
   gitCommit,
+  gitConflictFileContent,
   gitDiscardFileChanges,
   gitFileDiff,
+  gitFinishMerge,
   gitLog,
   gitPull,
   gitPush,
   gitResetToRemote,
+  gitResolveConflict,
   gitStage,
   gitStatus,
   gitUnstage,
   type GitCommitSummary,
+  type GitConflictFile,
   type GitDiffScope,
   type GitFileDiff,
   type GitStatusSnapshot,
@@ -21,16 +26,26 @@ import {
 const EMPTY_STATUS: GitStatusSnapshot = {
   staged: [],
   unstaged: [],
+  conflicted: [],
   branch: null,
   hasCommits: false,
   hasUpstream: false,
   ahead: 0,
+  mergeInProgress: false,
 };
 
 type UseGitPanelOptions = {
   active?: boolean;
   onBranchChange?: (branch: string | null) => void;
 };
+
+/** Outcome of pull(): "ok" (merged cleanly), "conflict" (surfaced via
+ * status.conflicted instead of an error — no separate message here), or a
+ * real failure (network/auth/no-upstream/etc). */
+export type PullResult =
+  | { status: "ok" }
+  | { status: "conflict" }
+  | { status: "error"; message: string };
 
 /** Formats commit message as `doc(JIRA-123): description` or `doc(): description`. */
 export function formatDocCommitMessage(
@@ -173,12 +188,117 @@ export function useGitPanel(
   );
 
   const pull = useCallback(
-    (mode: PullMode) => {
-      if (!repoRoot) return Promise.resolve("Нет открытого репозитория");
-      return runRemote(() => gitPull(repoRoot, mode));
+    async (mode: PullMode): Promise<PullResult> => {
+      if (!repoRoot) return { status: "error", message: "Нет открытого репозитория" };
+      setBusy(true);
+      try {
+        await gitPull(repoRoot, mode);
+        await refresh();
+        return { status: "ok" };
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        // A merge conflict leaves the repo mid-merge instead of raising a
+        // hard error — surface it through `status.conflicted` (picked up by
+        // the fresh status below) rather than a generic error alert.
+        try {
+          const fresh = await gitStatus(repoRoot);
+          setStatus(fresh);
+          onBranchChangeRef.current?.(fresh.branch);
+          if (fresh.conflicted.length > 0) {
+            setError(null);
+            return { status: "conflict" };
+          }
+        } catch {
+          // Ignore — fall through and report the original pull error.
+        }
+        setError(message);
+        return { status: "error", message };
+      } finally {
+        setBusy(false);
+      }
     },
-    [repoRoot, runRemote],
+    [refresh, repoRoot],
   );
+
+  const loadConflictFile = useCallback(
+    async (path: string): Promise<GitConflictFile | null> => {
+      if (!repoRoot) return null;
+      try {
+        const file = await gitConflictFileContent(repoRoot, path);
+        setError(null);
+        return file;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return null;
+      }
+    },
+    [repoRoot],
+  );
+
+  const resolveConflict = useCallback(
+    async (
+      path: string,
+      content: string,
+    ): Promise<{ ok: boolean; mergeFinished: boolean; commitHash?: string }> => {
+      if (!repoRoot) return { ok: false, mergeFinished: false };
+      setBusy(true);
+      try {
+        await gitResolveConflict(repoRoot, path, content);
+        const fresh = await gitStatus(repoRoot);
+        setStatus(fresh);
+        onBranchChangeRef.current?.(fresh.branch);
+        if (fresh.conflicted.length === 0 && fresh.mergeInProgress) {
+          const commitHash = await gitFinishMerge(repoRoot);
+          await refresh();
+          setError(null);
+          return { ok: true, mergeFinished: true, commitHash };
+        }
+        setError(null);
+        return { ok: true, mergeFinished: false };
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return { ok: false, mergeFinished: false };
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refresh, repoRoot],
+  );
+
+  const abortMerge = useCallback(async (): Promise<boolean> => {
+    if (!repoRoot) return false;
+    setBusy(true);
+    try {
+      await gitAbortMerge(repoRoot);
+      await refresh();
+      setError(null);
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh, repoRoot]);
+
+  /** Manual retry for the rare case where the last resolveConflict() call
+   * cleared all conflicts but the automatic finish-merge commit failed
+   * (e.g. missing git identity) — surfaced as a banner in the git panel. */
+  const finishMerge = useCallback(async (): Promise<boolean> => {
+    if (!repoRoot) return false;
+    setBusy(true);
+    try {
+      await gitFinishMerge(repoRoot);
+      await refresh();
+      setError(null);
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh, repoRoot]);
 
   const resetToRemote = useCallback(() => {
     if (!repoRoot) return Promise.resolve("Нет открытого репозитория");
@@ -267,5 +387,9 @@ export function useGitPanel(
     loadFileDiff,
     discardFileChanges,
     applyDiffContent,
+    loadConflictFile,
+    resolveConflict,
+    abortMerge,
+    finishMerge,
   };
 }
