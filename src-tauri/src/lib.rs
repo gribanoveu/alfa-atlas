@@ -154,6 +154,8 @@ pub fn run() {
             commands::project::resolve_asset_path,
             commands::project::write_project_file,
             commands::project::create_project_file,
+            commands::project::create_project_file_from_template,
+            commands::project::create_rest_endpoint_folder,
             commands::project::create_project_dir,
             commands::project::delete_project_file,
             commands::project::delete_project_dir,

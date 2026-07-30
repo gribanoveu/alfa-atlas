@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { AsciidocFileTemplate } from "../../lib/project";
 import {
   DEFAULT_NEW_FILE_EXTENSION,
   NEW_FILE_EXTENSION_OPTIONS,
@@ -8,8 +9,18 @@ import "../Welcome/CloneRepoModal.css";
 type NewFileModalProps = {
   parentPath: string;
   onCancel: () => void;
-  onConfirm: (fileName: string) => Promise<void>;
+  onConfirm: (
+    fileName: string,
+    template: AsciidocFileTemplate | null,
+  ) => Promise<void>;
 };
+
+const TEMPLATE_OPTIONS: { value: AsciidocFileTemplate | null; label: string }[] = [
+  { value: null, label: "Нет" },
+  { value: "method", label: "Документация на метод" },
+  { value: "response", label: "Ответ" },
+  { value: "request", label: "Запрос" },
+];
 
 function stripMatchingExtension(name: string, ext: string): string {
   const lower = name.toLowerCase();
@@ -27,28 +38,46 @@ export function NewFileModal({
   const [name, setName] = useState("");
   const [ext, setExt] = useState<string>(DEFAULT_NEW_FILE_EXTENSION);
   const [extOpen, setExtOpen] = useState(false);
+  const [template, setTemplate] = useState<AsciidocFileTemplate | null>(null);
+  const [templateOpen, setTemplateOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const extRef = useRef<HTMLDivElement>(null);
+  const templateRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const selected =
     NEW_FILE_EXTENSION_OPTIONS.find((o) => o.ext === ext) ??
     NEW_FILE_EXTENSION_OPTIONS[0];
+  const isAsciidoc = ext === ".adoc";
+  const selectedTemplate =
+    TEMPLATE_OPTIONS.find((o) => o.value === template) ?? TEMPLATE_OPTIONS[0];
 
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
   useEffect(() => {
-    if (!extOpen) return;
+    if (!isAsciidoc && template !== null) {
+      setTemplate(null);
+    }
+  }, [isAsciidoc, template]);
+
+  useEffect(() => {
+    if (!extOpen && !templateOpen) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (!extRef.current?.contains(event.target as Node)) {
+      if (extOpen && !extRef.current?.contains(event.target as Node)) {
         setExtOpen(false);
+      }
+      if (templateOpen && !templateRef.current?.contains(event.target as Node)) {
+        setTemplateOpen(false);
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setExtOpen(false);
+      if (event.key === "Escape") {
+        setExtOpen(false);
+        setTemplateOpen(false);
+      }
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -56,7 +85,7 @@ export function NewFileModal({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [extOpen]);
+  }, [extOpen, templateOpen]);
 
   const submit = async () => {
     const trimmed = name.trim();
@@ -77,7 +106,7 @@ export function NewFileModal({
     setBusy(true);
     setError(null);
     try {
-      await onConfirm(fileName);
+      await onConfirm(fileName, isAsciidoc ? template : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -165,6 +194,52 @@ export function NewFileModal({
             ) : null}
           </div>
         </div>
+
+        {isAsciidoc ? (
+          <div className="clone-modal-field">
+            <span className="clone-modal-label" id="new-file-template-label">
+              Шаблон
+            </span>
+            <div className="clone-select" ref={templateRef}>
+              <button
+                type="button"
+                className={`clone-select-trigger${templateOpen ? " is-open" : ""}`}
+                aria-haspopup="listbox"
+                aria-expanded={templateOpen}
+                aria-labelledby="new-file-template-label"
+                onClick={() => setTemplateOpen((v) => !v)}
+              >
+                <span className="clone-select-value">
+                  <span className="clone-select-path">
+                    {selectedTemplate.label}
+                  </span>
+                </span>
+                <span className="clone-select-chevron" aria-hidden>
+                  ▾
+                </span>
+              </button>
+              {templateOpen ? (
+                <div className="clone-select-menu" role="listbox">
+                  {TEMPLATE_OPTIONS.map((option) => (
+                    <button
+                      key={option.label}
+                      type="button"
+                      role="option"
+                      aria-selected={option.value === template}
+                      className={`clone-select-option${option.value === template ? " is-active" : ""}`}
+                      onClick={() => {
+                        setTemplate(option.value);
+                        setTemplateOpen(false);
+                      }}
+                    >
+                      <span className="clone-select-path">{option.label}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         {error ? <div className="clone-modal-message">{error}</div> : null}
 

@@ -1,3 +1,4 @@
+use crate::domain::asciidoc_templates::AsciidocFileTemplate;
 use crate::domain::project_config::{OpenedProject, ProbeResult, RecentProject, TreeNode};
 use crate::services::{docs_fs, gitignore, project_open};
 
@@ -78,6 +79,26 @@ pub fn write_project_file(
 #[tauri::command]
 pub fn create_project_file(docs_root: String, relative_path: String) -> Result<(), String> {
     docs_fs::create_project_file(&docs_root, &relative_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_project_file_from_template(
+    docs_root: String,
+    relative_path: String,
+    template: Option<AsciidocFileTemplate>,
+) -> Result<(), String> {
+    docs_fs::create_project_file_from_template(&docs_root, &relative_path, template)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_rest_endpoint_folder(
+    docs_root: String,
+    relative_path: String,
+    method_name: String,
+) -> Result<(), String> {
+    docs_fs::create_rest_endpoint_folder(&docs_root, &relative_path, &method_name)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

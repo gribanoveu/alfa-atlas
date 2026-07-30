@@ -1,4 +1,5 @@
 pub mod asciidoc_facts;
+pub mod asciidoc_templates;
 pub mod git;
 pub mod layout;
 pub mod paths;

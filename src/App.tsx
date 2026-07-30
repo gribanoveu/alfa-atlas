@@ -47,7 +47,18 @@ import {
   collectDirPaths,
   useWorkspaceSession,
 } from "./hooks/useWorkspaceSession";
-import { copyProjectDir, copyProjectFile, createProjectDir, createProjectFile, deleteProjectDir, deleteProjectFile, readProjectFile, renameProjectDir, renameProjectFile } from "./lib/project";
+import {
+  copyProjectDir,
+  copyProjectFile,
+  createProjectDir,
+  createProjectFileFromTemplate,
+  createRestEndpointFolder,
+  deleteProjectDir,
+  deleteProjectFile,
+  readProjectFile,
+  renameProjectDir,
+  renameProjectFile,
+} from "./lib/project";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
 import { formatLabelFor, isAsciiDocPath, lineEndingLabelFor } from "./lib/supportedFiles";
@@ -1098,9 +1109,13 @@ function App() {
         <NewFileModal
           parentPath={newFileParent}
           onCancel={() => setNewFileParent(null)}
-          onConfirm={async (fileName) => {
+          onConfirm={async (fileName, template) => {
             const relativePath = joinParent(newFileParent, fileName);
-            await createProjectFile(project.docsRoot!, relativePath);
+            await createProjectFileFromTemplate(
+              project.docsRoot!,
+              relativePath,
+              template,
+            );
             session.ensureExpanded(newFileParent);
             setNewFileParent(null);
             await tree.refresh();
@@ -1113,12 +1128,23 @@ function App() {
         <NewFolderModal
           parentPath={newFolderParent}
           onCancel={() => setNewFolderParent(null)}
-          onConfirm={async (folderName) => {
+          onConfirm={async (folderName, useRestEndpointTemplate) => {
             const relativePath = joinParent(newFolderParent, folderName);
-            await createProjectDir(project.docsRoot!, relativePath);
+            if (useRestEndpointTemplate) {
+              await createRestEndpointFolder(
+                project.docsRoot!,
+                relativePath,
+                folderName,
+              );
+            } else {
+              await createProjectDir(project.docsRoot!, relativePath);
+            }
             session.ensureExpanded(relativePath);
             setNewFolderParent(null);
             await tree.refresh();
+            if (useRestEndpointTemplate) {
+              await editor.openFile(joinParent(relativePath, `${folderName}.adoc`));
+            }
           }}
         />
       ) : null}

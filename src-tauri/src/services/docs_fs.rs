@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::domain::asciidoc_templates::{AsciidocFileTemplate, SEQUENCE_DIAGRAM_TEMPLATE};
 use crate::domain::paths;
 use crate::domain::project_config::{ProjectError, TreeNode};
 use crate::domain::supported_files::is_supported_file;
@@ -120,8 +121,13 @@ pub fn write_project_file(
     fs::write(&canonical, content).map_err(ProjectError::Write)
 }
 
-/// Create a new empty supported file. Fails if the path already exists.
-pub fn create_project_file(docs_root: &str, relative_path: &str) -> Result<(), ProjectError> {
+/// Create a new supported file with the given initial content. Fails if the
+/// path already exists.
+pub fn create_project_file_with_content(
+    docs_root: &str,
+    relative_path: &str,
+    content: &str,
+) -> Result<(), ProjectError> {
     validate_relative_name(relative_path)?;
     let root = resolve_docs_root(docs_root)?;
     let joined = paths::join_relative(&root, relative_path)?;
@@ -148,7 +154,23 @@ pub fn create_project_file(docs_root: &str, relative_path: &str) -> Result<(), P
     if target.exists() {
         return Err(ProjectError::AlreadyExists(relative_path.to_string()));
     }
-    fs::write(&target, "").map_err(ProjectError::Write)
+    fs::write(&target, content).map_err(ProjectError::Write)
+}
+
+/// Create a new empty supported file. Fails if the path already exists.
+pub fn create_project_file(docs_root: &str, relative_path: &str) -> Result<(), ProjectError> {
+    create_project_file_with_content(docs_root, relative_path, "")
+}
+
+/// Create a file populated from an AsciiDoc template (or empty when `template`
+/// is `None`).
+pub fn create_project_file_from_template(
+    docs_root: &str,
+    relative_path: &str,
+    template: Option<AsciidocFileTemplate>,
+) -> Result<(), ProjectError> {
+    let content = template.map(AsciidocFileTemplate::content).unwrap_or("");
+    create_project_file_with_content(docs_root, relative_path, content)
 }
 
 /// Create a directory under docs root. Fails if a file already occupies the path.
@@ -170,6 +192,49 @@ pub fn create_project_dir(docs_root: &str, relative_path: &str) -> Result<(), Pr
         let _ = fs::remove_dir_all(&canonical);
         return Err(ProjectError::PathEscape(relative_path.to_string()));
     }
+    Ok(())
+}
+
+/// Create a new folder populated with the REST-endpoint template set:
+/// `{method_name}.adoc` (from the method template) plus `request.adoc`,
+/// `response.adoc`, and `sequence_diagramm.puml` copied as-is from
+/// `src/templates/asciidoc/rest-endpoint`.
+pub fn create_rest_endpoint_folder(
+    docs_root: &str,
+    relative_path: &str,
+    method_name: &str,
+) -> Result<(), ProjectError> {
+    create_project_dir(docs_root, relative_path)?;
+
+    let child_path = |name: &str| -> String {
+        if relative_path.is_empty() || relative_path == "." {
+            name.to_string()
+        } else {
+            format!("{relative_path}/{name}")
+        }
+    };
+
+    create_project_file_from_template(
+        docs_root,
+        &child_path(&format!("{method_name}.adoc")),
+        Some(AsciidocFileTemplate::Method),
+    )?;
+    create_project_file_from_template(
+        docs_root,
+        &child_path("request.adoc"),
+        Some(AsciidocFileTemplate::Request),
+    )?;
+    create_project_file_from_template(
+        docs_root,
+        &child_path("response.adoc"),
+        Some(AsciidocFileTemplate::Response),
+    )?;
+    create_project_file_with_content(
+        docs_root,
+        &child_path("sequence_diagramm.puml"),
+        SEQUENCE_DIAGRAM_TEMPLATE,
+    )?;
+
     Ok(())
 }
 
@@ -366,11 +431,17 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_dir() -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        // Nanosecond timestamps alone can collide between parallel test
+        // threads on coarser clocks; a per-process counter guarantees
+        // uniqueness regardless of clock resolution.
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("alfa-atlas-fs-{nanos}"));
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-fs-{nanos}-{n}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -391,6 +462,42 @@ mod tests {
 
         let err = create_project_file(root.to_str().unwrap(), "empty-folder/note.adoc").unwrap_err();
         assert!(matches!(err, ProjectError::AlreadyExists(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn create_rest_endpoint_folder_populates_template_files() {
+        let root = temp_dir();
+        create_rest_endpoint_folder(root.to_str().unwrap(), "getUserProfile", "getUserProfile")
+            .unwrap();
+
+        let tree = list_docs_tree(root.to_str().unwrap()).unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].name, "getUserProfile");
+        assert!(tree[0].is_dir);
+        let mut names: Vec<&str> = tree[0]
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec![
+                "getUserProfile.adoc",
+                "request.adoc",
+                "response.adoc",
+                "sequence_diagramm.puml",
+            ]
+        );
+
+        let method_content =
+            read_project_file(root.to_str().unwrap(), "getUserProfile/getUserProfile.adoc")
+                .unwrap();
+        assert!(method_content.contains("Метод Template"));
 
         fs::remove_dir_all(&root).ok();
     }

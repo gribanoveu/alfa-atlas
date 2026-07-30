@@ -126,6 +126,32 @@ export function createProjectFile(
   return invoke<void>("create_project_file", { docsRoot, relativePath });
 }
 
+export type AsciidocFileTemplate = "method" | "request" | "response";
+
+export function createProjectFileFromTemplate(
+  docsRoot: string,
+  relativePath: string,
+  template: AsciidocFileTemplate | null,
+): Promise<void> {
+  return invoke<void>("create_project_file_from_template", {
+    docsRoot,
+    relativePath,
+    template,
+  });
+}
+
+export function createRestEndpointFolder(
+  docsRoot: string,
+  relativePath: string,
+  methodName: string,
+): Promise<void> {
+  return invoke<void>("create_rest_endpoint_folder", {
+    docsRoot,
+    relativePath,
+    methodName,
+  });
+}
+
 export function createProjectDir(
   docsRoot: string,
   relativePath: string,
