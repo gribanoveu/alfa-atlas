@@ -387,7 +387,9 @@ export function GitPanel({
           value={jiraKey}
           disabled={busy}
           spellCheck={false}
-          onChange={(event) => onJiraKeyChange(event.target.value)}
+          onChange={(event) =>
+            onJiraKeyChange(event.target.value.toUpperCase())
+          }
         />
         <textarea
           className="git-commit-message"

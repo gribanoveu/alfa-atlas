@@ -308,6 +308,12 @@ function App() {
     }
   }, [layout.activeTool, hasProject, branches.refresh]);
 
+  useEffect(() => {
+    if (layout.activeTool === "git" && hasProject) {
+      void git.refresh();
+    }
+  }, [layout.activeTool, hasProject, git.refresh]);
+
   const cursorLabel = hasProject
     ? `Ln ${editor.cursor.line}, Col ${editor.cursor.column}`
     : "Ln 1, Col 1";
