@@ -34,7 +34,7 @@ fn enc_key_file_path() -> Result<PathBuf, String> {
 }
 
 /// Retrieves or creates a 256-bit AES key. The authoritative store is a file
-/// at `~/.alfa-atlas/.enc_key` (0o600).  The OS keyring is written as a secondary
+/// at `~/.atlas/.enc_key` (0o600).  The OS keyring is written as a secondary
 /// store but never relied upon for retrieval — macOS silently rejects keychain
 /// writes from unsigned binaries (showing no prompt), so the file must be the
 /// source of truth.
@@ -75,7 +75,7 @@ fn keyring_set_if_empty(key: &[u8; 32]) -> Result<(), String> {
     }
 }
 
-/// File-based fallback: reads or creates `~/.alfa-atlas/.enc_key` (0o600 permissions).
+/// File-based fallback: reads or creates `~/.atlas/.enc_key` (0o600 permissions).
 fn file_key_get_or_create() -> Result<[u8; 32], String> {
     let path = enc_key_file_path()?;
 
@@ -162,7 +162,7 @@ fn generate_ed25519_keypair() -> Result<(String, String), String> {
     Ok((private_openssh.to_string(), public_openssh))
 }
 
-/// Loads the key config from `~/.alfa-atlas/key_config.json`.
+/// Loads the key config from `~/.atlas/key_config.json`.
 /// Returns `KeyConfig::default()` if the file does not exist.
 pub fn load_key_config() -> Result<KeyConfig, String> {
     let path = key_config_path()?;
@@ -176,7 +176,7 @@ pub fn load_key_config() -> Result<KeyConfig, String> {
     Ok(config)
 }
 
-/// Saves the key config to `~/.alfa-atlas/key_config.json`.
+/// Saves the key config to `~/.atlas/key_config.json`.
 fn save_key_config(config: &KeyConfig) -> Result<(), String> {
     let path = key_config_path()?;
     if let Some(dir) = path.parent() {

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Stable per-repo config stored at `{repoRoot}/.alfa-atlas/project.json`.
+/// Stable per-repo config stored at `{repoRoot}/.atlas/project.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectConfig {

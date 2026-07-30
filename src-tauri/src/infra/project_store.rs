@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::project_config::{ProjectConfig, ProjectError};
 
-const PROJECT_DIR_NAME: &str = ".alfa-atlas";
+const PROJECT_DIR_NAME: &str = ".atlas";
 const PROJECT_FILE_NAME: &str = "project.json";
 
 fn resolve_repo_root(repo_root: &str) -> Result<PathBuf, ProjectError> {
@@ -18,7 +18,7 @@ fn project_config_path(repo_root: &Path) -> PathBuf {
     repo_root.join(PROJECT_DIR_NAME).join(PROJECT_FILE_NAME)
 }
 
-/// Loads `{repo}/.alfa-atlas/project.json`. Missing file → `Ok(None)`.
+/// Loads `{repo}/.atlas/project.json`. Missing file → `Ok(None)`.
 pub fn load(repo_root: &str) -> Result<Option<ProjectConfig>, ProjectError> {
     let root = resolve_repo_root(repo_root)?;
     let path = project_config_path(&root);

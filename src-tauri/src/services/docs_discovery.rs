@@ -11,7 +11,7 @@ const MIN_SUPPORTED_FOR_DENSITY: usize = 2;
 
 const SKIP_DIRS: &[&str] = &[
     ".git",
-    ".alfa-atlas",
+    ".atlas",
     "node_modules",
     "target",
     "dist",

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::domain::layout::PanelLayout;
 use crate::domain::settings::SettingsError;
 
-const PROJECT_DIR_NAME: &str = ".alfa-atlas";
+const PROJECT_DIR_NAME: &str = ".atlas";
 const LAYOUT_FILE_NAME: &str = "layout.json";
 
 fn resolve_project_root(project_root: &str) -> Result<PathBuf, SettingsError> {
@@ -19,7 +19,7 @@ fn layout_path(project_root: &Path) -> PathBuf {
     project_root.join(PROJECT_DIR_NAME).join(LAYOUT_FILE_NAME)
 }
 
-/// Loads panel layout from `{project}/.alfa-atlas/layout.json`.
+/// Loads panel layout from `{project}/.atlas/layout.json`.
 /// Missing file yields defaults.
 pub fn load(project_root: &str) -> Result<PanelLayout, SettingsError> {
     let root = resolve_project_root(project_root)?;

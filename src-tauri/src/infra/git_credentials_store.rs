@@ -10,7 +10,7 @@ fn credentials_path() -> Result<std::path::PathBuf, SettingsError> {
     Ok(dir.join(CREDENTIALS_FILE_NAME))
 }
 
-/// Loads `GitCredentials` from `~/.alfa-atlas/git_credentials.json`.
+/// Loads `GitCredentials` from `~/.atlas/git_credentials.json`.
 /// Missing file yields `GitCredentials::default()`.
 pub fn load() -> Result<GitCredentials, SettingsError> {
     let path = credentials_path()?;

@@ -32,7 +32,7 @@ pub fn get_settings_paths() -> Result<SettingsPaths, String> {
     let project_root = settings.project.root.clone();
     let project_config_dir = project_root
         .as_ref()
-        .map(|root| std::path::Path::new(root).join(".alfa-atlas").to_string_lossy().into_owned());
+        .map(|root| std::path::Path::new(root).join(".atlas").to_string_lossy().into_owned());
 
     Ok(SettingsPaths {
         user_settings_dir,

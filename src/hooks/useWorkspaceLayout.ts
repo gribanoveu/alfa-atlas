@@ -31,7 +31,7 @@ const BOTTOM_TOOLS: readonly BottomTool[] = [
 
 export const DEFAULT_PANEL_UI: PanelUiState = {
   sidebarOpen: true,
-  rightTool: "assistant",
+  rightTool: null,
   bottomTool: null,
 };
 

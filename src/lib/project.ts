@@ -49,6 +49,13 @@ export function openProject(
   return invoke<OpenedProject>("open_project", { root, docsRoot });
 }
 
+export function addGitignoreEntry(
+  root: string,
+  entry: string,
+): Promise<void> {
+  return invoke<void>("add_gitignore_entry", { root, entry });
+}
+
 export function openCachedProject(root: string): Promise<OpenedProject> {
   return invoke<OpenedProject>("open_cached_project", { root });
 }

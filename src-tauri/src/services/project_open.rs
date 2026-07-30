@@ -78,7 +78,7 @@ pub fn probe_open_path(selected_path: &str) -> Result<ProbeResult, ProjectError>
     })
 }
 
-/// Persist global last-root and optionally write `{repo}/.alfa-atlas/project.json`.
+/// Persist global last-root and optionally write `{repo}/.atlas/project.json`.
 pub fn open_project(repo_root: &str, docs_root: &str) -> Result<OpenedProject, ProjectError> {
     let repo = Path::new(repo_root);
     if !repo.is_dir() {

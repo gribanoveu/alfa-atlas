@@ -1,5 +1,5 @@
 use crate::domain::project_config::{OpenedProject, ProbeResult, RecentProject, TreeNode};
-use crate::services::{docs_fs, project_open};
+use crate::services::{docs_fs, gitignore, project_open};
 
 #[tauri::command]
 pub fn probe_open_path(path: String) -> Result<ProbeResult, String> {
@@ -9,6 +9,11 @@ pub fn probe_open_path(path: String) -> Result<ProbeResult, String> {
 #[tauri::command]
 pub fn open_project(root: String, docs_root: String) -> Result<OpenedProject, String> {
     project_open::open_project(&root, &docs_root).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_gitignore_entry(root: String, entry: String) -> Result<(), String> {
+    gitignore::ensure_entry(&root, &entry).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

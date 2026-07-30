@@ -116,6 +116,7 @@ pub fn run() {
             exit_app,
             commands::project::probe_open_path,
             commands::project::open_project,
+            commands::project::add_gitignore_entry,
             commands::project::open_cached_project,
             commands::project::get_project,
             commands::project::get_saved_repo_root,

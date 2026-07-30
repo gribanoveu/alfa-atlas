@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::domain::settings::SettingsError;
 use crate::domain::workspace::WorkspaceState;
 
-const PROJECT_DIR_NAME: &str = ".alfa-atlas";
+const PROJECT_DIR_NAME: &str = ".atlas";
 const WORKSPACE_FILE_NAME: &str = "workspace.json";
 
 fn resolve_project_root(project_root: &str) -> Result<PathBuf, SettingsError> {
@@ -21,7 +21,7 @@ fn workspace_path(project_root: &Path) -> PathBuf {
         .join(WORKSPACE_FILE_NAME)
 }
 
-/// Loads `{project}/.alfa-atlas/workspace.json`. Missing file → defaults.
+/// Loads `{project}/.atlas/workspace.json`. Missing file → defaults.
 pub fn load(project_root: &str) -> Result<WorkspaceState, SettingsError> {
     let root = resolve_project_root(project_root)?;
     let path = workspace_path(&root);

@@ -507,7 +507,7 @@ export function SettingsDialog({
                 <div className="settings-section-title">Пути</div>
                 <div className="settings-row">
                   <span className="settings-hint" style={{ paddingLeft: 0 }}>
-                    Папка настроек пользователя (~/.alfa-atlas)
+                    Папка настроек пользователя (~/.atlas)
                   </span>
                   <div className="settings-path">
                     {paths?.userSettingsDir ?? "…"}
@@ -525,13 +525,13 @@ export function SettingsDialog({
                 </div>
                 <div className="settings-row">
                   <span className="settings-hint" style={{ paddingLeft: 0 }}>
-                    Настройки проекта (.alfa-atlas)
+                    Настройки проекта (.atlas)
                   </span>
                   <div
                     className={`settings-path${!paths?.projectConfigDir && !projectRoot ? " empty" : ""}`}
                   >
                     {projectRoot
-                      ? `${projectRoot.replace(/[/\\]+$/, "")}/.alfa-atlas`
+                      ? `${projectRoot.replace(/[/\\]+$/, "")}/.atlas`
                       : (paths?.projectConfigDir ?? "—")}
                   </div>
                 </div>

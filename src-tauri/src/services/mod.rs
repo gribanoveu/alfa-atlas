@@ -5,6 +5,7 @@ pub mod docs_fs;
 pub mod file_watcher;
 pub mod general_prefs;
 pub mod git_credentials;
+pub mod gitignore;
 pub mod git_ops;
 pub mod project_layout;
 pub mod project_open;

@@ -79,6 +79,23 @@
   filter: brightness(1.08);
 }
 
+.clone-modal-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: var(--font-ui);
+  color: var(--text-0);
+}
+
+.clone-modal-checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .clone-modal-message {
   font-size: var(--font-ui);
   color: var(--text-1);

@@ -1,7 +1,10 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { addGitignoreEntry } from "../../lib/project";
 import type { DocsCandidate, ProbeResult } from "../../lib/project";
 import "./CloneRepoModal.css";
+
+const ATLAS_GITIGNORE_ENTRY = ".atlas";
 
 type ConfirmOpenProjectModalProps = {
   probe: ProbeResult;
@@ -24,6 +27,7 @@ export function ConfirmOpenProjectModal({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [candidatesOpen, setCandidatesOpen] = useState(false);
+  const [addToGitignore, setAddToGitignore] = useState(true);
   const candidatesRef = useRef<HTMLDivElement>(null);
 
   const candidates: DocsCandidate[] = probe.candidates;
@@ -88,6 +92,14 @@ export function ConfirmOpenProjectModal({
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
+      return;
+    }
+    if (addToGitignore) {
+      try {
+        await addGitignoreEntry(probe.root, ATLAS_GITIGNORE_ENTRY);
+      } catch (e) {
+        console.error("Failed to update .gitignore", e);
+      }
     }
   };
 
@@ -202,6 +214,16 @@ export function ConfirmOpenProjectModal({
               Обзор…
             </button>
           </div>
+        </label>
+
+        <label className="clone-modal-checkbox-label">
+          <input
+            type="checkbox"
+            checked={addToGitignore}
+            onChange={(event) => setAddToGitignore(event.target.checked)}
+            className="clone-modal-checkbox"
+          />
+          <span>Добавить файлы настроек приложения в .gitignore</span>
         </label>
 
         {error ? <div className="clone-modal-message">{error}</div> : null}

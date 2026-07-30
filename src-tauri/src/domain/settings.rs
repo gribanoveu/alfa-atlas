@@ -58,7 +58,7 @@ pub const MAX_RECENT_PROJECTS: usize = 10;
 pub struct ProjectSettings {
     #[serde(default)]
     pub root: Option<String>,
-    /// MRU absolute paths (index 0 = most recent). Global `~/.alfa-atlas/settings.json` only.
+    /// MRU absolute paths (index 0 = most recent). Global `~/.atlas/settings.json` only.
     #[serde(default)]
     pub recent: Vec<String>,
 }

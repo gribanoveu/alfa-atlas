@@ -133,7 +133,7 @@ pub struct AppKeyStatus {
     pub is_imported: bool,
 }
 
-/// App-managed key configuration stored in ~/.alfa-atlas/key_config.json.
+/// App-managed key configuration stored in ~/.atlas/key_config.json.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyConfig {
