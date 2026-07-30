@@ -17,11 +17,15 @@ export function AscList({
   onOpenXref?: XrefHandler;
 }) {
   const ctx = list.getContext();
-  const ordered = ctx === "olist";
+  const ordered = ctx === "olist" || ctx === "colist";
   const Tag = ordered ? "ol" : "ul";
   const items = list.getItems();
   return (
-    <Tag className={`asc-list ${ordered ? "asc-list-ordered" : "asc-list-unordered"}`}>
+    <Tag
+      className={`asc-list ${ordered ? "asc-list-ordered" : "asc-list-unordered"}${
+        ctx === "colist" ? " asc-list-colist" : ""
+      }`}
+    >
       {items.map((item, i) => (
         <AscListItem key={i} item={item} onOpenXref={onOpenXref} />
       ))}

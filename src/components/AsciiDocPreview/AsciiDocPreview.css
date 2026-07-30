@@ -118,6 +118,128 @@
 .asc-section h5,
 .asc-section h6 { font-size: 0.929em; }
 
+/* Table of contents (:toc:) */
+.asc-preview-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 32px;
+}
+
+.asc-preview-body-toc-right {
+  flex-direction: row-reverse;
+}
+
+.asc-preview-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.asc-toc {
+  font-size: 0.86em;
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.asc-toc-left,
+.asc-toc-right {
+  flex: none;
+  width: 220px;
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  padding: 10px 14px;
+  transition: width 0.15s ease, padding 0.15s ease;
+}
+
+/* Collapsed sidebar TOC shrinks to a slim strip instead of just hiding its
+ * list, so it actually gives the reading column its space back. */
+.asc-toc-left.is-collapsed,
+.asc-toc-right.is-collapsed {
+  width: 32px;
+  padding: 10px 6px;
+  overflow: hidden;
+}
+
+.asc-toc-top {
+  margin: 0 0 24px;
+  padding: 10px 16px;
+}
+
+.asc-toc-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.asc-toc.is-collapsed .asc-toc-header {
+  margin-bottom: 0;
+}
+
+.asc-toc-left.is-collapsed .asc-toc-header,
+.asc-toc-right.is-collapsed .asc-toc-header {
+  justify-content: center;
+}
+
+.asc-toc-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--text-0);
+  font-size: 1.05em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asc-toc-left.is-collapsed .asc-toc-title,
+.asc-toc-right.is-collapsed .asc-toc-title {
+  display: none;
+}
+
+.asc-toc-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--text-2);
+  border: 1px solid transparent;
+}
+
+.asc-toc-toggle:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+
+.asc-toc ul {
+  list-style: none;
+  margin: 0;
+  padding-left: 14px;
+}
+
+.asc-toc > ul {
+  padding-left: 0;
+}
+
+.asc-toc li {
+  margin: 2px 0;
+}
+
+.asc-toc-link {
+  display: block;
+  padding: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .asc-floating-title {
   font-size: 1.143em;
   font-weight: 600;
@@ -364,13 +486,25 @@
   font-style: italic;
 }
 
-/* Example / sidebar */
+/* Example / sidebar / open */
 .asc-example {
   margin: 14px 0;
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-0);
+}
+
+.asc-example-title {
+  font-weight: 600;
+  color: var(--text-0);
+  margin-bottom: 6px;
+}
+
+.asc-open-title {
+  font-weight: 600;
+  color: var(--text-0);
+  margin-bottom: 6px;
 }
 
 /* Pass-through raw HTML (++++ … ++++): <details>, SVG и т.п. */

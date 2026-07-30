@@ -1,11 +1,13 @@
+import { useCallback, useRef, useState } from "react";
 import type * as Monaco from "monaco-editor";
 import { extensionOf } from "../../lib/fileExtensions";
 import { useAsciiDocRender } from "../../hooks/useAsciiDocRender";
 import { AscBlockList } from "./AscBlockList";
 import { AscMermaid } from "./AscMermaid";
 import { AscPlantuml } from "./AscPlantuml";
+import { AscToc, type AscTocPlacement } from "./AscToc";
 import { InlineHtml } from "./InlineHtml";
-import type { AbstractBlock } from "./types";
+import type { AbstractBlock, Section } from "./types";
 import "./AsciiDocPreview.css";
 
 type XrefHandler = (href: string) => void;
@@ -26,6 +28,14 @@ const PLANTUML_EXTS = new Set([".puml", ".plantuml"]);
 
 /** Extensions that are standalone Mermaid sources, not AsciiDoc. */
 const MERMAID_EXTS = new Set([".mmd", ".mermaid"]);
+
+/**
+ * Below this share of the window width, the sidebar TOC (`:toc: left/right`)
+ * collapses in favor of reading room — covers both the 2-panel split view
+ * (preview pane ~half the window) and a full-width preview squeezed by a
+ * narrow app window or open sidebars.
+ */
+const TOC_SIDEBAR_MIN_WIDTH_RATIO = 0.6;
 
 /**
  * Standalone `.puml` file → fake asciidoctor "listing" block whose
@@ -66,6 +76,25 @@ export function AsciiDocPreview({
   const isPlantumlFile = PLANTUML_EXTS.has(ext);
   const isMermaidFile = MERMAID_EXTS.has(ext);
   const isStandaloneDiagram = isPlantumlFile || isMermaidFile;
+  const previewRef = useRef<HTMLDivElement>(null);
+  const tocResizeObserverRef = useRef<ResizeObserver | null>(null);
+  const [isTocSidebarNarrow, setIsTocSidebarNarrow] = useState(false);
+
+  const attachPreviewNode = useCallback((node: HTMLDivElement | null) => {
+    previewRef.current = node;
+    tocResizeObserverRef.current?.disconnect();
+    tocResizeObserverRef.current = null;
+    if (!node) return;
+
+    const observer = new ResizeObserver(() => {
+      setIsTocSidebarNarrow(
+        node.getBoundingClientRect().width <
+          window.innerWidth * TOC_SIDEBAR_MIN_WIDTH_RATIO,
+      );
+    });
+    observer.observe(node);
+    tocResizeObserverRef.current = observer;
+  }, []);
 
   const { doc, error, parsing } = useAsciiDocRender(
     content,
@@ -114,19 +143,59 @@ export function AsciiDocPreview({
   const docTitle = doc.getDocumentTitle() as string | null;
   const blocks = doc.getBlocks();
 
+  const tocSections = (
+    doc.hasSections() ? doc.getSections() : []
+  ) as unknown as Section[];
+  const tocEnabled = doc.hasAttribute("toc") && tocSections.length > 0;
+  const tocPosition = doc.getAttribute("toc-position") as string | null;
+  const tocPlacement: AscTocPlacement =
+    tocPosition === "left" || tocPosition === "right" ? tocPosition : "top";
+  const tocTitle = doc.getAttribute("toc-title", "Table of Contents") as string;
+  const tocLevels = Number(doc.getAttribute("toclevels", 2));
+  const isSidebarToc =
+    tocEnabled && tocPlacement !== "top" && !isTocSidebarNarrow;
+
+  const blockList = (
+    <AscBlockList
+      blocks={blocks}
+      docsRoot={docsRoot}
+      monaco={monaco}
+      onOpenXref={onOpenXref}
+    />
+  );
+
   return (
-    <div className="asc-preview">
+    <div className="asc-preview" ref={attachPreviewNode}>
       {docTitle ? (
         <h1 className="asc-doc-title">
           <InlineHtml html={docTitle} onOpenXref={onOpenXref} />
         </h1>
       ) : null}
-      <AscBlockList
-        blocks={blocks}
-        docsRoot={docsRoot}
-        monaco={monaco}
-        onOpenXref={onOpenXref}
-      />
+
+      {tocEnabled && tocPlacement === "top" ? (
+        <AscToc
+          sections={tocSections}
+          title={tocTitle}
+          maxLevel={tocLevels}
+          placement="top"
+          containerRef={previewRef}
+        />
+      ) : null}
+
+      {isSidebarToc ? (
+        <div className={`asc-preview-body asc-preview-body-toc-${tocPlacement}`}>
+          <AscToc
+            sections={tocSections}
+            title={tocTitle}
+            maxLevel={tocLevels}
+            placement={tocPlacement}
+            containerRef={previewRef}
+          />
+          <div className="asc-preview-content">{blockList}</div>
+        </div>
+      ) : (
+        blockList
+      )}
     </div>
   );
 }

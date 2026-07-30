@@ -3,6 +3,7 @@ import type * as Monaco from "monaco-editor";
 import type { Section } from "./types";
 import { InlineHtml } from "./InlineHtml";
 import { AscBlockList } from "./AscBlockList";
+import { sectionDisplayTitle } from "./asciidocOutline";
 
 type XrefHandler = (href: string) => void;
 
@@ -33,7 +34,14 @@ export function AscSection({
   return (
     <section className="asc-section">
       {title
-        ? createElement(tag, null, <InlineHtml html={title} onOpenXref={onOpenXref} />)
+        ? createElement(
+            tag,
+            { id: section.getId() },
+            <InlineHtml
+              html={sectionDisplayTitle(section)}
+              onOpenXref={onOpenXref}
+            />,
+          )
         : null}
       <AscBlockList
         blocks={section.getBlocks()}

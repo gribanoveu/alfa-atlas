@@ -1,6 +1,5 @@
 // { Название метода/сервиса }
 = Метод Template
-
 :sectnums:
 :sectnumlevels: 3
 :toc: left

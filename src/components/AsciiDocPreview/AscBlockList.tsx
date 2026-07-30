@@ -14,6 +14,7 @@ import { AscSplitDetails } from "./AscSplitDetails";
 import { AscTable } from "./AscTable";
 import type { AscTable as AscTableType } from "./types";
 import { expandSplitDetails } from "./splitDetails";
+import { InlineHtml } from "./InlineHtml";
 
 type XrefHandler = (href: string) => void;
 
@@ -90,10 +91,17 @@ function AscBlock({
       return <AscParagraph block={block} onOpenXref={onOpenXref} />;
     case "ulist":
     case "olist":
+    case "colist":
       return <AscList list={block as unknown as List} onOpenXref={onOpenXref} />;
     case "dlist":
-      // Description list — минимальная поддержка как <dl>.
-      return <AscDescriptionList block={block} />;
+      return (
+        <AscDescriptionList
+          block={block}
+          docsRoot={docsRoot}
+          monaco={monaco}
+          onOpenXref={onOpenXref}
+        />
+      );
     case "table":
       return <AscTable table={block as unknown as AscTableType} />;
     case "admonition":
@@ -119,6 +127,11 @@ function AscBlock({
     case "example":
       return (
         <div className="asc-example">
+          {block.hasTitle() ? (
+            <div className="asc-example-title">
+              <InlineHtml html={block.getCaptionedTitle()} onOpenXref={onOpenXref} />
+            </div>
+          ) : null}
           <AscBlockList
             blocks={block.getBlocks()}
             docsRoot={docsRoot}
@@ -147,12 +160,19 @@ function AscBlock({
       ) : null;
     case "open":
       return (
-        <AscBlockList
-          blocks={block.getBlocks()}
-          docsRoot={docsRoot}
-          monaco={monaco}
-          onOpenXref={onOpenXref}
-        />
+        <div className="asc-open">
+          {block.hasTitle() ? (
+            <div className="asc-open-title">
+              <InlineHtml html={block.title} onOpenXref={onOpenXref} />
+            </div>
+          ) : null}
+          <AscBlockList
+            blocks={block.getBlocks()}
+            docsRoot={docsRoot}
+            monaco={monaco}
+            onOpenXref={onOpenXref}
+          />
+        </div>
       );
     default:
       return (
@@ -166,7 +186,17 @@ function AscBlock({
   }
 }
 
-function AscDescriptionList({ block }: { block: AbstractBlock }) {
+function AscDescriptionList({
+  block,
+  docsRoot,
+  monaco,
+  onOpenXref,
+}: {
+  block: AbstractBlock;
+  docsRoot: string | null;
+  monaco: typeof Monaco | null;
+  onOpenXref?: XrefHandler;
+}) {
   const items = (block as unknown as {
     getItems: () => Array<[AbstractBlock[], AbstractBlock | null]>;
   }).getItems();
@@ -175,9 +205,23 @@ function AscDescriptionList({ block }: { block: AbstractBlock }) {
       {items.map(([terms, desc], i) => (
         <div key={i} className="asc-dlist-item">
           {terms.map((t, ti) => (
-            <dt key={ti}>{safeGetText(t) ?? ""}</dt>
+            <dt key={ti}>
+              <InlineHtml html={safeGetText(t)} onOpenXref={onOpenXref} />
+            </dt>
           ))}
-          {desc ? <dd>{safeGetText(desc) ?? ""}</dd> : null}
+          {desc ? (
+            <dd>
+              <InlineHtml html={safeGetText(desc)} onOpenXref={onOpenXref} />
+              {desc.getBlocks().length > 0 ? (
+                <AscBlockList
+                  blocks={desc.getBlocks()}
+                  docsRoot={docsRoot}
+                  monaco={monaco}
+                  onOpenXref={onOpenXref}
+                />
+              ) : null}
+            </dd>
+          ) : null}
         </div>
       ))}
     </dl>
