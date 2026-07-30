@@ -2,7 +2,7 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 4px 0;
+  padding: 0 0 4px;
 }
 
 .problems-scope {
