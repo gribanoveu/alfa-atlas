@@ -212,6 +212,23 @@ export function useWorkspaceSession(
     [schedulePersist],
   );
 
+  const expandAll = useCallback(
+    (dirPaths: string[]) => {
+      const next = new Set<string>([".", ...dirPaths]);
+      expandedRef.current = next;
+      schedulePersist();
+      setExpandedDirs(next);
+    },
+    [schedulePersist],
+  );
+
+  const collapseAll = useCallback(() => {
+    const next = new Set<string>(["."]);
+    expandedRef.current = next;
+    schedulePersist();
+    setExpandedDirs(next);
+  }, [schedulePersist]);
+
   const remapExpandedUnder = useCallback(
     (oldPath: string, newPath: string) => {
       const prefix = oldPath.replace(/[/\\]+$/, "") + "/";
@@ -246,6 +263,8 @@ export function useWorkspaceSession(
     expandedDirs,
     toggleDir,
     ensureExpanded,
+    expandAll,
+    collapseAll,
     remapExpandedUnder,
     syncTabs,
     syncPanelUi,

@@ -4,6 +4,7 @@ import type { TreeNode } from "../../lib/project";
 import { FileTree, type FileTreeDeleteTarget } from "./FileTree";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useCallback } from "react";
+import { ChevronsDownUp, ChevronsUpDown, RefreshCw } from "lucide-react";
 import "./Sidebar.css";
 
 type SidebarProps = {
@@ -17,6 +18,9 @@ type SidebarProps = {
   expandedDirs: ReadonlySet<string>;
   separateExternal?: boolean;
   onToggleDir: (path: string) => void;
+  onRefreshTree: () => void;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
   onOpenFile: (path: string) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
@@ -47,6 +51,9 @@ export function Sidebar({
   expandedDirs,
   separateExternal = true,
   onToggleDir,
+  onRefreshTree,
+  onExpandAll,
+  onCollapseAll,
   onOpenFile,
   onNewFile,
   onNewFolder,
@@ -93,7 +100,37 @@ export function Sidebar({
         <div className="icons">
           <button
             type="button"
-            className="sidebar-hide"
+            className="sidebar-icon-btn"
+            onClick={onRefreshTree}
+            disabled={!docsRoot || treeLoading}
+            title="Обновить"
+            aria-label="Обновить дерево файлов"
+          >
+            <RefreshCw size={14} aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="sidebar-icon-btn"
+            onClick={onExpandAll}
+            disabled={!docsRoot}
+            title="Развернуть все папки"
+            aria-label="Развернуть все папки"
+          >
+            <ChevronsUpDown size={14} aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="sidebar-icon-btn"
+            onClick={onCollapseAll}
+            disabled={!docsRoot}
+            title="Свернуть все папки"
+            aria-label="Свернуть все папки"
+          >
+            <ChevronsDownUp size={14} aria-hidden />
+          </button>
+          <button
+            type="button"
+            className="sidebar-icon-btn"
             onClick={onToggle}
             title="Hide"
             aria-label="Скрыть панель документации"

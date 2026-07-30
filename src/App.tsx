@@ -344,7 +344,7 @@ function App() {
       if (sync.behind > 0) {
         setGitAlert({
           title: "Сначала обновите проект",
-          message: `На сервере ${behindCommitsMessage(sync.behind)}. Выполните «Git → Pull» и повторите отправку.`,
+          message: `На сервере ${behindCommitsMessage(sync.behind)}. Выполните «Git → Обновить проект» и повторите отправку.`,
           variant: "info",
         });
         return;
@@ -901,6 +901,9 @@ function App() {
             expandedDirs={session.expandedDirs}
             separateExternal={generalPrefs.prefs.separateExternalFolder}
             onToggleDir={session.toggleDir}
+            onRefreshTree={() => void tree.refresh()}
+            onExpandAll={() => session.expandAll(collectDirPaths(tree.nodes))}
+            onCollapseAll={session.collapseAll}
             onOpenFile={(path) => void editor.openFile(path)}
             onNewFile={setNewFileParent}
             onNewFolder={setNewFolderParent}
