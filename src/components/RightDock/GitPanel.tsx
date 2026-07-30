@@ -89,6 +89,7 @@ type GroupProps = {
     icon: "plus" | "minus";
     disabled?: boolean;
   };
+  tone?: "stage";
   children: ReactNode;
 };
 
@@ -99,11 +100,12 @@ function GitGroup({
   open,
   onToggle,
   headerAction,
+  tone,
   children,
 }: GroupProps) {
   const Chevron = open ? ChevronDown : ChevronRight;
   return (
-    <section className="git-group">
+    <section className={`git-group${tone ? ` git-group-${tone}` : ""}`}>
       <div className="git-group-head">
         <button
           type="button"
@@ -343,6 +345,7 @@ export function GitPanel({
           count={staged.length}
           open={stagedOpen}
           onToggle={() => setStagedOpen((v) => !v)}
+          tone="stage"
           headerAction={
             staged.length > 0
               ? {

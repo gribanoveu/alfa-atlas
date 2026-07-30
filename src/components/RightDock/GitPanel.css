@@ -111,6 +111,11 @@
   flex-direction: column;
 }
 
+/* Tints the Stage section so it visually reads as "what will be committed". */
+.git-group-stage .git-group-body {
+  background: color-mix(in srgb, var(--green) 15%, transparent);
+}
+
 .git-empty {
   font-size: var(--font-ui-sm);
   color: var(--text-2);
