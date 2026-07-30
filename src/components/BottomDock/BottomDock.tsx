@@ -1,7 +1,9 @@
 import type { BottomTool } from "../../hooks/useWorkspaceLayout";
+import type { GitCommitSummary } from "../../lib/git";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
+import { CommitHistoryPanel } from "../RightDock/CommitHistoryPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
 import "./BottomDock.css";
 
@@ -9,9 +11,9 @@ type ToolMeta = { id: BottomTool; label: string; empty: string };
 
 const TOOLS: ToolMeta[] = [
   {
-    id: "suggestions",
-    label: "Подсказки",
-    empty: "Нет активных подсказок",
+    id: "gitHistory",
+    label: "История Git",
+    empty: "Записей в истории пока нет",
   },
   {
     id: "formatting",
@@ -38,6 +40,12 @@ type BottomDockProps = {
     line: number,
     column: number,
   ) => void;
+  gitHistory?: {
+    commits: GitCommitSummary[];
+    busy: boolean;
+    error: string | null;
+    onRefresh: () => void;
+  } | null;
 };
 
 export function BottomDock({
@@ -49,6 +57,7 @@ export function BottomDock({
   diagnostics,
   activeDocumentId,
   onOpenDiagnostic,
+  gitHistory,
 }: BottomDockProps) {
   const open = Boolean(activeTool);
   const active = TOOLS.find((tool) => tool.id === activeTool);
@@ -89,6 +98,13 @@ export function BottomDock({
                 diagnostics={diagnostics}
                 activeDocumentId={activeDocumentId}
                 onOpenDiagnostic={onOpenDiagnostic}
+              />
+            ) : active.id === "gitHistory" && gitHistory ? (
+              <CommitHistoryPanel
+                commits={gitHistory.commits}
+                busy={gitHistory.busy}
+                error={gitHistory.error}
+                onRefresh={gitHistory.onRefresh}
               />
             ) : (
               <div className="panel-empty">{active.empty}</div>

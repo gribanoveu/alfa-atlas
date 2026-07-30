@@ -4,9 +4,9 @@ export type RightTool =
   | "assistant"
   | "asciidoc"
   | "git"
-  | "gitHistory"
+  | "suggestions"
   | "branches";
-export type BottomTool = "suggestions" | "formatting" | "problems";
+export type BottomTool = "gitHistory" | "formatting" | "problems";
 
 export type PanelUiState = {
   sidebarOpen: boolean;
@@ -20,11 +20,11 @@ const RIGHT_TOOLS: readonly RightTool[] = [
   "assistant",
   "branches",
   "git",
-  "gitHistory",
+  "suggestions",
   "asciidoc",
 ];
 const BOTTOM_TOOLS: readonly BottomTool[] = [
-  "suggestions",
+  "gitHistory",
   "formatting",
   "problems",
 ];

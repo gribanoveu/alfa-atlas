@@ -387,7 +387,7 @@ function App() {
     if (layout.bottomTool) {
       layout.setBottomToolId(null);
     } else {
-      layout.setBottomToolId("suggestions");
+      layout.setBottomToolId("gitHistory");
     }
   }, [layout]);
 
@@ -914,7 +914,6 @@ function App() {
                 ? {
                     staged: git.status.staged,
                     unstaged: git.status.unstaged,
-                    commits: git.commits,
                     jiraKey: git.jiraKey,
                     onJiraKeyChange: git.setJiraKey,
                     description: git.description,
@@ -973,6 +972,16 @@ function App() {
           activeDocumentId={activeDocumentId}
           onOpenDiagnostic={(documentId, line, column) =>
             void openDiagnostic(documentId, line, column)
+          }
+          gitHistory={
+            hasProject
+              ? {
+                  commits: git.commits,
+                  busy: git.busy,
+                  error: git.error,
+                  onRefresh: () => void git.refresh(),
+                }
+              : null
           }
         />
       </div>

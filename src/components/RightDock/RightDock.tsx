@@ -2,21 +2,19 @@ import {
   FileText,
   GitCommitHorizontal,
   GitFork,
-  History,
+  Lightbulb,
   Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import type { RightTool } from "../../hooks/useWorkspaceLayout";
 import type {
   GitBranchInfo,
-  GitCommitSummary,
   GitDiffScope,
   GitFileStatus,
 } from "../../lib/git";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import { BranchesPanel } from "./BranchesPanel";
-import { CommitHistoryPanel } from "./CommitHistoryPanel";
 import { GitPanel } from "./GitPanel";
 import { AsciiDocPanel } from "./AsciiDocPanel";
 import "./RightDock.css";
@@ -40,10 +38,10 @@ const TOOL_DEFS: Record<
     empty: "Нет изменений для отображения",
     Icon: GitCommitHorizontal,
   },
-  gitHistory: {
-    label: "Commit history / История коммитов",
-    empty: "Записей в истории пока нет",
-    Icon: History,
+  suggestions: {
+    label: "Подсказки",
+    empty: "Нет активных подсказок",
+    Icon: Lightbulb,
   },
   asciidoc: {
     label: "AsciiDoc",
@@ -55,14 +53,14 @@ const TOOL_DEFS: Record<
 /** Stripe order: assistant on top, git tools grouped, editor tools below. */
 const TOOL_STRIPE_GROUPS: RightTool[][] = [
   ["assistant"],
-  ["branches", "git", "gitHistory"],
+  ["branches", "git"],
   ["asciidoc"],
+  ["suggestions"],
 ];
 
 export type GitPanelViewProps = {
   staged: GitFileStatus[];
   unstaged: GitFileStatus[];
-  commits: GitCommitSummary[];
   jiraKey: string;
   onJiraKeyChange: (value: string) => void;
   description: string;
@@ -164,13 +162,6 @@ export function RightDock({
                 onRefresh={git.onRefresh}
                 onOpenFileDiff={git.onOpenFileDiff}
                 selectedDiff={git.selectedDiff}
-              />
-            ) : activeTool === "gitHistory" && git ? (
-              <CommitHistoryPanel
-                commits={git.commits}
-                busy={git.busy}
-                error={git.error}
-                onRefresh={git.onRefresh}
               />
             ) : activeTool === "asciidoc" && asciidoc ? (
               <AsciiDocPanel
