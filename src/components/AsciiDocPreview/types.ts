@@ -24,6 +24,14 @@ export type {
   Section,
 };
 
+/**
+ * A table column node. Not exported from asciidoctor's main type index
+ * (same reason as `AscTable` below), so it's typed structurally as an
+ * `AbstractNode` — `getAttribute('colpcwidth')` is what `[cols="..."]`
+ * resolves to (percentage width per column, e.g. `[cols="1,3,1"]` → 20/60/20).
+ */
+export type AscColumn = AbstractNode & { style: string | null };
+
 /** Минимальная runtime-форма таблицы asciidoctor. */
 export type AscTable = AbstractBlock & {
   rows: {
@@ -31,7 +39,7 @@ export type AscTable = AbstractBlock & {
     body: AscCell[][];
     foot: AscCell[][];
   };
-  columns: { style: string | null }[];
+  columns: AscColumn[];
   hasHeaderOption: boolean;
 };
 
