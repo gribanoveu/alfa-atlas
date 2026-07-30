@@ -3,8 +3,8 @@
 }
 
 .git-diff-modal {
-  width: min(960px, 100%);
-  height: min(720px, calc(100vh - 32px));
+  width: min(1200px, 100%);
+  height: min(800px, calc(100vh - 32px));
   max-height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
