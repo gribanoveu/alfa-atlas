@@ -3,6 +3,7 @@ import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { AlertOkModal } from "./components/Git/AlertOkModal";
 import { GitFileDiffModal } from "./components/Git/GitFileDiffModal";
+import { GitCommitFileDiffModal } from "./components/Git/GitCommitFileDiffModal";
 import { CheckoutBlockedModal } from "./components/Git/CheckoutBlockedModal";
 import { PullUpdateModal } from "./components/Git/PullUpdateModal";
 import { PushConfirmModal } from "./components/Git/PushConfirmModal";
@@ -16,8 +17,20 @@ import { StatusBar } from "./components/StatusBar/StatusBar";
 import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
-import type { GitBranchInfo, GitDiffScope, GitFileStatus, PullMode } from "./lib/git";
-import { gitSyncStatus, hasTrackedGitChanges, hasUnpushedCommits } from "./lib/git";
+import type {
+  GitBranchInfo,
+  GitDiffScope,
+  GitFileDiff,
+  GitFileStatus,
+  PullMode,
+} from "./lib/git";
+import {
+  gitCommitFileDiff,
+  gitCommitFiles,
+  gitSyncStatus,
+  hasTrackedGitChanges,
+  hasUnpushedCommits,
+} from "./lib/git";
 import { useBranches } from "./hooks/useBranches";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
@@ -181,6 +194,10 @@ function App() {
   const [gitDiffTarget, setGitDiffTarget] = useState<{
     file: GitFileStatus;
     scope: GitDiffScope;
+  } | null>(null);
+  const [commitFileDiffTarget, setCommitFileDiffTarget] = useState<{
+    commitHash: string;
+    file: GitFileStatus;
   } | null>(null);
   const [revealRequest, setRevealRequest] = useState<{
     id: number;
@@ -505,6 +522,37 @@ function App() {
       setGitDiffTarget({ file, scope });
     },
     [git.status.staged, git.status.unstaged],
+  );
+
+  const openCommitFileDiff = useCallback(
+    (commitHash: string, file: GitFileStatus) => {
+      setCommitFileDiffTarget({ commitHash, file });
+    },
+    [],
+  );
+
+  const loadCommitFiles = useCallback(
+    async (commitHash: string): Promise<GitFileStatus[] | null> => {
+      if (!project.repoRoot) return null;
+      try {
+        return await gitCommitFiles(project.repoRoot, commitHash);
+      } catch {
+        return null;
+      }
+    },
+    [project.repoRoot],
+  );
+
+  const loadCommitFileDiff = useCallback(
+    async (commitHash: string, path: string): Promise<GitFileDiff | null> => {
+      if (!project.repoRoot) return null;
+      try {
+        return await gitCommitFileDiff(project.repoRoot, commitHash, path);
+      } catch {
+        return null;
+      }
+    },
+    [project.repoRoot],
   );
 
   const syncEditorAfterGitDiscard = useCallback(
@@ -1018,6 +1066,8 @@ function App() {
                   busy: git.busy,
                   error: git.error,
                   onRefresh: () => void git.refresh(),
+                  onLoadCommitFiles: loadCommitFiles,
+                  onOpenCommitFileDiff: openCommitFileDiff,
                 }
               : null
           }
@@ -1164,6 +1214,16 @@ function App() {
           onLoadDiff={git.loadFileDiff}
           onDiscard={handleGitDiscard}
           onSaveContent={handleGitSaveContent}
+        />
+      ) : null}
+
+      {commitFileDiffTarget ? (
+        <GitCommitFileDiffModal
+          commitHash={commitFileDiffTarget.commitHash}
+          file={commitFileDiffTarget.file}
+          editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
+          onClose={() => setCommitFileDiffTarget(null)}
+          onLoadDiff={loadCommitFileDiff}
         />
       ) : null}
 

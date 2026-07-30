@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::domain::git::{
-    GitBranchInfo, GitCommitSummary, GitDiffScope, GitError, GitFileDiff,
+    GitBranchInfo, GitCommitSummary, GitDiffScope, GitError, GitFileDiff, GitFileStatus,
     GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::infra::{git_credentials_store, git_repo, key_management};
@@ -67,6 +67,18 @@ pub fn file_diff(
     scope: GitDiffScope,
 ) -> Result<GitFileDiff, GitError> {
     git_repo::file_diff(Path::new(repo_root), path, scope)
+}
+
+pub fn commit_files(repo_root: &str, commit_hash: &str) -> Result<Vec<GitFileStatus>, GitError> {
+    git_repo::commit_files(Path::new(repo_root), commit_hash)
+}
+
+pub fn commit_file_diff(
+    repo_root: &str,
+    commit_hash: &str,
+    path: &str,
+) -> Result<GitFileDiff, GitError> {
+    git_repo::commit_file_diff(Path::new(repo_root), commit_hash, path)
 }
 
 pub fn discard_file_changes(repo_root: &str, path: &str) -> Result<(), GitError> {

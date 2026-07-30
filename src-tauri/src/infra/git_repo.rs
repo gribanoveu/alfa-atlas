@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use git2::{
-    build::CheckoutBuilder, AnnotatedCommit, Branch, BranchType, Cred, CredentialType,
-    FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions, RemoteCallbacks, Repository,
-    ResetType, Signature, Status, StatusOptions, StatusShow,
+    build::CheckoutBuilder, AnnotatedCommit, Branch, BranchType, Cred, CredentialType, Delta,
+    DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions, RemoteCallbacks,
+    Repository, ResetType, Signature, Status, StatusOptions, StatusShow,
 };
 
 use crate::domain::git::{
@@ -381,6 +381,105 @@ pub fn log(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitE
         });
     }
     Ok(commits)
+}
+
+fn short_oid(oid: git2::Oid) -> String {
+    let full = oid.to_string();
+    full[..7.min(full.len())].to_string()
+}
+
+/// Resolve a (possibly abbreviated) commit hash to the commit object.
+fn resolve_commit<'repo>(
+    repo: &'repo Repository,
+    commit_ref: &str,
+) -> Result<git2::Commit<'repo>, GitError> {
+    let obj = repo
+        .revparse_single(commit_ref)
+        .map_err(|_| GitError::Message(format!("commit not found: {commit_ref}")))?;
+    obj.peel_to_commit().map_err(GitError::Operation)
+}
+
+fn delta_status_letter(status: Delta) -> Option<&'static str> {
+    match status {
+        Delta::Added => Some("A"),
+        Delta::Deleted => Some("D"),
+        Delta::Modified | Delta::Typechange => Some("M"),
+        Delta::Renamed | Delta::Copied => Some("R"),
+        _ => None,
+    }
+}
+
+/// Files changed by `commit_ref` relative to its first parent (or, for a
+/// root commit, relative to an empty tree).
+pub fn commit_files(repo_root: &Path, commit_ref: &str) -> Result<Vec<GitFileStatus>, GitError> {
+    let repo = open_repo(repo_root)?;
+    let commit = resolve_commit(&repo, commit_ref)?;
+    let tree = commit.tree().map_err(GitError::Operation)?;
+    let parent_tree = match commit.parent(0) {
+        Ok(parent) => Some(parent.tree().map_err(GitError::Operation)?),
+        Err(_) => None,
+    };
+
+    let mut diff_opts = DiffOptions::new();
+    let diff = repo
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut diff_opts))
+        .map_err(GitError::Operation)?;
+
+    let mut files: Vec<GitFileStatus> = diff
+        .deltas()
+        .filter_map(|delta| {
+            let letter = delta_status_letter(delta.status())?;
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())?;
+            Some(GitFileStatus {
+                path: path.to_string_lossy().into_owned(),
+                status: letter.to_string(),
+            })
+        })
+        .collect();
+
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files)
+}
+
+/// Diff of a single file between `commit_ref` and its first parent (empty
+/// tree for a root commit) — used for the read-only commit-history file view.
+pub fn commit_file_diff(
+    repo_root: &Path,
+    commit_ref: &str,
+    path: &str,
+) -> Result<GitFileDiff, GitError> {
+    let rel = validate_relative_path(path)?;
+    let repo = open_repo(repo_root)?;
+    let commit = resolve_commit(&repo, commit_ref)?;
+    let tree = commit.tree().map_err(GitError::Operation)?;
+    let parent = commit.parent(0).ok();
+    let parent_tree = match &parent {
+        Some(p) => Some(p.tree().map_err(GitError::Operation)?),
+        None => None,
+    };
+
+    let (modified, mod_bin) =
+        read_tree_blob(&repo, &tree, rel).unwrap_or_else(|| (String::new(), false));
+    let (original, orig_bin) = parent_tree
+        .as_ref()
+        .and_then(|t| read_tree_blob(&repo, t, rel))
+        .unwrap_or_else(|| (String::new(), false));
+
+    let modified_label = short_oid(commit.id());
+    let original_label = parent
+        .map(|p| short_oid(p.id()))
+        .unwrap_or_else(|| "(empty)".into());
+
+    Ok(GitFileDiff {
+        original,
+        modified,
+        original_label,
+        modified_label,
+        is_binary: orig_bin || mod_bin,
+    })
 }
 
 /// Classifies a remote error as an authentication failure using a small set
@@ -1750,6 +1849,109 @@ mod tests {
         let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
         repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
             .unwrap();
+    }
+
+    fn delete_and_commit(repo: &Repository, name: &str, message: &str) {
+        std::fs::remove_file(repo.workdir().unwrap().join(name)).unwrap();
+        let mut index = repo.index().unwrap();
+        index.remove_path(Path::new(name)).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = commit_signature(repo).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])
+            .unwrap();
+    }
+
+    #[test]
+    fn commit_files_lists_added_files_on_root_commit() {
+        let dir = temp_dir("commit-files-root");
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "init");
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+
+        let files = commit_files(&dir, &head.id().to_string()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "a.txt");
+        assert_eq!(files[0].status, "A");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn commit_files_lists_modified_and_deleted_files() {
+        let dir = temp_dir("commit-files-mod-del");
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "init");
+        commit_file(&repo, "b.txt", "two", "add b");
+        commit_file(&repo, "a.txt", "one-changed", "modify a");
+        delete_and_commit(&repo, "b.txt", "remove b");
+
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let files = commit_files(&dir, &head.id().to_string()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "b.txt");
+        assert_eq!(files[0].status, "D");
+
+        let modify_commit = head.parent(0).unwrap();
+        let files = commit_files(&dir, &modify_commit.id().to_string()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path, "a.txt");
+        assert_eq!(files[0].status, "M");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn commit_file_diff_returns_before_and_after_content() {
+        let dir = temp_dir("commit-file-diff");
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "init");
+        commit_file(&repo, "a.txt", "two", "modify a");
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+
+        let diff = commit_file_diff(&dir, &head.id().to_string(), "a.txt").unwrap();
+        assert_eq!(diff.original, "one");
+        assert_eq!(diff.modified, "two");
+        assert!(!diff.is_binary);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn commit_file_diff_root_commit_has_empty_original() {
+        let dir = temp_dir("commit-file-diff-root");
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "init");
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+
+        let diff = commit_file_diff(&dir, &head.id().to_string(), "a.txt").unwrap();
+        assert_eq!(diff.original, "");
+        assert_eq!(diff.modified, "one");
+        assert_eq!(diff.original_label, "(empty)");
+
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

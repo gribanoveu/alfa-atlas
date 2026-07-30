@@ -1,6 +1,6 @@
 use crate::domain::git::{
     AppKeyStatus, GitBranchInfo, GitCommitSummary, GitCredentials, GitDiffScope, GitFileDiff,
-    GitStatusSnapshot, GitSyncStatus, PullMode,
+    GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::domain::project_config::ProbeResult;
 use crate::services::{git_clone, git_credentials, git_ops};
@@ -73,6 +73,23 @@ pub fn git_file_diff(
     scope: GitDiffScope,
 ) -> Result<GitFileDiff, String> {
     git_ops::file_diff(&repo_root, &path, scope).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_commit_files(
+    repo_root: String,
+    commit_hash: String,
+) -> Result<Vec<GitFileStatus>, String> {
+    git_ops::commit_files(&repo_root, &commit_hash).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_commit_file_diff(
+    repo_root: String,
+    commit_hash: String,
+    path: String,
+) -> Result<GitFileDiff, String> {
+    git_ops::commit_file_diff(&repo_root, &commit_hash, &path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

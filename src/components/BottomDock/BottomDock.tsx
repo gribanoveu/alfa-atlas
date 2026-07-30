@@ -1,5 +1,5 @@
 import type { BottomTool } from "../../hooks/useWorkspaceLayout";
-import type { GitCommitSummary } from "../../lib/git";
+import type { GitCommitSummary, GitFileStatus } from "../../lib/git";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
@@ -45,6 +45,8 @@ type BottomDockProps = {
     busy: boolean;
     error: string | null;
     onRefresh: () => void;
+    onLoadCommitFiles: (commitHash: string) => Promise<GitFileStatus[] | null>;
+    onOpenCommitFileDiff: (commitHash: string, file: GitFileStatus) => void;
   } | null;
 };
 
@@ -105,6 +107,8 @@ export function BottomDock({
                 busy={gitHistory.busy}
                 error={gitHistory.error}
                 onRefresh={gitHistory.onRefresh}
+                onLoadCommitFiles={gitHistory.onLoadCommitFiles}
+                onOpenCommitFileDiff={gitHistory.onOpenCommitFileDiff}
               />
             ) : (
               <div className="panel-empty">{active.empty}</div>

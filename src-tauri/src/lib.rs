@@ -134,6 +134,8 @@ pub fn run() {
             commands::git::git_sync_status,
             commands::git::git_push,
             commands::git::git_file_diff,
+            commands::git::git_commit_files,
+            commands::git::git_commit_file_diff,
             commands::git::git_discard_file_changes,
             commands::git::git_apply_diff_content,
             commands::git::git_list_branches,

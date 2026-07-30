@@ -1,0 +1,95 @@
+.commit-history-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-0);
+}
+
+.commit-history-list {
+  flex: 1 1 45%;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+
+.commit-history-files {
+  flex: 1 1 55%;
+  min-width: 0;
+}
+
+/* The list's rows normally carry their own padding, but here that padding
+ * moves onto the inner button (below) so the whole row is clickable. */
+.commit-history-list .git-commit-row {
+  padding: 0;
+}
+
+.git-commit-row-btn {
+  display: block;
+  width: 100%;
+  padding: 3px 8px 4px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.git-commit-row-selected {
+  background: var(--bg-1);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.commit-tree-branch {
+  display: flex;
+  flex-direction: column;
+}
+
+.commit-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-height: 22px;
+  padding-right: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.commit-tree-row:hover {
+  background: var(--bg-1);
+  color: var(--text-0);
+}
+
+.commit-tree-row.dir {
+  color: var(--text-0);
+}
+
+.commit-tree-twist {
+  width: 12px;
+  flex: none;
+  font-size: calc(var(--font-ui-sm) * 0.82);
+  line-height: 1;
+  color: var(--text-2);
+  text-align: center;
+}
+
+.commit-tree-icon {
+  flex: none;
+  stroke-width: 1.75;
+  color: var(--yellow);
+}
+
+.commit-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commit-tree-status {
+  flex: none;
+}

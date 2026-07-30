@@ -134,6 +134,25 @@ export function gitFileDiff(
   return invoke<GitFileDiff>("git_file_diff", { repoRoot, path, scope });
 }
 
+export function gitCommitFiles(
+  repoRoot: string,
+  commitHash: string,
+): Promise<GitFileStatus[]> {
+  return invoke<GitFileStatus[]>("git_commit_files", { repoRoot, commitHash });
+}
+
+export function gitCommitFileDiff(
+  repoRoot: string,
+  commitHash: string,
+  path: string,
+): Promise<GitFileDiff> {
+  return invoke<GitFileDiff>("git_commit_file_diff", {
+    repoRoot,
+    commitHash,
+    path,
+  });
+}
+
 export function gitDiscardFileChanges(
   repoRoot: string,
   path: string,
