@@ -40,9 +40,10 @@ function lineUpToCursor(
 }
 
 /**
- * Registers four AsciiDoc completion providers on Monaco's `plaintext`
+ * Registers five AsciiDoc completion providers on Monaco's `plaintext`
  * language (`.adoc` maps to plaintext in `supportedFiles.ts`) per spec
- * section 9: `include::`, `xref:`, `image::`, and `{` for attributes.
+ * section 9: `include::`, `xref:`, `image::`, `{` for attributes, and
+ * `!table` for a command-menu table snippet.
  *
  * Each provider fetches fresh data from the index on trigger — O(1) lookups
  * per spec. `provideCompletionItems` may return a Promise, so async `invoke`
@@ -154,6 +155,49 @@ export function useMonacoCompletions(
               detail: a.value || undefined,
               range,
             })),
+          };
+        },
+      }),
+    );
+
+    // 5. `!table` — command-menu trigger inserting an AsciiDoc table
+    // snippet (2 columns, 1 row) with tab stops over each cell. `!` is used
+    // instead of `/` because `/` already appears constantly in ordinary
+    // AsciiDoc text (URLs, image::/xref::/include:: paths, `//` comments),
+    // which would otherwise pop the suggestion widget on nearly every slash.
+    disposers.push(
+      monaco.languages.registerCompletionItemProvider(ADOC_LANGUAGE, {
+        triggerCharacters: ["!"],
+        provideCompletionItems(model, position) {
+          const match = lineUpToCursor(model, position).match(/!(\w*)$/);
+          if (!match) return null;
+          const range: Monaco.IRange = {
+            startLineNumber: position.lineNumber,
+            startColumn: position.column - match[0].length,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          };
+          return {
+            suggestions: [
+              {
+                label: "!table",
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                detail: "Таблица AsciiDoc (2 колонки, 1 строка)",
+                filterText: "!table",
+                insertText:
+                  '[cols="1,1"]\n' +
+                  "|===\n" +
+                  "| ${1:Колонка A} | ${2:Колонка B}\n" +
+                  "\n" +
+                  "| ${3:Значение 1} | ${4:Значение 2}\n" +
+                  "|===\n" +
+                  "$0",
+                insertTextRules:
+                  monaco.languages.CompletionItemInsertTextRule
+                    .InsertAsSnippet,
+                range,
+              },
+            ],
           };
         },
       }),
