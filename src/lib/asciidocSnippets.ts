@@ -25,7 +25,7 @@ export const ASCIIDOC_SNIPPET_CATEGORIES: {
 export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
   {
     id: "doc-title",
-    label: "Заголовок документа",
+    label: "Заголовок документа (1 уровень)",
     category: "structure",
     description: "Заголовок первого уровня (=)",
     template: `= Заголовок документа
@@ -34,7 +34,7 @@ export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
   },
   {
     id: "doc-attrs",
-    label: "Атрибуты документа",
+    label: "Секция оглавления",
     category: "structure",
     description: "Нумерация разделов и оглавление слева",
     template: `:sectnums:
@@ -47,7 +47,7 @@ export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
   },
   {
     id: "section",
-    label: "Раздел",
+    label: "Раздел (2 уровень)",
     category: "structure",
     description: "Заголовок второго уровня (==)",
     template: `== Заголовок раздела
@@ -57,10 +57,10 @@ export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
   },
   {
     id: "subsection",
-    label: "Подраздел",
+    label: "Подраздел (3 уровень) со ссылкой",
     category: "structure",
     description: "Заголовок третьего уровня (===)",
-    template: `=== Подраздел
+    template: `=== Подраздел link:../_external/service/method.adoc[Метод]
 
 Текст подраздела.
 `,
@@ -104,23 +104,6 @@ export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
 `,
   },
   {
-    id: "http-method",
-    label: "HTTP-метод",
-    category: "structure",
-    description: "Таблица метода, URL и описания",
-    template: `== HTTP-метод
-
-[cols="1,4"]
-|===
-| Метод | \`POST\`
-
-| URL | \`/api/v1/example\`
-
-| Описание | Краткое описание метода.
-|===
-`,
-  },
-  {
     id: "simple-table",
     label: "Таблица",
     category: "tables",
@@ -134,20 +117,69 @@ export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
 `,
   },
   {
-    id: "request-params",
+    id: "http-method",
     label: "Параметры запроса",
     category: "tables",
-    description: "Таблица параметров запроса",
-    template: `== Параметры запроса
+    description: "Таблица метода, URL и описания",
+    template: `== Входные параметры
 
-[cols="2,1,1,4"]
+[cols="1,1,1,1,3,1"]
 |===
-| Параметр | Тип | Обязательный | Описание
+| *Тип параметра*   | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*
 
-| paramName
+|Метод            5+| POST
+|Endpoint         5+| corp-
+
+| Header          
+| A-userId     
 | string
-| Да
-| Описание параметра
+| required
+| X-pin клиента, инициатора запроса
+| XAAAAA
+
+| Header          
+| A-userIp    
+| string
+| optional
+| Ip-адресс клиента
+| 64.233.165.113
+
+| Header          
+| A-customerId  
+| string
+| required
+| U-pin клиента, инициатора запроса
+| UAAAAA
+
+| Header          
+| A-projectId
+| string
+| required
+| Идентификатор приложения инициатора запроса
+| WOWTAX
+
+| Header          
+| A-clientType
+| string
+| required
+| Тип сервиса инициатора запроса
+| FRONT
+
+| Header          
+| A-channelId
+| string
+| required
+| Идентификатор вызывающей системы (канала) NIB/ABM/BAAS
+| NIB
+
+6+| Тело запроса
+
+| Body          
+| -
+| -
+| required
+| -
+| -
 |===
 `,
   },
@@ -158,13 +190,31 @@ export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
     description: "Таблица полей ответа",
     template: `== Поля ответа
 
-[cols="2,1,4"]
+[cols="1,1,3,1"]
 |===
-| Поле | Тип | Описание
+| Параметр | Формат | Описание | Варианты значений
 
 | fieldName
 | string
-| Описание поля
+| description
+| values
+|===
+`,
+  },
+  {
+    id: "validation-fields",
+    label: "Поля валидации",
+    category: "tables",
+    description: "Таблица полей валидации",
+    template: `== Поля валидации
+
+[cols="1,1,1"]
+|===
+| Параметр | Условие | Результат 
+
+| param
+| condition
+| result
 |===
 `,
   },
@@ -175,12 +225,14 @@ export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
     description: "Таблица кодов и сообщений об ошибках",
     template: `== Коды ошибок
 
-[cols="1,4"]
+[cols="1,1,2,2"]
 |===
-| Код | Описание
+| Type | Error Code | Message | Описание
 
-| errorCode
-| Текст сообщения об ошибке
+| ValidationException
+| validationError
+| Some of input parameters are incorrect
+| Входные параметры не прошли валидацию
 |===
 `,
   },
@@ -221,7 +273,7 @@ ____
   },
   {
     id: "note",
-    label: "NOTE",
+    label: "ЗАМЕТКА",
     category: "examples",
     description: "Блок заметки",
     template: `NOTE: Текст заметки.
@@ -229,7 +281,7 @@ ____
   },
   {
     id: "tip",
-    label: "TIP",
+    label: "ПОДСКАЗКА",
     category: "examples",
     description: "Блок подсказки",
     template: `TIP: Полезная подсказка.
@@ -237,7 +289,7 @@ ____
   },
   {
     id: "warning",
-    label: "WARNING",
+    label: "ПРЕДУПРЕЖДЕНИЕ",
     category: "examples",
     description: "Блок предупреждения",
     template: `WARNING: Текст предупреждения.
@@ -245,7 +297,7 @@ ____
   },
   {
     id: "important",
-    label: "IMPORTANT",
+    label: "ВАЖНО",
     category: "examples",
     description: "Блок важной информации",
     template: `IMPORTANT: Важная информация.
