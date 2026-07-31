@@ -5,6 +5,8 @@ export type MenuActionId =
   | "file.save"
   | "file.closeProject"
   | "file.exit"
+  | "edit.undo"
+  | "edit.redo"
   | "view.toggleSidebar"
   | "view.toggleRight"
   | "view.toggleBottom"

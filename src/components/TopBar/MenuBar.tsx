@@ -48,8 +48,8 @@ const MENUS: MenuDef[] = [
     id: "edit",
     label: "Правка",
     items: [
-      { type: "item", id: "undo", label: "Отменить", disabled: true },
-      { type: "item", id: "redo", label: "Повторить", disabled: true },
+      { type: "item", id: "undo", label: "Отменить", action: "edit.undo" },
+      { type: "item", id: "redo", label: "Повторить", action: "edit.redo" },
       { type: "separator" },
       { type: "item", id: "cut", label: "Вырезать", disabled: true },
       { type: "item", id: "copy", label: "Копировать", disabled: true },
@@ -170,12 +170,14 @@ type MenuBarProps = {
   onAction: (action: MenuActionId) => void;
   hasProject?: boolean;
   gitBusy?: boolean;
+  hasActiveTab?: boolean;
 };
 
 export function MenuBar({
   onAction,
   hasProject = false,
   gitBusy = false,
+  hasActiveTab = false,
 }: MenuBarProps) {
   const [openId, setOpenId] = useState<string | null>(null);
   const rootRef = useRef<HTMLElement>(null);
@@ -189,6 +191,19 @@ export function MenuBar({
             if (item.id === "clone") return item;
             return { ...item, disabled: !hasProject || gitBusy };
           }),
+      };
+    }
+    if (menu.id === "edit") {
+      return {
+        ...menu,
+        items: menu.items.map((item) => {
+          if (item.type !== "item") return item;
+          if (item.id !== "undo" && item.id !== "redo") return item;
+          // Monaco's ITextModel has no public canUndo/canRedo — gate on
+          // "is a document open" rather than the exact stack state; an
+          // Undo/Redo click with nothing to do is a harmless no-op.
+          return { ...item, disabled: !hasActiveTab };
+        }),
       };
     }
     return menu;

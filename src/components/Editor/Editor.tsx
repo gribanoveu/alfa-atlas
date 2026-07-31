@@ -70,6 +70,10 @@ type EditorPaneProps = {
   docsRoot: string | null;
   gitGutter?: GitGutterConfig | null;
   editorFontSizePx: number;
+  /** Уведомляет о смене текущего экземпляра редактора (для команд Undo/Redo из меню). */
+  onEditorInstanceChange?: (
+    editor: MonacoEditor.IStandaloneCodeEditor | null,
+  ) => void;
 };
 
 const SPLIT_INITIAL_RATIO = 0.5;
@@ -98,12 +102,14 @@ export function EditorPane({
   docsRoot,
   gitGutter,
   editorFontSizePx,
+  onEditorInstanceChange,
 }: EditorPaneProps) {
   const [monaco, setMonaco] = useState<typeof Monaco | null>(null);
   const [editor, setEditor] =
     useState<MonacoEditor.IStandaloneCodeEditor | null>(null);
   const highlightRef = useRef<string[]>([]);
   const lastHandledInsertIdRef = useRef(0);
+  const knownTabIdsRef = useRef<Set<string>>(new Set());
 
   const handleMount: OnMount = useCallback(
     (editorInstance, monacoInstance) => {
@@ -121,6 +127,58 @@ export function EditorPane({
     },
     [onCursorChange],
   );
+
+  // Уведомляем App о смене активного экземпляра редактора — так команды
+  // Undo/Redo из меню «Правка» всегда бьют по текущей модели.
+  useEffect(() => {
+    onEditorInstanceChange?.(editor);
+  }, [editor, onEditorInstanceChange]);
+
+  // Модели теперь переживают переключение вкладок (см. `path`+`keepCurrentModel`
+  // на <Editor> ниже) — значит их больше не закрывает автоматически сам
+  // @monaco-editor/react. Закрываем модель ровно один раз, когда вкладка
+  // реально закрыта (а не просто неактивна), иначе память утекает с каждым
+  // закрытием вкладки.
+  //
+  // Важно: это отдельный useEffect от эффекта-«подчистки при размонтировании»
+  // ниже. Если объединить их в один (с возвратом cleanup-функции из этого же
+  // эффекта), React будет вызывать cleanup перед КАЖДЫМ повторным запуском
+  // (при каждом изменении `tabs`), закрывая вообще все модели ещё до того,
+  // как отработает сама diff-логика — а не только при реальном размонтировании.
+  useEffect(() => {
+    if (!monaco) return;
+    const currentIds = new Set(tabs.map((tab) => tab.id));
+    for (const id of knownTabIdsRef.current) {
+      if (!currentIds.has(id)) {
+        monaco.editor.getModel(monaco.Uri.parse(id))?.dispose();
+      }
+    }
+    knownTabIdsRef.current = currentIds;
+  }, [tabs, monaco]);
+
+  // EditorPane размонтируется целиком (например, закрытие проекта) —
+  // подчищаем всё, что ещё числится открытым. `monaco` — стабильная ссылка
+  // на синглтон на всё время жизни компонента, так что этот cleanup
+  // реально срабатывает только при настоящем unmount, не на каждый рендер.
+  useEffect(() => {
+    return () => {
+      if (!monaco) return;
+      for (const id of knownTabIdsRef.current) {
+        monaco.editor.getModel(monaco.Uri.parse(id))?.dispose();
+      }
+      knownTabIdsRef.current = new Set();
+    };
+  }, [monaco]);
+
+  // Если файл переименован в другое расширение уже после создания модели
+  // (модель переиспользуется по `tab.id`, а не по пути), синхронизируем язык.
+  useEffect(() => {
+    if (!monaco || !editor || !activeTab) return;
+    const model = editor.getModel();
+    if (model && model.getLanguageId() !== activeTab.language) {
+      monaco.editor.setModelLanguage(model, activeTab.language);
+    }
+  }, [monaco, editor, activeTab]);
 
   useMonacoCompletions(monaco, completionsEnabled);
   useMonacoDiagnostics(monaco, editor, diagnostics, activeTab?.path ?? null);
@@ -249,12 +307,18 @@ export function EditorPane({
     lineDecorationsWidth: 11,
   };
 
-  // Monaco монтируется единожды на активную вкладку и не размонтируется
-  // при переключении режимов просмотра — так сохраняются undo-стек и
-  // курсор. В режимах `render` он скрыт через `display: none`.
+  // `key={activeTab.id}` всё ещё пересоздаёт сам экземпляр редактора при
+  // переключении вкладок (см. большой комментарий выше про handleMount) —
+  // но `path`+`keepCurrentModel` заставляют @monaco-editor/react искать уже
+  // существующую модель по этому пути вместо того, чтобы каждый раз создавать
+  // (и молча терять) новую. Модель, а вместе с ней стек undo/redo, курсор и
+  // scroll — переживают переключение вкладок; закрывается она явно эффектом
+  // выше, когда вкладка реально закрыта.
   const monacoNode = activeTab ? (
     <Editor
       key={activeTab.id}
+      path={activeTab.id}
+      keepCurrentModel
       height="100%"
       theme={ATLAS_DARK_THEME_ID}
       language={activeTab.language}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { editor as MonacoEditor } from "monaco-editor";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { AlertOkModal } from "./components/Git/AlertOkModal";
@@ -177,6 +178,31 @@ function App() {
     onTabsChange,
     prefs: generalPrefs.prefs,
   });
+
+  // Текущий экземпляр Monaco-редактора — для команд Undo/Redo из меню
+  // «Правка». Ref, а не state: сама смена инстанса не должна вызывать
+  // перерендер App, нужен только актуальный указатель на момент клика.
+  const activeEditorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(
+    null,
+  );
+  const handleEditorInstanceChange = useCallback(
+    (instance: MonacoEditor.IStandaloneCodeEditor | null) => {
+      activeEditorRef.current = instance;
+    },
+    [],
+  );
+  const handleUndo = useCallback(() => {
+    const instance = activeEditorRef.current;
+    if (!instance) return;
+    instance.trigger("menu", "undo", null);
+    instance.focus();
+  }, []);
+  const handleRedo = useCallback(() => {
+    const instance = activeEditorRef.current;
+    if (!instance) return;
+    instance.trigger("menu", "redo", null);
+    instance.focus();
+  }, []);
   const git = useGitPanel(project.repoRoot, {
     active: Boolean(project.repoRoot),
     onBranchChange: project.setBranchFromGit,
@@ -937,6 +963,9 @@ function App() {
           if (ok) git.scheduleRefresh();
           return ok;
         }}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        hasActiveTab={editor.activeTab !== null}
         onPrefsChange={generalPrefs.setPrefs}
         onSpellcheckConfigChange={spellcheck.setConfig}
         onToggleSidebar={layout.toggleSidebar}
@@ -1081,6 +1110,7 @@ function App() {
                   : null
               }
               editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
+              onEditorInstanceChange={handleEditorInstanceChange}
             />
           ) : (
             <Welcome

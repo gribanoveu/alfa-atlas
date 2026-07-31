@@ -27,6 +27,9 @@ type TopBarProps = {
   onOpenFolder: () => Promise<unknown>;
   onCloseProject: () => Promise<void>;
   onSave: () => Promise<unknown>;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  hasActiveTab?: boolean;
   onPrefsChange?: (prefs: GeneralPrefs) => void;
   onSpellcheckConfigChange?: (config: SpellcheckConfig) => void;
   onToggleSidebar: () => void;
@@ -60,6 +63,9 @@ export function TopBar({
   onOpenFolder,
   onCloseProject,
   onSave,
+  onUndo,
+  onRedo,
+  hasActiveTab = false,
   onPrefsChange,
   onSpellcheckConfigChange,
   onToggleSidebar,
@@ -117,6 +123,12 @@ export function TopBar({
         case "file.exit":
           void invoke("exit_app");
           break;
+        case "edit.undo":
+          onUndo?.();
+          break;
+        case "edit.redo":
+          onRedo?.();
+          break;
         case "view.toggleSidebar":
           onToggleSidebar();
           break;
@@ -171,6 +183,8 @@ export function TopBar({
       onPull,
       onPush,
       onSave,
+      onUndo,
+      onRedo,
       onToggleBottom,
       onToggleGit,
       onOpenBranches,
@@ -186,6 +200,7 @@ export function TopBar({
           onAction={onAction}
           hasProject={hasProject}
           gitBusy={gitBusy}
+          hasActiveTab={hasActiveTab}
         />
         <div className="topbar-spacer" />
         <div className="topbar-right">
