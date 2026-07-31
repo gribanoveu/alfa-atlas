@@ -71,7 +71,11 @@ export function Sidebar({
   const handleRevealInExplorer = useCallback(
     (relativePath: string) => {
       if (!docsRoot) return;
-      const absolutePath = docsRoot.replace(/[/\\]+$/, "") + "/" + relativePath;
+      const root = docsRoot.replace(/[/\\]+$/, "");
+      const absolutePath =
+        relativePath === "." || relativePath === ""
+          ? root
+          : root + "/" + relativePath;
       openPath(absolutePath).catch(() => {});
     },
     [docsRoot],

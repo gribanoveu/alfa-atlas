@@ -113,5 +113,28 @@ export function useWorkspaceIndex(
     };
   }, [active, repoRoot]);
 
-  return { status, progress, stats, diagnostics, error, refreshDiagnostics };
+  // Force a full re-scan, discarding stale documents/diagnostics for files
+  // that no longer exist (e.g. deleted or renamed outside a watched event).
+  const rebuildIndex = useCallback(async () => {
+    if (!active || !repoRoot) return;
+    setStatus("building");
+    setProgress(null);
+    setError(null);
+    try {
+      await buildIndex(repoRoot);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setStatus("error");
+    }
+  }, [active, repoRoot]);
+
+  return {
+    status,
+    progress,
+    stats,
+    diagnostics,
+    error,
+    refreshDiagnostics,
+    rebuildIndex,
+  };
 }

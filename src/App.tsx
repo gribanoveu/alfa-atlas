@@ -975,7 +975,10 @@ function App() {
             expandedDirs={session.expandedDirs}
             separateExternal={generalPrefs.prefs.separateExternalFolder}
             onToggleDir={session.toggleDir}
-            onRefreshTree={() => void tree.refresh()}
+            onRefreshTree={() => {
+              void tree.refresh();
+              void workspaceIndex.rebuildIndex();
+            }}
             onExpandAll={() => session.expandAll(collectDirPaths(tree.nodes))}
             onCollapseAll={session.collapseAll}
             onOpenFile={(path) => void editor.openFile(path)}

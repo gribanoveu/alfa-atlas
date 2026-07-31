@@ -534,6 +534,24 @@ export function FileTree({
             </span>
             <span className="file-tree-context-label">Новая папка…</span>
           </button>
+          {menu.target === null ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="file-tree-context-item"
+              onClick={() => {
+                onRevealInExplorer(menu.parentPath);
+                setMenu(null);
+              }}
+            >
+              <span className="file-tree-context-icon" aria-hidden>
+                <ExternalLink size={14} strokeWidth={1.75} />
+              </span>
+              <span className="file-tree-context-label">
+                Открыть в проводнике
+              </span>
+            </button>
+          ) : null}
           {copiedItem &&
           !(copiedItem.isDir && isSelfOrDescendant(copiedItem, menu.parentPath)) ? (
             <>
