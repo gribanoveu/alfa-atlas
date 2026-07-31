@@ -6,7 +6,9 @@ import { useGitGutter } from "../../hooks/useGitGutter";
 import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
 import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
 import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
+import { useMonacoSpellcheck } from "../../hooks/useMonacoSpellcheck";
 import type { GitFileDiff } from "../../lib/git";
+import type { SpellcheckConfig } from "../../lib/spellcheck";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
 import type { EditorViewMode } from "../../types/viewMode";
@@ -53,6 +55,7 @@ type EditorPaneProps = {
   onCursorChange: (cursor: CursorPosition) => void;
   diagnostics: Diagnostic[];
   completionsEnabled: boolean;
+  spellcheckConfig: SpellcheckConfig;
   /** Запрос на переход к строке с диагностикой (из Problems panel). */
   revealRequest: RevealRequest | null;
   /** Запрос на вставку AsciiDoc-шаблона в позицию курсора. */
@@ -84,6 +87,7 @@ export function EditorPane({
   onCursorChange,
   diagnostics,
   completionsEnabled,
+  spellcheckConfig,
   revealRequest,
   insertRequest,
   onOpenProblems,
@@ -119,6 +123,7 @@ export function EditorPane({
 
   useMonacoCompletions(monaco, completionsEnabled);
   useMonacoDiagnostics(monaco, editor, diagnostics, activeTab?.path ?? null);
+  useMonacoSpellcheck(monaco, editor, activeTab, spellcheckConfig);
   useMonacoErrorsWidget(
     editor,
     diagnostics,

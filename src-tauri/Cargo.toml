@@ -34,4 +34,5 @@ keyring = "3"
 aes-gcm = "0.10"
 rand = "0.8"
 ssh-key = { version = "0.6", features = ["ed25519"] }
+spellbook = "0.4.2"
 

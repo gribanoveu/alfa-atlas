@@ -36,6 +36,7 @@ import { useBranches } from "./hooks/useBranches";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
+import { useSpellcheckConfig } from "./hooks/useSpellcheckConfig";
 import { useGitPanel } from "./hooks/useGitPanel";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
@@ -156,6 +157,7 @@ function App() {
   const viewMode = useEditorViewMode();
   const project = useProject();
   const generalPrefs = useGeneralPrefs();
+  const spellcheck = useSpellcheckConfig();
   const panels = usePanelLayout(project.repoRoot, {
     onCollapseSidebar: () => layout.setSidebarOpen(false),
     onCollapseRight: () => layout.setRightTool(null),
@@ -936,6 +938,7 @@ function App() {
           return ok;
         }}
         onPrefsChange={generalPrefs.setPrefs}
+        onSpellcheckConfigChange={spellcheck.setConfig}
         onToggleSidebar={layout.toggleSidebar}
         onToggleRight={toggleRightPanel}
         onToggleBottom={toggleBottomPanel}
@@ -1060,6 +1063,7 @@ function App() {
               onCursorChange={editor.setCursor}
               diagnostics={editorDiagnostics}
               completionsEnabled={workspaceIndex.status !== "idle"}
+              spellcheckConfig={spellcheck.config}
               revealRequest={revealRequest}
               insertRequest={insertRequest}
               onOpenProblems={openProblems}

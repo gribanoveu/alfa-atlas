@@ -213,6 +213,8 @@ pub struct AppSettings {
     pub general: GeneralPrefs,
     #[serde(default)]
     pub standards: crate::domain::standards::StandardsRuleConfig,
+    #[serde(default)]
+    pub spellcheck: crate::domain::spellcheck::SpellcheckConfig,
 }
 
 #[derive(Debug, Error)]
@@ -296,6 +298,14 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
         assert!(settings.standards.rules.is_empty());
+    }
+
+    #[test]
+    fn deserializes_legacy_settings_without_spellcheck() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
+        assert!(settings.spellcheck.enabled);
+        assert!(settings.spellcheck.dictionaries.is_empty());
     }
 
     #[test]

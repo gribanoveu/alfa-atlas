@@ -6,6 +6,7 @@ import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
 import type { GeneralPrefs } from "../../lib/prefs";
 import type { ProbeResult } from "../../lib/git";
+import type { SpellcheckConfig } from "../../lib/spellcheck";
 import { SettingsDialog } from "../Settings/SettingsDialog";
 import type { SectionId } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
@@ -27,6 +28,7 @@ type TopBarProps = {
   onCloseProject: () => Promise<void>;
   onSave: () => Promise<unknown>;
   onPrefsChange?: (prefs: GeneralPrefs) => void;
+  onSpellcheckConfigChange?: (config: SpellcheckConfig) => void;
   onToggleSidebar: () => void;
   onToggleRight: () => void;
   onToggleBottom: () => void;
@@ -59,6 +61,7 @@ export function TopBar({
   onCloseProject,
   onSave,
   onPrefsChange,
+  onSpellcheckConfigChange,
   onToggleSidebar,
   onToggleRight,
   onToggleBottom,
@@ -278,6 +281,7 @@ export function TopBar({
           }}
           onCloseProject={onCloseProject}
           onPrefsChange={onPrefsChange}
+          onSpellcheckConfigChange={onSpellcheckConfigChange}
           initialSection={settingsInitialSection}
         />
       ) : null}

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
 
 use crate::infra::parsers::registry::ParserRegistry;
+use crate::services::spellcheck::SpellcheckEngine;
 use crate::services::workspace_index::WorkspaceIndex;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -98,6 +99,7 @@ pub fn run() {
                 index.set_app_handle(window.app_handle().clone());
             }
             app.manage(index);
+            app.manage(Arc::new(SpellcheckEngine::load()));
 
             Ok(())
         })
@@ -196,6 +198,14 @@ pub fn run() {
             commands::standards::get_standards_config,
             commands::standards::set_standards_config,
             commands::standards::check_standards,
+            commands::spellcheck::get_dictionaries,
+            commands::spellcheck::get_spellcheck_config,
+            commands::spellcheck::set_spellcheck_config,
+            commands::spellcheck::check_spelling,
+            commands::spellcheck::suggest_spelling,
+            commands::spellcheck::get_custom_dictionary_words,
+            commands::spellcheck::add_custom_dictionary_word,
+            commands::spellcheck::remove_custom_dictionary_word,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

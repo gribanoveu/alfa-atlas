@@ -1,3 +1,5 @@
+pub mod custom_dictionary_store;
+pub mod dictionary_assets;
 pub mod git_credentials_store;
 pub mod git_repo;
 pub mod key_management;

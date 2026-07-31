@@ -9,6 +9,8 @@ pub mod gitignore;
 pub mod git_ops;
 pub mod project_layout;
 pub mod project_open;
+pub mod spellcheck;
+pub mod spellcheck_prefs;
 pub mod standards;
 pub mod standards_messages;
 pub mod standards_prefs;

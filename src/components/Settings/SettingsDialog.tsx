@@ -14,9 +14,11 @@ import {
   type SettingsPaths,
 } from "../../lib/prefs";
 import { SUPPORTED_FORMAT_LABELS } from "../../lib/supportedFiles";
+import type { SpellcheckConfig } from "../../lib/spellcheck";
 import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
 import { CredentialsTab } from "./CredentialsTab";
+import { SpellcheckTab } from "./SpellcheckTab";
 import { StandardsRulesTab } from "./StandardsRulesTab";
 
 export type SectionId =
@@ -25,7 +27,8 @@ export type SectionId =
   | "formats"
   | "paths"
   | "credentials"
-  | "standards";
+  | "standards"
+  | "spellcheck";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "Общие" },
@@ -34,6 +37,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "paths", label: "Пути" },
   { id: "credentials", label: "Git" },
   { id: "standards", label: "Стандарты" },
+  { id: "spellcheck", label: "Орфография" },
 ];
 
 type FontSizePrefKey =
@@ -84,6 +88,7 @@ type SettingsDialogProps = {
   onClose: () => void;
   onCloseProject?: () => Promise<void>;
   onPrefsChange?: (prefs: GeneralPrefs) => void;
+  onSpellcheckConfigChange?: (config: SpellcheckConfig) => void;
   initialSection?: SectionId;
 };
 
@@ -91,6 +96,7 @@ export function SettingsDialog({
   projectRoot,
   onClose,
   onPrefsChange,
+  onSpellcheckConfigChange,
   initialSection,
 }: SettingsDialogProps) {
   const [section, setSection] = useState<SectionId>(initialSection ?? "general");
@@ -559,6 +565,10 @@ export function SettingsDialog({
             {section === "credentials" ? <CredentialsTab /> : null}
 
             {section === "standards" ? <StandardsRulesTab /> : null}
+
+            {section === "spellcheck" ? (
+              <SpellcheckTab onConfigChange={onSpellcheckConfigChange} />
+            ) : null}
 
             {error ? <div className="settings-error">{error}</div> : null}
           </div>
