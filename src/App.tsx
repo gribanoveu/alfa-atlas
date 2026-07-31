@@ -42,6 +42,7 @@ import { useProject } from "./hooks/useProject";
 import { useAsciiDocParser } from "./hooks/useAsciiDocParser";
 import { useEditorViewMode } from "./hooks/useEditorViewMode";
 import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
+import { useStandardsCheck } from "./hooks/useStandardsCheck";
 import { findAnchors } from "./lib/workspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
@@ -303,6 +304,10 @@ function App() {
   const workspaceIndex = useWorkspaceIndex(project.repoRoot, {
     active: hasProject,
   });
+  const standards = useStandardsCheck(project.docsRoot, {
+    active: hasProject,
+  });
+  const [standardsSettingsSignal, setStandardsSettingsSignal] = useState(0);
 
   useEffect(() => {
     if (layout.activeTool === "branches" && hasProject) {
@@ -955,6 +960,7 @@ function App() {
         onCloneProject={async (cloned) => {
           project.submitProbe(cloned);
         }}
+        openStandardsSettingsSignal={standardsSettingsSignal}
       />
       <div className="workspace">
         <div className={mainClassName}>
@@ -1165,6 +1171,14 @@ function App() {
                   onOpenCommitFileDiff: openCommitFileDiff,
                 }
               : null
+          }
+          standardsReport={standards.report}
+          standardsStatus={standards.status}
+          standardsError={standards.error}
+          standardsActiveDocsPath={activePath}
+          onRunStandardsCheck={() => void standards.runCheck()}
+          onOpenStandardsSettings={() =>
+            setStandardsSettingsSignal((n) => n + 1)
           }
         />
       </div>

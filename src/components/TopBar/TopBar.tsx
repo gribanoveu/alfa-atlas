@@ -1,7 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, CloudUpload, FolderOpen } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
 import type { GeneralPrefs } from "../../lib/prefs";
@@ -42,6 +42,8 @@ type TopBarProps = {
   onOpenPushConfirm?: () => void;
   onSelectProject?: (root: string) => void;
   onCloneProject?: (probe: ProbeResult) => Promise<void>;
+  /** Bump this (e.g. `n => n + 1`) to open Settings on the "standards" tab. */
+  openStandardsSettingsSignal?: number;
 };
 
 export function TopBar({
@@ -72,12 +74,26 @@ export function TopBar({
   onOpenPushConfirm,
   onSelectProject,
   onCloneProject,
+  openStandardsSettingsSignal,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
+  const standardsSignalRef = useRef(openStandardsSettingsSignal);
+
+  useEffect(() => {
+    if (
+      openStandardsSettingsSignal === undefined ||
+      openStandardsSettingsSignal === standardsSignalRef.current
+    ) {
+      return;
+    }
+    standardsSignalRef.current = openStandardsSettingsSignal;
+    setSettingsInitialSection("standards");
+    setSettingsOpen(true);
+  }, [openStandardsSettingsSignal]);
 
   const onAction = useCallback(
     (action: MenuActionId) => {

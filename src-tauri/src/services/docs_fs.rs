@@ -197,7 +197,7 @@ pub fn create_project_dir(docs_root: &str, relative_path: &str) -> Result<(), Pr
 
 /// Create a new folder populated with the REST-endpoint template set:
 /// `{method_name}.adoc` (from the method template) plus `request.adoc`,
-/// `response.adoc`, and `sequence_diagramm.puml` copied as-is from
+/// `response.adoc`, and `{method_name}.puml` copied from
 /// `src/templates/asciidoc/rest-endpoint`.
 pub fn create_rest_endpoint_folder(
     docs_root: &str,
@@ -214,10 +214,13 @@ pub fn create_rest_endpoint_folder(
         }
     };
 
-    create_project_file_from_template(
+    let method_content = AsciidocFileTemplate::Method
+        .content()
+        .replace("sequence_diagramm", method_name);
+    create_project_file_with_content(
         docs_root,
         &child_path(&format!("{method_name}.adoc")),
-        Some(AsciidocFileTemplate::Method),
+        &method_content,
     )?;
     create_project_file_from_template(
         docs_root,
@@ -231,7 +234,7 @@ pub fn create_rest_endpoint_folder(
     )?;
     create_project_file_with_content(
         docs_root,
-        &child_path("sequence_diagramm.puml"),
+        &child_path(&format!("{method_name}.puml")),
         SEQUENCE_DIAGRAM_TEMPLATE,
     )?;
 
@@ -488,9 +491,9 @@ mod tests {
             names,
             vec![
                 "getUserProfile.adoc",
+                "getUserProfile.puml",
                 "request.adoc",
                 "response.adoc",
-                "sequence_diagramm.puml",
             ]
         );
 
@@ -498,6 +501,7 @@ mod tests {
             read_project_file(root.to_str().unwrap(), "getUserProfile/getUserProfile.adoc")
                 .unwrap();
         assert!(method_content.contains("Метод Template"));
+        assert!(method_content.contains("include::getUserProfile.puml[]"));
 
         fs::remove_dir_all(&root).ok();
     }

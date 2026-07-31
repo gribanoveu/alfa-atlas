@@ -17,8 +17,15 @@ import { SUPPORTED_FORMAT_LABELS } from "../../lib/supportedFiles";
 import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
 import { CredentialsTab } from "./CredentialsTab";
+import { StandardsRulesTab } from "./StandardsRulesTab";
 
-export type SectionId = "general" | "editor" | "formats" | "paths" | "credentials";
+export type SectionId =
+  | "general"
+  | "editor"
+  | "formats"
+  | "paths"
+  | "credentials"
+  | "standards";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "Общие" },
@@ -26,6 +33,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "formats", label: "Файлы" },
   { id: "paths", label: "Пути" },
   { id: "credentials", label: "Git" },
+  { id: "standards", label: "Стандарты" },
 ];
 
 type FontSizePrefKey =
@@ -549,6 +557,8 @@ export function SettingsDialog({
             ) : null}
 
             {section === "credentials" ? <CredentialsTab /> : null}
+
+            {section === "standards" ? <StandardsRulesTab /> : null}
 
             {error ? <div className="settings-error">{error}</div> : null}
           </div>

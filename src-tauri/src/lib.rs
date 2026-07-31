@@ -192,6 +192,10 @@ pub fn run() {
             commands::workspace_index::get_diagnostics_for,
             commands::asciidoc::submit_asciidoc_facts,
             commands::asciidoc::frontend_ready,
+            commands::standards::get_standards_rules,
+            commands::standards::get_standards_config,
+            commands::standards::set_standards_config,
+            commands::standards::check_standards,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

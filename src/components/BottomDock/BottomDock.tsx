@@ -1,10 +1,13 @@
 import type { BottomTool } from "../../hooks/useWorkspaceLayout";
+import type { StandardsCheckStatus } from "../../hooks/useStandardsCheck";
 import type { GitCommitSummary, GitFileStatus } from "../../lib/git";
+import type { StandardsReport } from "../../lib/standards";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import { CommitHistoryPanel } from "../RightDock/CommitHistoryPanel";
 import { ProblemsPanel } from "./ProblemsPanel";
+import { StandardsPanel } from "./StandardsPanel";
 import "./BottomDock.css";
 
 type ToolMeta = { id: BottomTool; label: string; empty: string };
@@ -48,6 +51,12 @@ type BottomDockProps = {
     onLoadCommitFiles: (commitHash: string) => Promise<GitFileStatus[] | null>;
     onOpenCommitFileDiff: (commitHash: string, file: GitFileStatus) => void;
   } | null;
+  standardsReport: StandardsReport | null;
+  standardsStatus: StandardsCheckStatus;
+  standardsActiveDocsPath: string | null;
+  standardsError: string | null;
+  onRunStandardsCheck: () => void;
+  onOpenStandardsSettings: () => void;
 };
 
 export function BottomDock({
@@ -60,6 +69,12 @@ export function BottomDock({
   activeDocumentId,
   onOpenDiagnostic,
   gitHistory,
+  standardsReport,
+  standardsStatus,
+  standardsError,
+  standardsActiveDocsPath,
+  onRunStandardsCheck,
+  onOpenStandardsSettings,
 }: BottomDockProps) {
   const open = Boolean(activeTool);
   const active = TOOLS.find((tool) => tool.id === activeTool);
@@ -67,6 +82,8 @@ export function BottomDock({
   const errorCount = diagnostics.filter((d) => d.severity === "error").length;
   const warningCount = diagnostics.filter((d) => d.severity === "warning")
     .length;
+  const standardsFailCount =
+    standardsReport?.folders.filter((f) => !f.passed).length ?? 0;
 
   return (
     <aside className={`bottom-dock ${open ? "is-open" : "is-collapsed"}`}>
@@ -101,6 +118,15 @@ export function BottomDock({
                 activeDocumentId={activeDocumentId}
                 onOpenDiagnostic={onOpenDiagnostic}
               />
+            ) : active.id === "formatting" ? (
+              <StandardsPanel
+                report={standardsReport}
+                status={standardsStatus}
+                error={standardsError}
+                activeDocsPath={standardsActiveDocsPath}
+                onRunCheck={onRunStandardsCheck}
+                onOpenSettings={onOpenStandardsSettings}
+              />
             ) : active.id === "gitHistory" && gitHistory ? (
               <CommitHistoryPanel
                 commits={gitHistory.commits}
@@ -120,17 +146,20 @@ export function BottomDock({
       <nav className="bottom-stripe" aria-label="Bottom tool windows">
         {TOOLS.map((tool) => {
           const isProblems = tool.id === "problems";
+          const isStandards = tool.id === "formatting";
           const badge =
             isProblems && (errorCount > 0 || warningCount > 0)
               ? errorCount > 0
                 ? `${errorCount}`
                 : `${warningCount}`
-              : null;
+              : isStandards && standardsFailCount > 0
+                ? `${standardsFailCount}`
+                : null;
           return (
             <button
               key={tool.id}
               type="button"
-              className={`bottom-stripe-btn ${activeTool === tool.id ? "active" : ""} ${isProblems && errorCount > 0 ? "has-errors" : ""}`}
+              className={`bottom-stripe-btn ${activeTool === tool.id ? "active" : ""} ${(isProblems && errorCount > 0) || (isStandards && standardsFailCount > 0) ? "has-errors" : ""}`}
               title={tool.label}
               aria-pressed={activeTool === tool.id}
               onClick={() => onToggleTool(tool.id)}
@@ -138,7 +167,7 @@ export function BottomDock({
               {tool.label}
               {badge !== null ? (
                 <span
-                  className={`bottom-stripe-badge ${errorCount > 0 ? "errors" : "warnings"}`}
+                  className={`bottom-stripe-badge ${errorCount > 0 || standardsFailCount > 0 ? "errors" : "warnings"}`}
                 >
                   {badge}
                 </span>

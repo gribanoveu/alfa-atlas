@@ -5,6 +5,7 @@ pub mod layout;
 pub mod paths;
 pub mod project_config;
 pub mod settings;
+pub mod standards;
 pub mod supported_files;
 pub mod workspace;
 pub mod workspace_index;

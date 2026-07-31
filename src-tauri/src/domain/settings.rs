@@ -211,6 +211,8 @@ pub struct AppSettings {
     pub project: ProjectSettings,
     #[serde(default)]
     pub general: GeneralPrefs,
+    #[serde(default)]
+    pub standards: crate::domain::standards::StandardsRuleConfig,
 }
 
 #[derive(Debug, Error)]
@@ -287,6 +289,13 @@ mod tests {
         assert_eq!(state.x, None);
         assert_eq!(state.y, None);
         assert!(!state.maximized);
+    }
+
+    #[test]
+    fn deserializes_legacy_settings_without_standards() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
+        assert!(settings.standards.rules.is_empty());
     }
 
     #[test]

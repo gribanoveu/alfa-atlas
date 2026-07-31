@@ -62,25 +62,25 @@ version: "1.0"
 | string
 | optional
 | Комментарий к документу
-|
+| -
 
 | items
 | array
 | required
 | Список позиций документа
-|
+| -
 
 | items[].name
 | string
 | required
 | Наименование позиции
-|
+| - 
 
 | items[].amount
 | number
 | required
 | Сумма по позиции
-|
+| -
 |===
 
 [#request-body-example,role="request-body-example"]

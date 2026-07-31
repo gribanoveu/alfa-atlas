@@ -157,7 +157,7 @@ export function NewFolderModal({
           <div className="clone-modal-message">
             Будет создана папка «{name.trim() || "…"}» с файлами{" "}
             <b>{(name.trim() || "methodName") + ".adoc"}</b>, request.adoc,
-            response.adoc и sequence_diagramm.puml.
+            response.adoc и {(name.trim() || "methodName") + ".puml"}.
           </div>
         ) : null}
 

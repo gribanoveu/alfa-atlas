@@ -1,0 +1,293 @@
+.standards-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Never sticky-positioned, never shrunk below its content — the toolbar
+   buttons must always render in full instead of being clipped by a short
+   bottom-dock, and a static block avoids the sticky-vs-sticky stacking gap
+   that let scrolled list content show through between the two rows. */
+.standards-header {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+}
+
+.standards-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.standards-toolbar-left,
+.standards-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.standards-scope {
+  display: flex;
+  gap: 2px;
+}
+
+.standards-scope-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.standards-scope-btn:hover {
+  color: var(--text-0);
+  background: var(--bg-1);
+}
+
+.standards-scope-btn.active {
+  color: var(--text-0);
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+
+.standards-scope-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: var(--font-ui-xs);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.standards-scope-btn.active .standards-scope-count {
+  background: var(--accent);
+  color: #fff;
+}
+
+.standards-run-btn,
+.standards-settings-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-1);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.standards-run-btn:hover,
+.standards-settings-btn:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.standards-run-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.standards-summary-row {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.standards-summary {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.standards-spin {
+  animation: standards-spin 0.9s linear infinite;
+}
+
+@keyframes standards-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.standards-error {
+  padding: 6px 10px;
+  font-size: var(--font-ui-sm);
+  color: #e5534b;
+}
+
+.standards-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.standards-folders {
+  display: flex;
+  flex-direction: column;
+}
+
+.standards-folder-group {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+
+.standards-folder-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-1);
+  background: var(--bg-1);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.standards-folder-status.pass {
+  color: #3fb950;
+}
+
+.standards-folder-status.fail {
+  color: #e5534b;
+}
+
+.standards-folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.standards-folder-score {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: var(--font-ui-xs);
+  font-weight: 700;
+}
+
+.standards-folder-score.pass {
+  background: rgba(63, 185, 80, 0.18);
+  color: #3fb950;
+}
+
+.standards-folder-score.fail {
+  background: rgba(229, 83, 75, 0.18);
+  color: #e5534b;
+}
+
+.standards-folder-empty {
+  padding: 6px 10px 6px 24px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.standards-findings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.standards-findings-list li {
+  padding: 4px 10px 4px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.standards-findings-list li:last-child {
+  border-bottom: none;
+}
+
+.standards-finding-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-ui-sm);
+}
+
+.standards-finding-icon {
+  flex: none;
+  display: inline-flex;
+}
+
+.standards-finding-icon.pass {
+  color: #3fb950;
+}
+
+.standards-finding-icon.fail {
+  color: #e5534b;
+}
+
+.standards-finding-rule {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.standards-finding-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-0);
+}
+
+.standards-finding-weight {
+  flex: none;
+  min-width: 18px;
+  text-align: right;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.standards-findings-list li.passed .standards-finding-title,
+.standards-findings-list li.passed .standards-finding-rule {
+  color: var(--text-2);
+}
+
+.standards-finding-message {
+  margin-top: 2px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.standards-toggle-all {
+  align-self: flex-start;
+  margin: 2px 0 4px 24px;
+  padding: 0;
+  font-size: var(--font-ui-xs);
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.standards-toggle-all:hover {
+  text-decoration: underline;
+}
