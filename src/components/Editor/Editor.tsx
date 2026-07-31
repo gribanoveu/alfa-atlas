@@ -6,6 +6,7 @@ import { useGitGutter } from "../../hooks/useGitGutter";
 import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
 import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
 import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
+import { useMonacoOutline } from "../../hooks/useMonacoOutline";
 import { useMonacoSpellcheck } from "../../hooks/useMonacoSpellcheck";
 import type { GitFileDiff } from "../../lib/git";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
@@ -181,6 +182,7 @@ export function EditorPane({
   }, [monaco, editor, activeTab]);
 
   useMonacoCompletions(monaco, completionsEnabled);
+  useMonacoOutline(monaco);
   useMonacoDiagnostics(monaco, editor, diagnostics, activeTab?.path ?? null);
   useMonacoSpellcheck(monaco, editor, activeTab, spellcheckConfig);
   useMonacoErrorsWidget(
@@ -305,6 +307,12 @@ export function EditorPane({
     wordWrap: "on",
     glyphMargin: true,
     lineDecorationsWidth: 11,
+    // On by default in Monaco already — set explicitly so the intent is
+    // visible here rather than relying on an unstated library default.
+    // Only actually pins anything for AsciiDoc, fed by useMonacoOutline's
+    // DocumentSymbolProvider (sections, table headers, admonition/titled
+    // blocks) — other languages fall back to indentation-based sticky lines.
+    stickyScroll: { enabled: true },
   };
 
   // `key={activeTab.id}` всё ещё пересоздаёт сам экземпляр редактора при
