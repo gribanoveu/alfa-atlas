@@ -39,8 +39,8 @@ const TOOL_DEFS: Record<
     Icon: GitCommitHorizontal,
   },
   suggestions: {
-    label: "Подсказки",
-    empty: "Нет активных подсказок",
+    label: "Уведомления",
+    empty: "Нет активных уведомлений",
     Icon: Lightbulb,
   },
   asciidoc: {
@@ -50,12 +50,11 @@ const TOOL_DEFS: Record<
   },
 };
 
-/** Stripe order: assistant on top, git tools grouped, editor tools below. */
+/** Stripe order: notifications + assistant grouped on top, then git tools, then editor tools. */
 const TOOL_STRIPE_GROUPS: RightTool[][] = [
-  ["assistant"],
+  ["suggestions", "assistant"],
   ["branches", "git"],
   ["asciidoc"],
-  ["suggestions"],
 ];
 
 export type GitPanelViewProps = {
