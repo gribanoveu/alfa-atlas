@@ -38,3 +38,65 @@ export function toRepoRelativePath(
   if (!suffix) return rel;
   return `${suffix}/${rel}`;
 }
+
+/** Collapse `.`/`..` segments in a `/`-joined relative path. */
+function normalizeRelativePath(p: string): string {
+  const norm = p.replace(/\\/g, "/");
+  const stack: string[] = [];
+  for (const segment of norm.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      stack.pop();
+      continue;
+    }
+    stack.push(segment);
+  }
+  return stack.join("/") || ".";
+}
+
+/**
+ * Resolve `target` (an `include::`/`image::`/`xref:` macro target, possibly
+ * with a leading `./`/`../`) against the directory of
+ * `sourceDocsRelativePath` — both docs-root-relative, matching what
+ * `editor.openFile` expects. Collapses `.`/`..` segments.
+ */
+export function resolveRelativeToDocument(
+  target: string,
+  sourceDocsRelativePath: string,
+): string {
+  const baseDir = sourceDocsRelativePath.includes("/")
+    ? sourceDocsRelativePath.slice(0, sourceDocsRelativePath.lastIndexOf("/"))
+    : "";
+  const combined = baseDir ? `${baseDir}/${target}` : target;
+  return normalizeRelativePath(combined);
+}
+
+/**
+ * Inverse of `resolveRelativeToDocument`: the shortest relative path from
+ * the directory of `sourceDocsRelativePath` to `targetDocsRelativePath`
+ * (both docs-root-relative) — used when inserting a new `include::`/
+ * `image::`/`xref:` target so it's written relative to the current file,
+ * matching how every existing reference in this codebase is authored.
+ */
+export function relativizeToDocument(
+  targetDocsRelativePath: string,
+  sourceDocsRelativePath: string,
+): string {
+  const sourceDir = sourceDocsRelativePath.includes("/")
+    ? sourceDocsRelativePath.slice(0, sourceDocsRelativePath.lastIndexOf("/")).split("/")
+    : [];
+  const targetParts = targetDocsRelativePath.split("/").filter(Boolean);
+
+  let common = 0;
+  while (
+    common < sourceDir.length &&
+    common < targetParts.length &&
+    sourceDir[common] === targetParts[common]
+  ) {
+    common += 1;
+  }
+
+  const upCount = sourceDir.length - common;
+  const parts = [...Array(upCount).fill(".."), ...targetParts.slice(common)];
+  return parts.join("/");
+}

@@ -4,6 +4,7 @@ import type { editor as MonacoEditor } from "monaco-editor";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useGitGutter } from "../../hooks/useGitGutter";
 import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
+import { useMonacoDefinitions } from "../../hooks/useMonacoDefinitions";
 import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
 import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
 import { useMonacoOutline } from "../../hooks/useMonacoOutline";
@@ -75,6 +76,8 @@ type EditorPaneProps = {
   onEditorInstanceChange?: (
     editor: MonacoEditor.IStandaloneCodeEditor | null,
   ) => void;
+  /** Уведомляет о готовности monaco-неймспейса (для Ctrl+Click «перейти к файлу»). */
+  onMonacoInstanceChange?: (monaco: typeof Monaco | null) => void;
 };
 
 const SPLIT_INITIAL_RATIO = 0.5;
@@ -104,6 +107,7 @@ export function EditorPane({
   gitGutter,
   editorFontSizePx,
   onEditorInstanceChange,
+  onMonacoInstanceChange,
 }: EditorPaneProps) {
   const [monaco, setMonaco] = useState<typeof Monaco | null>(null);
   const [editor, setEditor] =
@@ -134,6 +138,10 @@ export function EditorPane({
   useEffect(() => {
     onEditorInstanceChange?.(editor);
   }, [editor, onEditorInstanceChange]);
+
+  useEffect(() => {
+    onMonacoInstanceChange?.(monaco);
+  }, [monaco, onMonacoInstanceChange]);
 
   // Модели теперь переживают переключение вкладок (см. `path`+`keepCurrentModel`
   // на <Editor> ниже) — значит их больше не закрывает автоматически сам
@@ -181,8 +189,9 @@ export function EditorPane({
     }
   }, [monaco, editor, activeTab]);
 
-  useMonacoCompletions(monaco, completionsEnabled);
+  useMonacoCompletions(monaco, completionsEnabled, docsRoot, gitGutter?.repoRoot ?? null);
   useMonacoOutline(monaco);
+  useMonacoDefinitions(monaco, docsRoot, gitGutter?.repoRoot ?? null);
   useMonacoDiagnostics(monaco, editor, diagnostics, activeTab?.path ?? null);
   useMonacoSpellcheck(monaco, editor, activeTab, spellcheckConfig);
   useMonacoErrorsWidget(

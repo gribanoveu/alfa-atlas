@@ -6,6 +6,7 @@ import {
   getAttributes,
   getDocuments,
 } from "../lib/workspaceIndex";
+import { relativizeToDocument, toDocsRelativePath } from "../lib/paths";
 import { ASCIIDOC_LANGUAGE_ID } from "../monaco/asciidocLanguage";
 
 const ADOC_LANGUAGE = ASCIIDOC_LANGUAGE_ID;
@@ -231,10 +232,36 @@ function lineUpToCursor(
 export function useMonacoCompletions(
   monaco: typeof Monaco | null,
   enabled: boolean,
+  docsRoot: string | null,
+  repoRoot: string | null,
 ) {
   useEffect(() => {
     if (!monaco || !enabled) return;
     const disposers: IDisposable[] = [];
+
+    // Suggestions insert a path relative to the *current* file's directory
+    // — matching how every include::/image::/xref: target in this codebase
+    // is actually authored — not the index's repo-relative key.
+    const docSuggestions = (
+      model: Monaco.editor.ITextModel,
+      docs: { relativePath: string }[],
+      range: Monaco.IRange,
+    ) => {
+      const sourceDocsRelative = documentIdFromModel(model);
+      return docs.map((d) => {
+        const docsRelative =
+          docsRoot && repoRoot
+            ? toDocsRelativePath(d.relativePath, repoRoot, docsRoot)
+            : d.relativePath;
+        const insertText = relativizeToDocument(docsRelative, sourceDocsRelative);
+        return {
+          label: insertText,
+          kind: monaco.languages.CompletionItemKind.File,
+          insertText,
+          range,
+        };
+      });
+    };
 
     // 1. include:: — list all documents.
     disposers.push(
@@ -246,14 +273,7 @@ export function useMonacoCompletions(
           }
           const docs = await getDocuments();
           const range = zeroWidthRange(position);
-          return {
-            suggestions: docs.map((d) => ({
-              label: d.relativePath,
-              kind: monaco.languages.CompletionItemKind.File,
-              insertText: d.relativePath,
-              range,
-            })),
-          };
+          return { suggestions: docSuggestions(model, docs, range) };
         },
       }),
     );
@@ -271,14 +291,7 @@ export function useMonacoCompletions(
           const range = zeroWidthRange(position);
           if (hashIdx === -1) {
             const docs = await getDocuments();
-            return {
-              suggestions: docs.map((d) => ({
-                label: d.relativePath,
-                kind: monaco.languages.CompletionItemKind.File,
-                insertText: d.relativePath,
-                range,
-              })),
-            };
+            return { suggestions: docSuggestions(model, docs, range) };
           }
           const docId = after.slice(0, hashIdx);
           if (!docId) return null;
@@ -305,14 +318,7 @@ export function useMonacoCompletions(
           }
           const docs = await getDocuments();
           const range = zeroWidthRange(position);
-          return {
-            suggestions: docs.map((d) => ({
-              label: d.relativePath,
-              kind: monaco.languages.CompletionItemKind.File,
-              insertText: d.relativePath,
-              range,
-            })),
-          };
+          return { suggestions: docSuggestions(model, docs, range) };
         },
       }),
     );

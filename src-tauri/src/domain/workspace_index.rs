@@ -307,6 +307,44 @@ pub fn resolve_against_document(source_document: &str, target: &str) -> String {
     parts.join("/")
 }
 
+/// Inverse of `resolve_against_document`: computes the shortest relative path
+/// from the directory of `source_document` to `target_document` (both
+/// repo-relative `/`-joined keys). Used to rewrite a reference's target text
+/// after the referenced document has moved — the replacement must stay a
+/// relative path (matching how every existing `include::`/`image::`/`xref:`
+/// target in this codebase is authored), not a repo-relative index key.
+pub fn relativize(source_document: &str, target_document: &str) -> String {
+    let source_dir: Vec<&str> = Path::new(source_document)
+        .parent()
+        .map(|parent| {
+            parent
+                .components()
+                .filter_map(|c| match c {
+                    Component::Normal(s) => s.to_str(),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let target_parts: Vec<&str> = target_document
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let common = source_dir
+        .iter()
+        .zip(target_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let mut parts: Vec<String> = Vec::with_capacity(source_dir.len() - common + target_parts.len());
+    parts.extend(std::iter::repeat("..".to_string()).take(source_dir.len() - common));
+    parts.extend(target_parts[common..].iter().map(|s| s.to_string()));
+
+    parts.join("/")
+}
+
 /// Resolve a `relative` path against `root`, rejecting `..` components.
 #[allow(dead_code)]
 pub fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, WorkspaceIndexError> {
@@ -387,6 +425,43 @@ mod tests {
         );
         assert_eq!(resolve_against_document("a.adoc", "b.adoc"), "b.adoc");
         assert_eq!(resolve_against_document("a.adoc", ""), "");
+    }
+
+    #[test]
+    fn relativize_is_inverse_of_resolve_against_document() {
+        assert_eq!(
+            relativize("src/docs/asciidoc/index.adoc", "src/docs/asciidoc/_external/foo.adoc"),
+            "_external/foo.adoc"
+        );
+        assert_eq!(
+            relativize(
+                "src/docs/asciidoc/getBookkeepingServicesInfo/doc.adoc",
+                "src/docs/asciidoc/_external/foo.adoc"
+            ),
+            "../_external/foo.adoc"
+        );
+        assert_eq!(
+            relativize("src/docs/a.adoc", "src/docs/sibling.adoc"),
+            "sibling.adoc"
+        );
+        assert_eq!(relativize("a.adoc", "b.adoc"), "b.adoc");
+    }
+
+    #[test]
+    fn relativize_climbs_multiple_levels() {
+        assert_eq!(
+            relativize("a/b/c/doc.adoc", "a/other/target.adoc"),
+            "../../other/target.adoc"
+        );
+    }
+
+    #[test]
+    fn relativize_handles_same_directory_move() {
+        // Renaming a file within the same directory as the referencing doc.
+        assert_eq!(
+            relativize("src/docs/index.adoc", "src/docs/renamed.adoc"),
+            "renamed.adoc"
+        );
     }
 
     #[test]

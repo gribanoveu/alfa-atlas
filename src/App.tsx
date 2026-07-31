@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type * as Monaco from "monaco-editor";
 import type { editor as MonacoEditor } from "monaco-editor";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
@@ -66,7 +67,11 @@ import {
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
 import { formatLabelFor, isAsciiDocPath, lineEndingLabelFor } from "./lib/supportedFiles";
-import { toDocsRelativePath, toRepoRelativePath } from "./lib/paths";
+import {
+  resolveRelativeToDocument,
+  toDocsRelativePath,
+  toRepoRelativePath,
+} from "./lib/paths";
 import { RenameModal } from "./components/Sidebar/RenameModal";
 
 function joinParent(parentPath: string, name: string): string {
@@ -125,27 +130,7 @@ function resolveXrefHref(
     return { path: sourcePath, anchor: anchor ?? null };
   }
 
-  const baseDir = sourcePath.includes("/")
-    ? sourcePath.slice(0, sourcePath.lastIndexOf("/"))
-    : "";
-  const combined = baseDir ? `${baseDir}/${pathPart}` : pathPart;
-  const normalized = normalizeRelativePath(combined);
-  return { path: normalized, anchor: anchor ?? null };
-}
-
-/** Collapse `.`/`..` segments in a `/`-joined relative path. */
-function normalizeRelativePath(p: string): string {
-  const norm = p.replace(/\\/g, "/");
-  const stack: string[] = [];
-  for (const segment of norm.split("/")) {
-    if (segment === "" || segment === ".") continue;
-    if (segment === "..") {
-      stack.pop();
-      continue;
-    }
-    stack.push(segment);
-  }
-  return stack.join("/") || ".";
+  return { path: resolveRelativeToDocument(pathPart, sourcePath), anchor: anchor ?? null };
 }
 
 function App() {
@@ -203,6 +188,10 @@ function App() {
     instance.trigger("menu", "redo", null);
     instance.focus();
   }, []);
+
+  // State (not a ref) — the Ctrl+Click editor-opener registration effect
+  // below needs to re-run once this becomes available.
+  const [monacoInstance, setMonacoInstance] = useState<typeof Monaco | null>(null);
   const git = useGitPanel(project.repoRoot, {
     active: Boolean(project.repoRoot),
     onBranchChange: project.setBranchFromGit,
@@ -214,6 +203,29 @@ function App() {
   const [dismissedToastMessage, setDismissedToastMessage] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<{ id: number; message: string } | null>(null);
   const successToastCounter = useRef(0);
+
+  // Переименование/перемещение файла или папки могло переписать include::/
+  // image::/xref: в других документах — подхватываем это в открытых вкладках
+  // (reloadTabFromDisk молча ничего не делает, если файл сейчас не открыт)
+  // и сообщаем пользователю, что именно поменялось.
+  const applyRenameReport = useCallback(
+    async (report: { updatedFiles: { docsRelativePath: string; count: number }[] }) => {
+      if (report.updatedFiles.length === 0) return;
+      await Promise.all(
+        report.updatedFiles.map((f) => editor.reloadTabFromDisk(f.docsRelativePath)),
+      );
+      const totalRefs = report.updatedFiles.reduce((sum, f) => sum + f.count, 0);
+      successToastCounter.current += 1;
+      setSuccessToast({
+        id: successToastCounter.current,
+        // Родительный падеж числительного не согласуем со словом — как в
+        // «Найдено результатов: N» — чтобы не городить русскую плюрализацию
+        // ради тоста.
+        message: `Ссылки обновлены — файлов: ${report.updatedFiles.length}, ссылок: ${totalRefs}`,
+      });
+    },
+    [editor.reloadTabFromDisk],
+  );
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
@@ -787,23 +799,17 @@ function App() {
   );
 
   /**
-   * Клик по xref-ссылке в превью AsciiDoc. Распарсивает href (`path#anchor`,
-   * `path`, `#anchor`), открывает целевой файл и (если есть якорь)
-   * прокручивает редактор к строке якоря через `findAnchors`.
+   * Открывает `relPath` (относительно docsRoot) и, если передан `anchor`,
+   * прокручивает редактор к его строке через `findAnchors`. Общая для клика
+   * по xref-ссылке в превью (`openXref` ниже) и для Ctrl+Click «перейти к
+   * файлу» из самого Monaco (см. `registerEditorOpener` ниже).
    */
-  const openXref = useCallback(
-    async (href: string) => {
-      const sourcePath = editor.activeTab?.path;
-      if (!sourcePath) return;
-      // Внешние URL — не наша зона ответственности, пропускаем.
-      if (/^https?:\/\//i.test(href) || href.startsWith("mailto:")) return;
-
-      const { path: relPath, anchor } = resolveXrefHref(href, sourcePath);
-
+  const openDocumentReference = useCallback(
+    async (relPath: string, anchor: string | null) => {
       try {
         await editor.openFile(relPath);
       } catch {
-        // Файл не существует (битый xref) — тихо игнорируем; диагностику
+        // Файл не существует (битая ссылка) — тихо игнорируем; диагностику
         // пользователь уже видит в Problems, если она была построена.
         return;
       }
@@ -832,6 +838,40 @@ function App() {
     },
     [editor, project.repoRoot, project.docsRoot],
   );
+
+  /**
+   * Клик по xref-ссылке в превью AsciiDoc. Распарсивает href (`path#anchor`,
+   * `path`, `#anchor`) и делегирует открытие+прокрутку `openDocumentReference`.
+   */
+  const openXref = useCallback(
+    async (href: string) => {
+      const sourcePath = editor.activeTab?.path;
+      if (!sourcePath) return;
+      // Внешние URL — не наша зона ответственности, пропускаем.
+      if (/^https?:\/\//i.test(href) || href.startsWith("mailto:")) return;
+
+      const { path: relPath, anchor } = resolveXrefHref(href, sourcePath);
+      await openDocumentReference(relPath, anchor);
+    },
+    [editor, openDocumentReference],
+  );
+
+  // Ctrl+Click (Cmd+Click на macOS) на цель include::/image::/xref: —
+  // useMonacoDefinitions.ts резолвит макрос в Uri (docs-relative путь,
+  // якорь — в fragment), а дальше Monaco зовёт этот «opener», потому что
+  // сам standalone-редактор не умеет открывать чужие ресурсы.
+  useEffect(() => {
+    if (!monacoInstance) return;
+    const disposer = monacoInstance.editor.registerEditorOpener({
+      openCodeEditor(_source, resource) {
+        const path = resource.path.replace(/^\//, "");
+        if (!path) return false;
+        void openDocumentReference(path, resource.fragment || null);
+        return true;
+      },
+    });
+    return () => disposer.dispose();
+  }, [monacoInstance, openDocumentReference]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1024,12 +1064,11 @@ function App() {
               const name = oldPath.split(/[/\\]/).filter(Boolean).pop();
               if (!name) return;
               const newPath = joinParent(destDirPath, name);
+              let report: Awaited<ReturnType<typeof renameProjectFile>>;
               try {
-                if (source.isDir) {
-                  await renameProjectDir(project.docsRoot, oldPath, newPath);
-                } else {
-                  await renameProjectFile(project.docsRoot, oldPath, newPath);
-                }
+                report = source.isDir
+                  ? await renameProjectDir(project.docsRoot, oldPath, newPath)
+                  : await renameProjectFile(project.docsRoot, oldPath, newPath);
               } catch (e) {
                 setFolderError(e instanceof Error ? e.message : String(e));
                 return;
@@ -1039,6 +1078,7 @@ function App() {
               session.ensureExpanded(destDirPath);
               await tree.refresh();
               git.scheduleRefresh();
+              void applyRenameReport(report);
             }}
             onCopy={async (target) => {
               if (!target.isDir && project.docsRoot) {
@@ -1111,6 +1151,7 @@ function App() {
               }
               editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
               onEditorInstanceChange={handleEditorInstanceChange}
+              onMonacoInstanceChange={setMonacoInstance}
             />
           ) : (
             <Welcome
@@ -1309,17 +1350,16 @@ function App() {
           onConfirm={async (newName) => {
             const oldPath = renameTarget.path;
             const newPath = joinParent(parentOfPath(oldPath), newName);
-            if (renameTarget.isDir) {
-              await renameProjectDir(project.docsRoot!, oldPath, newPath);
-            } else {
-              await renameProjectFile(project.docsRoot!, oldPath, newPath);
-            }
+            const report = renameTarget.isDir
+              ? await renameProjectDir(project.docsRoot!, oldPath, newPath)
+              : await renameProjectFile(project.docsRoot!, oldPath, newPath);
             editor.remapTabsUnder(oldPath, newPath);
             session.remapExpandedUnder(oldPath, newPath);
             session.ensureExpanded(parentOfPath(newPath));
             setRenameTarget(null);
             await tree.refresh();
             git.scheduleRefresh();
+            void applyRenameReport(report);
           }}
         />
       ) : null}

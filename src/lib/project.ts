@@ -173,12 +173,23 @@ export function deleteProjectDir(
   return invoke<void>("delete_project_dir", { docsRoot, relativePath });
 }
 
+/** One other document whose references were rewritten as a side effect of a rename/move. */
+export type UpdatedReference = {
+  docsRelativePath: string;
+  count: number;
+};
+
+/** Result of a rename/move that cascaded into other documents' `include::`/`image::`/`xref:` references. */
+export type RenameReport = {
+  updatedFiles: UpdatedReference[];
+};
+
 export function renameProjectFile(
   docsRoot: string,
   fromPath: string,
   toPath: string,
-): Promise<void> {
-  return invoke<void>("rename_project_file", {
+): Promise<RenameReport> {
+  return invoke<RenameReport>("rename_project_file", {
     docsRoot,
     fromRelative: fromPath,
     toRelative: toPath,
@@ -189,8 +200,8 @@ export function renameProjectDir(
   docsRoot: string,
   fromPath: string,
   toPath: string,
-): Promise<void> {
-  return invoke<void>("rename_project_dir", {
+): Promise<RenameReport> {
+  return invoke<RenameReport>("rename_project_dir", {
     docsRoot,
     fromRelative: fromPath,
     toRelative: toPath,

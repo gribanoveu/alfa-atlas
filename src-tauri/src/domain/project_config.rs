@@ -97,3 +97,21 @@ pub struct TreeNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<TreeNode>>,
 }
+
+/// One other document whose `include::`/`image::`/`xref:` references were
+/// rewritten as a side effect of a rename/move, and how many changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatedReference {
+    pub docs_relative_path: String,
+    pub count: u32,
+}
+
+/// Result of a rename/move that also cascaded into other documents'
+/// references — returned instead of `()` so the frontend can refresh any
+/// affected open tabs and tell the user what changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameReport {
+    pub updated_files: Vec<UpdatedReference>,
+}
