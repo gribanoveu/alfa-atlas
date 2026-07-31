@@ -5,6 +5,7 @@ import jsonWorker from "monaco-editor/language/json/json.worker?worker";
 import cssWorker from "monaco-editor/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/language/typescript/ts.worker?worker";
+import { registerAsciiDocLanguage } from "./monaco/asciidocLanguage";
 
 self.MonacoEnvironment = {
   getWorker(_workerId: string, label: string) {
@@ -23,5 +24,7 @@ self.MonacoEnvironment = {
     return new editorWorker();
   },
 };
+
+registerAsciiDocLanguage(monaco);
 
 loader.config({ monaco });

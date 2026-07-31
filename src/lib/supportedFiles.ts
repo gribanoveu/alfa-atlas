@@ -3,6 +3,7 @@
  * open-file flows; keep this list as the single source of truth for filters/UI.
  */
 import { extensionOf } from "./fileExtensions";
+import { ASCIIDOC_LANGUAGE_ID } from "../monaco/asciidocLanguage";
 
 export const SUPPORTED_EXTENSIONS = [
   ".adoc",
@@ -69,6 +70,7 @@ export function monacoLanguageFor(path: string): string {
       return "yaml";
     case ".adoc":
     case ".asciidoc":
+      return ASCIIDOC_LANGUAGE_ID;
     case ".txt":
     case ".puml":
     case ".plantuml":

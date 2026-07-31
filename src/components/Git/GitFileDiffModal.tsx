@@ -2,6 +2,7 @@ import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GitDiffScope, GitFileDiff, GitFileStatus } from "../../lib/git";
 import { monacoLanguageFor } from "../../lib/supportedFiles";
+import { ATLAS_DARK_THEME_ID } from "../../monaco/asciidocLanguage";
 import "../Welcome/CloneRepoModal.css";
 import "./GitFileDiffModal.css";
 
@@ -215,7 +216,7 @@ export function GitFileDiffModal({
           ) : diff ? (
             <DiffEditor
               height="100%"
-              theme="vs-dark"
+              theme={ATLAS_DARK_THEME_ID}
               language={language}
               original={diff.original}
               modified={diff.modified}

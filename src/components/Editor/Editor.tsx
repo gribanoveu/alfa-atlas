@@ -10,6 +10,7 @@ import { useMonacoSpellcheck } from "../../hooks/useMonacoSpellcheck";
 import type { GitFileDiff } from "../../lib/git";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
 import type { Diagnostic } from "../../lib/workspaceIndex";
+import { ATLAS_DARK_THEME_ID } from "../../monaco/asciidocLanguage";
 import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
 import type { EditorViewMode } from "../../types/viewMode";
 import { DocumentPreview } from "../DocumentPreview/DocumentPreview";
@@ -255,7 +256,7 @@ export function EditorPane({
     <Editor
       key={activeTab.id}
       height="100%"
-      theme="vs-dark"
+      theme={ATLAS_DARK_THEME_ID}
       language={activeTab.language}
       value={activeTab.content}
       onChange={handleChange}

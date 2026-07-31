@@ -10,6 +10,7 @@ import {
   type ConflictBlock,
 } from "../../lib/gitConflict";
 import { monacoLanguageFor } from "../../lib/supportedFiles";
+import { ATLAS_DARK_THEME_ID } from "../../monaco/asciidocLanguage";
 import "../Welcome/CloneRepoModal.css";
 import "../Git/GitFileDiffModal.css";
 import "./GitConflictModal.css";
@@ -390,7 +391,7 @@ export function GitConflictModal({
                 </div>
                 <div className="conflict-merge-pane-editor">
                   <Editor
-                    theme="vs-dark"
+                    theme={ATLAS_DARK_THEME_ID}
                     language={language}
                     value={oursSide.text}
                     onMount={handleSideMount(leftRef, oursSide.ranges, "conflict-range-ours")}
@@ -402,7 +403,7 @@ export function GitConflictModal({
                 <div className="conflict-merge-pane-head conflict-pane-result">Результат</div>
                 <div className="conflict-merge-pane-editor">
                   <Editor
-                    theme="vs-dark"
+                    theme={ATLAS_DARK_THEME_ID}
                     language={language}
                     defaultValue={collapsed.text}
                     onMount={handleCenterMount}
@@ -416,7 +417,7 @@ export function GitConflictModal({
                 </div>
                 <div className="conflict-merge-pane-editor">
                   <Editor
-                    theme="vs-dark"
+                    theme={ATLAS_DARK_THEME_ID}
                     language={language}
                     value={theirsSide.text}
                     onMount={handleSideMount(rightRef, theirsSide.ranges, "conflict-range-theirs")}

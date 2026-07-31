@@ -6,8 +6,9 @@ import {
   getAttributes,
   getDocuments,
 } from "../lib/workspaceIndex";
+import { ASCIIDOC_LANGUAGE_ID } from "../monaco/asciidocLanguage";
 
-const ADOC_LANGUAGE = "plaintext";
+const ADOC_LANGUAGE = ASCIIDOC_LANGUAGE_ID;
 
 /**
  * `!`-command words mapped to AsciiDoc snippet templates. Every command
@@ -217,8 +218,8 @@ function lineUpToCursor(
 }
 
 /**
- * Registers five AsciiDoc completion providers on Monaco's `plaintext`
- * language (`.adoc` maps to plaintext in `supportedFiles.ts`) per spec
+ * Registers five AsciiDoc completion providers on Monaco's `asciidoc`
+ * language (`.adoc`/`.asciidoc` map to it in `supportedFiles.ts`) per spec
  * section 9: `include::`, `xref:`, `image::`, `{` for attributes, and a
  * `!`-triggered command menu (`!table`, `!request`, `!response`, ...) for
  * inserting AsciiDoc snippets.
