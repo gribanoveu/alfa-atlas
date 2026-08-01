@@ -78,7 +78,8 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_clipboard_manager::init());
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_http::init());
 
     // MCP bridge plugin — debug-only, so the Cursor Tauri MCP server can
     // inspect the running app for diagnostics. No effect in production builds.
@@ -170,6 +171,8 @@ pub fn run() {
             commands::project::copy_project_file,
             commands::project::copy_project_dir,
             commands::project::check_path_exists,
+            commands::openapi::detect_specs_repo,
+            commands::openapi::load_openapi_bundle,
             commands::layout::get_project_layout,
             commands::layout::save_project_layout,
             commands::workspace::get_workspace_state,

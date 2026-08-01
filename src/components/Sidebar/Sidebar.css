@@ -93,3 +93,28 @@
   display: flex;
   flex-direction: column;
 }
+
+.sidebar-pinned-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-1);
+  color: var(--text-0);
+  font-size: var(--font-sidebar);
+  text-align: left;
+}
+
+.sidebar-pinned-item:hover {
+  background: var(--bg-2);
+  border-color: var(--accent-dim);
+}
+
+.sidebar-pinned-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

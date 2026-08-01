@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::domain::paths;
 use crate::domain::project_config::{DocsCandidate, ProjectError};
 use crate::domain::supported_files::{is_asciidoc, is_supported_file};
+use crate::services::openapi;
 
 const MAX_DEPTH: usize = 6;
 const MIN_SUPPORTED_FOR_DENSITY: usize = 2;
@@ -34,11 +35,20 @@ const NAMED_PATHS: &[&str] = &[
     "documentation",
 ];
 
+/// Outweighs any plausible YAML-file-count score a structural subfolder
+/// (`schemas/`, `operations/`, …) could accumulate, so a detected OpenAPI
+/// spec root always outranks its own children as a docs-root candidate.
+const OPENAPI_SPECS_BONUS: u32 = 950;
+
 #[derive(Debug, Default, Clone)]
 struct DirStats {
     supported: u32,
     asciidoc: u32,
     named_bonus: u32,
+    /// Set when this directory itself matches the OpenAPI multi-file spec
+    /// signature (see `openapi::specs_root_signature`) — weighted by
+    /// structure (entry file + required subfolders), not by file count.
+    openapi_bonus: u32,
     depth: usize,
 }
 
@@ -72,6 +82,8 @@ pub fn find_candidates(
         &mut stats,
     )?;
 
+    apply_openapi_specs_roots(&mut stats);
+
     // If scan root itself looks like a docs leaf, ensure it is scored.
     if !stats.contains_key(&scan_root) {
         let (supported, asciidoc) = count_supported_immediate(&scan_root)?;
@@ -81,8 +93,8 @@ pub fn find_candidates(
                 DirStats {
                     supported,
                     asciidoc,
-                    named_bonus: 0,
                     depth: 0,
+                    ..Default::default()
                 },
             );
         }
@@ -91,7 +103,8 @@ pub fn find_candidates(
     let mut candidates: Vec<DocsCandidate> = stats
         .into_iter()
         .filter_map(|(path, st)| {
-            if st.named_bonus == 0
+            if st.openapi_bonus == 0
+                && st.named_bonus == 0
                 && st.supported < MIN_SUPPORTED_FOR_DENSITY as u32
                 && st.asciidoc == 0
             {
@@ -140,7 +153,7 @@ fn named_bonus(named: &str) -> u32 {
 }
 
 fn score(st: &DirStats) -> u32 {
-    st.named_bonus + st.asciidoc * 20 + st.supported * 5 + depth_bonus(st.depth)
+    st.openapi_bonus + st.named_bonus + st.asciidoc * 20 + st.supported * 5 + depth_bonus(st.depth)
 }
 
 fn depth_bonus(depth: usize) -> u32 {
@@ -149,12 +162,36 @@ fn depth_bonus(depth: usize) -> u32 {
 }
 
 fn reason(st: &DirStats, relative: &str) -> String {
-    if st.named_bonus > 0 {
+    if st.openapi_bonus > 0 {
+        format!("спецификация OpenAPI: {relative}")
+    } else if st.named_bonus > 0 {
         format!("известное имя: {relative}")
     } else if st.asciidoc > 0 {
         format!("{} AsciiDoc-файлов", st.asciidoc)
     } else {
         format!("{} поддерживаемых файлов", st.supported)
+    }
+}
+
+/// Boosts directories that themselves match the OpenAPI multi-file spec
+/// signature so they outrank their own structural subfolders, and drops
+/// those known subfolders (`schemas/`, `responses/`, `parameters/`,
+/// `operations/`) from candidacy entirely — they're never a sensible docs
+/// root on their own, regardless of how many YAML files they happen to hold.
+fn apply_openapi_specs_roots(stats: &mut HashMap<PathBuf, DirStats>) {
+    let dirs: Vec<PathBuf> = stats.keys().cloned().collect();
+    let specs_roots: Vec<PathBuf> = dirs
+        .into_iter()
+        .filter(|dir| openapi::specs_root_signature(dir).is_some())
+        .collect();
+
+    for root in &specs_roots {
+        let entry = stats.entry(root.clone()).or_default();
+        entry.openapi_bonus = OPENAPI_SPECS_BONUS;
+
+        for sub in openapi::REQUIRED_SUBDIRS {
+            stats.remove(&root.join(sub));
+        }
     }
 }
 
@@ -263,6 +300,36 @@ mod tests {
         let candidates = find_candidates(&root, &root).unwrap();
         assert!(!candidates.is_empty());
         assert_eq!(candidates[0].relative_path, "src/docs/asciidoc");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn prefers_specs_root_over_its_own_schemas_subfolder() {
+        let root = temp_dir();
+        let specs = root.join("specs");
+        let schemas = specs.join("schemas");
+        for sub in ["schemas", "responses", "parameters", "operations"] {
+            fs::create_dir_all(specs.join(sub)).unwrap();
+        }
+        fs::write(
+            specs.join("api.yaml"),
+            "openapi: 3.0.3\ninfo:\n  title: test\n  version: 1.0.0\npaths: {}\n",
+        )
+        .unwrap();
+        // schemas/ alone holds far more YAML files than specs/ itself —
+        // this used to make schemas/ win purely on file count.
+        for i in 0..10 {
+            fs::write(schemas.join(format!("s{i}.yaml")), "type: object\n").unwrap();
+        }
+
+        let candidates = find_candidates(&root, &root).unwrap();
+        assert!(!candidates.is_empty());
+        assert_eq!(candidates[0].relative_path, "specs");
+        assert!(
+            candidates.iter().all(|c| c.relative_path != "specs/schemas"),
+            "structural subfolders must not be offered as docs-root candidates: {candidates:?}"
+        );
 
         fs::remove_dir_all(&root).ok();
     }

@@ -16,6 +16,10 @@
     },
     "dialog:default",
     "clipboard-manager:allow-write-text",
-    "mcp-bridge:default"
+    "mcp-bridge:default",
+    {
+      "identifier": "http:default",
+      "allow": [{ "url": "http://*" }, { "url": "https://*" }]
+    }
   ]
 }

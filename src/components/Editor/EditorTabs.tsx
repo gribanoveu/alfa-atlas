@@ -6,11 +6,19 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { Columns2, Code, Eye } from "lucide-react";
-import type { EditorTab } from "../../hooks/useEditorTabs";
 import type { EditorViewMode } from "../../types/viewMode";
 
+/** Minimal shape the tab strip needs to render a tab — satisfied by real
+ * file tabs (`EditorTab`) as well as non-file pseudo-tabs (e.g. the API
+ * Explorer), which don't carry editor content/dirty-state machinery. */
+export type DisplayTab = {
+  id: string;
+  title: string;
+  dirty: boolean;
+};
+
 type EditorTabsProps = {
-  tabs: EditorTab[];
+  tabs: DisplayTab[];
   activeTabId: string | null;
   onSelect: (id: string) => void;
   onClose: (id: string) => void;

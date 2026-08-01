@@ -1,10 +1,11 @@
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import type { TreeNode } from "../../lib/project";
+import type { SpecsRepoInfo } from "../../lib/openapi";
 import { FileTree, type FileTreeDeleteTarget } from "./FileTree";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { useCallback } from "react";
-import { ChevronsDownUp, ChevronsUpDown, RefreshCw } from "lucide-react";
+import { ChevronsDownUp, ChevronsUpDown, FileJson2, RefreshCw } from "lucide-react";
 import "./Sidebar.css";
 
 type SidebarProps = {
@@ -17,6 +18,8 @@ type SidebarProps = {
   activePath: string | null;
   expandedDirs: ReadonlySet<string>;
   separateExternal?: boolean;
+  specsRepo?: SpecsRepoInfo | null;
+  onOpenApiExplorer?: () => void;
   onToggleDir: (path: string) => void;
   onRefreshTree: () => void;
   onExpandAll: () => void;
@@ -50,6 +53,8 @@ export function Sidebar({
   activePath,
   expandedDirs,
   separateExternal = true,
+  specsRepo = null,
+  onOpenApiExplorer,
   onToggleDir,
   onRefreshTree,
   onExpandAll,
@@ -143,6 +148,17 @@ export function Sidebar({
           </button>
         </div>
       </div>
+      {specsRepo ? (
+        <button
+          type="button"
+          className="sidebar-pinned-item"
+          onClick={onOpenApiExplorer}
+          title={`Открыть API Explorer${specsRepo.version ? ` (v${specsRepo.version})` : ""}`}
+        >
+          <FileJson2 size={14} aria-hidden />
+          <span>{specsRepo.title ?? "API Explorer"}</span>
+        </button>
+      ) : null}
       <div className="sidebar-body">
         {docsRoot ? (
           treeLoading ? (

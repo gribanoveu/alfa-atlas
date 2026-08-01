@@ -17,7 +17,7 @@ import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
 import type { EditorViewMode } from "../../types/viewMode";
 import { DocumentPreview } from "../DocumentPreview/DocumentPreview";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
-import { EditorTabs } from "./EditorTabs";
+import { EditorTabs, type DisplayTab } from "./EditorTabs";
 import "./Editor.css";
 import "./GitGutter.css";
 
@@ -47,9 +47,13 @@ type InsertRequest = {
 };
 
 type EditorPaneProps = {
-  tabs: EditorTab[];
+  tabs: DisplayTab[];
   activeTabId: string | null;
   activeTab: EditorTab | null;
+  /** "file" shows the active file tab (Monaco/preview); "openapi" shows
+   * `openApiExplorer` instead, regardless of `activeTab`/`activeTabId`. */
+  activeKind: "file" | "openapi";
+  openApiExplorer?: React.ReactNode;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onCloseAllTabs: () => void;
@@ -88,6 +92,8 @@ export function EditorPane({
   tabs,
   activeTabId,
   activeTab,
+  activeKind,
+  openApiExplorer,
   onSelectTab,
   onCloseTab,
   onCloseAllTabs,
@@ -369,7 +375,9 @@ export function EditorPane({
         onViewModeChange={onViewModeChange}
       />
       <div className={`editor-body editor-body-${viewMode}`}>
-        {activeTab ? (
+        {activeKind === "openapi" ? (
+          openApiExplorer
+        ) : activeTab ? (
           viewMode === "split" ? (
             <SplitLayout
               monacoNode={monacoNode}

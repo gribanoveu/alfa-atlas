@@ -7,6 +7,7 @@ pub mod general_prefs;
 pub mod git_credentials;
 pub mod gitignore;
 pub mod git_ops;
+pub mod openapi;
 pub mod project_layout;
 pub mod project_open;
 pub mod reference_rewrite;

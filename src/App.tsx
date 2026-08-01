@@ -37,6 +37,10 @@ import {
 import { useBranches } from "./hooks/useBranches";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
+import { useSpecsRepo } from "./hooks/useSpecsRepo";
+import { useOpenApiBundle } from "./hooks/useOpenApiBundle";
+import { OpenApiExplorer } from "./components/OpenApiExplorer/OpenApiExplorer";
+import type { DisplayTab } from "./components/Editor/EditorTabs";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
 import { useSpellcheckConfig } from "./hooks/useSpellcheckConfig";
 import { useGitPanel } from "./hooks/useGitPanel";
@@ -163,6 +167,83 @@ function App() {
     onTabsChange,
     prefs: generalPrefs.prefs,
   });
+
+  const specsRepo = useSpecsRepo(project.repoRoot);
+  const [openApiTabOpen, setOpenApiTabOpen] = useState(false);
+  const [activeKind, setActiveKind] = useState<"file" | "openapi">("file");
+  const openApiBundle = useOpenApiBundle(
+    project.repoRoot,
+    specsRepo.info?.entryFile ?? null,
+    openApiTabOpen,
+  );
+
+  // Any real file tab becoming active (open/select/restore-on-load) hands
+  // focus back to the file view — the API Explorer only stays active when
+  // the user explicitly picked it (see handleSelectTab), which doesn't
+  // touch editor.activeTabId.
+  useEffect(() => {
+    setActiveKind("file");
+  }, [editor.activeTabId]);
+
+  const displayTabs: DisplayTab[] = useMemo(() => {
+    const fileTabs: DisplayTab[] = editor.tabs.map((t) => ({
+      id: t.id,
+      title: t.title,
+      dirty: t.dirty,
+    }));
+    if (!openApiTabOpen) return fileTabs;
+    return [
+      ...fileTabs,
+      { id: "openapi", title: specsRepo.info?.title ?? "API Explorer", dirty: false },
+    ];
+  }, [editor.tabs, openApiTabOpen, specsRepo.info]);
+
+  const handleSelectTab = useCallback(
+    (id: string) => {
+      if (id === "openapi") {
+        setActiveKind("openapi");
+        return;
+      }
+      editor.selectTab(id);
+    },
+    [editor.selectTab],
+  );
+
+  const handleCloseTab = useCallback(
+    (id: string) => {
+      if (id === "openapi") {
+        setOpenApiTabOpen(false);
+        setActiveKind("file");
+        return;
+      }
+      void editor.closeTab(id);
+    },
+    [editor.closeTab],
+  );
+
+  const openApiExplorerTab = useCallback(() => {
+    setOpenApiTabOpen(true);
+    setActiveKind("openapi");
+  }, []);
+
+  const handleCloseAllTabs = useCallback(() => {
+    setOpenApiTabOpen(false);
+    setActiveKind("file");
+    void editor.closeAllTabs();
+  }, [editor.closeAllTabs]);
+
+  const handleCloseOtherTabs = useCallback(
+    (id: string) => {
+      if (id === "openapi") {
+        setActiveKind("openapi");
+        void editor.closeAllTabs();
+        return;
+      }
+      setOpenApiTabOpen(false);
+      void editor.closeOtherTabs(id);
+    },
+    [editor.closeAllTabs, editor.closeOtherTabs],
+  );
 
   // Текущий экземпляр Monaco-редактора — для команд Undo/Redo из меню
   // «Правка». Ref, а не state: сама смена инстанса не должна вызывать
@@ -489,6 +570,8 @@ function App() {
   const closeProject = useCallback(async () => {
     await editor.reset();
     await project.closeProject();
+    setOpenApiTabOpen(false);
+    setActiveKind("file");
     skipNextPanelSync.current = true;
     layout.reset();
   }, [editor.reset, layout.reset, project.closeProject]);
@@ -1046,6 +1129,8 @@ function App() {
             activePath={editor.activeTab?.path ?? null}
             expandedDirs={session.expandedDirs}
             separateExternal={generalPrefs.prefs.separateExternalFolder}
+            specsRepo={specsRepo.info}
+            onOpenApiExplorer={openApiExplorerTab}
             onToggleDir={session.toggleDir}
             onRefreshTree={() => {
               void tree.refresh();
@@ -1121,13 +1206,23 @@ function App() {
           />
           {hasProject ? (
             <EditorPane
-              tabs={editor.tabs}
-              activeTabId={editor.activeTabId}
+              tabs={displayTabs}
+              activeTabId={activeKind === "openapi" ? "openapi" : editor.activeTabId}
               activeTab={editor.activeTab}
-              onSelectTab={editor.selectTab}
-              onCloseTab={editor.closeTab}
-              onCloseAllTabs={editor.closeAllTabs}
-              onCloseOtherTabs={editor.closeOtherTabs}
+              activeKind={activeKind}
+              openApiExplorer={
+                openApiTabOpen ? (
+                  <OpenApiExplorer
+                    bundle={openApiBundle.bundle}
+                    loading={openApiBundle.loading}
+                    error={openApiBundle.error}
+                  />
+                ) : undefined
+              }
+              onSelectTab={handleSelectTab}
+              onCloseTab={handleCloseTab}
+              onCloseAllTabs={handleCloseAllTabs}
+              onCloseOtherTabs={handleCloseOtherTabs}
               onChangeContent={editor.updateActiveContent}
               onCursorChange={editor.setCursor}
               diagnostics={editorDiagnostics}
