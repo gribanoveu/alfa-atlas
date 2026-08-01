@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import * as monaco from "monaco-editor";
+import { useMemo, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { ATLAS_DARK_THEME_ID } from "../../monaco/asciidocLanguage";
+import { highlightJson } from "./jsonHighlight";
 import { skeletonForSchema } from "./requestBuilder";
+import "../StructuredDataPreview/StructuredDataPreview.css";
 import "./OpenApiExplorer.css";
 
 type JsonExampleProps = {
@@ -12,36 +12,16 @@ type JsonExampleProps = {
 /** Always-visible, copyable, syntax-highlighted example JSON generated from
  * a schema — meant to be handed off as a contract to a backend/frontend
  * team or pasted into other docs, not just read on-screen like
- * `SchemaViewer`'s type tree. Highlighting uses Monaco's static `colorize`
- * API (same mechanism as fenced code blocks in Markdown preview) rather
- * than mounting a full editor instance per block. */
+ * `SchemaViewer`'s type tree. */
 export function JsonExample({ schema }: JsonExampleProps) {
   const [copied, setCopied] = useState(false);
-  const [html, setHtml] = useState<string | null>(null);
 
   const json = useMemo(
     () => JSON.stringify(skeletonForSchema(schema), null, 2),
     [schema],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    // Ensures the app's dark theme is active even if this is the first
-    // Monaco-related thing rendered in the session (colorize() otherwise
-    // falls back to Monaco's default light theme).
-    monaco.editor.setTheme(ATLAS_DARK_THEME_ID);
-    monaco.editor
-      .colorize(json, "json", { tabSize: 2 })
-      .then((out) => {
-        if (!cancelled) setHtml(out);
-      })
-      .catch(() => {
-        if (!cancelled) setHtml(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [json]);
+  const html = useMemo(() => highlightJson(json), [json]);
 
   const handleCopy = async () => {
     try {
@@ -66,11 +46,7 @@ export function JsonExample({ schema }: JsonExampleProps) {
         </button>
       </div>
       <pre className="oas-json-example-code">
-        {html ? (
-          <code dangerouslySetInnerHTML={{ __html: html }} />
-        ) : (
-          <code>{json}</code>
-        )}
+        <code dangerouslySetInnerHTML={{ __html: html }} />
       </pre>
     </div>
   );
