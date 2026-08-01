@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
-import { Braces } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import * as monaco from "monaco-editor";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { ATLAS_DARK_THEME_ID } from "../../monaco/asciidocLanguage";
 import { skeletonForSchema } from "./requestBuilder";
 import "./OpenApiExplorer.css";
 
@@ -8,17 +9,39 @@ type JsonExampleProps = {
   schema: unknown;
 };
 
-/** Collapsible, copyable example JSON generated from a schema — meant to be
- * handed off as a contract to a backend/frontend team or pasted into other
- * docs, not just read on-screen like `SchemaViewer`'s type tree. */
+/** Always-visible, copyable, syntax-highlighted example JSON generated from
+ * a schema — meant to be handed off as a contract to a backend/frontend
+ * team or pasted into other docs, not just read on-screen like
+ * `SchemaViewer`'s type tree. Highlighting uses Monaco's static `colorize`
+ * API (same mechanism as fenced code blocks in Markdown preview) rather
+ * than mounting a full editor instance per block. */
 export function JsonExample({ schema }: JsonExampleProps) {
-  const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [html, setHtml] = useState<string | null>(null);
 
   const json = useMemo(
     () => JSON.stringify(skeletonForSchema(schema), null, 2),
     [schema],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    // Ensures the app's dark theme is active even if this is the first
+    // Monaco-related thing rendered in the session (colorize() otherwise
+    // falls back to Monaco's default light theme).
+    monaco.editor.setTheme(ATLAS_DARK_THEME_ID);
+    monaco.editor
+      .colorize(json, "json", { tabSize: 2 })
+      .then((out) => {
+        if (!cancelled) setHtml(out);
+      })
+      .catch(() => {
+        if (!cancelled) setHtml(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [json]);
 
   const handleCopy = async () => {
     try {
@@ -32,32 +55,23 @@ export function JsonExample({ schema }: JsonExampleProps) {
 
   return (
     <div className="oas-json-example">
-      <button
-        type="button"
-        className={`oas-json-example-toggle ${open ? "active" : ""}`}
-        onClick={() => setOpen((o) => !o)}
-        aria-expanded={open}
-      >
-        <Braces size={13} aria-hidden />
-        Итоговый JSON
-        <span className="oas-json-example-chevron" aria-hidden>
-          {open ? "▾" : "▸"}
-        </span>
-      </button>
-      {open ? (
-        <div className="oas-json-example-body">
-          <div className="oas-json-example-actions">
-            <button
-              type="button"
-              className="oas-try-copy-btn"
-              onClick={() => void handleCopy()}
-            >
-              {copied ? "Скопировано" : "Копировать"}
-            </button>
-          </div>
-          <pre className="oas-try-response-body">{json}</pre>
-        </div>
-      ) : null}
+      <div className="oas-json-example-header">
+        <span className="oas-json-example-title">Итоговый JSON</span>
+        <button
+          type="button"
+          className="oas-try-copy-btn"
+          onClick={() => void handleCopy()}
+        >
+          {copied ? "Скопировано" : "Копировать"}
+        </button>
+      </div>
+      <pre className="oas-json-example-code">
+        {html ? (
+          <code dangerouslySetInnerHTML={{ __html: html }} />
+        ) : (
+          <code>{json}</code>
+        )}
+      </pre>
     </div>
   );
 }

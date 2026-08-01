@@ -9,13 +9,24 @@ use serde_json::{json, Value};
 use crate::domain::openapi::{OpenApiBundleResult, OpenApiError, RefDiagnostic, SpecsRepoInfo};
 use crate::domain::paths;
 
-/// Subfolders that always exist alongside the entry document in this
-/// OpenAPI multi-file spec convention. Presence of all four, plus an entry
-/// document directly inside the candidate directory, *is* the detection
-/// signature — deliberately not based on how many YAML/JSON files happen to
-/// sit in any one of them (a `schemas/` folder can easily contain more YAML
-/// files than the spec root itself, but is never a sensible root on its own).
-pub const REQUIRED_SUBDIRS: [&str; 4] = ["schemas", "responses", "parameters", "operations"];
+/// Conventional structural subfolders of this OpenAPI multi-file spec
+/// convention. None are individually required — real-world spec repos
+/// sometimes omit one (e.g. no `parameters/` if no operation needs extra
+/// parameters) — each is instead an independent scored signal, see
+/// [`score_specs_signals`].
+pub const KNOWN_SUBDIRS: [&str; 4] = ["schemas", "responses", "parameters", "operations"];
+
+const ENTRY_FILE_POINTS: u32 = 40;
+const SUBDIR_POINTS: u32 = 15;
+
+/// Minimum [`score_specs_signals`] score for [`specs_root_signature`] to
+/// treat a directory as a spec root worth bundling for the API Explorer:
+/// the entry document plus at least one structural subfolder. The entry
+/// document itself is effectively still mandatory — without one there is
+/// nothing to bundle, and `score_specs_signals` never returns an `entry`
+/// without having found it, regardless of how the subfolder points add up.
+const DETECTION_THRESHOLD: u32 = ENTRY_FILE_POINTS + SUBDIR_POINTS;
+
 const SPEC_EXTS: [&str; 3] = ["yaml", "yml", "json"];
 
 /// The entry document found directly inside a detected specs root, plus
@@ -26,21 +37,42 @@ pub struct SpecsRootSignature {
     pub version: Option<String>,
 }
 
-/// Checks whether `dir` itself is the root of an OpenAPI multi-file spec:
-/// all four [`REQUIRED_SUBDIRS`] present, plus a YAML/JSON file directly
-/// inside `dir` (not recursing into the subfolders) with a top-level
-/// `openapi:`/`swagger:` key. Shared by [`detect_specs_repo`] (applied to
-/// `{repoRoot}/specs`) and the docs-root discovery heuristic (applied to
-/// arbitrary candidate directories, so structural subfolders like
-/// `specs/schemas` are never mistaken for the root themselves).
-pub fn specs_root_signature(dir: &Path) -> Option<SpecsRootSignature> {
+/// How strongly a directory looks like an OpenAPI multi-file spec root,
+/// as an additive score rather than a pass/fail gate on a fixed required
+/// set. Used by the docs-root discovery heuristic to weigh "this is a spec
+/// root" against its own "this is a docs root" score for the very same
+/// directory, and let whichever is higher win.
+pub struct SpecsSignal {
+    pub score: u32,
+    pub entry: Option<SpecsRootSignature>,
+}
+
+/// Scores `dir` on how strongly it looks like an OpenAPI multi-file spec
+/// root: [`ENTRY_FILE_POINTS`] for a YAML/JSON file directly inside `dir`
+/// (not recursing into subfolders) with a top-level `openapi:`/`swagger:`
+/// key, plus [`SUBDIR_POINTS`] for each of [`KNOWN_SUBDIRS`] actually
+/// present. No single signal is required for a nonzero score.
+pub fn score_specs_signals(dir: &Path) -> SpecsSignal {
     if !dir.is_dir() {
-        return None;
-    }
-    if !REQUIRED_SUBDIRS.iter().all(|sub| dir.join(sub).is_dir()) {
-        return None;
+        return SpecsSignal {
+            score: 0,
+            entry: None,
+        };
     }
 
+    let entry = find_entry_file(dir);
+    let mut score = if entry.is_some() { ENTRY_FILE_POINTS } else { 0 };
+    for sub in KNOWN_SUBDIRS {
+        if dir.join(sub).is_dir() {
+            score += SUBDIR_POINTS;
+        }
+    }
+    SpecsSignal { score, entry }
+}
+
+/// Scans the files directly inside `dir` (not recursing into subfolders)
+/// for one with a top-level `openapi:`/`swagger:` key.
+fn find_entry_file(dir: &Path) -> Option<SpecsRootSignature> {
     let mut entries: Vec<PathBuf> = fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
@@ -85,10 +117,26 @@ pub fn specs_root_signature(dir: &Path) -> Option<SpecsRootSignature> {
     None
 }
 
-/// Detects whether `repo_root` follows the `specs/{schemas,responses,parameters,operations}`
-/// convention and, if so, finds the entry document. Independent of the
-/// existing docs-root discovery heuristic — this is a fixed structural check,
-/// not a scored guess.
+/// Checks whether `dir` scores highly enough ([`score_specs_signals`] >=
+/// [`DETECTION_THRESHOLD`]) to be treated as a spec root worth bundling.
+/// Shared conceptually with the docs-root discovery heuristic (both are
+/// built on `score_specs_signals`), but this one applies a fixed threshold
+/// rather than comparing against a competing docs score, since it's used to
+/// gate a specific feature (the API Explorer) rather than to rank candidates.
+pub fn specs_root_signature(dir: &Path) -> Option<SpecsRootSignature> {
+    let signal = score_specs_signals(dir);
+    if signal.score < DETECTION_THRESHOLD {
+        return None;
+    }
+    signal.entry
+}
+
+/// Detects whether `repo_root/specs` follows this OpenAPI multi-file spec
+/// convention closely enough ([`specs_root_signature`]) to bundle, and if
+/// so, finds the entry document. This gate is independent of the docs-root
+/// discovery heuristic (`docs_discovery.rs`), which separately weighs the
+/// same underlying score against a competing "looks like documentation"
+/// score to decide what to suggest as a project's docs root.
 pub fn detect_specs_repo(repo_root: &Path) -> Result<Option<SpecsRepoInfo>, OpenApiError> {
     let specs_root = repo_root.join("specs");
     let Some(sig) = specs_root_signature(&specs_root) else {

@@ -254,42 +254,41 @@
   margin-top: 14px;
 }
 
-.oas-json-example-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border: 1px solid var(--accent-dim);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
-  font-weight: 600;
-  font-size: calc(var(--font-preview) * 0.79);
-}
-
-.oas-json-example-toggle:hover {
-  background: var(--accent-dim);
-  color: var(--text-0);
-}
-
-.oas-json-example-toggle.active {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-}
-
-.oas-json-example-chevron {
-  color: inherit;
-  font-size: calc(var(--font-preview) * 0.68);
-}
-
-.oas-json-example-body {
-  margin-top: 6px;
-}
-
-.oas-json-example-actions {
+.oas-json-example-header {
   display: flex;
-  justify-content: flex-end;
-  margin-bottom: 4px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.oas-json-example-title {
+  font-size: calc(var(--font-preview) * 0.72);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-2);
+}
+
+.oas-json-example-code {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: calc(var(--font-preview) * 0.79);
+  line-height: 1.5;
+  color: var(--text-0);
+  max-height: 400px;
+  /* `colorize`'s output has literal `\n`s inside the HTML — preserve them. */
+  white-space: pre;
+  tab-size: 2;
+}
+
+.oas-json-example-code code {
+  background: none;
+  padding: 0;
+  font: inherit;
 }
 
 .oas-response-block {

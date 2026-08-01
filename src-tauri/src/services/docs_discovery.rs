@@ -35,19 +35,14 @@ const NAMED_PATHS: &[&str] = &[
     "documentation",
 ];
 
-/// Outweighs any plausible YAML-file-count score a structural subfolder
-/// (`schemas/`, `operations/`, …) could accumulate, so a detected OpenAPI
-/// spec root always outranks its own children as a docs-root candidate.
-const OPENAPI_SPECS_BONUS: u32 = 950;
-
 #[derive(Debug, Default, Clone)]
 struct DirStats {
     supported: u32,
     asciidoc: u32,
     named_bonus: u32,
-    /// Set when this directory itself matches the OpenAPI multi-file spec
-    /// signature (see `openapi::specs_root_signature`) — weighted by
-    /// structure (entry file + required subfolders), not by file count.
+    /// Set when this directory won the spec-vs-docs comparison in
+    /// `apply_openapi_specs_roots` — its own `score_specs_signals` score,
+    /// not a fixed bonus.
     openapi_bonus: u32,
     depth: usize,
 }
@@ -173,25 +168,55 @@ fn reason(st: &DirStats, relative: &str) -> String {
     }
 }
 
-/// Boosts directories that themselves match the OpenAPI multi-file spec
-/// signature so they outrank their own structural subfolders, and drops
-/// those known subfolders (`schemas/`, `responses/`, `parameters/`,
-/// `operations/`) from candidacy entirely — they're never a sensible docs
-/// root on their own, regardless of how many YAML files they happen to hold.
+/// For every directory already scored by the docs walk, weighs "this looks
+/// like an OpenAPI multi-file spec root" (`openapi::score_specs_signals` —
+/// points for an entry document plus each conventional subfolder present,
+/// none individually required) against "this looks like documentation"
+/// (this file's own `score()`, computed from the *same* directory's stats).
+/// Whichever is higher wins — there's no fixed required-folder gate, so a
+/// spec repo missing one of the conventional subfolders (e.g. no
+/// `parameters/`) still isn't mistaken for a docs root just because it
+/// lacks a "complete" set.
+///
+/// A directory that wins as a spec root has its known structural subfolders
+/// (`schemas/`, `responses/`, `parameters/`, `operations/`) — and everything
+/// nested inside them, however deep (e.g. `schemas/feature/properties`) —
+/// dropped from candidacy entirely, since those are never sensible docs
+/// roots on their own regardless of how many YAML files they hold.
 fn apply_openapi_specs_roots(stats: &mut HashMap<PathBuf, DirStats>) {
     let dirs: Vec<PathBuf> = stats.keys().cloned().collect();
-    let specs_roots: Vec<PathBuf> = dirs
+
+    let winners: Vec<PathBuf> = dirs
         .into_iter()
-        .filter(|dir| openapi::specs_root_signature(dir).is_some())
+        .filter_map(|dir| {
+            let signal = openapi::score_specs_signals(&dir);
+            if signal.score == 0 {
+                return None;
+            }
+            let docs_score = stats.get(&dir).map(score).unwrap_or(0);
+            (signal.score > docs_score).then_some((dir, signal.score))
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|(dir, spec_score)| {
+            if let Some(entry) = stats.get_mut(&dir) {
+                entry.openapi_bonus = spec_score;
+            }
+            dir
+        })
         .collect();
 
-    for root in &specs_roots {
-        let entry = stats.entry(root.clone()).or_default();
-        entry.openapi_bonus = OPENAPI_SPECS_BONUS;
-
-        for sub in openapi::REQUIRED_SUBDIRS {
-            stats.remove(&root.join(sub));
-        }
+    for root in &winners {
+        let structural_roots: Vec<PathBuf> = openapi::KNOWN_SUBDIRS
+            .iter()
+            .map(|sub| root.join(sub))
+            .collect();
+        stats.retain(|path, _| {
+            path == root
+                || !structural_roots
+                    .iter()
+                    .any(|structural| path.starts_with(structural))
+        });
     }
 }
 
@@ -328,6 +353,39 @@ mod tests {
         assert_eq!(candidates[0].relative_path, "specs");
         assert!(
             candidates.iter().all(|c| c.relative_path != "specs/schemas"),
+            "structural subfolders must not be offered as docs-root candidates: {candidates:?}"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn detects_specs_root_without_a_parameters_folder() {
+        // Real-world spec repos don't always have a `parameters/` folder
+        // (e.g. when no operation needs extra parameters beyond the request
+        // body) — detection must not require it, only schemas/responses/operations.
+        let root = temp_dir();
+        let specs = root.join("specs");
+        let schemas = specs.join("schemas").join("feature");
+        for sub in ["schemas/feature", "responses", "operations"] {
+            fs::create_dir_all(specs.join(sub)).unwrap();
+        }
+        fs::write(
+            specs.join("api.yaml"),
+            "openapi: 3.0.3\ninfo:\n  title: test\n  version: 1.0.0\npaths: {}\n",
+        )
+        .unwrap();
+        for i in 0..20 {
+            fs::write(schemas.join(format!("s{i}.yaml")), "type: object\n").unwrap();
+        }
+
+        let candidates = find_candidates(&root, &root).unwrap();
+        assert!(!candidates.is_empty());
+        assert_eq!(candidates[0].relative_path, "specs");
+        assert!(
+            candidates
+                .iter()
+                .all(|c| !c.relative_path.starts_with("specs/schemas")),
             "structural subfolders must not be offered as docs-root candidates: {candidates:?}"
         );
 
