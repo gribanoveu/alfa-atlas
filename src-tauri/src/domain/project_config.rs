@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::ai_access::AiAccessMode;
+use super::ai_access::{AiAccessMode, ToolName};
 
 /// Stable per-repo config stored at `{repoRoot}/.atlas/project.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,6 +15,12 @@ pub struct ProjectConfig {
     /// full repo.
     #[serde(default)]
     pub ai_access_mode: AiAccessMode,
+    /// User-set tool allowlist override. `None` = use
+    /// `ai_access::default_allowed_tools` for `ai_access_mode`. Once set, it
+    /// is authoritative — see that function's doc comment for why a new
+    /// tool isn't silently added to an already-customized list.
+    #[serde(default)]
+    pub ai_allowed_tools: Option<Vec<ToolName>>,
 }
 
 impl ProjectConfig {
@@ -22,6 +28,7 @@ impl ProjectConfig {
         Self {
             docs_root: docs_root_relative.into(),
             ai_access_mode: AiAccessMode::default(),
+            ai_allowed_tools: None,
         }
     }
 }
@@ -134,11 +141,13 @@ mod tests {
         let config: ProjectConfig = serde_json::from_str(r#"{"docsRoot":"docs"}"#).unwrap();
         assert_eq!(config.docs_root, "docs");
         assert_eq!(config.ai_access_mode, AiAccessMode::DocsOnly);
+        assert_eq!(config.ai_allowed_tools, None);
     }
 
     #[test]
     fn new_defaults_to_docs_only() {
         let config = ProjectConfig::new("docs");
         assert_eq!(config.ai_access_mode, AiAccessMode::DocsOnly);
+        assert_eq!(config.ai_allowed_tools, None);
     }
 }

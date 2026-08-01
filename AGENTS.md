@@ -46,6 +46,8 @@ Dependency direction points inward: `commands → services → domain`, and `inf
 
 Don't pre-build all four layers for something trivial. Introduce a trait boundary when there's a real second implementation (e.g. a test double) or a use-case spanning multiple infra calls — not speculatively.
 
+See [`AI_HARNESS.md`](AI_HARNESS.md) for the AI-agent tool-access infrastructure (`domain/ai_access.rs`, `domain/ai_tools.rs`, `services/ai_tools.rs`) — backend-only scaffolding, not yet wired to any LLM or UI.
+
 ## Errors
 
 - Model failures as data as deep into the stack as possible: `thiserror` enums in `domain/`, not `String`.

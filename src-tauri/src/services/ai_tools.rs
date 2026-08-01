@@ -5,26 +5,46 @@
 //! by passing an unexpected path, only by the `ToolScope` itself having been
 //! constructed with the wider root.
 
+use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::domain::ai_access::AiAccessMode;
+use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    is_tool_allowed, ListFilesArgs, ReadFileArgs, ToolError, ToolFileEntry, ToolName, ToolScope,
+    ListFilesArgs, ReadFileArgs, ToolCall, ToolError, ToolFileEntry, ToolResult, ToolScope,
 };
 use crate::domain::paths;
-use crate::domain::project_config::TreeNode;
+use crate::domain::project_config::{ProjectConfig, TreeNode};
 use crate::infra::workspace_scanner;
 use crate::services::docs_fs;
 
-pub fn list_files(
-    scope: &ToolScope,
-    args: ListFilesArgs,
-) -> Result<Vec<ToolFileEntry>, ToolError> {
-    if !is_tool_allowed(scope.mode, ToolName::ListFiles) {
-        return Err(ToolError::NotAllowed(ToolName::ListFiles));
+/// Single entry point for the harness: one allowlist check (via
+/// `scope.allows`), one place to serialize a call/result at the LLM
+/// boundary (`ToolCall`/`ToolResult` both derive `serde`), and — later —
+/// one place to log every tool invocation (not wired up yet).
+pub fn execute_tool(scope: &ToolScope, call: ToolCall) -> Result<ToolResult, ToolError> {
+    if !scope.allows(call.name()) {
+        return Err(ToolError::NotAllowed(call.name()));
     }
+    match call {
+        ToolCall::ReadFile(args) => read_file(scope, args).map(ToolResult::File),
+        ToolCall::ListFiles(args) => list_files(scope, args).map(ToolResult::FileList),
+    }
+}
 
+/// Resolves a `ToolScope` from a project's persisted config — the one place
+/// that turns "user hasn't customized anything" into `mode`'s default
+/// allowlist, and a customized list into the authoritative one.
+pub fn scope_for_config(repo_root: &Path, docs_root: &Path, config: &ProjectConfig) -> ToolScope {
+    let allowed: HashSet<ToolName> = config
+        .ai_allowed_tools
+        .clone()
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_else(|| default_allowed_tools(config.ai_access_mode));
+    ToolScope::new(repo_root, docs_root, config.ai_access_mode, allowed)
+}
+
+fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<ToolFileEntry>, ToolError> {
     let subdir = resolve_subdir(scope, args.path.as_deref())?;
 
     match scope.mode {
@@ -35,11 +55,7 @@ pub fn list_files(
     }
 }
 
-pub fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<String, ToolError> {
-    if !is_tool_allowed(scope.mode, ToolName::ReadFile) {
-        return Err(ToolError::NotAllowed(ToolName::ReadFile));
-    }
-
+fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<String, ToolError> {
     // No extension filtering here, unlike `docs_fs::read_project_file` —
     // the tool boundary is containment under `scope.root` alone. In
     // `FullRepo` mode the harness must be able to read source files, which
@@ -127,16 +143,24 @@ fn list_full_repo(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Builds a `repo_root/docs/...` + `repo_root/src/...` fixture and
-    /// returns `(repo_root, docs_root)`, both canonicalized.
+    /// returns `(repo_root, docs_root)`, both canonicalized. This file has
+    /// far more parallel fixture-based tests than a nanosecond timestamp
+    /// alone reliably disambiguates on a coarser system clock — the counter
+    /// guarantees uniqueness within the process regardless of clock
+    /// resolution.
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     fn fixture_repo() -> (PathBuf, PathBuf) {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let repo = std::env::temp_dir().join(format!("alfa-atlas-ai-tools-{nanos}"));
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let repo = std::env::temp_dir().join(format!("alfa-atlas-ai-tools-{nanos}-{n}"));
         let docs = repo.join("docs");
         let src = repo.join("src");
         fs::create_dir_all(&docs).unwrap();
@@ -150,18 +174,40 @@ mod tests {
         (repo, docs)
     }
 
+    /// Calls `execute_tool` for `ReadFile` and unwraps the expected
+    /// `ToolResult::File` shape, so tests read like the plain `read_file`
+    /// calls they replaced while still exercising the real public entry
+    /// point (allowlist check included).
+    fn read(scope: &ToolScope, path: &str) -> Result<String, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::ReadFile(ReadFileArgs {
+                path: path.to_string(),
+            }),
+        )? {
+            ToolResult::File(content) => Ok(content),
+            other => panic!("expected ToolResult::File, got {other:?}"),
+        }
+    }
+
+    fn list(scope: &ToolScope, path: Option<&str>) -> Result<Vec<ToolFileEntry>, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::ListFiles(ListFilesArgs {
+                path: path.map(str::to_string),
+            }),
+        )? {
+            ToolResult::FileList(entries) => Ok(entries),
+            other => panic!("expected ToolResult::FileList, got {other:?}"),
+        }
+    }
+
     #[test]
     fn read_file_inside_docs_root_succeeds_in_docs_only() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
-        let content = read_file(
-            &scope,
-            ReadFileArgs {
-                path: "intro.adoc".to_string(),
-            },
-        )
-        .unwrap();
+        let content = read(&scope, "intro.adoc").unwrap();
         assert_eq!(content, "= Intro\n");
         fs::remove_dir_all(&repo).ok();
     }
@@ -171,13 +217,7 @@ mod tests {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
-        let err = read_file(
-            &scope,
-            ReadFileArgs {
-                path: ".".to_string(),
-            },
-        )
-        .unwrap_err();
+        let err = read(&scope, ".").unwrap_err();
         assert!(matches!(err, ToolError::NotAFile(_)));
 
         fs::remove_dir_all(&repo).ok();
@@ -188,23 +228,11 @@ mod tests {
         let (repo, docs) = fixture_repo();
 
         let docs_only = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
-        let err = read_file(
-            &docs_only,
-            ReadFileArgs {
-                path: "../src/main.rs".to_string(),
-            },
-        )
-        .unwrap_err();
+        let err = read(&docs_only, "../src/main.rs").unwrap_err();
         assert!(matches!(err, ToolError::PathEscape(_)));
 
         let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
-        let err = read_file(
-            &full_repo,
-            ReadFileArgs {
-                path: "../outside.txt".to_string(),
-            },
-        )
-        .unwrap_err();
+        let err = read(&full_repo, "../outside.txt").unwrap_err();
         assert!(matches!(err, ToolError::PathEscape(_)));
 
         fs::remove_dir_all(&repo).ok();
@@ -220,22 +248,10 @@ mod tests {
         // scope root widens to the whole repo. This is `ToolScope`'s mode
         // switch doing its job, not a `..`-escape (that's covered above).
         let docs_only = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
-        let err = read_file(
-            &docs_only,
-            ReadFileArgs {
-                path: "src/main.rs".to_string(),
-            },
-        );
-        assert!(err.is_err());
+        assert!(read(&docs_only, "src/main.rs").is_err());
 
         let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
-        let content = read_file(
-            &full_repo,
-            ReadFileArgs {
-                path: "src/main.rs".to_string(),
-            },
-        )
-        .unwrap();
+        let content = read(&full_repo, "src/main.rs").unwrap();
         assert_eq!(content, "fn main() {}\n");
 
         fs::remove_dir_all(&repo).ok();
@@ -253,13 +269,7 @@ mod tests {
         std::os::unix::fs::symlink(repo.join("src/main.rs"), docs.join("leak.adoc")).unwrap();
 
         let docs_only = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
-        let err = read_file(
-            &docs_only,
-            ReadFileArgs {
-                path: "leak.adoc".to_string(),
-            },
-        )
-        .unwrap_err();
+        let err = read(&docs_only, "leak.adoc").unwrap_err();
         assert!(matches!(err, ToolError::PathEscape(_)));
 
         fs::remove_dir_all(&repo).ok();
@@ -270,7 +280,7 @@ mod tests {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
-        let entries = list_files(&scope, ListFilesArgs { path: None }).unwrap();
+        let entries = list(&scope, None).unwrap();
         let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
         assert!(paths.contains(&"intro.adoc"));
         assert!(!paths.contains(&"script.py"));
@@ -284,12 +294,70 @@ mod tests {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        let entries = list_files(&scope, ListFilesArgs { path: None }).unwrap();
+        let entries = list(&scope, None).unwrap();
         let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
         assert!(paths.contains(&"docs/intro.adoc"));
         assert!(paths.contains(&"docs/script.py"));
         assert!(paths.contains(&"src/main.rs"));
 
         fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn execute_tool_denies_a_tool_missing_from_a_customized_allowlist() {
+        let (repo, docs) = fixture_repo();
+        let only_list: HashSet<ToolName> = [ToolName::ListFiles].into_iter().collect();
+        let scope = ToolScope::new(&repo, &docs, AiAccessMode::DocsOnly, only_list);
+
+        let err = read(&scope, "intro.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::NotAllowed(ToolName::ReadFile)));
+
+        // The other tool in the same customized allowlist still works.
+        assert!(list(&scope, None).is_ok());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn scope_for_config_defaults_to_both_tools_when_unset() {
+        let (repo, docs) = fixture_repo();
+        let config = ProjectConfig::new(".");
+
+        let scope = scope_for_config(&repo, &docs, &config);
+        assert!(read(&scope, "intro.adoc").is_ok());
+        assert!(list(&scope, None).is_ok());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn scope_for_config_honors_a_customized_allowlist() {
+        let (repo, docs) = fixture_repo();
+        let mut config = ProjectConfig::new(".");
+        config.ai_allowed_tools = Some(vec![ToolName::ListFiles]);
+
+        let scope = scope_for_config(&repo, &docs, &config);
+        assert!(matches!(
+            read(&scope, "intro.adoc").unwrap_err(),
+            ToolError::NotAllowed(ToolName::ReadFile)
+        ));
+        assert!(list(&scope, None).is_ok());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn tool_call_and_result_round_trip_through_json() {
+        let call = ToolCall::ReadFile(ReadFileArgs {
+            path: "intro.adoc".to_string(),
+        });
+        let json = serde_json::to_string(&call).unwrap();
+        assert_eq!(json, r#"{"tool":"readFile","args":{"path":"intro.adoc"}}"#);
+        let round_tripped: ToolCall = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, call);
+
+        let result = ToolResult::File("= Intro\n".to_string());
+        let json = serde_json::to_string(&result).unwrap();
+        assert_eq!(json, r#"{"tool":"file","result":"= Intro\n"}"#);
     }
 }
