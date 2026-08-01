@@ -107,7 +107,7 @@ export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
     id: "job-table",
     label: "Параметры запроса для Job",
     category: "tables",
-    description: "Пустая таблица для параметров запроса для Job",
+    description: "Пустая таблица параметров запроса для Job",
     template: `=== Входные параметры
 
 Job не принимает входных параметров.
