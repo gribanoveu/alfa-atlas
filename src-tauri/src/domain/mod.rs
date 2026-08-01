@@ -1,3 +1,5 @@
+pub mod ai_access;
+pub mod ai_tools;
 pub mod asciidoc_facts;
 pub mod asciidoc_templates;
 pub mod git;

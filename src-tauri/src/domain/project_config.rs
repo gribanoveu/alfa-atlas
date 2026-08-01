@@ -1,18 +1,27 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::ai_access::AiAccessMode;
+
 /// Stable per-repo config stored at `{repoRoot}/.atlas/project.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectConfig {
     /// Path to documentation root, relative to the repository root (`"."` = repo root).
     pub docs_root: String,
+    /// Filesystem boundary for a future AI harness on this project.
+    /// Defaults to `DocsOnly` so existing `project.json` files without this
+    /// field keep the safer boundary rather than silently widening to the
+    /// full repo.
+    #[serde(default)]
+    pub ai_access_mode: AiAccessMode,
 }
 
 impl ProjectConfig {
     pub fn new(docs_root_relative: impl Into<String>) -> Self {
         Self {
             docs_root: docs_root_relative.into(),
+            ai_access_mode: AiAccessMode::default(),
         }
     }
 }
@@ -114,4 +123,22 @@ pub struct UpdatedReference {
 #[serde(rename_all = "camelCase")]
 pub struct RenameReport {
     pub updated_files: Vec<UpdatedReference>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deserializes_legacy_project_config_without_ai_access_mode() {
+        let config: ProjectConfig = serde_json::from_str(r#"{"docsRoot":"docs"}"#).unwrap();
+        assert_eq!(config.docs_root, "docs");
+        assert_eq!(config.ai_access_mode, AiAccessMode::DocsOnly);
+    }
+
+    #[test]
+    fn new_defaults_to_docs_only() {
+        let config = ProjectConfig::new("docs");
+        assert_eq!(config.ai_access_mode, AiAccessMode::DocsOnly);
+    }
 }

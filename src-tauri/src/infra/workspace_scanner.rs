@@ -21,6 +21,19 @@ pub struct ScannedFile {
 /// Walk `root` honoring `.gitignore` and the standard skip-list, returning
 /// supported files sorted by relative path for deterministic indexing order.
 pub fn scan(root: &Path) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
+    walk(root, true)
+}
+
+/// Same gitignore-aware walk as `scan`, but returns every file regardless of
+/// `is_supported_file` — used by the AI-tools file listing in full-repo
+/// mode, where source files (not just doc formats) must be visible to the
+/// harness, not just the doc-format subset the editor's own index cares
+/// about.
+pub fn scan_all(root: &Path) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
+    walk(root, false)
+}
+
+fn walk(root: &Path, filter_supported: bool) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
     let canonical_root = root.canonicalize().map_err(WorkspaceIndexError::Io)?;
 
     let walker = WalkBuilder::new(&canonical_root)
@@ -42,7 +55,7 @@ pub fn scan(root: &Path) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
         }
         let path = entry.path().to_path_buf();
         let path_str = path.to_string_lossy().into_owned();
-        if !is_supported_file(&path_str) {
+        if filter_supported && !is_supported_file(&path_str) {
             continue;
         }
         // Skip anything that escapes the canonical root (symlinks, etc.).
@@ -95,6 +108,22 @@ mod tests {
         assert!(names.contains(&"b.md".to_string()));
         assert!(names.contains(&"d.json".to_string()));
         assert!(!names.contains(&"c.rs".to_string()));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn scan_all_includes_unsupported_extensions() {
+        let root = temp_dir();
+        fs::write(root.join("a.adoc"), "= A\n").unwrap();
+        fs::write(root.join("c.rs"), "fn c() {}").unwrap();
+
+        let files = scan_all(&root).unwrap();
+        let names: Vec<String> = files
+            .iter()
+            .map(|f| f.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.contains(&"a.adoc".to_string()));
+        assert!(names.contains(&"c.rs".to_string()));
         fs::remove_dir_all(&root).ok();
     }
 
