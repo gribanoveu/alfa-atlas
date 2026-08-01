@@ -22,14 +22,14 @@ export function OnboardingCard({ card, onOpen, onDismiss }: OnboardingCardProps)
       }}
     >
       <div className="onboarding-card-icon">
-        <Icon size={22} strokeWidth={1.75} aria-hidden />
+        <Icon size={14} strokeWidth={1.75} aria-hidden />
       </div>
       <div className="onboarding-card-body">
         <span className="onboarding-card-title">{card.title}</span>
         <span className="onboarding-card-desc">{card.description}</span>
         {card.completed ? (
           <span className="onboarding-card-done">
-            <Check size={13} strokeWidth={2} aria-hidden />
+            <Check size={11} strokeWidth={2} aria-hidden />
             Пройдено
           </span>
         ) : (

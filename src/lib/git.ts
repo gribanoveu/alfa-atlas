@@ -225,6 +225,13 @@ export function gitCheckoutBranch(
   return invoke<void>("git_checkout_branch", { repoRoot, name, discardChanges });
 }
 
+export function gitDeleteBranch(
+  repoRoot: string,
+  name: string,
+): Promise<void> {
+  return invoke<void>("git_delete_branch", { repoRoot, name });
+}
+
 export function gitCheckoutRemoteBranch(
   repoRoot: string,
   name: string,

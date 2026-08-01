@@ -11,6 +11,7 @@ import { CheckoutBlockedModal } from "./components/Git/CheckoutBlockedModal";
 import { PullUpdateModal } from "./components/Git/PullUpdateModal";
 import { PushConfirmModal } from "./components/Git/PushConfirmModal";
 import { ResetRemoteConfirmModal } from "./components/Git/ResetRemoteConfirmModal";
+import { DeleteBranchConfirmModal } from "./components/Git/DeleteBranchConfirmModal";
 import { RightDock } from "./components/RightDock/RightDock";
 import { NewFileModal } from "./components/Sidebar/NewFileModal";
 import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
@@ -310,6 +311,7 @@ function App() {
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
+  const [deleteBranchTarget, setDeleteBranchTarget] = useState<GitBranchInfo | null>(null);
   const [copiedItem, setCopiedItem] = useState<FileTreeDeleteTarget | null>(null);
   const [renameTarget, setRenameTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [pullModalOpen, setPullModalOpen] = useState(false);
@@ -528,6 +530,13 @@ function App() {
     setPullModalOpen(false);
     if (err) setGitAlert({ message: err });
   }, [git]);
+
+  const onDeleteBranchConfirm = useCallback(async () => {
+    if (!deleteBranchTarget) return;
+    const ok = await branches.deleteBranch(deleteBranchTarget.name);
+    setDeleteBranchTarget(null);
+    if (!ok && branches.error) setGitAlert({ message: branches.error });
+  }, [branches, deleteBranchTarget]);
 
   const onPushConfirm = useCallback(async () => {
     setPushConfirmOpen(false);
@@ -1317,6 +1326,7 @@ function App() {
                     onCreateBranch: (name) => void handleCreateBranch(name),
                     onRefresh: () => void branches.refresh(),
                     onFetch: () => void branches.fetchBranches(),
+                    onDelete: (branch) => setDeleteBranchTarget(branch),
                   }
                 : null
             }
@@ -1473,6 +1483,15 @@ function App() {
           busy={git.busy}
           onCancel={() => setResetRemoteConfirmOpen(false)}
           onConfirm={() => void onResetToRemoteConfirm()}
+        />
+      ) : null}
+
+      {deleteBranchTarget ? (
+        <DeleteBranchConfirmModal
+          branch={deleteBranchTarget}
+          busy={branches.busy}
+          onCancel={() => setDeleteBranchTarget(null)}
+          onConfirm={() => void onDeleteBranchConfirm()}
         />
       ) : null}
 

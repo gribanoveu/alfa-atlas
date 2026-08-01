@@ -3,6 +3,7 @@ import {
   gitCheckoutBranch,
   gitCheckoutRemoteBranch,
   gitCreateBranch,
+  gitDeleteBranch,
   gitFetchBranches,
   gitListBranches,
   type GitBranchInfo,
@@ -93,6 +94,14 @@ export function useBranches(
     return run(() => gitFetchBranches(repoRoot));
   }, [repoRoot, run]);
 
+  const deleteBranch = useCallback(
+    (name: string) => {
+      if (!repoRoot) return Promise.resolve(false);
+      return run(() => gitDeleteBranch(repoRoot, name));
+    },
+    [repoRoot, run],
+  );
+
   return {
     branches,
     busy,
@@ -102,5 +111,6 @@ export function useBranches(
     checkoutBranch,
     checkoutRemoteBranch,
     fetchBranches,
+    deleteBranch,
   };
 }

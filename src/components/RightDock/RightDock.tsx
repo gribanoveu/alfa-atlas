@@ -92,6 +92,7 @@ export type BranchesPanelViewProps = {
   onCreateBranch: (name: string) => void;
   onRefresh: () => void;
   onFetch: () => void;
+  onDelete: (branch: GitBranchInfo) => void;
 };
 
 type RightDockProps = {
@@ -188,6 +189,7 @@ export function RightDock({
                 onCreateBranch={branches.onCreateBranch}
                 onRefresh={branches.onRefresh}
                 onFetch={branches.onFetch}
+                onDelete={branches.onDelete}
               />
             ) : activeTool === "suggestions" ? (
               <NotificationsPanel />

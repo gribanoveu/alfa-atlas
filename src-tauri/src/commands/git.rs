@@ -167,6 +167,11 @@ pub fn git_checkout_branch(
 }
 
 #[tauri::command]
+pub fn git_delete_branch(repo_root: String, name: String) -> Result<(), String> {
+    git_ops::delete_branch(&repo_root, &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn git_checkout_remote_branch(
     repo_root: String,
     name: String,

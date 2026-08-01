@@ -137,6 +137,10 @@ pub fn checkout_branch(
     git_repo::checkout_branch(Path::new(repo_root), name, discard_changes)
 }
 
+pub fn delete_branch(repo_root: &str, name: &str) -> Result<(), GitError> {
+    git_repo::delete_branch(Path::new(repo_root), name)
+}
+
 pub fn checkout_remote_branch(
     repo_root: &str,
     name: &str,

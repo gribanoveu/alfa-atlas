@@ -6,6 +6,7 @@ import {
   CloudDownload,
   GitFork,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { GitBranchInfo } from "../../lib/git";
@@ -22,6 +23,7 @@ export type BranchesPanelProps = {
   onCreateBranch: (name: string) => void;
   onRefresh: () => void;
   onFetch: () => void;
+  onDelete: (branch: GitBranchInfo) => void;
 };
 
 function splitBranchName(name: string): { leaf: string; prefix: string } {
@@ -45,19 +47,26 @@ function BranchList({
   branches,
   busy,
   icon: Icon,
+  showDelete,
   onCheckout,
+  onDelete,
 }: {
   branches: GitBranchInfo[];
   busy: boolean;
   icon: typeof GitFork;
+  showDelete: boolean;
   onCheckout: (branch: GitBranchInfo) => void;
+  onDelete: (branch: GitBranchInfo) => void;
 }) {
   return (
     <ul className="branches-panel-list" role="list">
       {branches.map((branch) => {
         const { leaf, prefix } = splitBranchName(branch.name);
         return (
-          <li key={`${branch.isRemote ? "remote" : "local"}:${branch.name}`}>
+          <li
+            key={`${branch.isRemote ? "remote" : "local"}:${branch.name}`}
+            className="branches-panel-row"
+          >
             <button
               type="button"
               className={`branches-panel-item${branch.isCurrent ? " is-current" : ""}`}
@@ -84,6 +93,21 @@ function BranchList({
                 <span className="branches-panel-badge">текущая</span>
               ) : null}
             </button>
+            {showDelete ? (
+              <button
+                type="button"
+                className="branches-icon-btn danger branches-panel-row-delete"
+                disabled={busy || branch.isCurrent}
+                title="Удалить ветку"
+                aria-label={`Удалить ветку ${branch.name}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDelete(branch);
+                }}
+              >
+                <Trash2 size={13} aria-hidden />
+              </button>
+            ) : null}
           </li>
         );
       })}
@@ -100,6 +124,7 @@ export function BranchesPanel({
   onCreateBranch,
   onRefresh,
   onFetch,
+  onDelete,
 }: BranchesPanelProps) {
   const [newBranchName, setNewBranchName] = useState(DEFAULT_BRANCH_PREFIX);
   const [search, setSearch] = useState("");
@@ -209,7 +234,9 @@ export function BranchesPanel({
             branches={filteredLocal}
             busy={busy}
             icon={GitFork}
+            showDelete
             onCheckout={onCheckout}
+            onDelete={onDelete}
           />
         )}
 
@@ -242,7 +269,9 @@ export function BranchesPanel({
             branches={filteredRemote}
             busy={busy}
             icon={Cloud}
+            showDelete={false}
             onCheckout={onCheckout}
+            onDelete={onDelete}
           />
         )}
       </div>

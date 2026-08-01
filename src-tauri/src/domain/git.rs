@@ -195,6 +195,8 @@ pub enum GitError {
     BranchNotFound(String),
     #[error("branch already exists: {0}")]
     BranchAlreadyExists(String),
+    #[error("cannot delete the current branch")]
+    CannotDeleteCurrentBranch,
     #[error("commit or discard tracked changes before switching branches")]
     CheckoutBlocked,
     #[error("clone failed: {0}")]

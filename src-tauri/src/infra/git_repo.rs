@@ -1558,6 +1558,18 @@ pub fn create_branch(repo_root: &Path, name: &str, discard_changes: bool) -> Res
     switch_to_branch(&repo, name)
 }
 
+pub fn delete_branch(repo_root: &Path, name: &str) -> Result<(), GitError> {
+    let name = validate_branch_name(name)?;
+    let repo = open_repo(repo_root)?;
+    if branch_name(&repo).as_deref() == Some(name) {
+        return Err(GitError::CannotDeleteCurrentBranch);
+    }
+    let mut branch = repo
+        .find_branch(name, BranchType::Local)
+        .map_err(|_| GitError::BranchNotFound(name.to_string()))?;
+    branch.delete().map_err(GitError::Operation)
+}
+
 pub fn checkout_branch(
     repo_root: &Path,
     name: &str,
