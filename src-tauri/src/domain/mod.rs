@@ -2,6 +2,7 @@ pub mod asciidoc_facts;
 pub mod asciidoc_templates;
 pub mod git;
 pub mod layout;
+pub mod onboarding;
 pub mod openapi;
 pub mod paths;
 pub mod project_config;

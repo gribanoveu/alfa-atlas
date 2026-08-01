@@ -17,6 +17,7 @@ import { HideIcon } from "../icons/HideIcon";
 import { BranchesPanel } from "./BranchesPanel";
 import { GitPanel } from "./GitPanel";
 import { AsciiDocPanel } from "./AsciiDocPanel";
+import { NotificationsPanel } from "./NotificationsPanel";
 import "./RightDock.css";
 
 const TOOL_DEFS: Record<
@@ -188,6 +189,8 @@ export function RightDock({
                 onRefresh={branches.onRefresh}
                 onFetch={branches.onFetch}
               />
+            ) : activeTool === "suggestions" ? (
+              <NotificationsPanel />
             ) : (
               <div className="panel-empty">{active.empty}</div>
             )}

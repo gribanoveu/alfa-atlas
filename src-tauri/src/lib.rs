@@ -180,6 +180,8 @@ pub fn run() {
             commands::prefs::get_general_prefs,
             commands::prefs::set_general_prefs,
             commands::prefs::get_settings_paths,
+            commands::onboarding::get_onboarding_state,
+            commands::onboarding::mark_onboarding_completed,
             commands::workspace_index::build_index,
             commands::workspace_index::clear_index,
             commands::workspace_index::index_is_open,

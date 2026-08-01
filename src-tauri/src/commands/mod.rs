@@ -1,6 +1,7 @@
 pub mod asciidoc;
 pub mod git;
 pub mod layout;
+pub mod onboarding;
 pub mod openapi;
 pub mod prefs;
 pub mod project;

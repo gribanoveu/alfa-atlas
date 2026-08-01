@@ -1,0 +1,48 @@
+.notifications-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+
+.notifications-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.notifications-section-alerts {
+  flex: 0 0 auto;
+  height: 96px;
+  padding: 10px 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.notifications-section-alerts .panel-empty {
+  padding: 0;
+}
+
+.notifications-section-onboarding {
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.notifications-section-title {
+  flex: none;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+
+.onboarding-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
