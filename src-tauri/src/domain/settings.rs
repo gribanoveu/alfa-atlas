@@ -155,6 +155,12 @@ pub struct GeneralPrefs {
     pub autosave_delay_ms: u64,
     #[serde(default = "default_true")]
     pub separate_external_folder: bool,
+    /// Если внешний файл, на который ссылается $ref (например
+    /// `build/common/META-INF/specs/api.yaml`, build-артефакт Java/Gradle
+    /// проектов), не найден на диске, подставлять встроенную в редактор
+    /// дефолтную копию этого common-спека вместо диагностики "file not found".
+    #[serde(default = "default_true")]
+    pub openapi_ref_fallback_enabled: bool,
     /// Язык сообщений диагностик (Проблемы в нижней панели).
     #[serde(default = "default_error_language")]
     pub error_language: ErrorLanguage,
@@ -194,6 +200,7 @@ impl Default for GeneralPrefs {
             save_on_tab_switch: true,
             autosave_delay_ms: DEFAULT_AUTOSAVE_DELAY_MS,
             separate_external_folder: true,
+            openapi_ref_fallback_enabled: true,
             error_language: ErrorLanguage::Ru,
             ui_font_size_px: DEFAULT_UI_FONT_SIZE_PX,
             sidebar_font_size_px: DEFAULT_SIDEBAR_FONT_SIZE_PX,
@@ -393,6 +400,13 @@ mod tests {
         let prefs: GeneralPrefs =
             serde_json::from_str(r#"{"restoreLastProject":false}"#).unwrap();
         assert_eq!(prefs.last_clone_dir, None);
+    }
+
+    #[test]
+    fn deserializes_legacy_general_without_openapi_ref_fallback() {
+        let prefs: GeneralPrefs =
+            serde_json::from_str(r#"{"restoreLastProject":false}"#).unwrap();
+        assert!(prefs.openapi_ref_fallback_enabled);
     }
 
     #[test]

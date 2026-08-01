@@ -496,6 +496,32 @@ export function SettingsDialog({
                     отображается отдельным блоком под основным деревом.
                   </p>
                 </div>
+                <div className="settings-row">
+                  <div className="settings-section-title">OpenAPI</div>
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={prefs?.openApiRefFallbackEnabled ?? true}
+                      disabled={!prefs || busy}
+                      onChange={(event) =>
+                        patchPrefs({
+                          openApiRefFallbackEnabled: event.target.checked,
+                        })
+                      }
+                    />
+                    <span>
+                      Подставлять встроенный common-спек OpenAPI, если файл не
+                      найден
+                    </span>
+                  </label>
+                  <p className="settings-hint">
+                    Если $ref ссылается на build/common/META-INF/specs/api.yaml
+                    (build-артефакт Java/Gradle-проекта, появляющийся только
+                    после сборки) и этого файла нет на диске, редактор
+                    подставляет встроенную копию этого common-спека вместо
+                    диагностики «file not found».
+                  </p>
+                </div>
               </>
             ) : null}
 

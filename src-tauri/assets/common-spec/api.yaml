@@ -1,0 +1,240 @@
+openapi: 3.0.3
+info:
+  title: Specs Common
+  version: 1.0.0
+paths:
+  /stub:
+    get:
+      operationId: stub
+      responses:
+        '200':
+          description: stub
+components:
+  schemas:
+    Currency:
+      type: object
+      properties:
+        code:
+          type: integer
+          format: int32
+          example: 810
+        mnemonicCode:
+          type: string
+          example: RUR
+        minorUnits:
+          type: integer
+          format: int32
+          example: 100
+        unicodeSymbol:
+          type: string
+          example: ₽
+        fullName:
+          type: string
+          example: Российский рубль
+    Amount:
+      type: object
+      properties:
+        amount:
+          type: integer
+          format: int64
+          description: Сумма
+          example: 1235
+        currency:
+          type: object
+          description: Валюта
+          $ref: '#/components/schemas/Currency'
+    Page:
+      title: page
+      description: Страница для пагинации
+      type: object
+      properties:
+        pageNumber:
+          type: integer
+          nullable: false
+          format: int64
+          description: Номер страницы
+          example: 2
+        pageSize:
+          type: integer
+          nullable: false
+          format: int64
+          description: Размер страницы
+          example: 20
+    Pagination:
+      title: pagination
+      description: Пагинация
+      type: object
+      properties:
+        pageNumber:
+          type: integer
+          format: int64
+          description: Номер страницы
+          example: 2
+        pageSize:
+          type: integer
+          format: int64
+          description: Размер страницы
+          example: 20
+        totalElements:
+          type: integer
+          format: int64
+          description: Общее количество элементов
+          example: 45
+        totalPages:
+          type: integer
+          format: int64
+          description: Общее количество страниц
+          example: 3
+    ResponseError:
+      title: ResponseError
+      type: object
+      required:
+        - source
+        - type
+        - internalMessage
+      properties:
+        source:
+          type: string
+          description: Источник ошибки
+          enum:
+            - CLIENT
+            - SERVER
+        type:
+          type: string
+          description: Тип ошибки
+          example: AuthenticationError
+        code:
+          type: string
+          description: Код ошибки
+          example: TokenExpired
+        internalMessage:
+          type: string
+          description: Внутренний текст ошибки (не предназначен для отображения клиенту)
+        details:
+          type: array
+          description: Дополнительная информация об ошибке
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                description: Тип дополнительной информации
+              attributes:
+                type: object
+                description: Атрибуты дополнительной информации об ошибке
+                additionalProperties:
+                  type: string
+        meta:
+          type: object
+          properties:
+            version:
+              type: integer
+              description: Версия схемы ошибки
+            traceId:
+              type: string
+              description: 'Идентификатор запроса, приведшего к ошибке'
+  parameters:
+    userId:
+      name: A-userId
+      in: header
+      description: Идентификатор инициатора запроса (УЛ)
+      required: true
+      schema:
+        type: string
+        nullable: false
+        pattern: '^(.{6}|.{9})$'
+      example: XAAAAA
+    userIp:
+      name: A-userIp
+      in: header
+      description: Идентификатор приложения инициатора запроса
+      required: false
+      schema:
+        type: string
+        nullable: false
+      example: 64.233.165.113
+    customerId:
+      name: A-customerId
+      in: header
+      description: Идентификатор клиента инициатора запроса (УЛ)
+      required: true
+      schema:
+        type: array
+        minItems: 1
+        items:
+          type: string
+          pattern: '^(.{6}|.{9})$'
+        nullable: false
+      example: UAAAAA
+    projectId:
+      name: A-projectId
+      in: header
+      description: Идентификатор приложения инициатора запроса
+      required: false
+      schema:
+        type: string
+        nullable: false
+      example: DASHBOARD
+    clientType:
+      name: A-clientType
+      in: header
+      description: Тип сервиса инициатора запроса
+      required: true
+      schema:
+        type: string
+        nullable: false
+        pattern: '^([a-zA-Z]+)$'
+      example: FRONT
+    channelId:
+      name: A-channelId
+      in: header
+      description: Идентификатор вызывающей системы (канала) NIB|ABM|BAAS
+      required: true
+      schema:
+        type: string
+        nullable: false
+        pattern: '^([a-zA-Z]+)$'
+      example: NIB
+  responses:
+    badRequest:
+      description: Неверные входные параметры запроса
+      content:
+        application/json:
+          schema:
+            type: object
+            $ref: '#/components/schemas/ResponseError'
+    forbidden:
+      description: Доступ запрещен
+      content:
+        application/json:
+          schema:
+            type: object
+            $ref: '#/components/schemas/ResponseError'
+    gatewayTimeout:
+      description: Таймаут при обращении к нижележащему сервису
+      content:
+        application/json:
+          schema:
+            type: object
+            $ref: '#/components/schemas/ResponseError'
+    internalError:
+      description: Внутренняя ошибка сервиса
+      content:
+        application/json:
+          schema:
+            type: object
+            $ref: '#/components/schemas/ResponseError'
+    notFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            type: object
+            $ref: '#/components/schemas/ResponseError'
+    conflict:
+      description: Конфликт запроса с текущим состоянием сервера
+      content:
+        application/json:
+          schema:
+            type: object
+            $ref: '#/components/schemas/ResponseError'

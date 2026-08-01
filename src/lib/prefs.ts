@@ -8,6 +8,7 @@ export type GeneralPrefs = {
   saveOnTabSwitch: boolean;
   autosaveDelayMs: number;
   separateExternalFolder: boolean;
+  openApiRefFallbackEnabled: boolean;
   errorLanguage: ErrorLanguage;
   uiFontSizePx: number;
   sidebarFontSizePx: number;
@@ -22,6 +23,7 @@ export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
   saveOnTabSwitch: true,
   autosaveDelayMs: 1000,
   separateExternalFolder: true,
+  openApiRefFallbackEnabled: true,
   errorLanguage: "ru",
   uiFontSizePx: 12.5,
   sidebarFontSizePx: 12,

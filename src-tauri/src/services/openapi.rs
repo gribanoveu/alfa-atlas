@@ -3,11 +3,13 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
 use crate::domain::openapi::{OpenApiBundleResult, OpenApiError, RefDiagnostic, SpecsRepoInfo};
 use crate::domain::paths;
+use crate::infra::common_spec_assets;
 
 /// Conventional structural subfolders of this OpenAPI multi-file spec
 /// convention. None are individually required — real-world spec repos
@@ -167,6 +169,7 @@ pub fn detect_specs_repo(repo_root: &Path) -> Result<Option<SpecsRepoInfo>, Open
 pub fn load_openapi_bundle(
     repo_root: &Path,
     entry_file_relative: &str,
+    enable_ref_fallback: bool,
 ) -> Result<OpenApiBundleResult, OpenApiError> {
     let joined = paths::join_relative(repo_root, entry_file_relative)?;
     let entry_path = paths::ensure_under(repo_root, &joined)?;
@@ -186,6 +189,7 @@ pub fn load_openapi_bundle(
         resolved_cache: RefCell::new(HashMap::new()),
         in_progress: RefCell::new(HashSet::new()),
         diagnostics: RefCell::new(Vec::new()),
+        enable_ref_fallback,
     };
     let document = resolver.walk(&root_value, &entry_path, "");
     Ok(OpenApiBundleResult {
@@ -283,6 +287,37 @@ fn display_relative(repo_root: &Path, p: &Path) -> String {
     paths::relative_to(repo_root, p).unwrap_or_else(|_| p.display().to_string())
 }
 
+/// Matches the well-known location of the "common" spec bundle that
+/// `ru.alfalab.openapi-configurer`-style Gradle projects extract from a
+/// published jar into `build/common/META-INF/specs/api.yaml` at build time.
+/// That path is always gitignored and only exists once a Java/Gradle build
+/// has run, so a repo opened here without that build step is missing it —
+/// matched by suffix, independent of the `build/` prefix (which is just
+/// where the referring `$ref` happened to resolve it lexically).
+fn is_common_spec_fallback_path(path: &Path) -> bool {
+    let mut tail: Vec<&str> = path
+        .components()
+        .rev()
+        .take(4)
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    tail.reverse();
+    tail.as_slice() == ["common", "META-INF", "specs", "api.yaml"]
+}
+
+/// Parses the bundled default copy of the common spec bundle once and caches
+/// the result for the process lifetime. Cached as a plain `Value` (`Rc` isn't
+/// `Sync`, so it can't live in a `static`); each call wraps a clone in a
+/// fresh `Rc` for the (single-threaded) resolver to cache further itself.
+fn bundled_common_spec_value() -> Rc<Value> {
+    static CACHE: OnceLock<Value> = OnceLock::new();
+    let value = CACHE.get_or_init(|| {
+        let text = common_spec_assets::bundled_common_api_yaml();
+        parse_generic(text, "yaml").expect("bundled common-spec asset must be valid YAML")
+    });
+    Rc::new(value.clone())
+}
+
 struct Resolver {
     repo_root: PathBuf,
     /// Raw parsed file content, keyed by lexically-normalized path.
@@ -293,6 +328,9 @@ struct Resolver {
     /// (file, pointer) pairs currently being resolved, for cycle detection.
     in_progress: RefCell<HashSet<(PathBuf, String)>>,
     diagnostics: RefCell<Vec<RefDiagnostic>>,
+    /// Whether a missing well-known common-spec bundle should fall back to
+    /// the app's bundled default copy instead of reporting "file not found".
+    enable_ref_fallback: bool,
 }
 
 impl Resolver {
@@ -312,6 +350,11 @@ impl Resolver {
                 self.file_cache.borrow_mut().insert(path.to_path_buf(), rc.clone());
                 return Ok(rc);
             }
+        }
+        if self.enable_ref_fallback && is_common_spec_fallback_path(path) {
+            let rc = bundled_common_spec_value();
+            self.file_cache.borrow_mut().insert(path.to_path_buf(), rc.clone());
+            return Ok(rc);
         }
         Err(())
     }
@@ -411,5 +454,92 @@ impl Resolver {
             ),
             other => other.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir() -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-openapi-{nanos}-{n}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Sets up a minimal spec repo whose `specs/responses/all.yaml` refs the
+    /// well-known common-spec bundle path, without that build artifact
+    /// actually existing on disk — mirroring a spec repo opened without a
+    /// prior Gradle build.
+    fn setup_repo_with_missing_common_spec() -> PathBuf {
+        let root = temp_dir();
+        fs::create_dir_all(root.join("specs/responses")).unwrap();
+        fs::write(
+            root.join("specs/api.yaml"),
+            "openapi: 3.0.3\ninfo:\n  title: t\n  version: '1'\npaths: {}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("specs/responses/all.yaml"),
+            "badRequest:\n  $ref: '../../build/common/META-INF/specs/api.yaml#/components/responses/badRequest'\n",
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn falls_back_to_bundled_common_spec_when_enabled() {
+        let root = setup_repo_with_missing_common_spec();
+        let result = load_openapi_bundle(&root, "specs/api.yaml", true).unwrap();
+        assert!(
+            result.diagnostics.is_empty(),
+            "expected no diagnostics, got {:?}",
+            result.diagnostics
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn reports_file_not_found_when_fallback_disabled() {
+        let root = setup_repo_with_missing_common_spec();
+        // The $ref lives in specs/responses/all.yaml, which the minimal
+        // entry document doesn't itself reference; walk it directly to
+        // exercise the resolver's file-not-found path.
+        let resolver = Resolver {
+            repo_root: root.clone(),
+            file_cache: RefCell::new(HashMap::new()),
+            resolved_cache: RefCell::new(HashMap::new()),
+            in_progress: RefCell::new(HashSet::new()),
+            diagnostics: RefCell::new(Vec::new()),
+            enable_ref_fallback: false,
+        };
+        let text = fs::read_to_string(root.join("specs/responses/all.yaml")).unwrap();
+        let value = parse_generic(&text, "yaml").unwrap();
+        resolver.walk(&value, &root.join("specs/responses/all.yaml"), "");
+        let diagnostics = resolver.diagnostics.into_inner();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].reason, "file not found");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn is_common_spec_fallback_path_matches_suffix_regardless_of_prefix() {
+        assert!(is_common_spec_fallback_path(Path::new(
+            "/repo/build/common/META-INF/specs/api.yaml"
+        )));
+        assert!(!is_common_spec_fallback_path(Path::new(
+            "/repo/build/common/META-INF/specs/other.yaml"
+        )));
+        assert!(!is_common_spec_fallback_path(Path::new(
+            "/repo/specs/schemas/api.yaml"
+        )));
     }
 }
