@@ -75,15 +75,6 @@ export function useMonacoDiagnostics(
       decorationsRef.current,
       decorations,
     );
-    // DEBUG: проверить, что decorations реально создаются.
-    const modelDecs = model.getAllDecorations();
-    console.log("[useMonacoDiagnostics]", {
-      activePath,
-      forThisDoc: forThisDoc.length,
-      applied: decorations.length,
-      modelDecs: modelDecs.length,
-      glyphDecs: modelDecs.filter((d) => d.options.glyphMarginClassName).length,
-    });
 
     return () => {
       monaco.editor.setModelMarkers(model, OWNER, []);
