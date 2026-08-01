@@ -61,6 +61,10 @@ webhook
 токена
 ФНС
 ЕНП
+kpp
+bic
+fio
+pochtochka
 adoc
 NotNull
 AmountDto

@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import type * as Monaco from "monaco-editor";
+import { highlightJson } from "../OpenApiExplorer/jsonHighlight";
+import "../StructuredDataPreview/StructuredDataPreview.css";
 
 const LANGUAGE_ALIASES: Record<string, string> = {
   sh: "shell",
@@ -54,6 +56,15 @@ export function MdCodeBlock({
   const [html, setHtml] = useState<string | null>(null);
 
   useEffect(() => {
+    // Monaco's "json" language has no classic Monarch tokenizer in this
+    // monaco-editor version (only css/html/typescript keep one alongside
+    // their LSP-driven language service) — colorize() falls back to flat,
+    // uncolored `mtk1` spans. Highlight it ourselves instead.
+    if (lang === "json") {
+      setHtml(highlightJson(source));
+      return;
+    }
+
     if (!monaco || !lang) {
       setHtml(null);
       return;
