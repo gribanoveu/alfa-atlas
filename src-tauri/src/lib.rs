@@ -212,6 +212,7 @@ pub fn run() {
             commands::spellcheck::get_custom_dictionary_words,
             commands::spellcheck::add_custom_dictionary_word,
             commands::spellcheck::remove_custom_dictionary_word,
+            commands::ai_tools::ai_execute_tool,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

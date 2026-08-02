@@ -4,7 +4,7 @@ Status of the AI-agent infrastructure in this app: what exists today, what it do
 
 ## Status
 
-**Backend-only scaffolding. No LLM is wired up, no chat UI exists, no Tauri commands expose any of this to the frontend yet.** This is groundwork for a future AI harness (an agent loop that calls an LLM with tool-calling) — specifically the trust boundary that decides *which files* and *which operations* that harness is allowed to touch. Everything below lives in Rust (`src-tauri/src`), is unit-tested, and is currently unreachable from the app itself.
+**The tool-execution boundary is now reachable from the frontend via one IPC command (`ai_execute_tool`), but no LLM is wired up and no chat UI exists yet.** This is groundwork for a future AI harness (an agent loop that calls an LLM with tool-calling) — specifically the trust boundary that decides *which files* and *which operations* that harness is allowed to touch. The Rust side (`src-tauri/src`) is unit-tested; the new IPC command itself is verified end-to-end (see "IPC surface" below) but has no caller anywhere in the app yet — nothing in `src/components`/`src/hooks` invokes it.
 
 The product vision for the user-facing feature this unblocks is documented separately in [`doc/business-requirements/02-functional-requirements.md`](doc/business-requirements/02-functional-requirements.md) (BR-4 "AI-ассистент документации", BR-5 "Подсказки AI").
 
@@ -37,8 +37,10 @@ Legacy `project.json` files without these fields deserialize cleanly (`#[serde(d
 domain/ai_access.rs   — AiAccessMode, ToolName, default_allowed_tools(mode)   (policy/data)
 domain/ai_tools.rs    — ToolCall, ToolResult, ToolScope, ToolError            (execution types)
 domain/project_config.rs — ai_access_mode, ai_allowed_tools (persisted)
-services/ai_tools.rs  — execute_tool(), scope_for_config()                    (orchestration)
+services/ai_tools.rs  — execute_tool(), scope_for_config(), current_scope()   (orchestration)
 infra/workspace_scanner.rs — scan() / scan_all() (gitignore-aware file walk; scan_all skips the doc-format filter, used by FullRepo listing)
+commands/ai_tools.rs  — ai_execute_tool (IPC command)
+src/lib/aiTools.ts     — aiExecuteTool() (typed frontend wrapper, no callers yet)
 ```
 
 ## The single entry point: `execute_tool`
@@ -84,13 +86,40 @@ Every path a tool touches is validated with `domain::paths::{join_relative, ensu
 
 One known gap, intentionally not addressed by this tool layer: `commands/git.rs` (git diff/blob reads via `git2`) can already surface content from anywhere in the tracked repository, independent of `docsRoot` containment. A `DocsOnly`-mode harness must never be handed a git-diff-style tool — this is why the allowlist is an explicit opt-in table rather than "everything not yet disabled."
 
+## IPC surface: `ai_execute_tool`
+
+One Tauri command, in [`commands/ai_tools.rs`](src-tauri/src/commands/ai_tools.rs), registered in `generate_handler![]` in `lib.rs`:
+
+```rust
+#[tauri::command]
+pub async fn ai_execute_tool(call: ToolCall) -> Result<ToolResult, String>
+```
+
+The frontend passes only `{ tool, args }` — it never passes `docsRoot`/`repoRoot`/an access mode, unlike every other document command in this codebase (`read_project_file(docsRoot, ...)` etc.). The command resolves which project is open itself, via a new `services::ai_tools::current_scope()`:
+
+```rust
+pub fn current_scope() -> Result<ToolScope, ProjectError>
+```
+
+`current_scope()` reuses `services::project_open::get_project()` (the same backend-authoritative "what's the current project" resolver `commands::project::get_project` uses at startup restore, reading `~/.atlas/settings.json`) to get `(repo_root, docs_root)`, then loads the full `ProjectConfig` via `infra::project_store::load` (for `ai_access_mode`/`ai_allowed_tools`, which `get_project()` alone discards), then calls `scope_for_config`. If no project is open, it returns an error whose message includes `"no project is open"`.
+
+Runs via `spawn_blocking` (like `check_standards`) since `ListFiles` in `FullRepo` mode walks the whole repo.
+
+Frontend wrapper, [`src/lib/aiTools.ts`](src/lib/aiTools.ts):
+```ts
+export function aiExecuteTool(call: ToolCall): Promise<ToolResult>
+```
+No `hooks/` layer and no UI wired to it yet — this is boundary-only, per AGENTS.md's `lib/` convention (one typed function per command, no logic).
+
+Verified end-to-end against a running dev build (`bun run tauri dev`) via direct `window.__TAURI__.core.invoke` calls in the webview: `listFiles` returns the real docs tree, `readFile` returns real file content, and a `../`-traversal attempt is rejected with `"path escapes tool root: ..."` — confirming the containment boundary holds across the actual IPC channel, not just in Rust unit tests.
+
 ## What is not built yet
 
-- No `#[tauri::command]`/IPC surface over `execute_tool` — nothing in the frontend can call this today.
 - No UI to view or change `ai_access_mode` / `ai_allowed_tools` — currently editable only by hand-editing `project.json` or in Rust code/tests.
 - No LLM client, no chat UI, no streaming — this file only governs *what a future harness may read*, not how it talks to a model.
 - No write/edit tool.
 - No logging at the `execute_tool` call site (the single entry point exists specifically so this is a one-line addition later).
+- No frontend caller of `aiExecuteTool` yet — the IPC boundary is wired and verified, but nothing in the UI triggers it.
 
 ## Extending this
 

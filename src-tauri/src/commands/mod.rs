@@ -1,3 +1,4 @@
+pub mod ai_tools;
 pub mod asciidoc;
 pub mod git;
 pub mod layout;

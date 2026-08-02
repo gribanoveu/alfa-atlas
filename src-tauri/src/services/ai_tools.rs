@@ -14,9 +14,9 @@ use crate::domain::ai_tools::{
     ListFilesArgs, ReadFileArgs, ToolCall, ToolError, ToolFileEntry, ToolResult, ToolScope,
 };
 use crate::domain::paths;
-use crate::domain::project_config::{ProjectConfig, TreeNode};
-use crate::infra::workspace_scanner;
-use crate::services::docs_fs;
+use crate::domain::project_config::{ProjectConfig, ProjectError, TreeNode};
+use crate::infra::{project_store, workspace_scanner};
+use crate::services::{docs_fs, project_open};
 
 /// Single entry point for the harness: one allowlist check (via
 /// `scope.allows`), one place to serialize a call/result at the LLM
@@ -42,6 +42,26 @@ pub fn scope_for_config(repo_root: &Path, docs_root: &Path, config: &ProjectConf
         .map(|v| v.into_iter().collect())
         .unwrap_or_else(|| default_allowed_tools(config.ai_access_mode));
     ToolScope::new(repo_root, docs_root, config.ai_access_mode, allowed)
+}
+
+/// Resolves a `ToolScope` for whichever project is currently open, without
+/// the caller (the IPC command) supplying any path — this is what lets the
+/// frontend call `ai_execute_tool` knowing nothing about `docsRoot`/
+/// `repoRoot`/the access mode. Reuses the same backend-authoritative source
+/// `commands::project::get_project` already uses at startup restore;
+/// `project_open::get_project()` alone doesn't expose `ai_access_mode`/
+/// `ai_allowed_tools` (it discards the rest of `ProjectConfig`), so those
+/// are loaded separately here.
+pub fn current_scope() -> Result<ToolScope, ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let config = project_store::load(&opened.root)?
+        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    Ok(scope_for_config(
+        Path::new(&opened.root),
+        Path::new(&opened.docs_root),
+        &config,
+    ))
 }
 
 fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<ToolFileEntry>, ToolError> {

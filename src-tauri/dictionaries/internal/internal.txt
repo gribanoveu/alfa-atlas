@@ -7,6 +7,7 @@
 # в отличие от личного словаря пользователя (~/.atlas/dictionaries/custom.txt)
 # это часть репозитория и общее для всей команды.
 API
+api
 SDK
 SQL
 URL
@@ -27,13 +28,17 @@ UUID
 uuid
 GUID
 REST
+rest
 SOAP
+soap
 CRUD
+crud
 CORS
 OAuth
 OpenAPI
 AsciiDoc
 Markdown
+pdf
 GitLab
 GitHub
 Kubernetes
@@ -58,6 +63,18 @@ webhook
 аутентификация
 идентификатор
 идентификатора
+предпросмотра
+предпросмотр
+пробрасываются
+сгенерирует
+сгенерированного
+Невалидные
+фреймворк
+хардкод
+mks-users-api
+mks-roles-api
+A-customerId
+A-userId
 капчу
 капча
 капчи
@@ -65,6 +82,7 @@ webhook
 токена
 ФНС
 ЕНП
+ФИО
 ЭА
 kpp
 bic
@@ -81,6 +99,13 @@ fullName
 RUR
 MIME-тип
 Валидация
+валидации
+OpenAPI-валидации
+OpenAPI-валидация
+null-проверки
+опциональные
+Маппинг
+сервисы
 json
 enum
 api
@@ -93,5 +118,18 @@ InternalError
 GatewayTimeout
 UnsupportedMediaType
 UnprocessableEntity
+ServerException
 operationId
 requestBody
+startuml
+enduml
+pragma
+graphviz
+MistyRose
+AliceBlue
+jdot
+CTRL
+PGW
+PGS
+DNS
+METR
