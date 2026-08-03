@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use dashmap::DashMap;
 
@@ -34,6 +34,12 @@ impl RepoIndexStats {
 pub struct RepositoryIndex {
     files: DashMap<FileId, IndexedFile>,
     indexers: HashMap<Language, Arc<dyn LanguageIndexer>>,
+    /// Set at the start of `build()`, mirrors
+    /// `services::workspace_index::WorkspaceIndex`'s own `repo_root` field —
+    /// lets `read()` resolve a `FileId` back to an absolute path without
+    /// every caller (e.g. `ChunkBuilder`) needing to know the repo layout
+    /// itself.
+    repo_root: RwLock<Option<PathBuf>>,
 }
 
 impl Default for RepositoryIndex {
@@ -47,6 +53,7 @@ impl RepositoryIndex {
         Self {
             files: DashMap::new(),
             indexers: language_indexers::default_indexers(),
+            repo_root: RwLock::new(None),
         }
     }
 
@@ -59,6 +66,7 @@ impl RepositoryIndex {
     /// short.
     pub fn build(&self, repo_root: &Path) -> Result<RepoIndexStats, RepoIndexError> {
         self.clear();
+        *self.repo_root.write().unwrap() = Some(repo_root.to_path_buf());
 
         let scanned = workspace_scanner::scan_all(repo_root)?;
         let mut stats = RepoIndexStats {
@@ -122,6 +130,31 @@ impl RepositoryIndex {
             .filter(|entry| entry.value().metadata.language == language)
             .map(|entry| entry.value().clone())
             .collect()
+    }
+
+    /// Every indexed file's id — deliberately cheap (clones only the small
+    /// keys, not each file's full symbol list) so a caller that wants to
+    /// process every file (e.g. `ChunkBuilder::build_all`) doesn't pay for a
+    /// bulk copy of the whole index just to enumerate it.
+    pub fn file_ids(&self) -> Vec<FileId> {
+        self.files.iter().map(|entry| entry.key().clone()).collect()
+    }
+
+    /// Reads `file_id`'s current content from disk, resolved against the
+    /// `repo_root` passed to the last `build()` call. `RepositoryIndex`
+    /// deliberately never stores file content (see `IndexedFile`'s doc
+    /// comment) — this is the one place that knows how to turn a `FileId`
+    /// back into bytes, so callers (e.g. `ChunkBuilder`) don't need to know
+    /// the repo layout themselves.
+    pub fn read(&self, file_id: &FileId) -> Result<String, RepoIndexError> {
+        let root = self
+            .repo_root
+            .read()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| RepoIndexError::Message("no repo_root set — call build() first".into()))?;
+        let path = root.join(&file_id.0);
+        fs::read_to_string(&path).map_err(RepoIndexError::Io)
     }
 
     pub fn clear(&self) {
@@ -221,6 +254,41 @@ mod tests {
         assert_eq!(java_files[0].metadata.language, Language::Java);
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn file_ids_lists_every_indexed_file() {
+        let root = fixture_repo();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        let ids = index.file_ids();
+        assert_eq!(ids.len(), 5);
+        assert!(ids.contains(&FileId("src/UserService.java".to_string())));
+        assert!(!ids.contains(&FileId("src/Main.rs".to_string())));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn read_returns_current_file_content() {
+        let root = fixture_repo();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        let content = index.read(&FileId("src/response.json".to_string())).unwrap();
+        assert_eq!(content, r#"{"a": 1}"#);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn read_before_build_fails_clearly() {
+        let index = RepositoryIndex::new();
+        let err = index
+            .read(&FileId("src/response.json".to_string()))
+            .unwrap_err();
+        assert!(matches!(err, RepoIndexError::Message(_)));
     }
 
     #[test]

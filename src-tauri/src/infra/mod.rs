@@ -1,3 +1,4 @@
+pub mod chunk_strategies;
 pub mod common_spec_assets;
 pub mod custom_dictionary_store;
 pub mod dictionary_assets;

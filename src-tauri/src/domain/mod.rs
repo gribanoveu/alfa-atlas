@@ -2,6 +2,7 @@ pub mod ai_access;
 pub mod ai_tools;
 pub mod asciidoc_facts;
 pub mod asciidoc_templates;
+pub mod chunk_index;
 pub mod git;
 pub mod layout;
 pub mod onboarding;

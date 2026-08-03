@@ -4,7 +4,7 @@ Status of the AI-agent infrastructure in this app: what exists today, what it do
 
 ## Status
 
-**The tool-execution boundary is reachable from the frontend via one IPC command (`ai_execute_tool`), and a standalone structural Repository Index now exists alongside it — but no LLM is wired up and no chat UI exists yet.** This is groundwork for a future AI harness (an agent loop that calls an LLM with tool-calling) — specifically the trust boundary that decides *which files* and *which operations* that harness is allowed to touch, plus a per-file index of metadata/hash/language/symbols it will eventually query. The Rust side (`src-tauri/src`) is unit-tested throughout; the IPC command is additionally verified end-to-end (see "IPC surface" below) but has no caller anywhere in the app yet, and the Repository Index has no caller at all yet (not even IPC) — nothing in `src/components`/`src/hooks` invokes either.
+**The tool-execution boundary is reachable from the frontend via one IPC command (`ai_execute_tool`), and a standalone Repository Index + Chunk Index now exist alongside it — but no LLM is wired up and no chat UI exists yet.** This is groundwork for a future AI harness (an agent loop that calls an LLM with tool-calling) — specifically the trust boundary that decides *which files* and *which operations* that harness is allowed to touch, plus a per-file structural index and a semantic-chunk index it will eventually query (and, later, that a separate embeddings stage will build on). The Rust side (`src-tauri/src`) is unit-tested throughout; the IPC command is additionally verified end-to-end (see "IPC surface" below) but has no caller anywhere in the app yet, and neither index has any caller at all yet (not even IPC) — nothing in `src/components`/`src/hooks` invokes any of this.
 
 The product vision for the user-facing feature this unblocks is documented separately in [`doc/business-requirements/02-functional-requirements.md`](doc/business-requirements/02-functional-requirements.md) (BR-4 "AI-ассистент документации", BR-5 "Подсказки AI").
 
@@ -44,7 +44,11 @@ src/lib/aiTools.ts     — aiExecuteTool() (typed frontend wrapper, no callers y
 
 domain/repo_index.rs        — Language, Symbol, FileMetadata, IndexedFile, LanguageIndexer trait, INDEX_VERSION
 infra/language_indexers/*   — JavaIndexer, JsonIndexer, YamlIndexer, MarkdownIndexer, AsciiDocIndexer
-services/repo_index.rs      — RepositoryIndex (build/get/files_for_language/clear)
+services/repo_index.rs      — RepositoryIndex (build/get/file_ids/read/files_for_language/clear)
+
+domain/chunk_index.rs       — ChunkSpan, ChunkStrategy trait, ChunkMetadata, Chunk, CHUNK_VERSION, gap-ownership + splitting helpers
+infra/chunk_strategies/*    — JavaChunkStrategy, MarkdownChunkStrategy, AsciiDocChunkStrategy, WholeFileChunkStrategy
+services/chunk_builder.rs   — ChunkBuilder (build_file/build_all), ChunkIndex (insert_all/replace_for_file/chunks_for_file/get/clear)
 ```
 
 ## The single entry point: `execute_tool`
@@ -144,6 +148,27 @@ Deliberately **does not store file content** — a repo of thousands of files wo
 
 `INDEX_VERSION` (currently `1`) exists from day one even though nothing persists the index yet — bumped whenever indexer behavior changes in a way that would change output for the same input, so a future on-disk cache has a cheap staleness signal instead of a retrofit.
 
+## Chunk Index
+
+Built on top of Repository Index: `RepositoryIndex → ChunkBuilder → ChunkIndex`. **Still no embeddings, no BGE-M3, no vector DB** — this layer only splits an already-indexed file into meaningful, addressable text fragments (a method, a doc section, a whole small file). That split is what a future embeddings stage would actually run over.
+
+```rust
+pub struct Chunk {
+    pub metadata: ChunkMetadata,  // id, file_id, language, kind, byte range, file_hash, hash, qualified_name, ordinal
+    pub text: String,             // unlike IndexedFile, a Chunk DOES carry its own text — it's the unit of work
+}
+```
+
+**Gap ownership** decides which bytes belong to which chunk without a useless `ChunkKind::Other`/`Gap`: for Java, `Method`/`Field` symbols already capture their own full body, so each chunk absorbs the *gap before it* (annotations, Javadoc, blank lines, and for the first chunk — package/imports/class declaration too); the last chunk also absorbs the file's trailing suffix. For Markdown/AsciiDoc, heading symbols only mark their own title line, so each chunk absorbs the content *forward* to the next heading (or EOF). JSON/YAML (no symbols) — and any file whose language has symbols but yields none, e.g. an empty class — become one `ChunkKind::File` chunk. `ChunkKind` is exactly `Method | Field | Section | File`.
+
+**Oversized chunks** (`> DEFAULT_MAX_CHUNK_BYTES`, 16KB) are split as a separate, uniform pass after semantic splitting — never per-language — preferring a blank line, `;`, or `}` boundary within a lookback window over an arbitrary cut, always on a valid UTF-8 char boundary.
+
+**Identity vs. change detection are deliberately separate fields**: `ChunkId` is the human-readable `"{file_id}#{start_byte}-{end_byte}"`; `hash` is `BLAKE3(file_hash || start_byte || end_byte || CHUNK_VERSION)` — derived from position, not from re-hashing `text`, so a later embeddings stage can ask "did this exact chunk change?" cheaply. `file_hash` is copied onto every chunk (not just reachable via `RepositoryIndex`) since a `ChunkIndex` will often outlive or travel separately from the index that built it — e.g. once chunks are written to a Vector DB.
+
+**`ChunkBuilder` and `ChunkIndex` are separate types** — the builder holds only the per-language `ChunkStrategy` registry and produces `Vec<Chunk>`; the index just stores (`DashMap<ChunkId, Chunk>`). `build_file`/`build_all` already exist as two entry points (`build_all` just loops `build_file` today) specifically so a future file watcher can call `build_file` + `chunk_index.replace_for_file` for exactly the one changed file without either type needing to change.
+
+A `ChunkStrategy` only returns ranges (`ChunkSpan`) — hashing, `qualified_name` lookup (smallest enclosing `Class`/`Interface`/`Enum` symbol, e.g. `"UserService.save"`), and `ordinal` assignment all happen once in `ChunkBuilder`, not duplicated per language.
+
 ## What is not built yet
 
 - No UI to view or change `ai_access_mode` / `ai_allowed_tools` — currently editable only by hand-editing `project.json` or in Rust code/tests.
@@ -151,7 +176,10 @@ Deliberately **does not store file content** — a repo of thousands of files wo
 - No write/edit tool.
 - No logging at the `execute_tool` call site (the single entry point exists specifically so this is a one-line addition later).
 - No frontend caller of `aiExecuteTool` yet — the IPC boundary is wired and verified, but nothing in the UI triggers it.
-- Repository Index has no `#[tauri::command]`, no `.manage()` registration, no wiring into `ai_tools`'s `ToolCall`/`ToolName`, no persistence to disk, and no chunking (`Chunk`/`ChunkStrategy` — a deliberately separate future stage once the index exists to build chunks from).
+- Neither Repository Index nor Chunk Index has a `#[tauri::command]`, a `.manage()` registration, or any wiring into `ai_tools`'s `ToolCall`/`ToolName` — both are standalone, unit-tested Rust with no caller in the app.
+- No persistence to disk for either index — both rebuild in memory from a `RepositoryIndex::build`/`ChunkBuilder::build_all` call.
+- No actual file-watcher-driven incremental rebuild — `ChunkBuilder::build_file` + `ChunkIndex::replace_for_file` exist in the shape a watcher will call, but nothing calls them on a file-change event yet.
+- No embeddings, no BGE-M3, no vector DB — Chunk Index produces text fragments only.
 
 ## Extending this
 

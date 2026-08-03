@@ -1,4 +1,5 @@
 pub mod ai_tools;
+pub mod chunk_builder;
 pub mod diagnostics;
 pub mod diagnostic_messages;
 pub mod docs_discovery;
