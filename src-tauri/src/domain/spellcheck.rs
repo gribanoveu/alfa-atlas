@@ -43,9 +43,12 @@ pub struct SpellcheckConfig {
     pub enabled: bool,
     #[serde(default)]
     pub dictionaries: HashMap<String, bool>,
-    /// Skip words shaped like `getUserInfo`/`isEnabled` — identifiers
-    /// mentioned inline in prose without code formatting. On by default:
-    /// these are essentially never genuine spelling mistakes.
+    /// For identifiers shaped like `getUserInfo`/`isEnabled` — mentioned
+    /// inline in prose without code formatting — check each case-delimited
+    /// part (`get`, `User`, `Info`) instead of the whole identifier, since
+    /// the whole blob is essentially never a real dictionary word. Off
+    /// disables this and checks the identifier literally as one word, which
+    /// will almost always flag it.
     #[serde(default = "default_true")]
     pub skip_camel_case: bool,
 }

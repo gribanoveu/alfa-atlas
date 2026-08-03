@@ -156,7 +156,7 @@ impl SpellcheckEngine {
 
         tokens
             .into_iter()
-            .filter(|(_, word)| !(config.skip_camel_case && is_camel_case(word)))
+            .flat_map(|(offset, word)| self.decompose(offset, word, &dicts, config))
             .filter(|(_, word)| !self.is_known(word, &dicts))
             .map(|(offset, word)| {
                 let (line, column) = line_col_for(offset, &line_starts, text);
@@ -174,6 +174,50 @@ impl SpellcheckEngine {
         self.custom_words.contains(word)
             || self.custom_words.contains(&word.to_lowercase())
             || dicts.iter().any(|d| d.check(word))
+    }
+
+    /// Breaks a compound token into checkable pieces, but only when the
+    /// whole thing isn't already a recognized word — this keeps curated
+    /// whole-phrase dictionary entries (`OpenAPI`, `mks-users-api`) matching
+    /// exactly as before, while still catching compounds nobody curated
+    /// (`annual-tax-report-api`, `DownloadNotificationService`) by falling
+    /// back to word-by-word checks. Recurses so a hyphenated part that is
+    /// itself PascalCase/camelCase gets split further.
+    fn decompose(
+        &self,
+        offset: usize,
+        word: String,
+        dicts: &[Arc<DictionarySource>],
+        config: &SpellcheckConfig,
+    ) -> Vec<(usize, String)> {
+        if self.is_known(&word, dicts) {
+            return vec![(offset, word)];
+        }
+
+        // Checking `word.contains('-')` rather than `hyphen_parts.len() > 1`
+        // matters for diagram/arrow syntax like `PGW-->CTRL`, which the
+        // tokenizer regex greedily captures as `PGW--`: after dropping the
+        // empty pieces around consecutive/trailing hyphens only one part
+        // (`PGW`) is left, but that stripped part must still replace the
+        // untrimmed original rather than falling through to be checked as
+        // literal `PGW--`.
+        if word.contains('-') {
+            let hyphen_parts = split_hyphenated(offset, &word);
+            return hyphen_parts
+                .into_iter()
+                .flat_map(|(o, w)| self.decompose(o, w, dicts, config))
+                .collect();
+        }
+
+        // No hyphen left to split on. Split at case boundaries too, unless
+        // this is a lowerCamelCase identifier (`getUserInfo`) and the user
+        // has disabled `skip_camel_case` — in that case they want it judged
+        // as one literal blob, same as before this compound-splitting logic
+        // existed.
+        if !is_camel_case(&word) || config.skip_camel_case {
+            return split_case_boundaries(offset, &word);
+        }
+        vec![(offset, word)]
     }
 
     /// Suggestions for one word, computed on demand (not during `check_text`)
@@ -233,6 +277,61 @@ fn is_camel_case(word: &str) -> bool {
         Some(first) if first.is_lowercase() => chars.any(|c| c.is_uppercase()),
         _ => false,
     }
+}
+
+/// Splits a compound word on hyphens so names like `annual-tax-report-api`
+/// can be checked word-by-word instead of as one never-in-any-dictionary
+/// blob. Byte offsets are recomputed per part so issue positions still
+/// point at just the misspelled component. Called from `decompose` only
+/// after the whole word has failed a dictionary lookup.
+fn split_hyphenated(offset: usize, word: &str) -> Vec<(usize, String)> {
+    if !word.contains('-') {
+        return vec![(offset, word.to_string())];
+    }
+    let mut out = Vec::new();
+    let mut pos = 0;
+    for part in word.split('-') {
+        if !part.is_empty() {
+            out.push((offset + pos, part.to_string()));
+        }
+        pos += part.len() + 1; // +1 for the hyphen byte just consumed
+    }
+    out
+}
+
+/// Splits a word at case-transition boundaries: lowercase-to-uppercase
+/// (`Download|Notification|Service`) and the trailing edge of an acronym run
+/// (`HTTP|Server`). Words without an internal transition (plain lowercase,
+/// a single leading capital, or a standalone ALLCAPS acronym) come back
+/// unchanged as one part. Called from `decompose` only after the whole word
+/// has failed a dictionary lookup.
+fn split_case_boundaries(offset: usize, word: &str) -> Vec<(usize, String)> {
+    let indices: Vec<(usize, char)> = word.char_indices().collect();
+    if indices.len() < 2 {
+        return vec![(offset, word.to_string())];
+    }
+    let mut boundaries = vec![0usize];
+    for i in 1..indices.len() {
+        let prev = indices[i - 1].1;
+        let cur = indices[i].1;
+        let lower_to_upper = prev.is_lowercase() && cur.is_uppercase();
+        let acronym_boundary = prev.is_uppercase()
+            && cur.is_uppercase()
+            && i + 1 < indices.len()
+            && indices[i + 1].1.is_lowercase();
+        if lower_to_upper || acronym_boundary {
+            boundaries.push(i);
+        }
+    }
+    boundaries.push(indices.len());
+    boundaries
+        .windows(2)
+        .map(|w| {
+            let byte_start = indices[w[0]].0;
+            let byte_end = indices.get(w[1]).map_or(word.len(), |(b, _)| *b);
+            (offset + byte_start, word[byte_start..byte_end].to_string())
+        })
+        .collect()
 }
 
 fn tokenize_words(text: &str) -> Vec<(usize, String)> {
@@ -459,6 +558,106 @@ mod tests {
             engine.check_text("asdkjasjd", DocKind::Plain, &config).len(),
             1
         );
+    }
+
+    #[test]
+    fn hyphenated_compound_is_checked_word_by_word() {
+        let engine = SpellcheckEngine::default();
+        let config = config_with(&["en_US", "internal"]);
+        // "annual", "tax" and "report" are real English words and "api" is
+        // in the internal dictionary — none should be flagged individually,
+        // even though the whole hyphenated blob is in no dictionary.
+        assert!(engine
+            .check_text("annual-tax-report-api", DocKind::Plain, &config)
+            .is_empty());
+
+        // A genuine typo inside one hyphen-separated part must still be
+        // caught, at the position of just that part.
+        let issues = engine.check_text("annual-taxx-report", DocKind::Plain, &config);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].word, "taxx");
+        assert_eq!(issues[0].column, 8);
+    }
+
+    #[test]
+    fn pascal_case_compound_is_checked_word_by_word() {
+        let engine = SpellcheckEngine::default();
+        let config = config_with(&["en_US"]);
+        // "Download", "Notification" and "Service" are all real words —
+        // none should be flagged, even though the whole PascalCase blob is
+        // in no dictionary.
+        assert!(engine
+            .check_text("DownloadNotificationService", DocKind::Plain, &config)
+            .is_empty());
+
+        // A typo inside one of the case-delimited parts must still be
+        // caught, at the position of just that part.
+        let issues = engine.check_text("DownloadNotificatoinService", DocKind::Plain, &config);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].word, "Notificatoin");
+        assert_eq!(issues[0].column, 9);
+    }
+
+    #[test]
+    fn lower_camel_case_is_checked_word_by_word_by_default() {
+        let engine = SpellcheckEngine::default();
+        let config = config_with(&["en_US"]);
+        // "get", "User" and "Info" are all real words — the identifier as a
+        // whole is in no dictionary, but by default it's split at case
+        // boundaries and checked part-by-part rather than skipped outright.
+        assert!(engine
+            .check_text("call getUserInfo now", DocKind::Plain, &config)
+            .is_empty());
+
+        // A typo inside one of the parts is still caught, at the position
+        // of just that part.
+        let issues = engine.check_text("call getUserInfoo now", DocKind::Plain, &config);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].word, "Infoo");
+
+        // With the split disabled, the identifier is judged literally as
+        // one blob instead — which almost never matches a dictionary word.
+        let mut config = config;
+        config.skip_camel_case = false;
+        let issues = engine.check_text("call getUserInfo now", DocKind::Plain, &config);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].word, "getUserInfo");
+    }
+
+    #[test]
+    fn curated_hyphenated_dictionary_entry_is_matched_whole_before_splitting() {
+        let engine = SpellcheckEngine::default();
+        let config = config_with(&["internal"]);
+        // "mks-users-api" is curated as a literal whole-phrase entry in the
+        // internal dictionary — it must match directly rather than being
+        // split into "mks"/"users"/"api" (of which "mks" alone isn't a
+        // recognized word).
+        assert!(engine
+            .check_text("mks-users-api", DocKind::Plain, &config)
+            .is_empty());
+
+        // Likewise "OpenAPI" is a curated whole term and shouldn't be split
+        // into "Open" + "API".
+        assert!(engine
+            .check_text("OpenAPI", DocKind::Plain, &config)
+            .is_empty());
+    }
+
+    #[test]
+    fn arrow_syntax_trailing_hyphens_are_stripped_before_checking() {
+        let engine = SpellcheckEngine::default();
+        let config = config_with(&["en_US"]);
+        engine.custom_words.insert("pgw".to_string());
+        // Diagram/sequence syntax like `PGW-->CTRL` or `PGW->CTRL` tokenizes
+        // as `PGW--`/`PGW-` (the tokenizer regex greedily eats trailing
+        // hyphens). Both must resolve to the bare word `PGW` rather than
+        // being flagged as an unrecognized `PGW--`/`PGW-` blob.
+        assert!(engine
+            .check_text("PGW-->call", DocKind::Plain, &config)
+            .is_empty());
+        assert!(engine
+            .check_text("PGW->call", DocKind::Plain, &config)
+            .is_empty());
     }
 
     #[test]

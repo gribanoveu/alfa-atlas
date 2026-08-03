@@ -39,6 +39,7 @@ OpenAPI
 AsciiDoc
 Markdown
 pdf
+Dto
 GitLab
 GitHub
 Kubernetes
@@ -100,6 +101,10 @@ RUR
 MIME-тип
 Валидация
 валидации
+russian
+парсинг
+парсинга
+сгенерированное
 OpenAPI-валидации
 OpenAPI-валидация
 null-проверки
@@ -121,6 +126,7 @@ UnprocessableEntity
 ServerException
 operationId
 requestBody
+wowtax
 startuml
 enduml
 pragma
