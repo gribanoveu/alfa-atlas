@@ -4,7 +4,7 @@ Status of the AI-agent infrastructure in this app: what exists today, what it do
 
 ## Status
 
-**The tool-execution boundary is now reachable from the frontend via one IPC command (`ai_execute_tool`), but no LLM is wired up and no chat UI exists yet.** This is groundwork for a future AI harness (an agent loop that calls an LLM with tool-calling) — specifically the trust boundary that decides *which files* and *which operations* that harness is allowed to touch. The Rust side (`src-tauri/src`) is unit-tested; the new IPC command itself is verified end-to-end (see "IPC surface" below) but has no caller anywhere in the app yet — nothing in `src/components`/`src/hooks` invokes it.
+**The tool-execution boundary is reachable from the frontend via one IPC command (`ai_execute_tool`), and a standalone structural Repository Index now exists alongside it — but no LLM is wired up and no chat UI exists yet.** This is groundwork for a future AI harness (an agent loop that calls an LLM with tool-calling) — specifically the trust boundary that decides *which files* and *which operations* that harness is allowed to touch, plus a per-file index of metadata/hash/language/symbols it will eventually query. The Rust side (`src-tauri/src`) is unit-tested throughout; the IPC command is additionally verified end-to-end (see "IPC surface" below) but has no caller anywhere in the app yet, and the Repository Index has no caller at all yet (not even IPC) — nothing in `src/components`/`src/hooks` invokes either.
 
 The product vision for the user-facing feature this unblocks is documented separately in [`doc/business-requirements/02-functional-requirements.md`](doc/business-requirements/02-functional-requirements.md) (BR-4 "AI-ассистент документации", BR-5 "Подсказки AI").
 
@@ -41,6 +41,10 @@ services/ai_tools.rs  — execute_tool(), scope_for_config(), current_scope()   
 infra/workspace_scanner.rs — scan() / scan_all() (gitignore-aware file walk; scan_all skips the doc-format filter, used by FullRepo listing)
 commands/ai_tools.rs  — ai_execute_tool (IPC command)
 src/lib/aiTools.ts     — aiExecuteTool() (typed frontend wrapper, no callers yet)
+
+domain/repo_index.rs        — Language, Symbol, FileMetadata, IndexedFile, LanguageIndexer trait, INDEX_VERSION
+infra/language_indexers/*   — JavaIndexer, JsonIndexer, YamlIndexer, MarkdownIndexer, AsciiDocIndexer
+services/repo_index.rs      — RepositoryIndex (build/get/files_for_language/clear)
 ```
 
 ## The single entry point: `execute_tool`
@@ -113,6 +117,33 @@ No `hooks/` layer and no UI wired to it yet — this is boundary-only, per AGENT
 
 Verified end-to-end against a running dev build (`bun run tauri dev`) via direct `window.__TAURI__.core.invoke` calls in the webview: `listFiles` returns the real docs tree, `readFile` returns real file content, and a `../`-traversal attempt is rejected with `"path escapes tool root: ..."` — confirming the containment boundary holds across the actual IPC channel, not just in Rust unit tests.
 
+## Repository Index
+
+A separate, standalone layer from the tool-execution boundary above: a structural per-file index — metadata, content hash, detected language, symbols. **No embeddings, no RAG, no chunking** — just an index a future tool/harness will query. Not wired into `ai_tools`/IPC/UI at all yet; it's pure Rust (`domain`/`infra`/`services`), unit-tested, with no caller anywhere in the app.
+
+```rust
+pub struct IndexedFile {
+    pub metadata: FileMetadata,   // relative_path, size_bytes, modified_at: SystemTime, hash: blake3::Hash, language
+    pub symbols: Vec<Symbol>,     // name, kind, start/end line, start/end byte
+}
+```
+
+Deliberately **does not store file content** — a repo of thousands of files would otherwise duplicate the entire working tree in memory. Content is read separately when actually needed (the `ReadFile` tool, or a plain `fs::read_to_string`); the index describes the project, it doesn't duplicate the filesystem.
+
+**Languages covered**: Java, JSON, YAML, Markdown, AsciiDoc (`domain::repo_index::Language`) — matches the Java/Kotlin-backend-with-JSON/YAML-schemas repos this app documents, minus Kotlin (see below). `detect_language` is extension-based; anything else (including this app's own `.rs`/`.ts`) is skipped entirely.
+
+**Per-language indexing** (`infra/language_indexers/`), registered once and explicitly in `default_indexers() -> HashMap<Language, Arc<dyn LanguageIndexer>>` — no `supports()` self-reporting, so the language↔indexer mapping exists in exactly one place:
+- **Java** — real parsing via `tree-sitter`/`tree-sitter-java`: class/interface/enum/method/constructor/field declarations, each with full line+byte ranges straight off the tree-sitter node. This is a documented swap point — a future `JdtLsJavaIndexer: LanguageIndexer` replaces it by changing one line in `default_indexers()`.
+- **AsciiDoc** — real parsing via `tree-sitter`/`tree-sitter-asciidoc`: section titles (`document_title`, `title1`..`title5` nodes). Chosen over a hand-written line scan specifically because a line scan can't distinguish a real section title from an `=` that merely starts a line inside a listing block or table — a grammar-aware parser doesn't have that failure mode (see `infra/language_indexers/asciidoc.rs`'s doc comment for the specific test that proves it, `ignores_equals_signs_inside_listing_blocks`).
+- **Markdown** — `pulldown-cmark` event walk; every heading becomes a symbol (unlike `infra/parsers/markdown.rs`'s anchor extraction, which only records a heading with an explicit `{ #id }`).
+- **JSON / YAML** — deliberately extract **zero symbols**. A regex key-scan produces false positives on quoted values that merely contain a colon (`{"query": "field:value"}`), and `serde_json`/`serde_yaml` carry no position information to do this properly. The file is still indexed (metadata + hash + language); only `.symbols` is empty, on principle, rather than guessing.
+
+**Kotlin was dropped entirely.** `tree-sitter-kotlin` (the only Kotlin grammar crate on crates.io) is capped at `tree-sitter <0.23`. Once AsciiDoc was prioritized and `tree-sitter-asciidoc`'s compiled grammar turned out to need language ABI 15 (unsupported by tree-sitter 0.22's runtime — Cargo's `links = "tree-sitter"` only allows one `tree-sitter` version project-wide), `tree-sitter` was bumped to `0.26.11` and Kotlin support was removed rather than kept on an incompatible pin. Re-add `Language::Kotlin` if a `tree-sitter-kotlin` release ever raises its own upper bound.
+
+**Resilience policy** (`services::repo_index::RepositoryIndex::build`): an unreadable file (I/O error, non-UTF-8) is skipped entirely with a warning. A file that reads fine but is malformed for its language (e.g. broken Java) still gets a full record — `LanguageIndexer::index` is infallible by signature, so a broken file's `symbols` may come back short or empty, but the file never disappears from the index.
+
+`INDEX_VERSION` (currently `1`) exists from day one even though nothing persists the index yet — bumped whenever indexer behavior changes in a way that would change output for the same input, so a future on-disk cache has a cheap staleness signal instead of a retrofit.
+
 ## What is not built yet
 
 - No UI to view or change `ai_access_mode` / `ai_allowed_tools` — currently editable only by hand-editing `project.json` or in Rust code/tests.
@@ -120,6 +151,7 @@ Verified end-to-end against a running dev build (`bun run tauri dev`) via direct
 - No write/edit tool.
 - No logging at the `execute_tool` call site (the single entry point exists specifically so this is a one-line addition later).
 - No frontend caller of `aiExecuteTool` yet — the IPC boundary is wired and verified, but nothing in the UI triggers it.
+- Repository Index has no `#[tauri::command]`, no `.manage()` registration, no wiring into `ai_tools`'s `ToolCall`/`ToolName`, no persistence to disk, and no chunking (`Chunk`/`ChunkStrategy` — a deliberately separate future stage once the index exists to build chunks from).
 
 ## Extending this
 

@@ -8,6 +8,7 @@ pub mod onboarding;
 pub mod openapi;
 pub mod paths;
 pub mod project_config;
+pub mod repo_index;
 pub mod settings;
 pub mod spellcheck;
 pub mod standards;

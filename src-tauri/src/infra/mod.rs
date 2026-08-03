@@ -4,6 +4,7 @@ pub mod dictionary_assets;
 pub mod git_credentials_store;
 pub mod git_repo;
 pub mod key_management;
+pub mod language_indexers;
 pub mod layout_store;
 pub mod onboarding_store;
 pub mod parsers;
