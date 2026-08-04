@@ -1,7 +1,14 @@
-import { Check, Download, RefreshCw, Settings2 } from "lucide-react";
+import { Check, Download, FileText, FolderGit2, RefreshCw, Settings2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
+import type { AiAccessMode } from "../../lib/aiTools";
 import "./AssistantPanel.css";
+
+const ACCESS_MODE_OPTIONS: { value: AiAccessMode; label: string; Icon: LucideIcon }[] = [
+  { value: "docsOnly", label: "Документация", Icon: FileText },
+  { value: "fullRepo", label: "Весь репозиторий", Icon: FolderGit2 },
+];
 
 type AssistantPanelProps = {
   onOpenSettings: () => void;
@@ -31,6 +38,7 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
     cancelDownload,
     sync,
   } = useEmbeddingSetup();
+  const { mode: accessMode, busy: accessModeBusy, setMode: setAccessMode } = useAiAccessMode();
 
   const items: ChecklistItem[] = [];
 
@@ -83,6 +91,31 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
 
   return (
     <div className="assistant-panel">
+      <section className="assistant-panel-section">
+        <h3 className="assistant-panel-section-title">Доступ</h3>
+        <div className="assistant-access-toggle" role="radiogroup" aria-label="Область доступа AI">
+          {ACCESS_MODE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={accessMode === option.value}
+              className={`assistant-access-btn ${accessMode === option.value ? "active" : ""}`}
+              disabled={accessModeBusy || accessMode === null}
+              onClick={() => void setAccessMode(option.value)}
+            >
+              <option.Icon size={13} strokeWidth={1.75} aria-hidden />
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <p className="assistant-access-hint">
+          {accessMode === "fullRepo"
+            ? "Индексируется весь репозиторий, включая исходный код — синхронизация займёт заметно больше времени и памяти."
+            : "Индексируется только папка документации."}
+        </p>
+      </section>
+
       <section className="assistant-panel-section">
         <h3 className="assistant-panel-section-title">Настройка эмбеддингов</h3>
         <div className="assistant-checklist">

@@ -11,6 +11,54 @@
   padding: 10px;
 }
 
+.assistant-panel-section + .assistant-panel-section {
+  border-top: 1px solid var(--border);
+}
+
+.assistant-access-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.assistant-access-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.assistant-access-btn:hover:not(:disabled):not(.active) {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.assistant-access-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.assistant-access-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.assistant-access-hint {
+  margin-top: 6px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
 .assistant-panel-section-title {
   font-size: var(--font-ui-sm);
   font-weight: 600;

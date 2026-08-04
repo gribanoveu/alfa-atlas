@@ -221,6 +221,8 @@ pub fn run() {
             commands::spellcheck::add_custom_dictionary_word,
             commands::spellcheck::remove_custom_dictionary_word,
             commands::ai_tools::ai_execute_tool,
+            commands::ai_tools::ai_get_access_mode,
+            commands::ai_tools::ai_set_access_mode,
             commands::embeddings::embedding_get_config,
             commands::embeddings::embedding_set_config,
             commands::embeddings::embedding_set_remote_api_key,

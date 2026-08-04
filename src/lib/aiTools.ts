@@ -1,5 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 
+// Mirrors `domain::ai_access::AiAccessMode` in
+// `src-tauri/src/domain/ai_access.rs` (`#[serde(rename_all = "camelCase")]`
+// on the enum variants).
+export type AiAccessMode = "docsOnly" | "fullRepo";
+
 export type ToolFileEntry = {
   path: string;
   isDir: boolean;
@@ -24,4 +29,14 @@ export type ToolResult =
  */
 export function aiExecuteTool(call: ToolCall): Promise<ToolResult> {
   return invoke<ToolResult>("ai_execute_tool", { call });
+}
+
+/** Which part of the filesystem the harness (and `embedding_sync`) may see
+ * for the currently open project — "docsOnly" (default) or "fullRepo". */
+export function getAiAccessMode(): Promise<AiAccessMode> {
+  return invoke<AiAccessMode>("ai_get_access_mode");
+}
+
+export function setAiAccessMode(mode: AiAccessMode): Promise<void> {
+  return invoke("ai_set_access_mode", { mode });
 }
