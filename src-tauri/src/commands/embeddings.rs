@@ -56,8 +56,13 @@ fn emit_sync_progress(app: &AppHandle, phase: SyncPhase, current: usize, total: 
 pub type EmbeddingIndexSlot = Mutex<Option<(PathBuf, usize, EmbeddingIndex)>>;
 
 /// One `IndexStore` (SQLite connection) per `index_root`, shared by
-/// `ChunkIndex` and `EmbeddingIndex`'s persistence for that project.
-pub type IndexStoreSlot = Mutex<Option<(PathBuf, Arc<IndexStore>)>>;
+/// `ChunkIndex` and `EmbeddingIndex`'s persistence for that project. The
+/// `bool` mirrors `index_store_ensure::IndexAttachment::stale` at the time
+/// of the last attach — cached here so a later `embedding_index_status`
+/// call in the same session doesn't need to re-derive it, and so
+/// `embedding_sync` can flip it to `false` in place once it actually
+/// repairs a stale store.
+pub type IndexStoreSlot = Mutex<Option<(PathBuf, Arc<IndexStore>, bool)>>;
 
 #[tauri::command]
 pub fn embedding_get_config() -> Result<EmbeddingProviderConfig, String> {
@@ -108,41 +113,70 @@ pub fn embedding_cancel_model_download(state: State<'_, Arc<DownloadState>>) {
     embedding_model::cancel_download(&state);
 }
 
-/// Same access-mode boundary `ai_execute_tool` already respects
-/// (`services::ai_tools::current_scope`) — `DocsOnly` (the default) indexes
-/// just the docs subtree, not the whole backend repo.
-fn resolve_index_root(project: &OpenedProject) -> Result<PathBuf, String> {
+/// Resolves both paths a project's index needs:
+/// - `index_root` — same access-mode boundary `ai_execute_tool` already
+///   respects (`services::ai_tools::current_scope`): `DocsOnly` (the
+///   default) walks just the docs subtree, not the whole backend repo.
+///   This is what `RepositoryIndex`/`ChunkBuilder`/`chunk_text::resolve_text`
+///   resolve relative `FileId`s against, and what keys the
+///   `ChunkIndex`/`EmbeddingIndexSlot` attach state.
+/// - `storage_dir` — where that mode's persisted index lives on disk:
+///   always under `{project.root}/.atlas/index/{mode}`, **never** under
+///   `docs_root` — `.atlas` is the one place this app keeps per-project
+///   state (`infra::project_store`'s `project.json` already lives there),
+///   and nesting a second one under the docs subtree would split that
+///   convention for no reason. The `{mode}` subfolder keeps `DocsOnly` and
+///   `FullRepo` persisted separately (same reason `index_root` differs
+///   between them — see `index_store_ensure` module docs).
+fn resolve_index_paths(project: &OpenedProject) -> Result<(PathBuf, PathBuf), String> {
     let config = project_store::load(&project.root)
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| ProjectConfig::new(project.docs_root.clone()));
-    Ok(match config.ai_access_mode {
-        AiAccessMode::DocsOnly => PathBuf::from(&project.docs_root),
-        AiAccessMode::FullRepo => PathBuf::from(&project.root),
-    })
+    let (index_root, mode_dir) = match config.ai_access_mode {
+        AiAccessMode::DocsOnly => (PathBuf::from(&project.docs_root), "docs-only"),
+        AiAccessMode::FullRepo => (PathBuf::from(&project.root), "full-repo"),
+    };
+    let storage_dir = PathBuf::from(&project.root)
+        .join(".atlas")
+        .join("index")
+        .join(mode_dir);
+    Ok((index_root, storage_dir))
 }
 
 /// Attaches `index_root`'s persisted `IndexStore` to `chunk_index`. Only on
 /// a genuine cold start or project/access-mode switch (the resident
-/// `ChunkIndex` wasn't already tracking `index_root`) does this bulk-reload
-/// its metadata from SQLite instead of reusing what's already resident.
-/// Read-only otherwise — never walks the repo, never touches the embedding
-/// provider; `embedding_sync` and `embedding_index_status` both build on
-/// this before doing their own, different, work.
+/// `ChunkIndex` wasn't already tracking `index_root`) does this call
+/// `index_store_ensure::open_for` at all — every later call in the same
+/// session reuses what's already attached (and its cached `stale` flag)
+/// instead of re-deriving it. Read-only — never walks the repo, never
+/// touches the embedding provider, never mutates the store; `embedding_sync`
+/// and `embedding_index_status` both build on this before doing their own,
+/// different, work.
+///
+/// If the store is stale (see `index_store_ensure`), `chunk_index` is
+/// deliberately left empty rather than loaded from metadata that might
+/// describe an incompatible chunking algorithm or a different
+/// `index_root` — the caller decides what to do with a stale attach
+/// (`embedding_sync` repairs it; `embedding_index_status` just reports it).
 fn attach_index_store(
     chunk_index: &ChunkIndex,
     index_store: &IndexStoreSlot,
+    storage_dir: &Path,
     index_root: &Path,
-) -> Result<Arc<IndexStore>, String> {
+) -> Result<(Arc<IndexStore>, bool), String> {
     let mut store_slot = index_store
         .lock()
         .map_err(|_| "index store lock poisoned".to_string())?;
-    let is_new_attach = !matches!(store_slot.as_ref(), Some((root, _)) if root == index_root);
+    let is_new_attach = !matches!(store_slot.as_ref(), Some((root, _, _)) if root == index_root);
     if is_new_attach {
-        let store = Arc::new(index_store_ensure::open_for(index_root)?);
-        chunk_index.load_metadata(store.load_all_chunks().map_err(|e| e.to_string())?);
-        *store_slot = Some((index_root.to_path_buf(), store));
+        let attachment = index_store_ensure::open_for(storage_dir, index_root)?;
+        if !attachment.stale {
+            chunk_index.load_metadata(attachment.store.load_all_chunks().map_err(|e| e.to_string())?);
+        }
+        *store_slot = Some((index_root.to_path_buf(), Arc::new(attachment.store), attachment.stale));
     }
-    Ok(store_slot.as_ref().expect("just set above if it was missing").1.clone())
+    let (_, store, stale) = store_slot.as_ref().expect("just set above if it was missing");
+    Ok((store.clone(), *stale))
 }
 
 /// Attaches `index_root` + `dimensions`'s `EmbeddingIndex` to the managed
@@ -150,11 +184,21 @@ fn attach_index_store(
 /// reloading from `store` (`vectors.usearch` + the SQLite `chunk_hash`
 /// mirror) when compatible, or starting blank when there's nothing
 /// (compatible) to reload. Never embeds anything itself.
+///
+/// `allow_repair` gates what happens on a *dimension* mismatch (different
+/// from `IndexStore`-level staleness — this is "the persisted vectors were
+/// written for a different embedding provider/model"): `true` (only from
+/// `embedding_sync`, already a real mutating sync) drops the mismatched
+/// `vectors.usearch`/`embeddings` rows so a fresh embed can start clean;
+/// `false` (from the read-only `embedding_index_status`) just returns a
+/// blank in-memory index without touching disk, leaving whatever's
+/// persisted for that other dimension alone.
 fn attach_embedding_index(
     embedding_index: &EmbeddingIndexSlot,
     store: &IndexStore,
     index_root: &Path,
     dimensions: usize,
+    allow_repair: bool,
 ) -> Result<(), String> {
     let mut slot = embedding_index
         .lock()
@@ -171,7 +215,7 @@ fn attach_embedding_index(
             let persisted_hashes = store.load_all_embedding_hashes().map_err(|e| e.to_string())?;
             EmbeddingIndex::load(dimensions, &store.vectors_path(), persisted_hashes)
                 .map_err(|e| e.to_string())?
-        } else {
+        } else if allow_repair {
             // No persisted vectors for this dimension (first sync ever, or
             // the provider's dimension changed since last time) — whatever
             // is on disk for a *different* dimension can't be reused, so
@@ -184,6 +228,10 @@ fn attach_embedding_index(
             store
                 .write_meta(META_EMBEDDING_DIMENSIONS, &dimensions.to_string())
                 .map_err(|e| e.to_string())?;
+            EmbeddingIndex::new(dimensions).map_err(|e| e.to_string())?
+        } else {
+            // Read-only path: report as empty for this dimension without
+            // touching whatever's actually persisted on disk.
             EmbeddingIndex::new(dimensions).map_err(|e| e.to_string())?
         };
         *slot = Some((index_root.to_path_buf(), dimensions, fresh));
@@ -219,8 +267,21 @@ pub async fn embedding_sync(
         let project = project_open::get_project()
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "no project is open".to_string())?;
-        let index_root = resolve_index_root(&project)?;
-        let store = attach_index_store(&chunk_index, &index_store, &index_root)?;
+        let (index_root, storage_dir) = resolve_index_paths(&project)?;
+        let (store, stale) = attach_index_store(&chunk_index, &index_store, &storage_dir, &index_root)?;
+        if stale {
+            // A real, already-mutating sync is the only place staleness
+            // actually gets repaired (see `index_store_ensure` module docs)
+            // — `chunk_index` is still empty from the attach above, so the
+            // diff loop below naturally treats every current file as new.
+            index_store_ensure::repair_stale(&store, &index_root)?;
+            let mut store_slot = index_store
+                .lock()
+                .map_err(|_| "index store lock poisoned".to_string())?;
+            if let Some(entry) = store_slot.as_mut() {
+                entry.2 = false;
+            }
+        }
 
         repo_index.build(&index_root).map_err(|e| e.to_string())?;
 
@@ -295,7 +356,7 @@ pub async fn embedding_sync(
         let dimensions = provider.dimensions();
         let builder = EmbeddingBuilder::new(Arc::from(provider));
 
-        attach_embedding_index(&embedding_index, &store, &index_root, dimensions)?;
+        attach_embedding_index(&embedding_index, &store, &index_root, dimensions, true)?;
         let mut slot = embedding_index
             .lock()
             .map_err(|_| "embedding index lock poisoned".to_string())?;
@@ -313,13 +374,17 @@ pub async fn embedding_sync(
 
 /// Read-only counterpart to `embedding_sync`, for the UI to learn "is this
 /// project's index already built" without triggering a rescan/re-embed —
-/// e.g. on mount, so a remounted panel can show real persisted state
-/// instead of resetting to "not yet synced". Attaches (and, on a cold
+/// e.g. right when a project opens, so the app knows the state without
+/// waiting for the user to open a specific panel. Attaches (and, on a cold
 /// start, reloads from disk) the same `ChunkIndex`/`EmbeddingIndex` state
-/// `embedding_sync` would use, but never walks the repo or calls the
-/// embedding provider beyond resolving its configured dimension count. If
-/// no project is open, reports `synced: false` rather than erroring — there
-/// is nothing to be out of sync with.
+/// `embedding_sync` would use, but never walks the repo, never repairs a
+/// stale store, and never constructs a real `EmbeddingProvider` — dimension
+/// lookup goes through `embedding_providers::expected_dimensions` (a plain
+/// config read) instead of `provider_for`, specifically so this stays cheap
+/// even for the Local provider (which would otherwise load the ~570MB ONNX
+/// model just to read a constant). If no project is open, reports
+/// `synced: false` rather than erroring — there is nothing to be out of
+/// sync with.
 #[tauri::command]
 pub async fn embedding_index_status(
     chunk_index: State<'_, Arc<ChunkIndex>>,
@@ -332,18 +397,29 @@ pub async fn embedding_index_status(
 
     tauri::async_runtime::spawn_blocking(move || -> Result<EmbeddingIndexStatus, String> {
         let Some(project) = project_open::get_project().map_err(|e| e.to_string())? else {
-            return Ok(EmbeddingIndexStatus { synced: false, embedded_count: 0 });
+            return Ok(EmbeddingIndexStatus {
+                synced: false,
+                embedded_count: 0,
+                stale: false,
+            });
         };
-        let index_root = resolve_index_root(&project)?;
-        let store = attach_index_store(&chunk_index, &index_store, &index_root)?;
+        let (index_root, storage_dir) = resolve_index_paths(&project)?;
+        let (store, stale) = attach_index_store(&chunk_index, &index_store, &storage_dir, &index_root)?;
+        if stale {
+            // Nothing trustworthy to attach an EmbeddingIndex to — report
+            // staleness and stop, rather than repairing (that only happens
+            // inside a real `embedding_sync`).
+            return Ok(EmbeddingIndexStatus {
+                synced: false,
+                embedded_count: 0,
+                stale: true,
+            });
+        }
 
         let config = embedding_config::load_embedding_config().map_err(|e| e.to_string())?;
-        let api_key = embedding_credentials_store::get_api_key();
-        let provider =
-            embedding_providers::provider_for(&config, api_key).map_err(|e| e.to_string())?;
-        let dimensions = provider.dimensions();
+        let dimensions = embedding_providers::expected_dimensions(&config);
 
-        attach_embedding_index(&embedding_index, &store, &index_root, dimensions)?;
+        attach_embedding_index(&embedding_index, &store, &index_root, dimensions, false)?;
         let slot = embedding_index
             .lock()
             .map_err(|_| "embedding index lock poisoned".to_string())?;
@@ -352,6 +428,7 @@ pub async fn embedding_index_status(
         Ok(EmbeddingIndexStatus {
             synced: embedded_count > 0,
             embedded_count,
+            stale: false,
         })
     })
     .await

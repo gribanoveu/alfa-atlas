@@ -126,6 +126,15 @@ pub struct SyncStats {
 pub struct EmbeddingIndexStatus {
     pub synced: bool,
     pub embedded_count: usize,
+    /// The persisted index exists but predates a `CHUNK_VERSION`/
+    /// `INDEX_VERSION` bump (or was built for a different `index_root`) —
+    /// `services::index_store_ensure` detected the mismatch but, being a
+    /// read-only attach, left the on-disk data untouched rather than
+    /// wiping it. `synced` is `false` in this case too (nothing was
+    /// loaded), but the reason is different from "never synced": a real
+    /// `embedding_sync` will repair and rebuild it, not start from a blank
+    /// slate.
+    pub stale: bool,
 }
 
 #[cfg(test)]

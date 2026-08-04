@@ -271,6 +271,10 @@ export function EmbeddingsTab() {
             Готово: добавлено {lastSync.embedded}, без изменений{" "}
             {lastSync.skippedUnchanged}, удалено {lastSync.removed}.
           </p>
+        ) : indexStatus?.stale ? (
+          <p className="settings-hint" style={{ paddingLeft: 0 }}>
+            Индекс устарел (обновилось приложение) — требуется повторная синхронизация.
+          </p>
         ) : indexStatus?.synced ? (
           <p className="settings-hint" style={{ paddingLeft: 0 }}>
             Проиндексировано чанков: {indexStatus.embeddedCount}.

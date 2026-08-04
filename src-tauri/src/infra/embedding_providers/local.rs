@@ -16,7 +16,7 @@ use fastembed::{Bgem3Embedding, Bgem3InitOptions, Bgem3Model};
 
 use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
 
-const DIMENSIONS: usize = 1024;
+pub(crate) const DIMENSIONS: usize = 1024;
 
 /// The Hugging Face repo/file `Bgem3Model::BGEM3Q` resolves to (per
 /// `fastembed`'s own `models_list()`) — `services::embedding_model` needs

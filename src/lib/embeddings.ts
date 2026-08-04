@@ -30,6 +30,10 @@ export type SyncStats = {
 export type EmbeddingIndexStatus = {
   synced: boolean;
   embeddedCount: number;
+  /** Persisted index exists but predates a version bump (or a different
+   * index root) — left untouched on disk, not loaded; needs a real sync to
+   * repair, distinct from "never synced". */
+  stale: boolean;
 };
 
 export type ModelDownloadProgress = {

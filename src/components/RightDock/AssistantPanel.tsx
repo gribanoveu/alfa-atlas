@@ -106,9 +106,11 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
         ? `${syncPhaseLabel}: ${syncProgress.current}/${syncProgress.total}`
         : lastSync
           ? `Добавлено ${lastSync.embedded}, без изменений ${lastSync.skippedUnchanged}, удалено ${lastSync.removed}.`
-          : indexStatus?.synced
-            ? `Проиндексировано чанков: ${indexStatus.embeddedCount}.`
-            : "Построить/обновить эмбеддинги чанков документации для текущего проекта.",
+          : indexStatus?.stale
+            ? "Индекс устарел (обновилось приложение) — требуется повторная синхронизация."
+            : indexStatus?.synced
+              ? `Проиндексировано чанков: ${indexStatus.embeddedCount}.`
+              : "Построить/обновить эмбеддинги чанков документации для текущего проекта.",
     // `indexStatus` reflects the backend's persisted/resident index, so this
     // stays accurate across a remount — `lastSync` alone (this session's
     // last sync() call) would reset to "not done" every time the panel
