@@ -3,14 +3,18 @@ import {
   cancelEmbeddingModelDownload,
   downloadEmbeddingModel,
   getEmbeddingConfig,
+  getEmbeddingIndexStatus,
   getEmbeddingModelStatus,
   hasEmbeddingRemoteApiKey,
   listenModelDownloadProgress,
+  listenSyncProgress,
   setEmbeddingConfig,
   setEmbeddingRemoteApiKey,
   syncEmbeddings,
+  type EmbeddingIndexStatus,
   type EmbeddingProviderConfig,
   type ModelStatus,
+  type SyncProgress,
   type SyncStats,
 } from "../lib/embeddings";
 
@@ -21,6 +25,13 @@ import {
  * the same logic, even though each holds its own React state instance
  * (the two are never visible at once — Settings is a modal overlay — so
  * there's no simultaneous-divergence case to guard against here).
+ *
+ * `lastSync` is this-session-only (the delta from the last `sync()` call);
+ * `indexStatus` is fetched fresh on every `refresh()` (including the
+ * mount-time one) from the backend's persisted/resident index, so "is the
+ * index already built" survives this hook remounting — e.g. `AssistantPanel`
+ * unmounting when the RightDock panel is hidden or another tool tab is
+ * selected — instead of resetting every time.
  */
 export function useEmbeddingSetup() {
   const [config, setConfigState] = useState<EmbeddingProviderConfig | null>(null);
@@ -29,6 +40,8 @@ export function useEmbeddingSetup() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<SyncStats | null>(null);
+  const [indexStatus, setIndexStatus] = useState<EmbeddingIndexStatus | null>(null);
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   // The backend can't truly abort an in-flight download (see
   // `cancelEmbeddingModelDownload`'s doc comment) — this just tells
   // `downloadModel`'s catch block that a rejection is an expected
@@ -37,14 +50,16 @@ export function useEmbeddingSetup() {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextConfig, nextStatus, nextHasKey] = await Promise.all([
+      const [nextConfig, nextStatus, nextHasKey, nextIndexStatus] = await Promise.all([
         getEmbeddingConfig(),
         getEmbeddingModelStatus(),
         hasEmbeddingRemoteApiKey(),
+        getEmbeddingIndexStatus(),
       ]);
       setConfigState(nextConfig);
       setModelStatus(nextStatus);
       setHasApiKey(nextHasKey);
+      setIndexStatus(nextIndexStatus);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -74,6 +89,26 @@ export function useEmbeddingSetup() {
           ? { status: "ready" }
           : { status: "downloading", progress: payload.progress },
       );
+    }).then((fn) => {
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Live sync progress, independent of `refresh` — the backend emits this
+  // while `syncEmbeddings()`'s promise is still in flight.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenSyncProgress((payload) => {
+      setSyncProgress(payload);
     }).then((fn) => {
       if (cancelled) {
         fn();
@@ -156,16 +191,19 @@ export function useEmbeddingSetup() {
 
   const sync = useCallback(async () => {
     setBusy(true);
+    setSyncProgress(null);
     try {
       const stats = await syncEmbeddings();
       setLastSync(stats);
       setError(null);
+      setIndexStatus(await getEmbeddingIndexStatus());
       return stats;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       return null;
     } finally {
       setBusy(false);
+      setSyncProgress(null);
     }
   }, []);
 
@@ -181,6 +219,8 @@ export function useEmbeddingSetup() {
     busy,
     error,
     lastSync,
+    indexStatus,
+    syncProgress,
     providerConfigured,
     updateConfig,
     saveApiKey,

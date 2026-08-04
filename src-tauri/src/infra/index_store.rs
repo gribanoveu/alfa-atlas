@@ -1,0 +1,477 @@
+//! SQLite-backed durable mirror of `ChunkIndex`/`EmbeddingIndex` metadata —
+//! everything needed to reload both without a full repo rescan, and to
+//! diff incrementally against what's on disk now. Deliberately stores
+//! neither chunk text (it lives in the source files, read on demand via
+//! `services::chunk_text::resolve_text`) nor embedding vectors (they live
+//! in `vectors.usearch`, see `infra::vector_store`) — this is only ids,
+//! byte offsets, and hashes.
+
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
+use std::time::UNIX_EPOCH;
+
+use rusqlite::{params, Connection, OptionalExtension};
+use thiserror::Error;
+
+use crate::domain::chunk_index::{ChunkId, ChunkKind, ChunkMetadata};
+use crate::domain::repo_index::{FileId, FileMetadata, Language};
+
+const DB_FILE_NAME: &str = "chunks.db";
+pub const VECTORS_FILE_NAME: &str = "vectors.usearch";
+
+const SCHEMA_SQL: &str = r#"
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS files (
+  file_id    TEXT PRIMARY KEY,
+  file_hash  BLOB NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  mtime_secs INTEGER NOT NULL,
+  language   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+  chunk_id       TEXT PRIMARY KEY,
+  file_id        TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+  language       TEXT NOT NULL,
+  kind           TEXT NOT NULL,
+  start_byte     INTEGER NOT NULL,
+  end_byte       INTEGER NOT NULL,
+  file_hash      BLOB NOT NULL,
+  chunk_hash     BLOB NOT NULL,
+  qualified_name TEXT,
+  ordinal        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id);
+
+-- `chunk_hash` here mirrors `EmbeddingRecord.chunk_hash`, written only once
+-- a vector actually lands in `vectors.usearch` — deliberately a separate
+-- write from `chunks.chunk_hash` (see module docs on `EmbeddingIndex::sync`
+-- for why that gap is a crash-safety feature, not a bug).
+CREATE TABLE IF NOT EXISTS embeddings (
+  chunk_id   TEXT PRIMARY KEY REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+  chunk_hash BLOB NOT NULL
+);
+"#;
+
+#[derive(Debug, Error)]
+pub enum IndexStoreError {
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("io error: {0}")]
+    Io(#[source] std::io::Error),
+    #[error("index store lock poisoned")]
+    LockPoisoned,
+}
+
+/// One SQLite connection per `index_root`, shared by `ChunkIndex` and
+/// `EmbeddingIndex` for that project — both write through it from their
+/// own mutating methods rather than a caller having to remember to keep a
+/// separate bookkeeping layer in sync.
+pub struct IndexStore {
+    conn: Mutex<Connection>,
+    dir: PathBuf,
+}
+
+impl IndexStore {
+    /// Opens (creating if needed) `{index_dir}/chunks.db`, applying the
+    /// schema idempotently. `index_dir` is conventionally
+    /// `{repo_root}/.atlas/index`.
+    pub fn open(index_dir: &Path) -> Result<Self, IndexStoreError> {
+        std::fs::create_dir_all(index_dir).map_err(IndexStoreError::Io)?;
+        let conn = Connection::open(index_dir.join(DB_FILE_NAME))?;
+        conn.execute_batch(SCHEMA_SQL)?;
+        Ok(Self {
+            conn: Mutex::new(conn),
+            dir: index_dir.to_path_buf(),
+        })
+    }
+
+    pub fn vectors_path(&self) -> PathBuf {
+        self.dir.join(VECTORS_FILE_NAME)
+    }
+
+    fn lock(&self) -> Result<MutexGuard<'_, Connection>, IndexStoreError> {
+        self.conn.lock().map_err(|_| IndexStoreError::LockPoisoned)
+    }
+
+    pub fn read_meta(&self, key: &str) -> Result<Option<String>, IndexStoreError> {
+        let conn = self.lock()?;
+        Ok(conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |row| {
+                row.get(0)
+            })
+            .optional()?)
+    }
+
+    pub fn write_meta(&self, key: &str, value: &str) -> Result<(), IndexStoreError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes every row (`meta`/`files`/`chunks`/`embeddings`) — used when
+    /// the version/`index_root` compatibility guard decides a persisted
+    /// store is unusable and must be rebuilt from scratch.
+    pub fn wipe(&self) -> Result<(), IndexStoreError> {
+        let conn = self.lock()?;
+        conn.execute_batch(
+            "DELETE FROM embeddings; DELETE FROM chunks; DELETE FROM files; DELETE FROM meta;",
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_files(&self, files: &[FileMetadata]) -> Result<(), IndexStoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        for file in files {
+            let mtime_secs = file
+                .modified_at
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            tx.execute(
+                "INSERT INTO files (file_id, file_hash, size_bytes, mtime_secs, language)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(file_id) DO UPDATE SET
+                    file_hash = excluded.file_hash,
+                    size_bytes = excluded.size_bytes,
+                    mtime_secs = excluded.mtime_secs,
+                    language = excluded.language",
+                params![
+                    file.relative_path,
+                    file.hash.as_bytes().to_vec(),
+                    file.size_bytes as i64,
+                    mtime_secs,
+                    language_to_str(file.language),
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Cascades to `chunks`/`embeddings` via the `ON DELETE CASCADE` FKs.
+    pub fn delete_files(&self, file_ids: &[FileId]) -> Result<(), IndexStoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        for file_id in file_ids {
+            tx.execute("DELETE FROM files WHERE file_id = ?1", params![file_id.0])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Drops every existing chunk row for `file_id`, then inserts `chunks`
+    /// — mirrors `ChunkIndex::replace_for_file`, which calls this in
+    /// lockstep. Cascades to that file's `embeddings` rows too.
+    pub fn replace_chunks_for_file(
+        &self,
+        file_id: &FileId,
+        chunks: &[ChunkMetadata],
+    ) -> Result<(), IndexStoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id.0])?;
+        for chunk in chunks {
+            tx.execute(
+                "INSERT INTO chunks (chunk_id, file_id, language, kind, start_byte, end_byte,
+                    file_hash, chunk_hash, qualified_name, ordinal)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    chunk.id.0,
+                    chunk.file_id.0,
+                    language_to_str(chunk.language),
+                    chunk_kind_to_str(chunk.kind),
+                    chunk.start_byte,
+                    chunk.end_byte,
+                    chunk.file_hash.as_bytes().to_vec(),
+                    chunk.hash.as_bytes().to_vec(),
+                    chunk.qualified_name,
+                    chunk.ordinal,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn clear_chunks(&self) -> Result<(), IndexStoreError> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM chunks", [])?;
+        Ok(())
+    }
+
+    /// Every persisted chunk's metadata — what `ChunkIndex::ensure_loaded`
+    /// bulk-populates its resident `DashMap` from on cold start, instead of
+    /// a full repo rescan.
+    pub fn load_all_chunks(&self) -> Result<Vec<ChunkMetadata>, IndexStoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT chunk_id, file_id, language, kind, start_byte, end_byte,
+                    file_hash, chunk_hash, qualified_name, ordinal
+             FROM chunks",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let file_hash_bytes: Vec<u8> = row.get(6)?;
+            let chunk_hash_bytes: Vec<u8> = row.get(7)?;
+            let language = str_to_language(&row.get::<_, String>(2)?).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(2, "language".into(), rusqlite::types::Type::Text)
+            })?;
+            let kind = str_to_chunk_kind(&row.get::<_, String>(3)?).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(3, "kind".into(), rusqlite::types::Type::Text)
+            })?;
+            Ok(ChunkMetadata {
+                id: ChunkId(row.get(0)?),
+                file_id: FileId(row.get(1)?),
+                language,
+                kind,
+                start_byte: row.get(4)?,
+                end_byte: row.get(5)?,
+                file_hash: hash_from_bytes(&file_hash_bytes),
+                hash: hash_from_bytes(&chunk_hash_bytes),
+                qualified_name: row.get(8)?,
+                ordinal: row.get(9)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(IndexStoreError::from)
+    }
+
+    pub fn upsert_embedding(
+        &self,
+        chunk_id: &ChunkId,
+        chunk_hash: blake3::Hash,
+    ) -> Result<(), IndexStoreError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO embeddings (chunk_id, chunk_hash) VALUES (?1, ?2)
+             ON CONFLICT(chunk_id) DO UPDATE SET chunk_hash = excluded.chunk_hash",
+            params![chunk_id.0, chunk_hash.as_bytes().to_vec()],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_embedding(&self, chunk_id: &ChunkId) -> Result<(), IndexStoreError> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM embeddings WHERE chunk_id = ?1", params![chunk_id.0])?;
+        Ok(())
+    }
+
+    pub fn clear_embeddings(&self) -> Result<(), IndexStoreError> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM embeddings", [])?;
+        Ok(())
+    }
+
+    /// What `EmbeddingIndex::ensure_loaded`/`load` reconstructs its
+    /// resident `records` map from — pairs with `vectors.usearch` (loaded
+    /// separately by `VectorStore::load`) to fully restore the index
+    /// without re-embedding anything that hasn't changed.
+    pub fn load_all_embedding_hashes(&self) -> Result<Vec<(ChunkId, blake3::Hash)>, IndexStoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare("SELECT chunk_id, chunk_hash FROM embeddings")?;
+        let rows = stmt.query_map([], |row| {
+            let chunk_id: String = row.get(0)?;
+            let hash_bytes: Vec<u8> = row.get(1)?;
+            Ok((chunk_id, hash_bytes))
+        })?;
+        rows.map(|r| r.map(|(id, bytes)| (ChunkId(id), hash_from_bytes(&bytes))))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(IndexStoreError::from)
+    }
+}
+
+fn hash_from_bytes(bytes: &[u8]) -> blake3::Hash {
+    let arr: [u8; 32] = bytes.try_into().expect("hash column is always 32 bytes");
+    blake3::Hash::from(arr)
+}
+
+fn language_to_str(language: Language) -> &'static str {
+    match language {
+        Language::Java => "java",
+        Language::Json => "json",
+        Language::Yaml => "yaml",
+        Language::Markdown => "markdown",
+        Language::AsciiDoc => "asciidoc",
+    }
+}
+
+fn str_to_language(s: &str) -> Option<Language> {
+    match s {
+        "java" => Some(Language::Java),
+        "json" => Some(Language::Json),
+        "yaml" => Some(Language::Yaml),
+        "markdown" => Some(Language::Markdown),
+        "asciidoc" => Some(Language::AsciiDoc),
+        _ => None,
+    }
+}
+
+fn chunk_kind_to_str(kind: ChunkKind) -> &'static str {
+    match kind {
+        ChunkKind::Method => "method",
+        ChunkKind::Field => "field",
+        ChunkKind::Section => "section",
+        ChunkKind::File => "file",
+    }
+}
+
+fn str_to_chunk_kind(s: &str) -> Option<ChunkKind> {
+    match s {
+        "method" => Some(ChunkKind::Method),
+        "field" => Some(ChunkKind::Field),
+        "section" => Some(ChunkKind::Section),
+        "file" => Some(ChunkKind::File),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::chunk_index::chunk_hash as compute_chunk_hash;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::SystemTime;
+
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn fixture_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("alfa-atlas-index-store-{nanos}-{n}"))
+    }
+
+    fn sample_file(file_id: &str, file_hash: blake3::Hash) -> FileMetadata {
+        FileMetadata {
+            relative_path: file_id.to_string(),
+            size_bytes: 10,
+            modified_at: SystemTime::now(),
+            hash: file_hash,
+            language: Language::Json,
+        }
+    }
+
+    fn sample_chunk(file_id: &str, start: u32, end: u32) -> ChunkMetadata {
+        let file_hash = blake3::hash(file_id.as_bytes());
+        ChunkMetadata {
+            id: ChunkId(format!("{file_id}#{start}-{end}")),
+            file_id: FileId(file_id.to_string()),
+            language: Language::Json,
+            kind: ChunkKind::File,
+            start_byte: start,
+            end_byte: end,
+            file_hash,
+            hash: compute_chunk_hash(file_hash, start, end),
+            qualified_name: None,
+            ordinal: 0,
+        }
+    }
+
+    #[test]
+    fn meta_round_trips() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+        assert_eq!(store.read_meta("schema_version").unwrap(), None);
+
+        store.write_meta("schema_version", "1").unwrap();
+        assert_eq!(store.read_meta("schema_version").unwrap().as_deref(), Some("1"));
+
+        store.write_meta("schema_version", "2").unwrap();
+        assert_eq!(store.read_meta("schema_version").unwrap().as_deref(), Some("2"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn chunks_round_trip_through_replace_and_load_all() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        let file_id = FileId("a.json".to_string());
+        let chunks = vec![sample_chunk("a.json", 0, 10)];
+        store
+            .upsert_files(&[sample_file("a.json", chunks[0].file_hash)])
+            .unwrap();
+        store.replace_chunks_for_file(&file_id, &chunks).unwrap();
+
+        let loaded = store.load_all_chunks().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, chunks[0].id);
+        assert_eq!(loaded[0].file_hash, chunks[0].file_hash);
+        assert_eq!(loaded[0].hash, chunks[0].hash);
+
+        // Replacing again with an empty set drops the file's chunks.
+        store.replace_chunks_for_file(&file_id, &[]).unwrap();
+        assert!(store.load_all_chunks().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deleting_a_chunk_cascades_to_its_embedding_row() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        let file_id = FileId("a.json".to_string());
+        let chunks = vec![sample_chunk("a.json", 0, 10)];
+        store
+            .upsert_files(&[sample_file("a.json", chunks[0].file_hash)])
+            .unwrap();
+        store.replace_chunks_for_file(&file_id, &chunks).unwrap();
+        store.upsert_embedding(&chunks[0].id, chunks[0].hash).unwrap();
+        assert_eq!(store.load_all_embedding_hashes().unwrap().len(), 1);
+
+        store.replace_chunks_for_file(&file_id, &[]).unwrap();
+        assert!(store.load_all_embedding_hashes().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn wipe_clears_everything() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+        store.write_meta("k", "v").unwrap();
+        let file_id = FileId("a.json".to_string());
+        let chunks = vec![sample_chunk("a.json", 0, 10)];
+        store
+            .upsert_files(&[sample_file("a.json", chunks[0].file_hash)])
+            .unwrap();
+        store.replace_chunks_for_file(&file_id, &chunks).unwrap();
+        store.upsert_embedding(&chunks[0].id, chunks[0].hash).unwrap();
+
+        store.wipe().unwrap();
+
+        assert_eq!(store.read_meta("k").unwrap(), None);
+        assert!(store.load_all_chunks().unwrap().is_empty());
+        assert!(store.load_all_embedding_hashes().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reopening_the_same_dir_preserves_data() {
+        let dir = fixture_dir();
+        {
+            let store = IndexStore::open(&dir).unwrap();
+            store.write_meta("k", "v").unwrap();
+        }
+        let reopened = IndexStore::open(&dir).unwrap();
+        assert_eq!(reopened.read_meta("k").unwrap().as_deref(), Some("v"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

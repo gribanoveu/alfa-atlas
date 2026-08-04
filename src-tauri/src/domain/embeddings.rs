@@ -14,11 +14,14 @@ pub struct Embedding(pub Vec<f32>);
 /// What `EmbeddingIndex` stores per chunk. `chunk_hash` — not the chunk's
 /// text — is the staleness signal: `EmbeddingIndex::sync` re-embeds a chunk
 /// only when this no longer matches the chunk's current
-/// `ChunkMetadata::hash`.
+/// `ChunkMetadata::hash`. Deliberately does **not** carry the vector itself
+/// — that already lives in `VectorStore`/`usearch::Index`, the only place
+/// anything actually reads it back (via `EmbeddingIndex::search`); keeping
+/// a second copy here would just double the resident memory cost of every
+/// embedded chunk for no functional benefit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddingRecord {
     pub chunk_hash: blake3::Hash,
-    pub vector: Embedding,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -111,6 +114,18 @@ pub struct SyncStats {
     pub embedded: usize,
     pub skipped_unchanged: usize,
     pub removed: usize,
+}
+
+/// Read-only "is this project's index built" signal — derived from the
+/// persisted/resident `EmbeddingIndex` itself (`embedded_count`), not from
+/// whether a `sync()` happened to run earlier in this process's lifetime.
+/// Lets the UI show real state on mount instead of resetting to "not yet
+/// synced" every time a component remounts.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingIndexStatus {
+    pub synced: bool,
+    pub embedded_count: usize,
 }
 
 #[cfg(test)]

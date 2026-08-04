@@ -25,6 +25,8 @@ export function EmbeddingsTab() {
     busy,
     error,
     lastSync,
+    indexStatus,
+    syncProgress,
     providerConfigured,
     updateConfig,
     saveApiKey,
@@ -250,7 +252,11 @@ export function EmbeddingsTab() {
             disabled={busy || syncing || !providerConfigured}
             onClick={() => void handleSync()}
           >
-            {syncing ? "Синхронизация…" : "Синхронизировать индекс"}
+            {syncing
+              ? syncProgress
+                ? `${syncProgress.phase === "chunking" ? "Индексация" : "Эмбеддинг"} ${syncProgress.current}/${syncProgress.total}`
+                : "Синхронизация…"
+              : "Синхронизировать индекс"}
           </button>
         </div>
         {!providerConfigured ? (
@@ -264,6 +270,10 @@ export function EmbeddingsTab() {
           <p className="settings-hint" style={{ paddingLeft: 0 }}>
             Готово: добавлено {lastSync.embedded}, без изменений{" "}
             {lastSync.skippedUnchanged}, удалено {lastSync.removed}.
+          </p>
+        ) : indexStatus?.synced ? (
+          <p className="settings-hint" style={{ paddingLeft: 0 }}>
+            Проиндексировано чанков: {indexStatus.embeddedCount}.
           </p>
         ) : null}
       </div>

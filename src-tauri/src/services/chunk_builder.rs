@@ -5,6 +5,7 @@
 //! "why" behind the data shapes and gap-ownership rules.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -15,6 +16,7 @@ use crate::domain::chunk_index::{
 };
 use crate::domain::repo_index::{FileId, Language, RepoIndexError};
 use crate::infra::chunk_strategies;
+use crate::services::chunk_text::{resolve_text, ChunkTextError};
 use crate::services::repo_index::RepositoryIndex;
 
 /// Builds chunks — holds only the strategy registry, no result state.
@@ -118,10 +120,16 @@ impl ChunkBuilder {
     }
 }
 
-/// Stores chunks — no knowledge of how they were built. `DashMap<ChunkId,
-/// Chunk>`, same storage style `RepositoryIndex` uses for `IndexedFile`.
+/// Stores chunk **metadata** only — no knowledge of how chunks were built,
+/// and deliberately no chunk text. `DashMap<ChunkId, ChunkMetadata>`, same
+/// storage style `RepositoryIndex` uses for `IndexedFile` (which, for the
+/// same reason, never carries file content either). A chunk's text is read
+/// on demand via `services::chunk_text::resolve_text` — keeping it out of
+/// this map is the whole point: resident memory here scales with chunk
+/// *count* (tens of bytes each), not with the total size of the indexed
+/// text (up to `DEFAULT_MAX_CHUNK_BYTES` per chunk).
 pub struct ChunkIndex {
-    chunks: DashMap<ChunkId, Chunk>,
+    chunks: DashMap<ChunkId, ChunkMetadata>,
 }
 
 impl Default for ChunkIndex {
@@ -137,9 +145,24 @@ impl ChunkIndex {
         }
     }
 
+    /// Takes builder output (`Chunk`, which still carries `text` — needed
+    /// in-flight to compute hashes and enforce the size limit) but stores
+    /// only `chunk.metadata`; `text` is dropped once this returns.
     pub fn insert_all(&self, chunks: Vec<Chunk>) {
         for chunk in chunks {
-            self.chunks.insert(chunk.metadata.id.clone(), chunk);
+            self.chunks.insert(chunk.metadata.id.clone(), chunk.metadata);
+        }
+    }
+
+    /// Replaces every chunk in this index with `chunks` — used to
+    /// repopulate a freshly-attached project's index from
+    /// `infra::index_store::IndexStore::load_all_chunks` on cold start,
+    /// without a full repo rescan. Unlike `insert_all`, takes metadata
+    /// directly (nothing to build here, it's already been persisted).
+    pub fn load_metadata(&self, chunks: Vec<ChunkMetadata>) {
+        self.chunks.clear();
+        for metadata in chunks {
+            self.chunks.insert(metadata.id.clone(), metadata);
         }
     }
 
@@ -149,22 +172,54 @@ impl ChunkIndex {
     /// `file_id`); fine at today's scale, and the API doesn't need to
     /// change if that's ever worth optimizing.
     pub fn replace_for_file(&self, file_id: &FileId, chunks: Vec<Chunk>) {
-        self.chunks.retain(|_, c| c.metadata.file_id != *file_id);
+        self.chunks.retain(|_, m| m.file_id != *file_id);
         self.insert_all(chunks);
     }
 
-    /// Every chunk belonging to one file — re-embedding, deletion, display,
-    /// debug all want this without scanning the whole map by hand each time.
-    pub fn chunks_for_file(&self, file_id: &FileId) -> Vec<Chunk> {
+    /// Every chunk's metadata belonging to one file — re-embedding,
+    /// deletion, display, debug all want this without scanning the whole
+    /// map by hand each time.
+    pub fn chunks_for_file(&self, file_id: &FileId) -> Vec<ChunkMetadata> {
         self.chunks
             .iter()
-            .filter(|entry| entry.value().metadata.file_id == *file_id)
+            .filter(|entry| entry.value().file_id == *file_id)
             .map(|entry| entry.value().clone())
             .collect()
     }
 
-    pub fn get(&self, id: &ChunkId) -> Option<Chunk> {
+    pub fn get(&self, id: &ChunkId) -> Option<ChunkMetadata> {
         self.chunks.get(id).map(|entry| entry.value().clone())
+    }
+
+    /// `get` plus an on-demand read of the chunk's text from `repo_root`.
+    /// `None` if `id` isn't in this index; `Some(Err(_))` if the metadata
+    /// exists but the text couldn't be resolved (file missing, or changed
+    /// since indexing — see `ChunkTextError`).
+    pub fn get_with_text(
+        &self,
+        id: &ChunkId,
+        repo_root: &Path,
+    ) -> Option<Result<(ChunkMetadata, String), ChunkTextError>> {
+        let metadata = self.get(id)?;
+        Some(resolve_text(repo_root, &metadata).map(|text| (metadata.clone(), text)))
+    }
+
+    /// Any one stored chunk's `file_hash` for `file_id` (every chunk of a
+    /// file shares the same one) — `None` if the file has no chunks in this
+    /// index. Cheap fast path for an incremental sync to skip re-chunking a
+    /// file whose content hasn't changed since it was last indexed.
+    pub fn file_hash_for(&self, file_id: &FileId) -> Option<blake3::Hash> {
+        self.chunks
+            .iter()
+            .find(|entry| entry.value().file_id == *file_id)
+            .map(|entry| entry.value().file_hash)
+    }
+
+    /// Every distinct `file_id` with at least one chunk in this index — an
+    /// incremental sync diffs this against the repo's current file list to
+    /// find files that were deleted since the index was last built/loaded.
+    pub fn file_ids(&self) -> std::collections::HashSet<FileId> {
+        self.chunks.iter().map(|entry| entry.value().file_id.clone()).collect()
     }
 
     /// Every chunk id currently stored, across every file — cheap (clones

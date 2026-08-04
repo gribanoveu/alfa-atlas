@@ -13,6 +13,9 @@
 //! module) keeps `key -> ChunkId` alongside its `ChunkId -> EmbeddingRecord`
 //! map.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
 use crate::domain::chunk_index::ChunkId;
@@ -28,10 +31,15 @@ pub fn usearch_key(chunk_id: &ChunkId) -> u64 {
 
 pub struct VectorStore {
     index: Index,
+    /// Set only by `load` — where this index round-trips to disk, so
+    /// `clear()` can remove the stale file alongside resetting the
+    /// in-memory index. `new()` (no persistence involved) leaves this
+    /// `None`.
+    path: Option<PathBuf>,
 }
 
 impl VectorStore {
-    pub fn new(dimensions: usize) -> Result<Self, EmbeddingError> {
+    fn build_index(dimensions: usize) -> Result<Index, EmbeddingError> {
         let options = IndexOptions {
             dimensions,
             metric: MetricKind::Cos,
@@ -40,7 +48,57 @@ impl VectorStore {
         };
         let index = Index::new(&options).map_err(vector_store_err)?;
         index.reserve(1024).map_err(vector_store_err)?;
-        Ok(Self { index })
+        Ok(index)
+    }
+
+    pub fn new(dimensions: usize) -> Result<Self, EmbeddingError> {
+        Ok(Self {
+            index: Self::build_index(dimensions)?,
+            path: None,
+        })
+    }
+
+    /// Loads a previously `save`d index from `path` if it exists, otherwise
+    /// starts empty (first-ever sync for this project) — either way, the
+    /// returned store remembers `path` so a later `save()`/`clear()` knows
+    /// where to write/remove it. `load()`, not `usearch`'s mmap-backed
+    /// `view()`: this index must stay mutable for the app's lifetime
+    /// (incremental `upsert`/`remove` on every sync), and a `view()`ed
+    /// index is read-only by design.
+    pub fn load(dimensions: usize, path: &Path) -> Result<Self, EmbeddingError> {
+        let index = Self::build_index(dimensions)?;
+        if path.exists() {
+            index
+                .load(path.to_str().ok_or_else(|| {
+                    EmbeddingError::VectorStore(format!("non-UTF8 path: {}", path.display()))
+                })?)
+                .map_err(vector_store_err)?;
+        }
+        Ok(Self {
+            index,
+            path: Some(path.to_path_buf()),
+        })
+    }
+
+    /// Persists the current index to `path` (or this store's remembered
+    /// `load`ed path if `path` is `None`). A full-file write — callers
+    /// should batch this to once per sync, not once per `upsert`.
+    pub fn save(&self, path: &Path) -> Result<(), EmbeddingError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(EmbeddingError::Io)?;
+        }
+        self.index
+            .save(path.to_str().ok_or_else(|| {
+                EmbeddingError::VectorStore(format!("non-UTF8 path: {}", path.display()))
+            })?)
+            .map_err(vector_store_err)
+    }
+
+    /// The path this store round-trips to, if it was `load`ed from one —
+    /// what a caller like `EmbeddingIndex::sync` checks to know whether it
+    /// should `save()` again after mutating.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// Adds or replaces the vector for `chunk_id`. `usearch` has no native
@@ -86,8 +144,21 @@ impl VectorStore {
         self.len() == 0
     }
 
+    /// Resets the in-memory index and, if this store was `load`ed from a
+    /// file, removes that file too — otherwise a stale `vectors.usearch`
+    /// (e.g. from a since-changed embedding dimension) would sit on disk
+    /// and a later blind `load()` would either fail or silently load
+    /// mismatched data.
     pub fn clear(&self) -> Result<(), EmbeddingError> {
-        self.index.reset().map_err(vector_store_err)
+        self.index.reset().map_err(vector_store_err)?;
+        if let Some(path) = &self.path {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(EmbeddingError::Io(e)),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -134,5 +205,53 @@ mod tests {
         assert_eq!(store.len(), 1);
         store.clear().unwrap();
         assert!(store.is_empty());
+    }
+
+    fn temp_vectors_path() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("alfa-atlas-vector-store-{nanos}.usearch"))
+    }
+
+    #[test]
+    fn save_and_load_round_trip_preserves_search_results() {
+        let path = temp_vectors_path();
+        let id = ChunkId("f#0-1".to_string());
+        {
+            let store = VectorStore::new(3).unwrap();
+            store.upsert(&id, &Embedding(vec![1.0, 0.0, 0.0])).unwrap();
+            store.save(&path).unwrap();
+        }
+
+        let loaded = VectorStore::load(3, &path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        let results = loaded.search(&Embedding(vec![1.0, 0.0, 0.0]), 1).unwrap();
+        assert_eq!(results[0].0, usearch_key(&id));
+
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn load_with_no_existing_file_starts_empty() {
+        let path = temp_vectors_path();
+        let store = VectorStore::load(3, &path).unwrap();
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn clear_removes_the_persisted_file() {
+        let path = temp_vectors_path();
+        let store = VectorStore::new(3).unwrap();
+        store
+            .upsert(&ChunkId("f#0-1".to_string()), &Embedding(vec![1.0, 0.0, 0.0]))
+            .unwrap();
+        store.save(&path).unwrap();
+        assert!(path.exists());
+
+        let loaded = VectorStore::load(3, &path).unwrap();
+        loaded.clear().unwrap();
+        assert!(!path.exists());
     }
 }

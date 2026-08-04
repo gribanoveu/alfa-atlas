@@ -25,6 +25,10 @@ type ChecklistItem = {
   actionDisabled?: boolean;
   secondaryLabel?: string;
   onSecondaryAction?: () => void;
+  /** For steps that stay repeatable after their first success (e.g. "sync
+   * index" — docs keep changing) — keeps the action button visible instead
+   * of permanently replacing it with the "Готово" badge once `completed`. */
+  alwaysShowAction?: boolean;
 };
 
 export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
@@ -33,12 +37,26 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
     modelStatus,
     providerConfigured,
     lastSync,
+    indexStatus,
+    syncProgress,
     busy,
     downloadModel,
     cancelDownload,
     sync,
+    refresh,
   } = useEmbeddingSetup();
   const { mode: accessMode, busy: accessModeBusy, setMode: setAccessMode } = useAiAccessMode();
+
+  // The index is per-access-mode (`DocsOnly`/`FullRepo` index different
+  // roots, each with its own persisted store — see `resolve_index_root` in
+  // `commands/embeddings.rs`), so switching modes must re-fetch
+  // `indexStatus` — otherwise it keeps showing whichever mode's count was
+  // last fetched. Awaiting `setAccessMode` first (rather than a `useEffect`
+  // on `accessMode`) avoids racing `embedding_index_status` against the
+  // backend's own persist of the new mode.
+  const handleAccessModeChange = (value: AiAccessMode) => {
+    void setAccessMode(value).then(() => refresh());
+  };
 
   const items: ChecklistItem[] = [];
 
@@ -76,15 +94,31 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
     });
   }
 
+  const syncPhaseLabel =
+    syncProgress?.phase === "chunking" ? "Индексация файлов" : "Расчёт эмбеддингов";
+
   items.push({
     id: "sync",
     Icon: RefreshCw,
     title: "Синхронизировать индекс",
-    description: lastSync
-      ? `Добавлено ${lastSync.embedded}, без изменений ${lastSync.skippedUnchanged}, удалено ${lastSync.removed}.`
-      : "Построить/обновить эмбеддинги чанков документации для текущего проекта.",
-    completed: lastSync !== null,
-    actionLabel: "Синхронизировать",
+    description:
+      busy && syncProgress
+        ? `${syncPhaseLabel}: ${syncProgress.current}/${syncProgress.total}`
+        : lastSync
+          ? `Добавлено ${lastSync.embedded}, без изменений ${lastSync.skippedUnchanged}, удалено ${lastSync.removed}.`
+          : indexStatus?.synced
+            ? `Проиндексировано чанков: ${indexStatus.embeddedCount}.`
+            : "Построить/обновить эмбеддинги чанков документации для текущего проекта.",
+    // `indexStatus` reflects the backend's persisted/resident index, so this
+    // stays accurate across a remount — `lastSync` alone (this session's
+    // last sync() call) would reset to "not done" every time the panel
+    // unmounts even though the index itself is still fully built.
+    completed: lastSync !== null || Boolean(indexStatus?.synced),
+    // Unlike "configure provider"/"download model" (genuinely one-time),
+    // syncing stays a repeatable action — docs keep changing — so the
+    // button must not disappear behind "Готово" after the first success.
+    alwaysShowAction: true,
+    actionLabel: busy ? (syncProgress ? `${syncProgress.current}/${syncProgress.total}` : "Синхронизация…") : "Синхронизировать",
     onAction: () => void sync(),
     actionDisabled: busy || !providerConfigured,
   });
@@ -102,7 +136,7 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
               aria-checked={accessMode === option.value}
               className={`assistant-access-btn ${accessMode === option.value ? "active" : ""}`}
               disabled={accessModeBusy || accessMode === null}
-              onClick={() => void setAccessMode(option.value)}
+              onClick={() => handleAccessModeChange(option.value)}
             >
               <option.Icon size={13} strokeWidth={1.75} aria-hidden />
               {option.label}
@@ -130,7 +164,7 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
               <div className="assistant-checklist-body">
                 <span className="assistant-checklist-title">{item.title}</span>
                 <span className="assistant-checklist-desc">{item.description}</span>
-                {item.completed ? (
+                {item.completed && !item.alwaysShowAction ? (
                   <span className="assistant-checklist-done">
                     <Check size={11} strokeWidth={2} aria-hidden />
                     Готово

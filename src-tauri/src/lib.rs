@@ -8,7 +8,7 @@ use services::window_settings;
 use std::sync::Arc;
 use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
 
-use crate::commands::embeddings::EmbeddingIndexSlot;
+use crate::commands::embeddings::{EmbeddingIndexSlot, IndexStoreSlot};
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::embedding_model::DownloadState;
@@ -108,6 +108,7 @@ pub fn run() {
             app.manage(Arc::new(RepositoryIndex::new()));
             app.manage(Arc::new(ChunkIndex::new()));
             app.manage(Arc::new(EmbeddingIndexSlot::new(None)));
+            app.manage(Arc::new(IndexStoreSlot::new(None)));
             app.manage(Arc::new(DownloadState::default()));
 
             Ok(())
@@ -231,6 +232,7 @@ pub fn run() {
             commands::embeddings::embedding_download_model,
             commands::embeddings::embedding_cancel_model_download,
             commands::embeddings::embedding_sync,
+            commands::embeddings::embedding_index_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,6 @@
 pub mod ai_tools;
 pub mod chunk_builder;
+pub mod chunk_text;
 pub mod diagnostics;
 pub mod diagnostic_messages;
 pub mod docs_discovery;
@@ -12,6 +13,7 @@ pub mod general_prefs;
 pub mod git_credentials;
 pub mod gitignore;
 pub mod git_ops;
+pub mod index_store_ensure;
 pub mod openapi;
 pub mod project_layout;
 pub mod project_open;

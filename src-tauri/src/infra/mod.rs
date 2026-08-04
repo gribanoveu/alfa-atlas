@@ -6,6 +6,7 @@ pub mod embedding_credentials_store;
 pub mod embedding_providers;
 pub mod git_credentials_store;
 pub mod git_repo;
+pub mod index_store;
 pub mod key_management;
 pub mod language_indexers;
 pub mod layout_store;

@@ -26,10 +26,26 @@ export type SyncStats = {
   removed: number;
 };
 
+// Mirrors `domain::embeddings::EmbeddingIndexStatus`.
+export type EmbeddingIndexStatus = {
+  synced: boolean;
+  embeddedCount: number;
+};
+
 export type ModelDownloadProgress = {
   progress: number;
   error?: string;
   cancelled?: boolean;
+};
+
+// Mirrors the Rust `SyncPhase`/`SyncProgressPayload` emitted by
+// `commands::embeddings::embedding_sync`.
+export type SyncPhase = "chunking" | "embedding";
+
+export type SyncProgress = {
+  phase: SyncPhase;
+  current: number;
+  total: number;
 };
 
 export function getEmbeddingConfig(): Promise<EmbeddingProviderConfig> {
@@ -73,10 +89,28 @@ export function syncEmbeddings(): Promise<SyncStats> {
   return invoke<SyncStats>("embedding_sync");
 }
 
+/** Read-only: is the current project's index already built? Backed by the
+ * persisted/resident `EmbeddingIndex` itself, not by whether `syncEmbeddings`
+ * happened to run earlier in this session — safe to call on every mount to
+ * recover real state after a remount. */
+export function getEmbeddingIndexStatus(): Promise<EmbeddingIndexStatus> {
+  return invoke<EmbeddingIndexStatus>("embedding_index_status");
+}
+
 export function listenModelDownloadProgress(
   onProgress: (payload: ModelDownloadProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<ModelDownloadProgress>("embedding:model-download-progress", (event) =>
     onProgress(event.payload),
   );
+}
+
+/** Fires repeatedly while a `syncEmbeddings()` call is in flight — first
+ * `phase: "chunking"` (re-chunking changed files), then `phase: "embedding"`
+ * (calling the provider in batches). Not emitted at all for a no-op sync
+ * (nothing changed since the last one). */
+export function listenSyncProgress(
+  onProgress: (payload: SyncProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<SyncProgress>("embedding:sync-progress", (event) => onProgress(event.payload));
 }
