@@ -1,0 +1,122 @@
+.assistant-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  overflow-y: auto;
+}
+
+.assistant-panel-section {
+  padding: 10px;
+}
+
+.assistant-panel-section-title {
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+
+.assistant-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.assistant-checklist-item {
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.assistant-checklist-item.is-completed {
+  opacity: 0.6;
+}
+
+.assistant-checklist-icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: var(--bg-2);
+  color: var(--accent);
+}
+
+.assistant-checklist-item.is-completed .assistant-checklist-icon {
+  color: var(--text-2);
+}
+
+.assistant-checklist-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.assistant-checklist-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.assistant-checklist-desc {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+.assistant-checklist-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.assistant-checklist-btn {
+  font-size: var(--font-ui-sm);
+  padding: 3px 9px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-1);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.assistant-checklist-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  border-color: var(--text-2);
+}
+
+.assistant-checklist-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.assistant-checklist-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.assistant-checklist-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.assistant-checklist-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--green);
+}

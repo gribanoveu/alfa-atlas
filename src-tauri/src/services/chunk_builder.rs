@@ -167,6 +167,14 @@ impl ChunkIndex {
         self.chunks.get(id).map(|entry| entry.value().clone())
     }
 
+    /// Every chunk id currently stored, across every file — cheap (clones
+    /// only the small keys, not each chunk's text), mirrors
+    /// `RepositoryIndex::file_ids()`. What `EmbeddingIndex::sync` diffs
+    /// against to detect chunks that no longer exist.
+    pub fn chunk_ids(&self) -> Vec<ChunkId> {
+        self.chunks.iter().map(|entry| entry.key().clone()).collect()
+    }
+
     pub fn clear(&self) {
         self.chunks.clear();
     }
@@ -445,6 +453,29 @@ public class UserService {
         let index = ChunkIndex::new();
         index.insert_all(chunks);
         assert!(index.get(&id).is_some());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn chunk_ids_lists_every_stored_chunk_across_files() {
+        let root = fixture_repo();
+        fs::write(root.join("src/UserService.java"), JAVA_SAMPLE).unwrap();
+        fs::write(root.join("src/response.json"), r#"{"a": 1}"#).unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        let builder = ChunkBuilder::new();
+        let all_chunks = builder.build_all(&repo_index, &ChunkBuildOptions::default());
+
+        let index = ChunkIndex::new();
+        index.insert_all(all_chunks.clone());
+
+        let ids = index.chunk_ids();
+        assert_eq!(ids.len(), all_chunks.len());
+        for chunk in &all_chunks {
+            assert!(ids.contains(&chunk.metadata.id));
+        }
 
         fs::remove_dir_all(&root).ok();
     }

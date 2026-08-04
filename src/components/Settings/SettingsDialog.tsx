@@ -18,6 +18,7 @@ import type { SpellcheckConfig } from "../../lib/spellcheck";
 import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
 import { CredentialsTab } from "./CredentialsTab";
+import { EmbeddingsTab } from "./EmbeddingsTab";
 import { SpellcheckTab } from "./SpellcheckTab";
 import { StandardsRulesTab } from "./StandardsRulesTab";
 
@@ -28,7 +29,8 @@ export type SectionId =
   | "paths"
   | "credentials"
   | "standards"
-  | "spellcheck";
+  | "spellcheck"
+  | "embeddings";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "Общие" },
@@ -38,6 +40,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "credentials", label: "Git" },
   { id: "standards", label: "Стандарты" },
   { id: "spellcheck", label: "Орфография" },
+  { id: "embeddings", label: "Эмбеддинги" },
 ];
 
 type FontSizePrefKey =
@@ -595,6 +598,8 @@ export function SettingsDialog({
             {section === "spellcheck" ? (
               <SpellcheckTab onConfigChange={onSpellcheckConfigChange} />
             ) : null}
+
+            {section === "embeddings" ? <EmbeddingsTab /> : null}
 
             {error ? <div className="settings-error">{error}</div> : null}
           </div>

@@ -431,6 +431,7 @@ function App() {
     active: hasProject,
   });
   const [standardsSettingsSignal, setStandardsSettingsSignal] = useState(0);
+  const [embeddingsSettingsSignal, setEmbeddingsSettingsSignal] = useState(0);
 
   useEffect(() => {
     if (layout.activeTool === "branches" && hasProject) {
@@ -1125,6 +1126,7 @@ function App() {
           project.submitProbe(cloned);
         }}
         openStandardsSettingsSignal={standardsSettingsSignal}
+        openEmbeddingsSettingsSignal={embeddingsSettingsSignal}
       />
       <div className="workspace">
         <div className={mainClassName}>
@@ -1330,6 +1332,9 @@ function App() {
                   }
                 : null
             }
+            assistant={{
+              onOpenSettings: () => setEmbeddingsSettingsSignal((n) => n + 1),
+            }}
           />
         </div>
         <BottomDock

@@ -14,6 +14,7 @@ import type {
 } from "../../lib/git";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
+import { AssistantPanel } from "./AssistantPanel";
 import { BranchesPanel } from "./BranchesPanel";
 import { GitPanel } from "./GitPanel";
 import { AsciiDocPanel } from "./AsciiDocPanel";
@@ -107,6 +108,9 @@ type RightDockProps = {
     canInsert: boolean;
     onInsert: (text: string) => void;
   } | null;
+  assistant?: {
+    onOpenSettings: () => void;
+  } | null;
 };
 
 export function RightDock({
@@ -118,6 +122,7 @@ export function RightDock({
   git,
   branches,
   asciidoc,
+  assistant,
 }: RightDockProps) {
   const open = Boolean(activeTool);
   const active = activeTool ? TOOL_DEFS[activeTool] : undefined;
@@ -193,6 +198,8 @@ export function RightDock({
               />
             ) : activeTool === "suggestions" ? (
               <NotificationsPanel />
+            ) : activeTool === "assistant" && assistant ? (
+              <AssistantPanel onOpenSettings={assistant.onOpenSettings} />
             ) : (
               <div className="panel-empty">{active.empty}</div>
             )}

@@ -222,6 +222,11 @@ pub struct AppSettings {
     pub standards: crate::domain::standards::StandardsRuleConfig,
     #[serde(default)]
     pub spellcheck: crate::domain::spellcheck::SpellcheckConfig,
+    /// Global — one embedding provider choice across every project, not
+    /// per-repo. The remote API key is never part of this (or any)
+    /// `settings.json` — see `infra::embedding_credentials_store`.
+    #[serde(default)]
+    pub embedding: crate::domain::embeddings::EmbeddingProviderConfig,
 }
 
 #[derive(Debug, Error)]
@@ -328,6 +333,17 @@ mod tests {
             settings.general.autosave_delay_ms,
             DEFAULT_AUTOSAVE_DELAY_MS
         );
+    }
+
+    #[test]
+    fn deserializes_legacy_settings_without_embedding() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
+        assert_eq!(
+            settings.embedding.kind,
+            crate::domain::embeddings::EmbeddingProviderKind::Local
+        );
+        assert_eq!(settings.embedding.remote_base_url, None);
     }
 
     #[test]

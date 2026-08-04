@@ -3,6 +3,7 @@ pub mod ai_tools;
 pub mod asciidoc_facts;
 pub mod asciidoc_templates;
 pub mod chunk_index;
+pub mod embeddings;
 pub mod git;
 pub mod layout;
 pub mod onboarding;

@@ -4,7 +4,7 @@ Status of the AI-agent infrastructure in this app: what exists today, what it do
 
 ## Status
 
-**The tool-execution boundary is reachable from the frontend via one IPC command (`ai_execute_tool`), and a standalone Repository Index + Chunk Index now exist alongside it — but no LLM is wired up and no chat UI exists yet.** This is groundwork for a future AI harness (an agent loop that calls an LLM with tool-calling) — specifically the trust boundary that decides *which files* and *which operations* that harness is allowed to touch, plus a per-file structural index and a semantic-chunk index it will eventually query (and, later, that a separate embeddings stage will build on). The Rust side (`src-tauri/src`) is unit-tested throughout; the IPC command is additionally verified end-to-end (see "IPC surface" below) but has no caller anywhere in the app yet, and neither index has any caller at all yet (not even IPC) — nothing in `src/components`/`src/hooks` invokes any of this.
+**The tool-execution boundary is reachable from the frontend via one IPC command (`ai_execute_tool`); a standalone Repository Index + Chunk Index exist alongside it; and an Embedding Service (local BGE-M3 or a remote OpenAI-compatible API, backed by a `usearch` vector index) now turns chunks into searchable vectors — but no LLM is wired up and no chat UI exists yet.** This is groundwork for a future AI harness (an agent loop that calls an LLM with tool-calling) — specifically the trust boundary that decides *which files* and *which operations* that harness is allowed to touch, a per-file structural index, a semantic-chunk index, and now the embedding layer a future semantic-search/RAG tool will query. The Rust side (`src-tauri/src`) is unit-tested throughout; the IPC command is additionally verified end-to-end (see "IPC surface" below) but has no caller anywhere in the app yet. Repository Index and Chunk Index still have no caller at all (not even IPC). The Embedding Service is the first layer in this file with real UI: a "Эмбеддинги" tab in Settings and a setup checklist in the RightDock "Ассистент" panel, both driving the same 7 `embedding_*` IPC commands — but nothing calls `embedding_sync` automatically yet (no file-watcher), and there is still no semantic-search command/UI consuming the resulting vectors.
 
 The product vision for the user-facing feature this unblocks is documented separately in [`doc/business-requirements/02-functional-requirements.md`](doc/business-requirements/02-functional-requirements.md) (BR-4 "AI-ассистент документации", BR-5 "Подсказки AI").
 
@@ -48,7 +48,20 @@ services/repo_index.rs      — RepositoryIndex (build/get/file_ids/read/files_f
 
 domain/chunk_index.rs       — ChunkSpan, ChunkStrategy trait, ChunkMetadata, Chunk, CHUNK_VERSION, gap-ownership + splitting helpers
 infra/chunk_strategies/*    — JavaChunkStrategy, MarkdownChunkStrategy, AsciiDocChunkStrategy, WholeFileChunkStrategy
-services/chunk_builder.rs   — ChunkBuilder (build_file/build_all), ChunkIndex (insert_all/replace_for_file/chunks_for_file/get/clear)
+services/chunk_builder.rs   — ChunkBuilder (build_file/build_all), ChunkIndex (insert_all/replace_for_file/chunks_for_file/get/clear/chunk_ids)
+
+domain/embeddings.rs               — Embedding, EmbeddingRecord, EmbeddingProviderKind/Config, ModelStatus, SyncStats, EmbeddingError, EmbeddingProvider trait
+infra/embedding_providers/*        — LocalEmbeddingProvider (fastembed + BGE-M3 int8 ONNX), RemoteEmbeddingProvider (ureq, OpenAI-compatible /embeddings), provider_for()
+infra/vector_store.rs              — VectorStore (usearch wrapper), usearch_key(&ChunkId) -> u64
+infra/embedding_credentials_store.rs — encrypted remote API key (AES-256-GCM, mirrors git_credentials_store.rs)
+services/embedding_model.rs        — model_status(), download_model() (emits embedding:model-download-progress)
+services/embedding_index.rs        — EmbeddingBuilder, EmbeddingIndex (sync/get/search/clear)
+services/embedding_config.rs       — load/save EmbeddingProviderConfig (AppSettings.embedding)
+commands/embeddings.rs             — 7 embedding_* IPC commands, EmbeddingIndexSlot
+src/lib/embeddings.ts              — typed wrappers + listenModelDownloadProgress()
+src/hooks/useEmbeddingSetup.ts     — shared state consumed by EmbeddingsTab and AssistantPanel
+src/components/Settings/EmbeddingsTab.tsx   — provider choice, model download, API key, manual sync
+src/components/RightDock/AssistantPanel.tsx — setup checklist (provider / model / sync)
 ```
 
 ## The single entry point: `execute_tool`
@@ -169,6 +182,38 @@ pub struct Chunk {
 
 A `ChunkStrategy` only returns ranges (`ChunkSpan`) — hashing, `qualified_name` lookup (smallest enclosing `Class`/`Interface`/`Enum` symbol, e.g. `"UserService.save"`), and `ordinal` assignment all happen once in `ChunkBuilder`, not duplicated per language.
 
+## Embeddings
+
+Built on top of Chunk Index: `ChunkIndex → EmbeddingBuilder → EmbeddingIndex (usearch)`. This is the layer a future semantic-search/RAG tool will actually query — everything before it only produces addressable text, nothing before it produces a vector.
+
+```rust
+pub trait EmbeddingProvider: Send + Sync {
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError>;  // batched
+    fn dimensions(&self) -> usize;
+}
+```
+
+**Two providers, one persisted choice** (`AppSettings.embedding: EmbeddingProviderConfig`, global — not per-project):
+- **Local** (default) — `infra::embedding_providers::local::LocalEmbeddingProvider`, wrapping `fastembed`'s BGE-M3 (int8 ONNX, 1024-dim, HF repo `gpahal/bge-m3-onnx-int8`). Chosen for multilingual strength (this app's primary content language is Russian). Not bundled — `~570MB`, downloaded on demand and cached at `~/.atlas/models` on first use, same "fetch once, cache locally" shape as any `hf-hub`-backed tool.
+- **Remote** — `infra::embedding_providers::remote::RemoteEmbeddingProvider`, a full (not stub) OpenAI-compatible client: `POST {base_url}/embeddings` with `{"input":[...],"model":...}`, `Authorization: Bearer {key}`, parses `{"data":[{"embedding":[...]}]}` — works against OpenAI, Together, Mistral, or a local Ollama/LM Studio server. The API key is never stored in `settings.json`; it goes through `infra::embedding_credentials_store` (AES-256-GCM, the same encryption key `key_management` already uses for the Git SSH private key).
+
+Both are synchronous (`fastembed` has no Tokio dependency; the remote client uses blocking `ureq` rather than expanding this project's minimal `tokio` feature set) — callers run `embed()` inside `spawn_blocking`, same as `check_standards`/`ai_execute_tool`.
+
+**Model download** (`services::embedding_model`): `model_status()` reports `NotDownloaded | Downloading{progress} | Ready | Error` by checking `hf-hub`'s cache directory without triggering a fetch; `download_model(app_handle)` triggers it and emits `embedding:model-download-progress` events. **Known limitation**: `fastembed` does not expose a byte-level download callback through its own `InitOptions` API (confirmed by reading `hf-hub`'s source — the granular hook exists there but isn't threaded through), so progress is coarse: one `0.0` event at start, one `1.0` event at completion, not a smooth bar.
+
+**Vector storage**: `infra::vector_store::VectorStore` wraps `usearch` (embedded HNSW/ANN, no server process, `MetricKind::Cos`). `usearch` keys entries by `u64`, not `ChunkId`, so `usearch_key(chunk_id)` derives one deterministically (`u64::from_le_bytes(blake3(chunk_id)[..8])`); `EmbeddingIndex` keeps a `key_to_chunk: DashMap<u64, ChunkId>` reverse map so `search()` can translate results back. No SQLite this pass — `RepositoryIndex`/`ChunkIndex` already hold every piece of chunk/file metadata a search result needs to be resolved back to a file and byte range.
+
+**Incremental sync** (`EmbeddingIndex::sync`, `services/embedding_index.rs`) does all three rules from the original request in one reconciliation pass over `chunk_index.chunk_ids()` vs. its own `records: DashMap<ChunkId, EmbeddingRecord>`:
+- No record for a `ChunkId` → **new chunk**, batched into one `provider.embed(...)` call.
+- Record exists but `record.chunk_hash != chunk.metadata.hash` → **changed**, re-embedded in the same batch (chunk `hash` already encodes "did this span's content or position change" from the Chunk Index stage — `sync` doesn't need its own staleness logic).
+- A `ChunkId` in `records` no longer present in `chunk_index.chunk_ids()` → **deleted**, removed from both `records` and the vector store.
+
+`EmbeddingIndexSlot` (`Mutex<Option<(usize, EmbeddingIndex)>>`, `commands/embeddings.rs`) is the first `.manage()`'d state in this file that's lazily (re)built rather than constructed once at startup — `usearch`'s index needs a fixed dimension count, and switching provider (Local↔Remote, or a different remote model) can change that dimension, so the slot rebuilds only when the resolved provider's `dimensions()` no longer matches what's currently held.
+
+**IPC surface** (`commands/embeddings.rs`, 7 commands): `embedding_get_config`/`embedding_set_config`, `embedding_set_remote_api_key`/`embedding_has_remote_api_key` (write-only key, mirrors `git_save_credentials`), `embedding_model_status`, `embedding_download_model` (async, streams progress events), `embedding_sync` (async — rebuilds `RepositoryIndex` + `ChunkIndex` for the current project, then `EmbeddingIndex::sync`, returns `SyncStats{embedded, skipped_unchanged, removed}`). Frontend wrappers in `src/lib/embeddings.ts`, shared state in `src/hooks/useEmbeddingSetup.ts`.
+
+**This is the first layer in this file with real UI**: a "Эмбеддинги" tab in Settings (provider choice, model download with a live progress bar, remote base URL/model/API key, manual sync trigger) and a setup checklist in the RightDock "Ассистент" panel (`AssistantPanel.tsx`, replacing what had been an empty stub since the very first AI-harness stage) — "Настроить провайдера" / "Загрузить модель" (Local only) / "Синхронизировать индекс", each item clickable, both consuming the same `useEmbeddingSetup` hook so they never disagree about current state.
+
 ## What is not built yet
 
 - No UI to view or change `ai_access_mode` / `ai_allowed_tools` — currently editable only by hand-editing `project.json` or in Rust code/tests.
@@ -176,10 +221,12 @@ A `ChunkStrategy` only returns ranges (`ChunkSpan`) — hashing, `qualified_name
 - No write/edit tool.
 - No logging at the `execute_tool` call site (the single entry point exists specifically so this is a one-line addition later).
 - No frontend caller of `aiExecuteTool` yet — the IPC boundary is wired and verified, but nothing in the UI triggers it.
-- Neither Repository Index nor Chunk Index has a `#[tauri::command]`, a `.manage()` registration, or any wiring into `ai_tools`'s `ToolCall`/`ToolName` — both are standalone, unit-tested Rust with no caller in the app.
-- No persistence to disk for either index — both rebuild in memory from a `RepositoryIndex::build`/`ChunkBuilder::build_all` call.
-- No actual file-watcher-driven incremental rebuild — `ChunkBuilder::build_file` + `ChunkIndex::replace_for_file` exist in the shape a watcher will call, but nothing calls them on a file-change event yet.
-- No embeddings, no BGE-M3, no vector DB — Chunk Index produces text fragments only.
+- Neither Repository Index nor Chunk Index has a `#[tauri::command]` of its own or any wiring into `ai_tools`'s `ToolCall`/`ToolName` — both are only reachable indirectly, via `embedding_sync` rebuilding them internally.
+- No persistence to disk for Repository Index, Chunk Index, or the embedding vectors — `embedding_sync` rebuilds `RepositoryIndex`/`ChunkIndex` from scratch every call, and `EmbeddingIndex`/`VectorStore` live only in memory for the app session (restart loses everything and the next sync re-embeds unchanged chunks from scratch, since there's no cached `chunk_hash` to diff against).
+- No actual file-watcher-driven incremental rebuild — `embedding_sync` (and, underneath it, `ChunkBuilder::build_file` + `ChunkIndex::replace_for_file`) exist in the shape a watcher will call, but nothing triggers a sync on a file-change event yet; it only runs when a user clicks "Синхронизировать" in Settings or the Assistant panel.
+- No semantic-search IPC command or UI — `EmbeddingIndex::search` exists and is unit-tested, but nothing calls it; this stage only builds the index, not a way to query it.
+- No `ai_tools`/`ToolCall` integration for embeddings — a future `SemanticSearch` tool would sit in `services/ai_tools.rs` next to `ReadFile`/`ListFiles`, but doesn't exist yet.
+- Model download progress is coarse (0%/100% only) — see "Embeddings" above for why.
 
 ## Extending this
 

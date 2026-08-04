@@ -8,7 +8,11 @@ use services::window_settings;
 use std::sync::Arc;
 use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
 
+use crate::commands::embeddings::EmbeddingIndexSlot;
 use crate::infra::parsers::registry::ParserRegistry;
+use crate::services::chunk_builder::ChunkIndex;
+use crate::services::embedding_model::DownloadState;
+use crate::services::repo_index::RepositoryIndex;
 use crate::services::spellcheck::SpellcheckEngine;
 use crate::services::workspace_index::WorkspaceIndex;
 
@@ -101,6 +105,10 @@ pub fn run() {
             }
             app.manage(index);
             app.manage(Arc::new(SpellcheckEngine::load()));
+            app.manage(Arc::new(RepositoryIndex::new()));
+            app.manage(Arc::new(ChunkIndex::new()));
+            app.manage(Arc::new(EmbeddingIndexSlot::new(None)));
+            app.manage(Arc::new(DownloadState::default()));
 
             Ok(())
         })
@@ -213,6 +221,14 @@ pub fn run() {
             commands::spellcheck::add_custom_dictionary_word,
             commands::spellcheck::remove_custom_dictionary_word,
             commands::ai_tools::ai_execute_tool,
+            commands::embeddings::embedding_get_config,
+            commands::embeddings::embedding_set_config,
+            commands::embeddings::embedding_set_remote_api_key,
+            commands::embeddings::embedding_has_remote_api_key,
+            commands::embeddings::embedding_model_status,
+            commands::embeddings::embedding_download_model,
+            commands::embeddings::embedding_cancel_model_download,
+            commands::embeddings::embedding_sync,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

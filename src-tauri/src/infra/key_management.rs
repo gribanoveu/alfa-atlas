@@ -38,7 +38,7 @@ fn enc_key_file_path() -> Result<PathBuf, String> {
 /// store but never relied upon for retrieval — macOS silently rejects keychain
 /// writes from unsigned binaries (showing no prompt), so the file must be the
 /// source of truth.
-fn get_or_create_encryption_key() -> Result<[u8; 32], String> {
+pub(crate) fn get_or_create_encryption_key() -> Result<[u8; 32], String> {
     let key = file_key_get_or_create()?;
 
     // Try to mirror the key into the OS keyring as a bonus.  Failure is OK:
@@ -117,7 +117,11 @@ fn file_key_get_or_create() -> Result<[u8; 32], String> {
 }
 
 /// AES-256-GCM encrypts `plaintext` with the given key. The nonce is prepended to the output.
-fn encrypt_private_key(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
+/// `pub(crate)`: also reused by `infra::embedding_credentials_store` to
+/// encrypt the remote embedding provider's API key with the same
+/// app-managed key, rather than introducing a second AES-GCM
+/// implementation for what is the same kind of secret.
+pub(crate) fn encrypt_private_key(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new_from_slice(key)
         .map_err(|e| format!("invalid key length: {e}"))?;
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -130,7 +134,7 @@ fn encrypt_private_key(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, Stri
 }
 
 /// AES-256-GCM decrypts data produced by `encrypt_private_key` (nonce + ciphertext).
-fn decrypt_private_key(encrypted: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
+pub(crate) fn decrypt_private_key(encrypted: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
     if encrypted.len() < 12 {
         return Err("encrypted data too short".to_string());
     }

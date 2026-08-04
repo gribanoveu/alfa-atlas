@@ -49,6 +49,8 @@ type TopBarProps = {
   onCloneProject?: (probe: ProbeResult) => Promise<void>;
   /** Bump this (e.g. `n => n + 1`) to open Settings on the "standards" tab. */
   openStandardsSettingsSignal?: number;
+  /** Bump this (e.g. `n => n + 1`) to open Settings on the "embeddings" tab. */
+  openEmbeddingsSettingsSignal?: number;
 };
 
 export function TopBar({
@@ -84,6 +86,7 @@ export function TopBar({
   onSelectProject,
   onCloneProject,
   openStandardsSettingsSignal,
+  openEmbeddingsSettingsSignal,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
@@ -91,6 +94,7 @@ export function TopBar({
   const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
   const standardsSignalRef = useRef(openStandardsSettingsSignal);
+  const embeddingsSignalRef = useRef(openEmbeddingsSettingsSignal);
 
   useEffect(() => {
     if (
@@ -103,6 +107,18 @@ export function TopBar({
     setSettingsInitialSection("standards");
     setSettingsOpen(true);
   }, [openStandardsSettingsSignal]);
+
+  useEffect(() => {
+    if (
+      openEmbeddingsSettingsSignal === undefined ||
+      openEmbeddingsSettingsSignal === embeddingsSignalRef.current
+    ) {
+      return;
+    }
+    embeddingsSignalRef.current = openEmbeddingsSettingsSignal;
+    setSettingsInitialSection("embeddings");
+    setSettingsOpen(true);
+  }, [openEmbeddingsSettingsSignal]);
 
   const onAction = useCallback(
     (action: MenuActionId) => {

@@ -1,5 +1,6 @@
 pub mod ai_tools;
 pub mod asciidoc;
+pub mod embeddings;
 pub mod git;
 pub mod layout;
 pub mod onboarding;
