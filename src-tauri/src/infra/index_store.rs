@@ -6,6 +6,7 @@
 //! in `vectors.usearch`, see `infra::vector_store`) — this is only ids,
 //! byte offsets, and hashes.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::UNIX_EPOCH;
@@ -14,7 +15,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
 use crate::domain::chunk_index::{ChunkId, ChunkKind, ChunkMetadata};
-use crate::domain::repo_index::{FileId, FileMetadata, Language};
+use crate::domain::repo_index::{FileId, FileMetadata, Language, Symbol, SymbolKind};
 
 const DB_FILE_NAME: &str = "chunks.db";
 pub const VECTORS_FILE_NAME: &str = "vectors.usearch";
@@ -58,6 +59,24 @@ CREATE TABLE IF NOT EXISTS embeddings (
   chunk_id   TEXT PRIMARY KEY REFERENCES chunks(chunk_id) ON DELETE CASCADE,
   chunk_hash BLOB NOT NULL
 );
+
+-- One row per `Symbol` a `LanguageIndexer` extracted, mirroring
+-- `RepositoryIndex`'s in-memory `IndexedFile.symbols` so a cold start can
+-- reuse a file's already-parsed symbols (via `RepositoryIndex::
+-- build_reusing_symbols`) instead of re-running tree-sitter/pulldown-cmark
+-- on every file, every time — gated on `files.file_hash` still matching,
+-- same as chunks/embeddings. No primary key of its own; nothing references
+-- a symbol by id, only by `file_id`.
+CREATE TABLE IF NOT EXISTS symbols (
+  file_id    TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  start_line INTEGER NOT NULL,
+  end_line   INTEGER NOT NULL,
+  start_byte INTEGER NOT NULL,
+  end_byte   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
 "#;
 
 #[derive(Debug, Error)]
@@ -120,13 +139,13 @@ impl IndexStore {
         Ok(())
     }
 
-    /// Deletes every row (`meta`/`files`/`chunks`/`embeddings`) — used when
-    /// the version/`index_root` compatibility guard decides a persisted
-    /// store is unusable and must be rebuilt from scratch.
+    /// Deletes every row (`meta`/`files`/`chunks`/`embeddings`/`symbols`) —
+    /// used when the version/`index_root` compatibility guard decides a
+    /// persisted store is unusable and must be rebuilt from scratch.
     pub fn wipe(&self) -> Result<(), IndexStoreError> {
         let conn = self.lock()?;
         conn.execute_batch(
-            "DELETE FROM embeddings; DELETE FROM chunks; DELETE FROM files; DELETE FROM meta;",
+            "DELETE FROM embeddings; DELETE FROM chunks; DELETE FROM symbols; DELETE FROM files; DELETE FROM meta;",
         )?;
         Ok(())
     }
@@ -289,6 +308,89 @@ impl IndexStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(IndexStoreError::from)
     }
+
+    /// Drops every existing symbol row for `file_id`, then inserts
+    /// `symbols` — mirrors `replace_chunks_for_file`'s "delete then bulk
+    /// insert" shape. Callers write this in lockstep with `upsert_files`,
+    /// same as chunks, whenever a file's parse result actually changed.
+    pub fn replace_symbols_for_file(
+        &self,
+        file_id: &FileId,
+        symbols: &[Symbol],
+    ) -> Result<(), IndexStoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id.0])?;
+        for symbol in symbols {
+            tx.execute(
+                "INSERT INTO symbols (file_id, name, kind, start_line, end_line, start_byte, end_byte)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    file_id.0,
+                    symbol.name,
+                    symbol_kind_to_str(symbol.kind),
+                    symbol.start_line,
+                    symbol.end_line,
+                    symbol.start_byte,
+                    symbol.end_byte,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every persisted symbol, grouped by the file it belongs to — what
+    /// `RepositoryIndex::build_reusing_symbols` reuses for a file whose
+    /// current content hash still matches `load_all_file_hashes`' record,
+    /// instead of re-parsing it.
+    pub fn load_all_symbols(&self) -> Result<HashMap<FileId, Vec<Symbol>>, IndexStoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT file_id, name, kind, start_line, end_line, start_byte, end_byte FROM symbols",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let file_id: String = row.get(0)?;
+            let kind = str_to_symbol_kind(&row.get::<_, String>(2)?).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(2, "kind".into(), rusqlite::types::Type::Text)
+            })?;
+            Ok((
+                FileId(file_id),
+                Symbol {
+                    name: row.get(1)?,
+                    kind,
+                    start_line: row.get(3)?,
+                    end_line: row.get(4)?,
+                    start_byte: row.get(5)?,
+                    end_byte: row.get(6)?,
+                },
+            ))
+        })?;
+
+        let mut out: HashMap<FileId, Vec<Symbol>> = HashMap::new();
+        for row in rows {
+            let (file_id, symbol) = row?;
+            out.entry(file_id).or_default().push(symbol);
+        }
+        Ok(out)
+    }
+
+    /// Every persisted file's content hash — the other half (alongside
+    /// `load_all_symbols`) `RepositoryIndex::build_reusing_symbols` needs to
+    /// decide "does this file's current content still match what was last
+    /// persisted" without re-parsing it to find out.
+    pub fn load_all_file_hashes(&self) -> Result<HashMap<FileId, blake3::Hash>, IndexStoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare("SELECT file_id, file_hash FROM files")?;
+        let rows = stmt.query_map([], |row| {
+            let file_id: String = row.get(0)?;
+            let hash_bytes: Vec<u8> = row.get(1)?;
+            Ok((FileId(file_id), hash_bytes))
+        })?;
+        rows.map(|r| r.map(|(id, bytes)| (id, hash_from_bytes(&bytes))))
+            .collect::<Result<HashMap<_, _>, _>>()
+            .map_err(IndexStoreError::from)
+    }
 }
 
 fn hash_from_bytes(bytes: &[u8]) -> blake3::Hash {
@@ -332,6 +434,29 @@ fn str_to_chunk_kind(s: &str) -> Option<ChunkKind> {
         "field" => Some(ChunkKind::Field),
         "section" => Some(ChunkKind::Section),
         "file" => Some(ChunkKind::File),
+        _ => None,
+    }
+}
+
+fn symbol_kind_to_str(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Class => "class",
+        SymbolKind::Interface => "interface",
+        SymbolKind::Enum => "enum",
+        SymbolKind::Method => "method",
+        SymbolKind::Field => "field",
+        SymbolKind::Section => "section",
+    }
+}
+
+fn str_to_symbol_kind(s: &str) -> Option<SymbolKind> {
+    match s {
+        "class" => Some(SymbolKind::Class),
+        "interface" => Some(SymbolKind::Interface),
+        "enum" => Some(SymbolKind::Enum),
+        "method" => Some(SymbolKind::Method),
+        "field" => Some(SymbolKind::Field),
+        "section" => Some(SymbolKind::Section),
         _ => None,
     }
 }
@@ -458,6 +583,93 @@ mod tests {
         assert_eq!(store.read_meta("k").unwrap(), None);
         assert!(store.load_all_chunks().unwrap().is_empty());
         assert!(store.load_all_embedding_hashes().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn sample_symbol(name: &str, start_byte: u32, end_byte: u32) -> Symbol {
+        Symbol {
+            name: name.to_string(),
+            kind: SymbolKind::Class,
+            start_line: 0,
+            end_line: 1,
+            start_byte,
+            end_byte,
+        }
+    }
+
+    #[test]
+    fn symbols_round_trip_through_replace_and_load_all() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        let file_id = FileId("a.json".to_string());
+        store
+            .upsert_files(&[sample_file("a.json", blake3::hash(b"x"))])
+            .unwrap();
+        let symbols = vec![sample_symbol("UserService", 0, 10)];
+        store.replace_symbols_for_file(&file_id, &symbols).unwrap();
+
+        let loaded = store.load_all_symbols().unwrap();
+        assert_eq!(loaded.get(&file_id).unwrap().len(), 1);
+        assert_eq!(loaded.get(&file_id).unwrap()[0].name, "UserService");
+        assert_eq!(loaded.get(&file_id).unwrap()[0].kind, SymbolKind::Class);
+
+        // Replacing again with an empty set drops the file's symbols.
+        store.replace_symbols_for_file(&file_id, &[]).unwrap();
+        assert!(store.load_all_symbols().unwrap().get(&file_id).is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deleting_a_file_cascades_to_its_symbol_rows() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        let file_id = FileId("a.json".to_string());
+        store
+            .upsert_files(&[sample_file("a.json", blake3::hash(b"x"))])
+            .unwrap();
+        store
+            .replace_symbols_for_file(&file_id, &[sample_symbol("Foo", 0, 3)])
+            .unwrap();
+        assert_eq!(store.load_all_symbols().unwrap().len(), 1);
+
+        store.delete_files(&[file_id]).unwrap();
+        assert!(store.load_all_symbols().unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_all_file_hashes_reflects_upserted_files() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        let hash = blake3::hash(b"content");
+        store.upsert_files(&[sample_file("a.json", hash)]).unwrap();
+
+        let hashes = store.load_all_file_hashes().unwrap();
+        assert_eq!(hashes.get(&FileId("a.json".to_string())), Some(&hash));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn wipe_clears_symbols_too() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+        let file_id = FileId("a.json".to_string());
+        store
+            .upsert_files(&[sample_file("a.json", blake3::hash(b"x"))])
+            .unwrap();
+        store
+            .replace_symbols_for_file(&file_id, &[sample_symbol("Foo", 0, 3)])
+            .unwrap();
+
+        store.wipe().unwrap();
+        assert!(store.load_all_symbols().unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }

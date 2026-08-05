@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -12,7 +12,7 @@ use crate::domain::embeddings::{
 };
 use crate::domain::paths;
 use crate::domain::project_config::{OpenedProject, ProjectConfig};
-use crate::domain::repo_index::{detect_language, FileId, RepoIndexError};
+use crate::domain::repo_index::{detect_language, FileId, RepoIndexError, Symbol};
 use crate::domain::workspace_index::DocumentId;
 use crate::infra::index_store::IndexStore;
 use crate::infra::{embedding_credentials_store, embedding_providers, project_store};
@@ -403,6 +403,25 @@ pub(crate) fn attach_embedding_index(
     Ok(())
 }
 
+/// Combines `store`'s persisted per-file content hash with its persisted
+/// symbols into the shape `RepositoryIndex::build_reusing_symbols` wants —
+/// what a fresh (e.g. just-restarted) `embedding_sync` call feeds it so a
+/// file whose content hasn't changed since the last sync skips a
+/// tree-sitter/pulldown-cmark re-parse entirely, not just re-embedding.
+fn load_persisted_symbols(
+    store: &IndexStore,
+) -> Result<HashMap<FileId, (blake3::Hash, Vec<Symbol>)>, String> {
+    let file_hashes = store.load_all_file_hashes().map_err(|e| e.to_string())?;
+    let mut symbols_by_file = store.load_all_symbols().map_err(|e| e.to_string())?;
+    Ok(file_hashes
+        .into_iter()
+        .map(|(file_id, hash)| {
+            let symbols = symbols_by_file.remove(&file_id).unwrap_or_default();
+            (file_id, (hash, symbols))
+        })
+        .collect())
+}
+
 /// The file-watcher's `on_change` reaction — the incremental counterpart to
 /// `embedding_sync`'s per-file diff loop, for exactly one changed path.
 /// Called from `IndexWatcher`'s own `spawn_blocking` task (see that
@@ -490,6 +509,9 @@ fn run_incremental_sync(
                     chunk_index.replace_for_file(&file_id, chunks);
                     store
                         .replace_chunks_for_file(&file_id, &metadatas)
+                        .map_err(|e| e.to_string())?;
+                    store
+                        .replace_symbols_for_file(&file_id, &indexed.symbols)
                         .map_err(|e| e.to_string())?;
                 }
             }
@@ -595,6 +617,9 @@ fn sync_backlog_batch(
                 chunk_index.replace_for_file(file_id, chunks);
                 store
                     .replace_chunks_for_file(file_id, &metadatas)
+                    .map_err(|e| e.to_string())?;
+                store
+                    .replace_symbols_for_file(file_id, &indexed.symbols)
                     .map_err(|e| e.to_string())?;
             }
             Err(e) => eprintln!("[embedding-sync] background: skipping {}: {e}", file_id.0),
@@ -856,7 +881,10 @@ pub async fn embedding_sync(
             }
         }
 
-        repo_index.build(&index_root).map_err(|e| e.to_string())?;
+        let persisted_symbols = load_persisted_symbols(&store)?;
+        repo_index
+            .build_reusing_symbols(&index_root, &persisted_symbols)
+            .map_err(|e| e.to_string())?;
 
         // A fresh project (nothing chunked yet, in this store or ever) is
         // the only case that gets the two-tier open-files-first treatment
@@ -948,6 +976,9 @@ pub async fn embedding_sync(
             chunk_index.replace_for_file(file_id, chunks);
             store
                 .replace_chunks_for_file(file_id, &metadatas)
+                .map_err(|e| e.to_string())?;
+            store
+                .replace_symbols_for_file(file_id, &indexed.symbols)
                 .map_err(|e| e.to_string())?;
             chunked_so_far += 1;
             emit_sync_progress(&app, SyncPhase::Chunking, chunked_so_far, total_changed, SyncTrigger::Full);

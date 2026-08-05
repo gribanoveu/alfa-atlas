@@ -66,6 +66,47 @@ impl RepositoryIndex {
     /// file never disappears from the index, only its `symbols` come back
     /// short.
     pub fn build(&self, repo_root: &Path) -> Result<RepoIndexStats, RepoIndexError> {
+        self.build_internal(repo_root, None)
+    }
+
+    /// Same full walk as `build`, but additionally reuses `persisted`'s
+    /// symbols for a file whose current content hash still matches what was
+    /// last persisted (`infra::index_store::IndexStore::load_all_file_hashes`/
+    /// `load_all_symbols`) — skipping a tree-sitter/pulldown-cmark re-parse
+    /// entirely for every unchanged file. `build` itself already gets an
+    /// equivalent, session-local version of this for free (see
+    /// `build_internal`'s `resident` snapshot); this additionally covers a
+    /// cold app restart, when nothing is resident yet.
+    pub fn build_reusing_symbols(
+        &self,
+        repo_root: &Path,
+        persisted: &HashMap<FileId, (blake3::Hash, Vec<Symbol>)>,
+    ) -> Result<RepoIndexStats, RepoIndexError> {
+        self.build_internal(repo_root, Some(persisted))
+    }
+
+    fn build_internal(
+        &self,
+        repo_root: &Path,
+        persisted: Option<&HashMap<FileId, (blake3::Hash, Vec<Symbol>)>>,
+    ) -> Result<RepoIndexStats, RepoIndexError> {
+        // Snapshot whatever's already resident *before* clearing — a file
+        // whose content hasn't changed since this session's own last build
+        // can reuse its already-parsed symbols too, not only ones supplied
+        // via `persisted` (which only a cold-start caller populates from
+        // SQLite). This is what makes a second `build()` call in the same
+        // session cheap even with no `persisted` map at all.
+        let resident: HashMap<FileId, (blake3::Hash, Vec<Symbol>)> = self
+            .files
+            .iter()
+            .map(|entry| {
+                (
+                    entry.key().clone(),
+                    (entry.value().metadata.hash, entry.value().symbols.clone()),
+                )
+            })
+            .collect();
+
         self.clear();
         *self.repo_root.write().unwrap() = Some(repo_root.to_path_buf());
 
@@ -93,29 +134,39 @@ impl RepositoryIndex {
             };
 
             let relative_path = paths::relative_to(repo_root, &file.path)?;
+            let file_id = FileId(relative_path.clone());
             let hash = blake3::hash(content.as_bytes());
             let metadata = FileMetadata {
-                relative_path: relative_path.clone(),
+                relative_path,
                 size_bytes: content.len() as u64,
                 modified_at: file.modified,
                 hash,
                 language,
             };
 
-            let facts = self
-                .indexers
-                .get(&language)
-                .expect("default_indexers registers every Language variant")
-                .index(&content);
+            let reused = resident
+                .get(&file_id)
+                .filter(|(resident_hash, _)| *resident_hash == hash)
+                .or_else(|| {
+                    persisted
+                        .and_then(|p| p.get(&file_id))
+                        .filter(|(persisted_hash, _)| *persisted_hash == hash)
+                })
+                .map(|(_, symbols)| symbols.clone());
+
+            let symbols = match reused {
+                Some(symbols) => symbols,
+                None => {
+                    self.indexers
+                        .get(&language)
+                        .expect("default_indexers registers every Language variant")
+                        .index(&content)
+                        .symbols
+                }
+            };
 
             stats.record(language);
-            self.files.insert(
-                FileId(relative_path),
-                IndexedFile {
-                    metadata,
-                    symbols: facts.symbols,
-                },
-            );
+            self.files.insert(file_id, IndexedFile { metadata, symbols });
         }
 
         Ok(stats)
@@ -259,8 +310,8 @@ impl RepositoryIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::repo_index::SymbolKind;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use crate::domain::repo_index::{LanguageFacts, SymbolKind};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -520,6 +571,129 @@ mod tests {
         assert!(file.metadata.size_bytes > 0);
         // Symbols may be empty or partial for malformed input — the point
         // is the record exists at all, not what's in `symbols`.
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Records how many times `index()` was actually invoked — lets a test
+    /// prove a file was *reused*, not just that its symbols happen to match
+    /// what a fresh parse would also produce.
+    struct CountingIndexer {
+        calls: Arc<AtomicUsize>,
+        symbols: Vec<Symbol>,
+    }
+    impl LanguageIndexer for CountingIndexer {
+        fn index(&self, _content: &str) -> LanguageFacts {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            LanguageFacts {
+                symbols: self.symbols.clone(),
+            }
+        }
+    }
+
+    fn fixed_symbols() -> Vec<Symbol> {
+        vec![Symbol {
+            name: "Fixed".to_string(),
+            kind: SymbolKind::Class,
+            start_line: 0,
+            end_line: 1,
+            start_byte: 0,
+            end_byte: 5,
+        }]
+    }
+
+    fn index_with_counting_java_indexer(calls: Arc<AtomicUsize>) -> RepositoryIndex {
+        let mut indexers = language_indexers::default_indexers();
+        indexers.insert(
+            Language::Java,
+            Arc::new(CountingIndexer {
+                calls,
+                symbols: fixed_symbols(),
+            }),
+        );
+        RepositoryIndex {
+            files: DashMap::new(),
+            indexers,
+            repo_root: RwLock::new(None),
+        }
+    }
+
+    #[test]
+    fn build_reuses_resident_symbols_for_an_unchanged_file_across_calls() {
+        let root = fixture_repo();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let index = index_with_counting_java_indexer(calls.clone());
+
+        index.build(&root).unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Same content, same instance — must reuse the resident symbols
+        // rather than parsing again.
+        index.build(&root).unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "second build must reuse resident symbols, not re-parse"
+        );
+
+        let result = index
+            .get(&FileId("src/UserService.java".to_string()))
+            .unwrap();
+        assert_eq!(result.symbols, fixed_symbols());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_reusing_symbols_reuses_persisted_symbols_for_an_unchanged_file() {
+        let root = fixture_repo();
+
+        // Seed `persisted` with the exact hash the fixture file currently
+        // has, paired with a recognizable, distinct symbol set.
+        let content = fs::read_to_string(root.join("src/UserService.java")).unwrap();
+        let file_hash = blake3::hash(content.as_bytes());
+        let mut persisted = HashMap::new();
+        persisted.insert(
+            FileId("src/UserService.java".to_string()),
+            (file_hash, fixed_symbols()),
+        );
+
+        // Fresh index, nothing resident — only `persisted` can supply
+        // reused symbols. The call counter proves it wasn't re-parsed.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let index = index_with_counting_java_indexer(calls.clone());
+        index.build_reusing_symbols(&root, &persisted).unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "must not re-parse — hash matched persisted");
+        let result = index
+            .get(&FileId("src/UserService.java".to_string()))
+            .unwrap();
+        assert_eq!(result.symbols, fixed_symbols());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_reusing_symbols_reparses_when_content_hash_differs() {
+        let root = fixture_repo();
+        let mut persisted = HashMap::new();
+        persisted.insert(
+            FileId("src/UserService.java".to_string()),
+            (blake3::hash(b"stale content, not what's on disk"), vec![]),
+        );
+
+        let index = RepositoryIndex::new();
+        index.build_reusing_symbols(&root, &persisted).unwrap();
+
+        // The persisted hash didn't match current content, so this must
+        // have re-parsed rather than reusing the (empty) stale entry.
+        let result = index
+            .get(&FileId("src/UserService.java".to_string()))
+            .unwrap();
+        assert!(result
+            .symbols
+            .iter()
+            .any(|s| s.name == "UserService" && s.kind == SymbolKind::Class));
 
         fs::remove_dir_all(&root).ok();
     }
