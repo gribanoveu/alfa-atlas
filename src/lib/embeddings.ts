@@ -46,10 +46,15 @@ export type ModelDownloadProgress = {
 // `commands::embeddings::embedding_sync`.
 export type SyncPhase = "chunking" | "embedding";
 
+// Mirrors the Rust `SyncTrigger` — distinguishes a full, user-triggered
+// `embedding_sync` from a file-watcher-driven incremental per-file tick.
+export type SyncTrigger = "full" | "incremental";
+
 export type SyncProgress = {
   phase: SyncPhase;
   current: number;
   total: number;
+  trigger: SyncTrigger;
 };
 
 export function getEmbeddingConfig(): Promise<EmbeddingProviderConfig> {
@@ -117,4 +122,12 @@ export function listenSyncProgress(
   onProgress: (payload: SyncProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<SyncProgress>("embedding:sync-progress", (event) => onProgress(event.payload));
+}
+
+/** Stops the file-watcher-driven incremental sync, if one is running for
+ * the current project. Call when a project closes without a new one
+ * opening in the same session — otherwise the backend's own attach logic
+ * naturally swaps the watcher to whichever project opens next. */
+export function teardownIncrementalWatcher(): Promise<void> {
+  return invoke("embedding_index_teardown");
 }

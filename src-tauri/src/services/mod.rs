@@ -14,6 +14,7 @@ pub mod git_credentials;
 pub mod gitignore;
 pub mod git_ops;
 pub mod index_store_ensure;
+pub mod index_watcher;
 pub mod openapi;
 pub mod project_layout;
 pub mod project_open;

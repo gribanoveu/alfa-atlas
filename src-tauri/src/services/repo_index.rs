@@ -157,6 +157,77 @@ impl RepositoryIndex {
         fs::read_to_string(&path).map_err(RepoIndexError::Io)
     }
 
+    /// Re-reads, re-hashes, and re-indexes exactly one already-known file —
+    /// the single-file counterpart to `build()`'s full walk, for a file
+    /// watcher to call instead of a full rescan. Requires `build()` to have
+    /// run at least once in this process (same precondition as `read()`) —
+    /// `repo_root` isn't known otherwise.
+    ///
+    /// An I/O error reading the file (most commonly "not found" — the file
+    /// vanished between the fs event firing and this running) is
+    /// deliberately *not* swallowed here: the caller decides what a missing
+    /// file means (the incremental watcher treats it as a delete), this
+    /// method just reports what actually happened, same as `read()` does.
+    ///
+    /// Unsupported-language files are removed instead of erroring — the
+    /// file_id might already be tracked from before (e.g. a `.java` file
+    /// renamed to something this index doesn't understand).
+    pub fn update_file(&self, file_id: &FileId) -> Result<(), RepoIndexError> {
+        let root = self
+            .repo_root
+            .read()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| RepoIndexError::Message("no repo_root set — call build() first".into()))?;
+        let path = root.join(&file_id.0);
+
+        let Some(language) = crate::domain::repo_index::detect_language(&file_id.0) else {
+            self.files.remove(file_id);
+            return Ok(());
+        };
+
+        let content = fs::read_to_string(&path).map_err(RepoIndexError::Io)?;
+        let hash = blake3::hash(content.as_bytes());
+        // A second, distinct fs syscall from the read above — if *this one*
+        // fails on an otherwise-successfully-read file (an ultra-narrow
+        // TOCTOU window), falling back to "now" is correct: the file is
+        // demonstrably still there, so treating it as deleted (per the
+        // doc comment above) would be wrong.
+        let modified_at = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| std::time::SystemTime::now());
+        let metadata = FileMetadata {
+            relative_path: file_id.0.clone(),
+            size_bytes: content.len() as u64,
+            modified_at,
+            hash,
+            language,
+        };
+
+        let facts = self
+            .indexers
+            .get(&language)
+            .expect("default_indexers registers every Language variant")
+            .index(&content);
+
+        self.files.insert(
+            file_id.clone(),
+            IndexedFile {
+                metadata,
+                symbols: facts.symbols,
+            },
+        );
+        Ok(())
+    }
+
+    /// Drops exactly one file's entry — infallible, mirrors
+    /// `ChunkIndex::replace_for_file(id, vec![])`'s "always succeeds" shape
+    /// so callers don't need error handling on the delete path. A no-op if
+    /// `file_id` wasn't tracked.
+    pub fn remove_file(&self, file_id: &FileId) {
+        self.files.remove(file_id);
+    }
+
     pub fn clear(&self) {
         self.files.clear();
     }
@@ -289,6 +360,100 @@ mod tests {
             .read(&FileId("src/response.json".to_string()))
             .unwrap_err();
         assert!(matches!(err, RepoIndexError::Message(_)));
+    }
+
+    #[test]
+    fn update_file_before_build_fails_clearly() {
+        let index = RepositoryIndex::new();
+        let err = index
+            .update_file(&FileId("src/response.json".to_string()))
+            .unwrap_err();
+        assert!(matches!(err, RepoIndexError::Message(_)));
+    }
+
+    #[test]
+    fn update_file_reflects_new_content() {
+        let root = fixture_repo();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        let file_id = FileId("src/response.json".to_string());
+        fs::write(root.join("src/response.json"), r#"{"a": 2}"#).unwrap();
+        index.update_file(&file_id).unwrap();
+
+        let updated = index.get(&file_id).unwrap();
+        assert_eq!(updated.metadata.hash, blake3::hash(br#"{"a": 2}"#));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn update_file_on_unsupported_extension_removes_a_previously_tracked_entry() {
+        let root = fixture_repo();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        // `build()` skips `src/Main.rs` (unsupported language) — simulate it
+        // having been tracked anyway (e.g. a stale entry from before a
+        // rename), to exercise `update_file`'s "unsupported language ->
+        // remove instead of error" branch directly.
+        let file_id = FileId("src/Main.rs".to_string());
+        index.files.insert(
+            file_id.clone(),
+            IndexedFile {
+                metadata: FileMetadata {
+                    relative_path: file_id.0.clone(),
+                    size_bytes: 0,
+                    modified_at: SystemTime::now(),
+                    hash: blake3::hash(b""),
+                    language: Language::Java,
+                },
+                symbols: Vec::new(),
+            },
+        );
+        assert!(index.get(&file_id).is_some());
+
+        index.update_file(&file_id).unwrap();
+        assert!(index.get(&file_id).is_none());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn update_file_missing_file_returns_io_not_found() {
+        let root = fixture_repo();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        let file_id = FileId("src/response.json".to_string());
+        fs::remove_file(root.join("src/response.json")).unwrap();
+
+        let err = index.update_file(&file_id).unwrap_err();
+        assert!(matches!(
+            err,
+            RepoIndexError::Io(e) if e.kind() == std::io::ErrorKind::NotFound
+        ));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn remove_file_drops_the_entry_idempotently() {
+        let root = fixture_repo();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        let file_id = FileId("src/response.json".to_string());
+        assert!(index.get(&file_id).is_some());
+
+        index.remove_file(&file_id);
+        assert!(index.get(&file_id).is_none());
+
+        // Idempotent — calling again on an already-absent id must not panic.
+        index.remove_file(&file_id);
+        assert!(index.get(&file_id).is_none());
+
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]

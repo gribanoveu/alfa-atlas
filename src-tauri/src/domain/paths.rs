@@ -61,6 +61,48 @@ pub fn relative_to(root: &Path, absolute: &Path) -> Result<String, ProjectError>
     Ok(parts.join("/"))
 }
 
+/// Like `relative_to`, but tolerates `absolute` not existing (canonicalizes
+/// its parent + rejoins the file name instead) — mirrors
+/// `domain::workspace_index::relative_key_lenient`. Used by the incremental
+/// index watcher, which must resolve a `FileId` for `Remove` events (and
+/// for `Upserted` events that raced a deletion) where the path is already
+/// gone.
+pub fn relative_to_lenient(root: &Path, absolute: &Path) -> Result<String, ProjectError> {
+    if absolute.exists() {
+        return relative_to(root, absolute);
+    }
+    let root = root.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let parent = absolute
+        .parent()
+        .ok_or_else(|| ProjectError::Message(format!("invalid path: {}", absolute.display())))?;
+    let name = absolute
+        .file_name()
+        .ok_or_else(|| ProjectError::Message(format!("invalid path: {}", absolute.display())))?;
+    let parent = parent.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let absolute = parent.join(name);
+
+    if absolute == root {
+        return Ok(".".to_string());
+    }
+    let rel = absolute
+        .strip_prefix(&root)
+        .map_err(|_| ProjectError::DocsOutsideRepo(absolute.display().to_string()))?;
+
+    let mut parts = Vec::new();
+    for component in rel.components() {
+        match component {
+            Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            _ => {
+                return Err(ProjectError::DocsOutsideRepo(
+                    absolute.display().to_string(),
+                ));
+            }
+        }
+    }
+    Ok(parts.join("/"))
+}
+
 /// Join `root` with a relative path that uses `/` separators. Rejects `..`.
 pub fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, ProjectError> {
     if relative.is_empty() || relative == "." {
@@ -114,6 +156,43 @@ mod tests {
     fn rejects_parent_escape() {
         let root = temp_dir();
         assert!(join_relative(&root, "../outside").is_err());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn relative_to_lenient_delegates_when_the_path_still_exists() {
+        let root = temp_dir();
+        let file = root.join("a.txt");
+        fs::write(&file, "x").unwrap();
+
+        assert_eq!(relative_to_lenient(&root, &file).unwrap(), "a.txt");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn relative_to_lenient_resolves_a_since_deleted_file() {
+        let root = temp_dir();
+        let file = root.join("gone.txt");
+        fs::write(&file, "x").unwrap();
+        fs::remove_file(&file).unwrap();
+
+        assert_eq!(relative_to_lenient(&root, &file).unwrap(), "gone.txt");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn relative_to_lenient_resolves_a_since_deleted_nested_file() {
+        let root = temp_dir();
+        let nested_dir = root.join("src").join("docs");
+        fs::create_dir_all(&nested_dir).unwrap();
+        let file = nested_dir.join("gone.md");
+        fs::write(&file, "x").unwrap();
+        fs::remove_file(&file).unwrap();
+
+        assert_eq!(relative_to_lenient(&root, &file).unwrap(), "src/docs/gone.md");
+
         fs::remove_dir_all(&root).ok();
     }
 }

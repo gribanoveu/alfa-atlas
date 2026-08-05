@@ -1,13 +1,17 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, State};
 
 use crate::domain::ai_access::AiAccessMode;
 use crate::domain::chunk_index::ChunkBuildOptions;
-use crate::domain::embeddings::{EmbeddingIndexStatus, EmbeddingProviderConfig, ModelStatus, SyncStats};
+use crate::domain::embeddings::{
+    EmbeddingIndexStatus, EmbeddingProvider, EmbeddingProviderConfig, ModelStatus, SyncStats,
+};
 use crate::domain::project_config::{OpenedProject, ProjectConfig};
+use crate::domain::repo_index::{detect_language, FileId, RepoIndexError};
 use crate::infra::index_store::IndexStore;
 use crate::infra::{embedding_credentials_store, embedding_providers, project_store};
 use crate::services::chunk_builder::{ChunkBuilder, ChunkIndex};
@@ -15,6 +19,7 @@ use crate::services::embedding_config;
 use crate::services::embedding_index::{EmbeddingBuilder, EmbeddingIndex};
 use crate::services::embedding_model::{self, DownloadState};
 use crate::services::index_store_ensure;
+use crate::services::index_watcher::{FileChangeKind, IndexWatcher};
 use crate::services::project_open;
 use crate::services::repo_index::RepositoryIndex;
 
@@ -34,16 +39,37 @@ enum SyncPhase {
     Embedding,
 }
 
+/// Distinguishes a full, user-triggered `embedding_sync` from a
+/// file-watcher-driven incremental tick — so the UI's "Синхронизировать"
+/// progress display never mistakes a single background per-file update for
+/// a full-repo resync in progress.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+enum SyncTrigger {
+    Full,
+    Incremental,
+}
+
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SyncProgressPayload {
     phase: SyncPhase,
     current: usize,
     total: usize,
+    trigger: SyncTrigger,
 }
 
-fn emit_sync_progress(app: &AppHandle, phase: SyncPhase, current: usize, total: usize) {
-    let _ = app.emit(SYNC_PROGRESS_EVENT, SyncProgressPayload { phase, current, total });
+fn emit_sync_progress(
+    app: &AppHandle,
+    phase: SyncPhase,
+    current: usize,
+    total: usize,
+    trigger: SyncTrigger,
+) {
+    let _ = app.emit(
+        SYNC_PROGRESS_EVENT,
+        SyncProgressPayload { phase, current, total, trigger },
+    );
 }
 
 /// `EmbeddingIndex` can't be built until a provider (hence a dimension
@@ -63,6 +89,51 @@ pub type EmbeddingIndexSlot = Mutex<Option<(PathBuf, usize, EmbeddingIndex)>>;
 /// `embedding_sync` can flip it to `false` in place once it actually
 /// repairs a stale store.
 pub type IndexStoreSlot = Mutex<Option<(PathBuf, Arc<IndexStore>, bool)>>;
+
+/// Caches the constructed `EmbeddingProvider` across calls — for the Local
+/// provider, `provider_for` constructs `LocalEmbeddingProvider::try_new()`,
+/// a full ONNX model load (~570MB); doing that on every sync (and, once
+/// wired up, every incremental file-watcher tick) would be unacceptable.
+/// Keyed by `(config, api_key)` rather than `config` alone — a `Remote`
+/// provider closes over the API key at construction time, so a key
+/// rotation with an otherwise-unchanged config must still invalidate the
+/// cache. Global (not per-project): the provider choice itself is global
+/// (`AppSettings.embedding`), not per-repo.
+pub type EmbeddingProviderSlot = Mutex<Option<(EmbeddingProviderConfig, Option<String>, Arc<dyn EmbeddingProvider>)>>;
+
+fn ensure_provider(
+    slot: &EmbeddingProviderSlot,
+    config: &EmbeddingProviderConfig,
+    api_key: Option<String>,
+) -> Result<Arc<dyn EmbeddingProvider>, String> {
+    let mut guard = slot
+        .lock()
+        .map_err(|_| "embedding provider lock poisoned".to_string())?;
+    let stale = !matches!(guard.as_ref(), Some((c, k, _)) if c == config && *k == api_key);
+    if stale {
+        let provider = embedding_providers::provider_for(config, api_key.clone())
+            .map_err(|e| e.to_string())?;
+        *guard = Some((config.clone(), api_key, Arc::from(provider)));
+    }
+    Ok(guard.as_ref().expect("just set above if missing").2.clone())
+}
+
+/// Serializes every full `embedding_sync` against every incremental
+/// file-watcher tick (and against each other) so the two mutation
+/// pipelines — each of which reads-then-writes `RepositoryIndex`/
+/// `ChunkIndex`/`IndexStore`/`EmbeddingIndex` across several non-atomic
+/// steps — can never interleave. Acquired first, before any other slot,
+/// and held for the whole pipeline in both `embedding_sync` and the
+/// incremental path; never re-entered, never acquired while already
+/// holding `IndexStoreSlot`/`EmbeddingIndexSlot`/`EmbeddingProviderSlot`.
+/// A manual "Синхронизировать" click during an in-flight incremental tick
+/// simply waits it out (typically sub-second) rather than racing it.
+pub type EmbeddingSyncGuard = Mutex<()>;
+
+/// The running file-watcher-driven incremental sync for `index_root`, if
+/// one is active. Restarted (drop old, start new) whenever `index_root`
+/// changes — a project/access-mode switch — via `ensure_incremental_watcher`.
+pub type IndexWatcherSlot = Mutex<Option<(PathBuf, IndexWatcher)>>;
 
 #[tauri::command]
 pub fn embedding_get_config() -> Result<EmbeddingProviderConfig, String> {
@@ -228,13 +299,226 @@ fn attach_embedding_index(
             store
                 .write_meta(META_EMBEDDING_DIMENSIONS, &dimensions.to_string())
                 .map_err(|e| e.to_string())?;
-            EmbeddingIndex::new(dimensions).map_err(|e| e.to_string())?
+            // `EmbeddingIndex::load`, not `::new` — the vectors file was
+            // just deleted (or never existed), so `persisted_hashes` is
+            // correctly empty, but `VectorStore` still needs a real path
+            // remembered so `EmbeddingIndex::sync`'s `save()` actually
+            // fires later. `::new` leaves `VectorStore.path` as `None`,
+            // which silently makes every sync after this one skip
+            // persisting to `vectors.usearch` entirely — the first sync of
+            // every new project would go unsaved forever.
+            EmbeddingIndex::load(dimensions, &store.vectors_path(), Vec::new())
+                .map_err(|e| e.to_string())?
         } else {
             // Read-only path: report as empty for this dimension without
             // touching whatever's actually persisted on disk.
             EmbeddingIndex::new(dimensions).map_err(|e| e.to_string())?
         };
         *slot = Some((index_root.to_path_buf(), dimensions, fresh));
+    }
+    Ok(())
+}
+
+/// The file-watcher's `on_change` reaction — the incremental counterpart to
+/// `embedding_sync`'s per-file diff loop, for exactly one changed path.
+/// Called from `IndexWatcher`'s own `spawn_blocking` task (see that
+/// module's docs), so this runs entirely synchronously and never blocks
+/// Tauri's async runtime — matching requirement 4 (never block the UI or a
+/// tool-call).
+///
+/// Only already-tracked files are updated incrementally (`repo_index.get`
+/// must already know about `file_id`) — a genuinely new file, or one
+/// that's always been gitignored, waits for the next full/manual
+/// `embedding_sync`, which does the real gitignore-aware walk
+/// (`workspace_scanner::scan_all`). This also means nothing happens here
+/// until `RepositoryIndex` has a baseline for this `index_root` (at least
+/// one `embedding_sync` this session) — expected, not a bug:
+/// `RepositoryIndex` has no persistence of its own.
+///
+/// `on_embedding_progress` is injected (mirrors `EmbeddingIndex::sync`'s own
+/// callback-based design) rather than taking an `AppHandle` directly — this
+/// keeps the actual sync logic testable with a no-op callback, with
+/// `ensure_incremental_watcher`'s closure the only place that touches
+/// `AppHandle` at all, translating the callback into a real
+/// `embedding:sync-progress` event.
+#[allow(clippy::too_many_arguments)]
+fn run_incremental_sync(
+    repo_index: &RepositoryIndex,
+    chunk_index: &ChunkIndex,
+    embedding_index: &EmbeddingIndexSlot,
+    embedding_provider: &EmbeddingProviderSlot,
+    sync_guard: &EmbeddingSyncGuard,
+    index_root: &Path,
+    store: &IndexStore,
+    path: PathBuf,
+    kind: FileChangeKind,
+    on_embedding_progress: &dyn Fn(usize, usize),
+) -> Result<(), String> {
+    // Same guard `embedding_sync` acquires first, before anything else —
+    // see `EmbeddingSyncGuard`'s doc comment.
+    let _guard = sync_guard
+        .lock()
+        .map_err(|_| "embedding sync guard poisoned".to_string())?;
+
+    let relative =
+        crate::domain::paths::relative_to_lenient(index_root, &path).map_err(|e| e.to_string())?;
+    let file_id = FileId(relative);
+
+    // Rename-vs-delete disambiguation lives here, not in `IndexWatcher` —
+    // mirrors how `WorkspaceIndex::update_document` does its own
+    // `path.exists()` check rather than `FileWatcher` doing it.
+    let effective_kind = if kind == FileChangeKind::Upserted && !path.exists() {
+        FileChangeKind::Removed
+    } else {
+        kind
+    };
+
+    if effective_kind == FileChangeKind::Upserted && repo_index.get(&file_id).is_none() {
+        return Ok(());
+    }
+
+    // Every branch below either updates the index and falls through, or
+    // returns early (nothing to reconcile) — reaching past this `match`
+    // always means something in `ChunkIndex`/`IndexStore` actually changed.
+    match effective_kind {
+        FileChangeKind::Removed => {
+            repo_index.remove_file(&file_id);
+            chunk_index.replace_for_file(&file_id, Vec::new());
+            store.delete_files(&[file_id.clone()]).map_err(|e| e.to_string())?;
+        }
+        FileChangeKind::Upserted => match repo_index.update_file(&file_id) {
+            Ok(()) => {
+                let Some(indexed) = repo_index.get(&file_id) else {
+                    return Ok(());
+                };
+                store
+                    .upsert_files(&[indexed.metadata.clone()])
+                    .map_err(|e| e.to_string())?;
+
+                let unchanged = chunk_index
+                    .file_hash_for(&file_id)
+                    .is_some_and(|hash| hash == indexed.metadata.hash);
+                if !unchanged {
+                    let chunks = ChunkBuilder::new()
+                        .build_file(repo_index, &file_id, &ChunkBuildOptions::default())
+                        .map_err(|e| e.to_string())?;
+                    let metadatas: Vec<_> = chunks.iter().map(|c| c.metadata.clone()).collect();
+                    chunk_index.replace_for_file(&file_id, chunks);
+                    store
+                        .replace_chunks_for_file(&file_id, &metadatas)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            // Raced a deletion after the exists() check above — treat it
+            // the same as a genuine Removed event.
+            Err(RepoIndexError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                repo_index.remove_file(&file_id);
+                chunk_index.replace_for_file(&file_id, Vec::new());
+                store.delete_files(&[file_id.clone()]).map_err(|e| e.to_string())?;
+            }
+            Err(e) => return Err(e.to_string()),
+        },
+    }
+
+    let config = embedding_config::load_embedding_config().map_err(|e| e.to_string())?;
+    let dimensions = embedding_providers::expected_dimensions(&config);
+
+    // A dimension mismatch means whatever's persisted can't be trusted for
+    // this provider — only a deliberate manual sync repairs that
+    // (`allow_repair: true`, `embedding_sync`); an incremental tick just
+    // skips embedding reconciliation for this tick rather than risk a
+    // destructive repair from a background job. The chunk/repo-index
+    // updates above already landed and are valid regardless.
+    let persisted_dimensions: Option<usize> = store
+        .read_meta(META_EMBEDDING_DIMENSIONS)
+        .map_err(|e| e.to_string())?
+        .and_then(|s| s.parse().ok());
+    if persisted_dimensions.is_some() && persisted_dimensions != Some(dimensions) {
+        return Ok(());
+    }
+
+    let api_key = embedding_credentials_store::get_api_key();
+    let provider = ensure_provider(embedding_provider, &config, api_key)?;
+    let builder = EmbeddingBuilder::new(provider);
+
+    attach_embedding_index(embedding_index, store, index_root, dimensions, false)?;
+    let mut slot = embedding_index
+        .lock()
+        .map_err(|_| "embedding index lock poisoned".to_string())?;
+    let Some((_, _, index)) = slot.as_mut() else {
+        return Ok(());
+    };
+    index
+        .sync(chunk_index, &builder, index_root, Some(store), Some(on_embedding_progress))
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Starts (or restarts, on an `index_root` change) the file-watcher-driven
+/// incremental sync for `index_root`. Called from both `embedding_sync` and
+/// `embedding_index_status` — the latter runs eagerly at project open
+/// (`useEmbeddingIndexWarmup`), so incremental watching begins immediately
+/// rather than waiting for the user's first manual sync. Started
+/// regardless of whether the store is `stale` — `run_incremental_sync`
+/// itself is a no-op until `RepositoryIndex` has a baseline (see its docs).
+#[allow(clippy::too_many_arguments)]
+fn ensure_incremental_watcher(
+    watcher_slot: &IndexWatcherSlot,
+    app: &AppHandle,
+    index_root: &Path,
+    store: &Arc<IndexStore>,
+    repo_index: &Arc<RepositoryIndex>,
+    chunk_index: &Arc<ChunkIndex>,
+    embedding_index: &Arc<EmbeddingIndexSlot>,
+    embedding_provider: &Arc<EmbeddingProviderSlot>,
+    sync_guard: &Arc<EmbeddingSyncGuard>,
+) -> Result<(), String> {
+    let mut guard = watcher_slot
+        .lock()
+        .map_err(|_| "index watcher lock poisoned".to_string())?;
+    let needs_restart = !matches!(guard.as_ref(), Some((root, _)) if root == index_root);
+    if needs_restart {
+        let app = app.clone();
+        let store = store.clone();
+        let repo_index = repo_index.clone();
+        let chunk_index = chunk_index.clone();
+        let embedding_index = embedding_index.clone();
+        let embedding_provider = embedding_provider.clone();
+        let sync_guard = sync_guard.clone();
+        let index_root_owned = index_root.to_path_buf();
+
+        let watcher = IndexWatcher::start(
+            index_root.to_path_buf(),
+            Duration::from_millis(400),
+            |path| detect_language(&path.to_string_lossy()).is_some(),
+            move |path, kind| {
+                let on_progress = |current: usize, total: usize| {
+                    emit_sync_progress(
+                        &app,
+                        SyncPhase::Embedding,
+                        current,
+                        total,
+                        SyncTrigger::Incremental,
+                    );
+                };
+                if let Err(e) = run_incremental_sync(
+                    &repo_index,
+                    &chunk_index,
+                    &embedding_index,
+                    &embedding_provider,
+                    &sync_guard,
+                    &index_root_owned,
+                    &store,
+                    path,
+                    kind,
+                    &on_progress,
+                ) {
+                    eprintln!("[embedding-watch] incremental sync tick failed: {e}");
+                }
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        *guard = Some((index_root.to_path_buf(), watcher));
     }
     Ok(())
 }
@@ -257,18 +541,47 @@ pub async fn embedding_sync(
     chunk_index: State<'_, Arc<ChunkIndex>>,
     embedding_index: State<'_, Arc<EmbeddingIndexSlot>>,
     index_store: State<'_, Arc<IndexStoreSlot>>,
+    embedding_provider: State<'_, Arc<EmbeddingProviderSlot>>,
+    sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
+    index_watcher: State<'_, Arc<IndexWatcherSlot>>,
 ) -> Result<SyncStats, String> {
     let repo_index = repo_index.inner().clone();
     let chunk_index = chunk_index.inner().clone();
     let embedding_index = embedding_index.inner().clone();
     let index_store = index_store.inner().clone();
+    let embedding_provider = embedding_provider.inner().clone();
+    let sync_guard = sync_guard.inner().clone();
+    let index_watcher = index_watcher.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<SyncStats, String> {
+        // Acquired first, before any other slot, and held for the entire
+        // pipeline — see `EmbeddingSyncGuard`'s doc comment for why a full
+        // sync and an incremental tick must never interleave.
+        let _guard = sync_guard
+            .lock()
+            .map_err(|_| "embedding sync guard poisoned".to_string())?;
+
         let project = project_open::get_project()
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "no project is open".to_string())?;
         let (index_root, storage_dir) = resolve_index_paths(&project)?;
         let (store, stale) = attach_index_store(&chunk_index, &index_store, &storage_dir, &index_root)?;
+
+        // Started regardless of `stale` — harmless either way, since
+        // `run_incremental_sync` no-ops until `RepositoryIndex` has a
+        // baseline (established a few lines below by `repo_index.build`).
+        ensure_incremental_watcher(
+            &index_watcher,
+            &app,
+            &index_root,
+            &store,
+            &repo_index,
+            &chunk_index,
+            &embedding_index,
+            &embedding_provider,
+            &sync_guard,
+        )?;
+
         if stale {
             // A real, already-mutating sync is the only place staleness
             // actually gets repaired (see `index_store_ensure` module docs)
@@ -331,7 +644,7 @@ pub async fn embedding_sync(
                 .replace_chunks_for_file(file_id, &metadatas)
                 .map_err(|e| e.to_string())?;
             chunked_so_far += 1;
-            emit_sync_progress(&app, SyncPhase::Chunking, chunked_so_far, total_changed);
+            emit_sync_progress(&app, SyncPhase::Chunking, chunked_so_far, total_changed, SyncTrigger::Full);
         }
 
         // Files present in `ChunkIndex` but gone from this scan — deleted
@@ -351,10 +664,9 @@ pub async fn embedding_sync(
 
         let config = embedding_config::load_embedding_config().map_err(|e| e.to_string())?;
         let api_key = embedding_credentials_store::get_api_key();
-        let provider =
-            embedding_providers::provider_for(&config, api_key).map_err(|e| e.to_string())?;
+        let provider = ensure_provider(&embedding_provider, &config, api_key)?;
         let dimensions = provider.dimensions();
-        let builder = EmbeddingBuilder::new(Arc::from(provider));
+        let builder = EmbeddingBuilder::new(provider);
 
         attach_embedding_index(&embedding_index, &store, &index_root, dimensions, true)?;
         let mut slot = embedding_index
@@ -362,7 +674,7 @@ pub async fn embedding_sync(
             .map_err(|_| "embedding index lock poisoned".to_string())?;
         let (_, _, index) = slot.as_mut().expect("attach_embedding_index just set this");
         let on_progress = |current: usize, total: usize| {
-            emit_sync_progress(&app, SyncPhase::Embedding, current, total);
+            emit_sync_progress(&app, SyncPhase::Embedding, current, total, SyncTrigger::Full);
         };
         index
             .sync(&chunk_index, &builder, &index_root, Some(&store), Some(&on_progress))
@@ -387,13 +699,22 @@ pub async fn embedding_sync(
 /// sync with.
 #[tauri::command]
 pub async fn embedding_index_status(
+    app: AppHandle,
+    repo_index: State<'_, Arc<RepositoryIndex>>,
     chunk_index: State<'_, Arc<ChunkIndex>>,
     embedding_index: State<'_, Arc<EmbeddingIndexSlot>>,
     index_store: State<'_, Arc<IndexStoreSlot>>,
+    embedding_provider: State<'_, Arc<EmbeddingProviderSlot>>,
+    sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
+    index_watcher: State<'_, Arc<IndexWatcherSlot>>,
 ) -> Result<EmbeddingIndexStatus, String> {
+    let repo_index = repo_index.inner().clone();
     let chunk_index = chunk_index.inner().clone();
     let embedding_index = embedding_index.inner().clone();
     let index_store = index_store.inner().clone();
+    let embedding_provider = embedding_provider.inner().clone();
+    let sync_guard = sync_guard.inner().clone();
+    let index_watcher = index_watcher.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<EmbeddingIndexStatus, String> {
         let Some(project) = project_open::get_project().map_err(|e| e.to_string())? else {
@@ -405,6 +726,26 @@ pub async fn embedding_index_status(
         };
         let (index_root, storage_dir) = resolve_index_paths(&project)?;
         let (store, stale) = attach_index_store(&chunk_index, &index_store, &storage_dir, &index_root)?;
+
+        // Eager warm-up: this read-only status check is what
+        // `useEmbeddingIndexWarmup` calls right when a project opens, so
+        // starting the watcher here (rather than only inside
+        // `embedding_sync`) is what makes incremental watching begin
+        // immediately instead of waiting for the user's first manual sync.
+        // Started regardless of `stale` — harmless, `run_incremental_sync`
+        // no-ops until `RepositoryIndex` has a baseline.
+        ensure_incremental_watcher(
+            &index_watcher,
+            &app,
+            &index_root,
+            &store,
+            &repo_index,
+            &chunk_index,
+            &embedding_index,
+            &embedding_provider,
+            &sync_guard,
+        )?;
+
         if stale {
             // Nothing trustworthy to attach an EmbeddingIndex to — report
             // staleness and stop, rather than repairing (that only happens
@@ -433,4 +774,69 @@ pub async fn embedding_index_status(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Stops the incremental file-watcher, if one is running. Called from the
+/// frontend when a project closes without a new one opening in the same
+/// session — otherwise `ensure_incremental_watcher`'s own `index_root`
+/// check naturally swaps it for whichever project opens next. Dropping the
+/// held `IndexWatcher` stops its underlying `notify` watch (RAII).
+#[tauri::command]
+pub fn embedding_index_teardown(
+    index_watcher: State<'_, Arc<IndexWatcherSlot>>,
+) -> Result<(), String> {
+    *index_watcher
+        .lock()
+        .map_err(|_| "index watcher lock poisoned".to_string())? = None;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::embeddings::EmbeddingProviderKind;
+
+    /// `Remote` config — cheap to construct (`RemoteEmbeddingProvider::new`
+    /// does no network I/O), unlike `Local`, which would load the ONNX
+    /// model.
+    fn remote_config(model: &str) -> EmbeddingProviderConfig {
+        EmbeddingProviderConfig {
+            kind: EmbeddingProviderKind::Remote,
+            remote_base_url: Some("https://api.example.com".to_string()),
+            remote_model: Some(model.to_string()),
+            remote_dimensions: Some(768),
+        }
+    }
+
+    #[test]
+    fn ensure_provider_reuses_cached_instance_when_unchanged() {
+        let slot = EmbeddingProviderSlot::new(None);
+        let config = remote_config("m1");
+
+        let first = ensure_provider(&slot, &config, Some("key1".to_string())).unwrap();
+        let second = ensure_provider(&slot, &config, Some("key1".to_string())).unwrap();
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn ensure_provider_rebuilds_on_config_change() {
+        let slot = EmbeddingProviderSlot::new(None);
+
+        let first = ensure_provider(&slot, &remote_config("m1"), Some("key1".to_string())).unwrap();
+        let second = ensure_provider(&slot, &remote_config("m2"), Some("key1".to_string())).unwrap();
+
+        assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn ensure_provider_rebuilds_on_api_key_change() {
+        let slot = EmbeddingProviderSlot::new(None);
+        let config = remote_config("m1");
+
+        let first = ensure_provider(&slot, &config, Some("key1".to_string())).unwrap();
+        let second = ensure_provider(&slot, &config, Some("key2".to_string())).unwrap();
+
+        assert!(!Arc::ptr_eq(&first, &second));
+    }
 }

@@ -103,11 +103,18 @@ export function useEmbeddingSetup() {
   }, []);
 
   // Live sync progress, independent of `refresh` — the backend emits this
-  // while `syncEmbeddings()`'s promise is still in flight.
+  // while `syncEmbeddings()`'s promise is still in flight. Filtered to
+  // `trigger === "full"`: the backend also emits this event for
+  // file-watcher-driven incremental ticks, which must never drive this
+  // hook's manual-sync progress display (`busy` can briefly be `true` here
+  // while a manual sync waits on the backend's sync guard to let an
+  // in-flight incremental tick finish — an unfiltered incremental payload
+  // arriving in that window would show the wrong current/total numbers).
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenSyncProgress((payload) => {
+      if (payload.trigger !== "full") return;
       setSyncProgress(payload);
     }).then((fn) => {
       if (cancelled) {
