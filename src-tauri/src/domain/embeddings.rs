@@ -135,6 +135,14 @@ pub struct EmbeddingIndexStatus {
     /// `embedding_sync` will repair and rebuild it, not start from a blank
     /// slate.
     pub stale: bool,
+    /// Files `RepositoryIndex` knows about but that haven't been chunked
+    /// yet — always `0` outside a fresh project's first-sync backlog
+    /// (every other code path chunks every known file in the same pass).
+    /// Derived from live state (`repo_index.file_ids().len() -
+    /// chunk_index.file_ids().len()`), not a hand-maintained counter, so it
+    /// survives an app restart or a panicked background task without
+    /// drifting.
+    pub background_pending: usize,
 }
 
 #[cfg(test)]

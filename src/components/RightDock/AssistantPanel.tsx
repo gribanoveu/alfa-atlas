@@ -96,6 +96,15 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
 
   const syncPhaseLabel =
     syncProgress?.phase === "chunking" ? "Индексация файлов" : "Расчёт эмбеддингов";
+  // Non-blocking: a fresh project's background backlog catch-up (see
+  // `backgroundSyncProgress`/`indexStatus.backgroundPending`) never disables
+  // the sync action or replaces the description above — it's appended as an
+  // extra note, same "show partial progress without gating anything on 100%"
+  // approach `useWorkspaceIndex`'s status bar already uses.
+  const backgroundNote =
+    indexStatus && indexStatus.backgroundPending > 0
+      ? ` Индексация остальной части репозитория продолжается в фоне (осталось файлов: ${indexStatus.backgroundPending}).`
+      : "";
 
   items.push({
     id: "sync",
@@ -105,11 +114,11 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
       busy && syncProgress
         ? `${syncPhaseLabel}: ${syncProgress.current}/${syncProgress.total}`
         : lastSync
-          ? `Добавлено ${lastSync.embedded}, без изменений ${lastSync.skippedUnchanged}, удалено ${lastSync.removed}.`
+          ? `Добавлено ${lastSync.embedded}, без изменений ${lastSync.skippedUnchanged}, удалено ${lastSync.removed}.${backgroundNote}`
           : indexStatus?.stale
             ? "Индекс устарел (обновилось приложение) — требуется повторная синхронизация."
             : indexStatus?.synced
-              ? `Проиндексировано чанков: ${indexStatus.embeddedCount}.`
+              ? `Проиндексировано чанков: ${indexStatus.embeddedCount}.${backgroundNote}`
               : "Построить/обновить эмбеддинги чанков документации для текущего проекта.",
     // `indexStatus` reflects the backend's persisted/resident index, so this
     // stays accurate across a remount — `lastSync` alone (this session's

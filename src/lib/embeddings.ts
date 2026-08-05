@@ -34,6 +34,12 @@ export type EmbeddingIndexStatus = {
    * index root) — left untouched on disk, not loaded; needs a real sync to
    * repair, distinct from "never synced". */
   stale: boolean;
+  /** Files the repo walk found but that haven't been chunked yet — always
+   * `0` outside a fresh project's first-sync backlog (see `SyncTrigger`'s
+   * `"background"` value). Non-zero means the rest of the repo is still
+   * being indexed in the background; the index itself is safe to use in
+   * the meantime, just incomplete. */
+  backgroundPending: number;
 };
 
 export type ModelDownloadProgress = {
@@ -47,8 +53,10 @@ export type ModelDownloadProgress = {
 export type SyncPhase = "chunking" | "embedding";
 
 // Mirrors the Rust `SyncTrigger` — distinguishes a full, user-triggered
-// `embedding_sync` from a file-watcher-driven incremental per-file tick.
-export type SyncTrigger = "full" | "incremental";
+// `embedding_sync` from a file-watcher-driven incremental per-file tick,
+// and from the low-priority backlog catch-up that follows a fresh
+// project's first sync.
+export type SyncTrigger = "full" | "incremental" | "background";
 
 export type SyncProgress = {
   phase: SyncPhase;
@@ -130,4 +138,13 @@ export function listenSyncProgress(
  * naturally swaps the watcher to whichever project opens next. */
 export function teardownIncrementalWatcher(): Promise<void> {
   return invoke("embedding_index_teardown");
+}
+
+/** Tells the backend which files are open in the editor, for `syncEmbeddings`
+ * to prioritize on a fresh project's first sync (open files + their direct
+ * includes/xrefs get chunked+embedded before the rest of the repo). Pass
+ * `EditorTab.path` values verbatim — already relative to the project's docs
+ * root, exactly what the backend expects; no conversion needed here. */
+export function setEmbeddingPriorityFiles(relativePaths: string[]): Promise<void> {
+  return invoke("embedding_set_priority_files", { relativePaths });
 }

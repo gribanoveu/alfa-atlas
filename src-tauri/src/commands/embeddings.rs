@@ -10,8 +10,10 @@ use crate::domain::chunk_index::ChunkBuildOptions;
 use crate::domain::embeddings::{
     EmbeddingIndexStatus, EmbeddingProvider, EmbeddingProviderConfig, ModelStatus, SyncStats,
 };
+use crate::domain::paths;
 use crate::domain::project_config::{OpenedProject, ProjectConfig};
 use crate::domain::repo_index::{detect_language, FileId, RepoIndexError};
+use crate::domain::workspace_index::DocumentId;
 use crate::infra::index_store::IndexStore;
 use crate::infra::{embedding_credentials_store, embedding_providers, project_store};
 use crate::services::chunk_builder::{ChunkBuilder, ChunkIndex};
@@ -22,6 +24,7 @@ use crate::services::index_store_ensure;
 use crate::services::index_watcher::{FileChangeKind, IndexWatcher};
 use crate::services::project_open;
 use crate::services::repo_index::RepositoryIndex;
+use crate::services::workspace_index::WorkspaceIndex;
 
 const META_EMBEDDING_DIMENSIONS: &str = "embedding_dimensions";
 
@@ -48,6 +51,11 @@ enum SyncPhase {
 enum SyncTrigger {
     Full,
     Incremental,
+    /// The low-priority catch-up for the rest of a fresh project's files,
+    /// running on its own task after the first sync's priority tier (open
+    /// files + their direct includes/xrefs) already returned to the caller
+    /// — see `run_background_backlog_sync`.
+    Background,
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize)]
@@ -135,6 +143,17 @@ pub type EmbeddingSyncGuard = Mutex<()>;
 /// changes — a project/access-mode switch — via `ensure_incremental_watcher`.
 pub type IndexWatcherSlot = Mutex<Option<(PathBuf, IndexWatcher)>>;
 
+/// Open-editor-tab hint for a fresh project's first `embedding_sync` (see
+/// its first-sync branch) — `FileId`s relative to whatever `index_root` was
+/// active the last time `embedding_set_priority_files` ran. Purely
+/// advisory and read only once, near the top of that branch: a
+/// stale-by-one-call snapshot is harmless (the next `embedding_set_priority_files`
+/// call supersedes it, and worst case a stale snapshot just fails to match
+/// anything in `current_set`, falling back to today's untiered behavior —
+/// see the module docs on the `AiAccessMode`-switch-without-touching-tabs
+/// edge case this leaves unhandled).
+pub type PriorityFilesSlot = Mutex<HashSet<FileId>>;
+
 #[tauri::command]
 pub fn embedding_get_config() -> Result<EmbeddingProviderConfig, String> {
     embedding_config::load_embedding_config().map_err(|e| e.to_string())
@@ -212,6 +231,71 @@ fn resolve_index_paths(project: &OpenedProject) -> Result<(PathBuf, PathBuf), St
         .join("index")
         .join(mode_dir);
     Ok((index_root, storage_dir))
+}
+
+/// `index_root`'s path relative to `project.root` — empty in `FullRepo`
+/// mode (`index_root == project.root`), e.g. `"src/docs/asciidoc"` in
+/// `DocsOnly` mode. The pure string relationship
+/// `document_id_to_file_id`/`file_id_to_document_id` bridge on, since a
+/// `WorkspaceIndex::DocumentId` is always repo-root-relative while a
+/// `FileId` is `index_root`-relative.
+fn index_root_suffix_for(project: &OpenedProject, index_root: &Path) -> Result<String, String> {
+    let repo_root = PathBuf::from(&project.root);
+    let suffix = paths::relative_to(&repo_root, index_root).map_err(|e| e.to_string())?;
+    Ok(if suffix == "." { String::new() } else { suffix })
+}
+
+/// A `WorkspaceIndex::find_includes`/`find_references` target — already a
+/// resolved, repo-root-relative string (see `WorkspaceIndex::insert_parsed`,
+/// which runs every include/xref target through `resolve_against_document`
+/// before storing it) — into this sync's `FileId` space. `None` when the
+/// target falls outside `index_root` (e.g. an include reaching outside
+/// `docs_root` in `DocsOnly` mode — `RepositoryIndex` never walked it, so
+/// there's no `FileId` for it).
+fn document_id_to_file_id(repo_relative: &str, index_root_suffix: &str) -> Option<FileId> {
+    if index_root_suffix.is_empty() {
+        return Some(FileId(repo_relative.to_string()));
+    }
+    repo_relative
+        .strip_prefix(index_root_suffix)
+        .and_then(|s| s.strip_prefix('/'))
+        .map(|s| FileId(s.to_string()))
+}
+
+/// Inverse of `document_id_to_file_id` — what `direct_dependencies` uses to
+/// turn an open file's `FileId` into the `DocumentId` key
+/// `WorkspaceIndex::find_includes`/`find_references` expect.
+fn file_id_to_document_id(file_id: &FileId, index_root_suffix: &str) -> DocumentId {
+    if index_root_suffix.is_empty() {
+        DocumentId::new(file_id.0.clone())
+    } else {
+        DocumentId::new(format!("{index_root_suffix}/{}", file_id.0))
+    }
+}
+
+/// One open file's direct (one-hop, non-transitive) AsciiDoc dependencies —
+/// its `include::`/`xref:` targets. Empty for a file `WorkspaceIndex`
+/// doesn't know about (not built yet this session, or a non-AsciiDoc file
+/// with no include/xref syntax) — graceful degradation, not an error: the
+/// priority tier then just contains the open file itself.
+fn direct_dependencies(
+    workspace_index: &WorkspaceIndex,
+    file_id: &FileId,
+    index_root_suffix: &str,
+) -> Vec<FileId> {
+    let doc_id = file_id_to_document_id(file_id, index_root_suffix);
+    let mut out = Vec::new();
+    for inc in workspace_index.find_includes(&doc_id) {
+        out.extend(document_id_to_file_id(&inc.path, index_root_suffix));
+    }
+    for r in workspace_index.find_references(&doc_id) {
+        if r.target_document.is_empty() {
+            // Same-document `#anchor` xref — not a cross-file dependency.
+            continue;
+        }
+        out.extend(document_id_to_file_id(&r.target_document, index_root_suffix));
+    }
+    out
 }
 
 /// Attaches `index_root`'s persisted `IndexStore` to `chunk_index`. Only on
@@ -454,6 +538,178 @@ fn run_incremental_sync(
     Ok(())
 }
 
+/// How many files the background backlog task chunks+embeds per
+/// `EmbeddingSyncGuard` acquisition — small enough that a concurrent manual
+/// sync or incremental tick never waits long, large enough that this
+/// doesn't spawn a fresh SQLite transaction/lock cycle per single file for
+/// a potentially large first-sync backlog.
+const BACKGROUND_BATCH_FILES: usize = 25;
+
+/// Rebuilds chunks for whichever of `file_ids` changed (skips the rest,
+/// same hash-comparison `embedding_sync`'s own bulk loop uses) and
+/// reconciles `EmbeddingIndex` once for the whole batch. Caller holds
+/// `EmbeddingSyncGuard` for the duration (not acquired here). Mirrors
+/// `embedding_sync`'s bulk loop, not `run_incremental_sync` — only the
+/// *changed* subset gets `store.upsert_files`'d, matching the bulk-sync
+/// convention this backlog descends from (`run_incremental_sync`'s
+/// `Upserted` branch always upserts, even on an unchanged hash, to keep
+/// `mtime`/`size_bytes` fresh for a touched-but-unchanged file — a
+/// different, event-driven concern this batch helper doesn't share).
+/// A single file's `build_file` failure (e.g. deleted between
+/// `repo_index.build()` and this batch reaching it) is logged and skipped,
+/// same resilience policy as `ChunkBuilder::build_all` — never aborts the
+/// rest of the batch.
+#[allow(clippy::too_many_arguments)]
+fn sync_backlog_batch(
+    repo_index: &RepositoryIndex,
+    chunk_index: &ChunkIndex,
+    embedding_index: &EmbeddingIndexSlot,
+    embedding_provider: &EmbeddingProviderSlot,
+    index_root: &Path,
+    store: &IndexStore,
+    file_ids: &[FileId],
+    on_progress: Option<&dyn Fn(usize, usize)>,
+) -> Result<SyncStats, String> {
+    let chunk_builder = ChunkBuilder::new();
+    let options = ChunkBuildOptions::default();
+
+    for file_id in file_ids {
+        let Some(indexed) = repo_index.get(file_id) else {
+            continue;
+        };
+        let unchanged = chunk_index
+            .file_hash_for(file_id)
+            .is_some_and(|hash| hash == indexed.metadata.hash);
+        if unchanged {
+            continue;
+        }
+        // `files` must gain (or already have) a row for `file_id` before
+        // `chunks` can reference it — `chunks.file_id` is a foreign key
+        // (`ON DELETE CASCADE`) onto `files.file_id`.
+        store
+            .upsert_files(&[indexed.metadata.clone()])
+            .map_err(|e| e.to_string())?;
+        match chunk_builder.build_file(repo_index, file_id, &options) {
+            Ok(chunks) => {
+                let metadatas: Vec<_> = chunks.iter().map(|c| c.metadata.clone()).collect();
+                chunk_index.replace_for_file(file_id, chunks);
+                store
+                    .replace_chunks_for_file(file_id, &metadatas)
+                    .map_err(|e| e.to_string())?;
+            }
+            Err(e) => eprintln!("[embedding-sync] background: skipping {}: {e}", file_id.0),
+        }
+    }
+
+    let config = embedding_config::load_embedding_config().map_err(|e| e.to_string())?;
+    let dimensions = embedding_providers::expected_dimensions(&config);
+
+    // Mirrors `run_incremental_sync`'s same guard: a dimension mismatch
+    // means whatever's persisted can't be trusted for this provider, and
+    // only a deliberate manual sync (`allow_repair: true`) repairs that —
+    // this background batch just skips embedding reconciliation for now.
+    // The chunk/repo-index updates above already landed and are valid
+    // regardless.
+    let persisted_dimensions: Option<usize> = store
+        .read_meta(META_EMBEDDING_DIMENSIONS)
+        .map_err(|e| e.to_string())?
+        .and_then(|s| s.parse().ok());
+    if persisted_dimensions.is_some() && persisted_dimensions != Some(dimensions) {
+        return Ok(SyncStats::default());
+    }
+
+    let api_key = embedding_credentials_store::get_api_key();
+    let provider = ensure_provider(embedding_provider, &config, api_key)?;
+    let builder = EmbeddingBuilder::new(provider);
+
+    attach_embedding_index(embedding_index, store, index_root, dimensions, false)?;
+    let mut slot = embedding_index
+        .lock()
+        .map_err(|_| "embedding index lock poisoned".to_string())?;
+    let Some((_, _, index)) = slot.as_mut() else {
+        return Ok(SyncStats::default());
+    };
+    index
+        .sync(chunk_index, &builder, index_root, Some(store), on_progress)
+        .map_err(|e| e.to_string())
+}
+
+/// `true` if the currently open project still resolves to `index_root` —
+/// the background backlog's abort check. Unlike a single incremental tick,
+/// the backlog can run long enough to plausibly outlive the project it
+/// started for; continuing past a project switch would mutate
+/// `EmbeddingIndexSlot`/`IndexStoreSlot` on behalf of a project that
+/// already reattached them to something else.
+fn is_current_index_root(index_root: &Path) -> bool {
+    let Ok(Some(project)) = project_open::get_project() else {
+        return false;
+    };
+    let Ok((root, _)) = resolve_index_paths(&project) else {
+        return false;
+    };
+    root == index_root
+}
+
+/// The rest of a fresh project's files, processed after the first sync's
+/// priority tier (open files + direct deps) already returned to the
+/// caller. Runs entirely on its own `spawn_blocking` task — nothing awaits
+/// this, mirroring how `IndexWatcher`'s own dispatcher spawns a further
+/// `spawn_blocking` per dispatched event. Acquires `EmbeddingSyncGuard` only
+/// for the duration of each batch (not once for the whole backlog), so a
+/// manual "Синхронизировать" click or an incremental fs-tick can interleave
+/// with this catch-up rather than wait it out entirely.
+#[allow(clippy::too_many_arguments)]
+fn run_background_backlog_sync(
+    repo_index: Arc<RepositoryIndex>,
+    chunk_index: Arc<ChunkIndex>,
+    embedding_index: Arc<EmbeddingIndexSlot>,
+    embedding_provider: Arc<EmbeddingProviderSlot>,
+    sync_guard: Arc<EmbeddingSyncGuard>,
+    store: Arc<IndexStore>,
+    index_root: PathBuf,
+    app: AppHandle,
+    backlog: Vec<FileId>,
+) {
+    let total = backlog.len();
+    let mut done = 0usize;
+
+    for batch in backlog.chunks(BACKGROUND_BATCH_FILES) {
+        if !is_current_index_root(&index_root) {
+            eprintln!(
+                "[embedding-sync] background backlog abandoned — project/index_root changed"
+            );
+            return;
+        }
+
+        let guard = match sync_guard.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                eprintln!("[embedding-sync] background backlog: sync guard poisoned");
+                return;
+            }
+        };
+        let on_progress = |current: usize, total_pending: usize| {
+            emit_sync_progress(&app, SyncPhase::Embedding, current, total_pending, SyncTrigger::Background);
+        };
+        if let Err(e) = sync_backlog_batch(
+            &repo_index,
+            &chunk_index,
+            &embedding_index,
+            &embedding_provider,
+            &index_root,
+            &store,
+            batch,
+            Some(&on_progress),
+        ) {
+            eprintln!("[embedding-sync] background backlog batch failed: {e}");
+        }
+        drop(guard);
+
+        done += batch.len();
+        emit_sync_progress(&app, SyncPhase::Chunking, done, total, SyncTrigger::Background);
+    }
+}
+
 /// Starts (or restarts, on an `index_root` change) the file-watcher-driven
 /// incremental sync for `index_root`. Called from both `embedding_sync` and
 /// `embedding_index_status` — the latter runs eagerly at project open
@@ -544,6 +800,8 @@ pub async fn embedding_sync(
     embedding_provider: State<'_, Arc<EmbeddingProviderSlot>>,
     sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
     index_watcher: State<'_, Arc<IndexWatcherSlot>>,
+    workspace_index: State<'_, Arc<WorkspaceIndex>>,
+    priority_files: State<'_, Arc<PriorityFilesSlot>>,
 ) -> Result<SyncStats, String> {
     let repo_index = repo_index.inner().clone();
     let chunk_index = chunk_index.inner().clone();
@@ -552,6 +810,8 @@ pub async fn embedding_sync(
     let embedding_provider = embedding_provider.inner().clone();
     let sync_guard = sync_guard.inner().clone();
     let index_watcher = index_watcher.inner().clone();
+    let workspace_index = workspace_index.inner().clone();
+    let priority_files = priority_files.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<SyncStats, String> {
         // Acquired first, before any other slot, and held for the entire
@@ -598,8 +858,52 @@ pub async fn embedding_sync(
 
         repo_index.build(&index_root).map_err(|e| e.to_string())?;
 
+        // A fresh project (nothing chunked yet, in this store or ever) is
+        // the only case that gets the two-tier open-files-first treatment
+        // below — a routine re-sync's changed-file count is normally small
+        // enough that splitting it wouldn't help, so it keeps behaving
+        // exactly as before.
+        let is_first_sync = chunk_index.chunk_ids().is_empty();
+
         let current_ids = repo_index.file_ids();
         let current_set: HashSet<_> = current_ids.iter().cloned().collect();
+
+        // Open editor files (plus their direct includes/xrefs, resolved via
+        // `WorkspaceIndex`) get chunked+embedded first so this call returns
+        // quickly with a useful partial index; the rest of a fresh
+        // project's files are deferred to `run_background_backlog_sync`
+        // below. Empty on anything but a first sync, and also empty
+        // whenever no priority file survives the `current_set` intersection
+        // (nothing open, or a stale `PriorityFilesSlot` snapshot from a
+        // different `index_root` — see that type's doc comment) — either
+        // way `tier1_ids` then simply becomes every file, matching today's
+        // untiered behavior.
+        let priority_ids: HashSet<FileId> = if is_first_sync {
+            let opened = priority_files
+                .lock()
+                .map_err(|_| "priority files lock poisoned".to_string())?
+                .clone();
+            let mut set = opened.clone();
+            if !opened.is_empty() {
+                let suffix = index_root_suffix_for(&project, &index_root)?;
+                for file_id in &opened {
+                    set.extend(direct_dependencies(&workspace_index, file_id, &suffix));
+                }
+            }
+            set.retain(|id| current_set.contains(id));
+            set
+        } else {
+            HashSet::new()
+        };
+        let (tier1_ids, tier2_ids): (Vec<FileId>, Vec<FileId>) = if !priority_ids.is_empty() {
+            current_ids
+                .iter()
+                .cloned()
+                .partition(|id| priority_ids.contains(id))
+        } else {
+            (current_ids.clone(), Vec::new())
+        };
+
         let chunk_builder = ChunkBuilder::new();
         let options = ChunkBuildOptions::default();
 
@@ -607,9 +911,11 @@ pub async fn embedding_sync(
         // them get re-chunked — for the rest, `build_file` (and the file
         // read it requires) is skipped entirely, and `EmbeddingIndex::sync`
         // below will correctly see their chunks' hashes as unchanged
-        // without this sync ever touching their text.
+        // without this sync ever touching their text. Scoped to `tier1_ids`
+        // — `tier2_ids` (empty outside a first sync) is handled by the
+        // background backlog task, not here.
         let mut changed_files = Vec::new();
-        for file_id in &current_ids {
+        for file_id in &tier1_ids {
             let Some(indexed) = repo_index.get(file_id) else {
                 continue;
             };
@@ -625,7 +931,7 @@ pub async fn embedding_sync(
         }
         let total_changed = changed_files.len();
         let mut chunked_so_far = 0usize;
-        for file_id in &current_ids {
+        for file_id in &tier1_ids {
             let Some(indexed) = repo_index.get(file_id) else {
                 continue;
             };
@@ -669,16 +975,49 @@ pub async fn embedding_sync(
         let builder = EmbeddingBuilder::new(provider);
 
         attach_embedding_index(&embedding_index, &store, &index_root, dimensions, true)?;
-        let mut slot = embedding_index
-            .lock()
-            .map_err(|_| "embedding index lock poisoned".to_string())?;
-        let (_, _, index) = slot.as_mut().expect("attach_embedding_index just set this");
-        let on_progress = |current: usize, total: usize| {
-            emit_sync_progress(&app, SyncPhase::Embedding, current, total, SyncTrigger::Full);
+        let stats = {
+            let mut slot = embedding_index
+                .lock()
+                .map_err(|_| "embedding index lock poisoned".to_string())?;
+            let (_, _, index) = slot.as_mut().expect("attach_embedding_index just set this");
+            let on_progress = |current: usize, total: usize| {
+                emit_sync_progress(&app, SyncPhase::Embedding, current, total, SyncTrigger::Full);
+            };
+            index
+                .sync(&chunk_index, &builder, &index_root, Some(&store), Some(&on_progress))
+                .map_err(|e| e.to_string())?
         };
-        index
-            .sync(&chunk_index, &builder, &index_root, Some(&store), Some(&on_progress))
-            .map_err(|e| e.to_string())
+
+        // The rest of a fresh project's files, if any — dispatched to its
+        // own task so this call can return `stats` (the priority tier's
+        // result) now instead of waiting out the whole repo. See
+        // `run_background_backlog_sync`'s doc comment for why it acquires
+        // `EmbeddingSyncGuard` per batch rather than once up front.
+        if is_first_sync && !tier2_ids.is_empty() {
+            let repo_index = repo_index.clone();
+            let chunk_index = chunk_index.clone();
+            let embedding_index = embedding_index.clone();
+            let embedding_provider = embedding_provider.clone();
+            let sync_guard = sync_guard.clone();
+            let store = store.clone();
+            let index_root = index_root.clone();
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                run_background_backlog_sync(
+                    repo_index,
+                    chunk_index,
+                    embedding_index,
+                    embedding_provider,
+                    sync_guard,
+                    store,
+                    index_root,
+                    app,
+                    tier2_ids,
+                );
+            });
+        }
+
+        Ok(stats)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -722,6 +1061,7 @@ pub async fn embedding_index_status(
                 synced: false,
                 embedded_count: 0,
                 stale: false,
+                background_pending: 0,
             });
         };
         let (index_root, storage_dir) = resolve_index_paths(&project)?;
@@ -754,6 +1094,7 @@ pub async fn embedding_index_status(
                 synced: false,
                 embedded_count: 0,
                 stale: true,
+                background_pending: 0,
             });
         }
 
@@ -766,10 +1107,19 @@ pub async fn embedding_index_status(
             .map_err(|_| "embedding index lock poisoned".to_string())?;
         let (_, _, index) = slot.as_ref().expect("attach_embedding_index just set this");
         let embedded_count = index.len();
+        // Files the repo walk found but that haven't been chunked yet —
+        // `0` outside a fresh project's first-sync backlog, since every
+        // other path chunks every known file in the same pass. See
+        // `EmbeddingIndexStatus::background_pending`'s doc comment.
+        let background_pending = repo_index
+            .file_ids()
+            .len()
+            .saturating_sub(chunk_index.file_ids().len());
         Ok(EmbeddingIndexStatus {
             synced: embedded_count > 0,
             embedded_count,
             stale: false,
+            background_pending,
         })
     })
     .await
@@ -788,6 +1138,43 @@ pub fn embedding_index_teardown(
     *index_watcher
         .lock()
         .map_err(|_| "index watcher lock poisoned".to_string())? = None;
+    Ok(())
+}
+
+/// Records which files are currently open in the editor, for
+/// `embedding_sync`'s first-sync branch to prioritize (see
+/// `PriorityFilesSlot`). `relative_paths` are exactly `EditorTab.path`
+/// values — already relative to `project.docs_root` — so the frontend
+/// never needs to know about `AiAccessMode`/`index_root`; this joins each
+/// one against `docs_root` and relativizes it against whatever `index_root`
+/// currently resolves to. A no-op (not an error) if no project is open, or
+/// if a given path can't be resolved (e.g. a tab open on a file that was
+/// just deleted) — this is a best-effort hint, never load-bearing for
+/// correctness.
+#[tauri::command]
+pub fn embedding_set_priority_files(
+    priority_files: State<'_, Arc<PriorityFilesSlot>>,
+    relative_paths: Vec<String>,
+) -> Result<(), String> {
+    let Some(project) = project_open::get_project().map_err(|e| e.to_string())? else {
+        return Ok(());
+    };
+    let (index_root, _) = resolve_index_paths(&project)?;
+    let docs_root = PathBuf::from(&project.docs_root);
+
+    let ids: HashSet<FileId> = relative_paths
+        .iter()
+        .filter_map(|rel| {
+            let absolute = paths::join_relative(&docs_root, rel).ok()?;
+            paths::relative_to_lenient(&index_root, &absolute)
+                .ok()
+                .map(FileId)
+        })
+        .collect();
+
+    *priority_files
+        .lock()
+        .map_err(|_| "priority files lock poisoned".to_string())? = ids;
     Ok(())
 }
 
@@ -838,5 +1225,186 @@ mod tests {
         let second = ensure_provider(&slot, &config, Some("key2".to_string())).unwrap();
 
         assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    // --- `document_id_to_file_id` / `file_id_to_document_id` ---
+
+    #[test]
+    fn file_id_document_id_round_trip_with_empty_suffix() {
+        // `FullRepo` mode: index_root == project.root, so the two spaces
+        // are identical strings.
+        let file_id = FileId("docs/guide.adoc".to_string());
+        let doc_id = file_id_to_document_id(&file_id, "");
+        assert_eq!(doc_id, DocumentId::new("docs/guide.adoc"));
+        assert_eq!(document_id_to_file_id(&doc_id.0, ""), Some(file_id));
+    }
+
+    #[test]
+    fn file_id_document_id_round_trip_with_a_suffix() {
+        // `DocsOnly` mode: index_root == project.docs_root, a subdirectory
+        // of project.root.
+        let file_id = FileId("guide.adoc".to_string());
+        let suffix = "src/docs/asciidoc";
+        let doc_id = file_id_to_document_id(&file_id, suffix);
+        assert_eq!(doc_id, DocumentId::new("src/docs/asciidoc/guide.adoc"));
+        assert_eq!(document_id_to_file_id(&doc_id.0, suffix), Some(file_id));
+    }
+
+    #[test]
+    fn document_id_to_file_id_is_none_outside_the_index_root() {
+        // An include/xref reaching outside `docs_root` in `DocsOnly` mode —
+        // `RepositoryIndex` never walked it, so there's no `FileId` for it.
+        assert_eq!(
+            document_id_to_file_id("src/main/java/Foo.java", "src/docs/asciidoc"),
+            None
+        );
+    }
+
+    // --- `direct_dependencies` ---
+
+    #[test]
+    fn direct_dependencies_is_empty_for_an_unknown_document() {
+        // Graceful degradation: a file `WorkspaceIndex` hasn't parsed this
+        // session (not built yet, or a non-AsciiDoc file) simply expands to
+        // itself, not an error.
+        let workspace_index =
+            WorkspaceIndex::new(crate::infra::parsers::registry::ParserRegistry::new());
+        let file_id = FileId("guide.adoc".to_string());
+        assert!(direct_dependencies(&workspace_index, &file_id, "").is_empty());
+    }
+
+    // --- `sync_backlog_batch` ---
+
+    use crate::domain::embeddings::{Embedding, EmbeddingError};
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn fixture_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-embeddings-cmd-{label}-{nanos}-{n}"));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Deterministic fake — never touches `fastembed`/network. Dimension is
+    /// configurable so a test can match whatever `expected_dimensions`
+    /// resolves to for the real config on the machine running the test.
+    struct MockProvider {
+        dimensions: usize,
+    }
+
+    impl EmbeddingProvider for MockProvider {
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError> {
+            Ok(texts
+                .iter()
+                .map(|t| Embedding(vec![t.len() as f32; self.dimensions]))
+                .collect())
+        }
+
+        fn dimensions(&self) -> usize {
+            self.dimensions
+        }
+    }
+
+    /// Pre-populates `EmbeddingProviderSlot` with a mock cached under
+    /// whatever `embedding_config::load_embedding_config`/
+    /// `embedding_credentials_store::get_api_key` actually return on this
+    /// machine — `ensure_provider`'s cache check (same config, same key) then
+    /// finds a hit and never calls the real `provider_for` (which would load
+    /// the ~570MB local ONNX model, or fail outright, if this test's config
+    /// happens to be `Local` or an incomplete `Remote` config).
+    fn mock_provider_slot() -> EmbeddingProviderSlot {
+        let config = embedding_config::load_embedding_config().unwrap_or_default();
+        let api_key = embedding_credentials_store::get_api_key();
+        let dimensions = embedding_providers::expected_dimensions(&config);
+        let provider: Arc<dyn EmbeddingProvider> = Arc::new(MockProvider { dimensions });
+        EmbeddingProviderSlot::new(Some((config, api_key, provider)))
+    }
+
+    #[test]
+    fn sync_backlog_batch_only_touches_the_given_file_ids() {
+        let root = fixture_dir("repo");
+        fs::write(root.join("a.json"), "0123456789").unwrap();
+        fs::write(root.join("b.json"), "abcdefghij").unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        let chunk_index = ChunkIndex::new();
+        let embedding_index = EmbeddingIndexSlot::new(None);
+        let embedding_provider = mock_provider_slot();
+
+        let store_dir = fixture_dir("store");
+        let store = IndexStore::open(&store_dir).unwrap();
+
+        let batch = vec![FileId("a.json".to_string())];
+        let stats = sync_backlog_batch(
+            &repo_index,
+            &chunk_index,
+            &embedding_index,
+            &embedding_provider,
+            &root,
+            &store,
+            &batch,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(stats.embedded, 1);
+        assert!(chunk_index.file_ids().contains(&FileId("a.json".to_string())));
+        assert!(!chunk_index.file_ids().contains(&FileId("b.json".to_string())));
+
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&store_dir).ok();
+    }
+
+    #[test]
+    fn sync_backlog_batch_skips_unchanged_files_on_a_second_pass() {
+        let root = fixture_dir("repo");
+        fs::write(root.join("a.json"), "0123456789").unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        let chunk_index = ChunkIndex::new();
+        let embedding_index = EmbeddingIndexSlot::new(None);
+        let embedding_provider = mock_provider_slot();
+
+        let store_dir = fixture_dir("store");
+        let store = IndexStore::open(&store_dir).unwrap();
+
+        let batch = vec![FileId("a.json".to_string())];
+        sync_backlog_batch(
+            &repo_index,
+            &chunk_index,
+            &embedding_index,
+            &embedding_provider,
+            &root,
+            &store,
+            &batch,
+            None,
+        )
+        .unwrap();
+
+        // Same batch again, nothing changed on disk in between.
+        let stats = sync_backlog_batch(
+            &repo_index,
+            &chunk_index,
+            &embedding_index,
+            &embedding_provider,
+            &root,
+            &store,
+            &batch,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(stats.embedded, 0);
+        assert_eq!(stats.skipped_unchanged, 1);
+
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&store_dir).ok();
     }
 }

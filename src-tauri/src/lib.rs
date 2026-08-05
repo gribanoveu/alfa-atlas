@@ -5,11 +5,13 @@ mod services;
 
 use domain::settings::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, WindowState};
 use services::window_settings;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
 
 use crate::commands::embeddings::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot, IndexWatcherSlot,
+    PriorityFilesSlot,
 };
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::services::chunk_builder::ChunkIndex;
@@ -114,6 +116,7 @@ pub fn run() {
             app.manage(Arc::new(EmbeddingProviderSlot::new(None)));
             app.manage(Arc::new(EmbeddingSyncGuard::new(())));
             app.manage(Arc::new(IndexWatcherSlot::new(None)));
+            app.manage(Arc::new(PriorityFilesSlot::new(HashSet::new())));
             app.manage(Arc::new(DownloadState::default()));
 
             Ok(())
@@ -239,6 +242,7 @@ pub fn run() {
             commands::embeddings::embedding_sync,
             commands::embeddings::embedding_index_status,
             commands::embeddings::embedding_index_teardown,
+            commands::embeddings::embedding_set_priority_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

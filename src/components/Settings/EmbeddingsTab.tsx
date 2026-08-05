@@ -270,6 +270,9 @@ export function EmbeddingsTab() {
           <p className="settings-hint" style={{ paddingLeft: 0 }}>
             Готово: добавлено {lastSync.embedded}, без изменений{" "}
             {lastSync.skippedUnchanged}, удалено {lastSync.removed}.
+            {indexStatus && indexStatus.backgroundPending > 0
+              ? ` Индексация остальной части репозитория продолжается в фоне (осталось файлов: ${indexStatus.backgroundPending}).`
+              : null}
           </p>
         ) : indexStatus?.stale ? (
           <p className="settings-hint" style={{ paddingLeft: 0 }}>
@@ -278,6 +281,9 @@ export function EmbeddingsTab() {
         ) : indexStatus?.synced ? (
           <p className="settings-hint" style={{ paddingLeft: 0 }}>
             Проиндексировано чанков: {indexStatus.embeddedCount}.
+            {indexStatus.backgroundPending > 0
+              ? ` Индексация остальной части репозитория продолжается в фоне (осталось файлов: ${indexStatus.backgroundPending}).`
+              : null}
           </p>
         ) : null}
       </div>

@@ -52,6 +52,7 @@ import { useEditorViewMode } from "./hooks/useEditorViewMode";
 import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
 import { useStandardsCheck } from "./hooks/useStandardsCheck";
 import { useEmbeddingIndexWarmup } from "./hooks/useEmbeddingIndexWarmup";
+import { useEmbeddingPriorityFiles } from "./hooks/useEmbeddingPriorityFiles";
 import { findAnchors } from "./lib/workspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
@@ -432,6 +433,10 @@ function App() {
     active: hasProject,
   });
   useEmbeddingIndexWarmup(project.repoRoot, { active: hasProject });
+  useEmbeddingPriorityFiles(
+    editor.tabs.map((t) => t.path),
+    { active: hasProject },
+  );
   const [standardsSettingsSignal, setStandardsSettingsSignal] = useState(0);
   const [embeddingsSettingsSignal, setEmbeddingsSettingsSignal] = useState(0);
 

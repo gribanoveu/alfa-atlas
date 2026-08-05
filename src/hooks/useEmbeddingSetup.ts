@@ -42,6 +42,11 @@ export function useEmbeddingSetup() {
   const [lastSync, setLastSync] = useState<SyncStats | null>(null);
   const [indexStatus, setIndexStatus] = useState<EmbeddingIndexStatus | null>(null);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  // The low-priority backlog catch-up after a fresh project's first sync —
+  // deliberately separate from `syncProgress`/`busy` (see the listener
+  // below) so it never makes the manual "Синхронизировать" action look
+  // busy while it runs.
+  const [backgroundSyncProgress, setBackgroundSyncProgress] = useState<SyncProgress | null>(null);
   // The backend can't truly abort an in-flight download (see
   // `cancelEmbeddingModelDownload`'s doc comment) — this just tells
   // `downloadModel`'s catch block that a rejection is an expected
@@ -102,20 +107,30 @@ export function useEmbeddingSetup() {
     };
   }, []);
 
-  // Live sync progress, independent of `refresh` — the backend emits this
-  // while `syncEmbeddings()`'s promise is still in flight. Filtered to
-  // `trigger === "full"`: the backend also emits this event for
-  // file-watcher-driven incremental ticks, which must never drive this
-  // hook's manual-sync progress display (`busy` can briefly be `true` here
-  // while a manual sync waits on the backend's sync guard to let an
-  // in-flight incremental tick finish — an unfiltered incremental payload
-  // arriving in that window would show the wrong current/total numbers).
+  // Live sync progress — the backend emits this while `syncEmbeddings()`'s
+  // promise is still in flight, and separately while a fresh project's
+  // background backlog task is catching up on the rest of the repo.
+  // `full`-triggered payloads drive the manual-sync progress display;
+  // `incremental` ticks (file-watcher-driven) are ignored here (`busy` can
+  // briefly be `true` while a manual sync waits on the backend's sync
+  // guard to let an in-flight incremental tick finish — an unfiltered
+  // incremental payload arriving in that window would show the wrong
+  // current/total numbers); `background` ticks update a separate piece of
+  // state instead of `syncProgress`/`busy`, so the backlog catch-up never
+  // makes the "Синхронизировать" action look busy. A `background`
+  // chunking-phase tick (fired once per backlog batch, not per file) also
+  // opportunistically refreshes `indexStatus` so `backgroundPending` stays
+  // reasonably current without polling.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenSyncProgress((payload) => {
-      if (payload.trigger !== "full") return;
-      setSyncProgress(payload);
+      if (payload.trigger === "full") {
+        setSyncProgress(payload);
+      } else if (payload.trigger === "background") {
+        setBackgroundSyncProgress(payload);
+        if (payload.phase === "chunking") void refresh();
+      }
     }).then((fn) => {
       if (cancelled) {
         fn();
@@ -127,7 +142,7 @@ export function useEmbeddingSetup() {
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [refresh]);
 
   const updateConfig = useCallback(
     async (patch: Partial<EmbeddingProviderConfig>) => {
@@ -228,6 +243,7 @@ export function useEmbeddingSetup() {
     lastSync,
     indexStatus,
     syncProgress,
+    backgroundSyncProgress,
     providerConfigured,
     updateConfig,
     saveApiKey,
