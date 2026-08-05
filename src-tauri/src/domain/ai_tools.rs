@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
+use super::embeddings::EmbeddingError;
 use super::project_config::ProjectError;
 use super::workspace_index::WorkspaceIndexError;
 
@@ -30,6 +31,46 @@ pub struct ToolFileEntry {
     pub is_dir: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticSearchArgs {
+    pub query: String,
+    /// `None` falls back to a default (see `services::ai_tools`), clamped
+    /// to a hard maximum regardless of what's requested.
+    pub top_k: Option<usize>,
+}
+
+/// Which cascade tier produced a `ToolMatch` — scores are only comparable
+/// within the same source, never across tiers (see `ToolMatch::score`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MatchSource {
+    Semantic,
+    Lexical,
+    Symbol,
+}
+
+/// One `SemanticSearch` hit. Deliberately not `Deserialize` — nothing ever
+/// reconstructs one from the frontend, only serializes one out, mirroring
+/// `ToolResult`'s own asymmetry.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolMatch {
+    /// Relative to the scope root, `/`-separated — same shape as
+    /// `ToolFileEntry::path`.
+    pub path: String,
+    pub snippet: String,
+    /// Only comparable within the same `source`: `Semantic` is
+    /// `1.0 - cosine_distance` (higher is better), `Lexical` is a raw
+    /// substring-occurrence count, `Symbol` is a fixed `1.0` (exact name
+    /// match).
+    pub score: f32,
+    pub start_byte: u32,
+    pub end_byte: u32,
+    pub qualified_name: Option<String>,
+    pub source: MatchSource,
+}
+
 /// One call into the tool executor. This — not the individual `ToolName`
 /// variants — is the harness-facing unit: `services::ai_tools::execute_tool`
 /// takes exactly one of these and returns exactly one `ToolResult`, so a
@@ -40,6 +81,7 @@ pub struct ToolFileEntry {
 pub enum ToolCall {
     ReadFile(ReadFileArgs),
     ListFiles(ListFilesArgs),
+    SemanticSearch(SemanticSearchArgs),
 }
 
 impl ToolCall {
@@ -47,6 +89,7 @@ impl ToolCall {
         match self {
             ToolCall::ReadFile(_) => ToolName::ReadFile,
             ToolCall::ListFiles(_) => ToolName::ListFiles,
+            ToolCall::SemanticSearch(_) => ToolName::SemanticSearch,
         }
     }
 }
@@ -55,11 +98,12 @@ impl ToolCall {
 /// payload (a file's content vs. a listing), not after the tool that
 /// produced it — mirrors `ToolCall` as the other half of the same
 /// serialized boundary.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "tool", content = "result", rename_all = "camelCase")]
 pub enum ToolResult {
     File(String),
     FileList(Vec<ToolFileEntry>),
+    SemanticSearchResults(Vec<ToolMatch>),
 }
 
 #[derive(Debug, Error)]
@@ -74,6 +118,14 @@ pub enum ToolError {
     NotAFile(String),
     #[error("io error: {0}")]
     Io(#[source] std::io::Error),
+    #[error("semantic search failed: {0}")]
+    SemanticSearch(String),
+}
+
+impl From<EmbeddingError> for ToolError {
+    fn from(err: EmbeddingError) -> Self {
+        ToolError::SemanticSearch(err.to_string())
+    }
 }
 
 impl From<ProjectError> for ToolError {

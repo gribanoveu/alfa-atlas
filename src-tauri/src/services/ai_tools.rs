@@ -8,27 +8,84 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use crate::commands::embeddings::{
+    attach_embedding_index, attach_index_store, ensure_provider, resolve_index_paths,
+    EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
+};
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    ListFilesArgs, ReadFileArgs, ToolCall, ToolError, ToolFileEntry, ToolResult, ToolScope,
+    ListFilesArgs, MatchSource, ReadFileArgs, SemanticSearchArgs, ToolCall, ToolError,
+    ToolFileEntry, ToolMatch, ToolResult, ToolScope,
 };
+use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::paths;
 use crate::domain::project_config::{ProjectConfig, ProjectError, TreeNode};
-use crate::infra::{project_store, workspace_scanner};
-use crate::services::{docs_fs, project_open};
+use crate::domain::repo_index::{FileId, Symbol};
+use crate::infra::{embedding_credentials_store, embedding_providers, project_store, workspace_scanner};
+use crate::services::chunk_builder::ChunkIndex;
+use crate::services::chunk_text::resolve_text;
+use crate::services::repo_index::RepositoryIndex;
+use crate::services::{docs_fs, embedding_config, project_open};
+
+const DEFAULT_TOP_K: usize = 10;
+const MAX_TOP_K: usize = 50;
+/// Cap on how many characters of matched text land in a `ToolMatch.snippet`
+/// — keeps a large chunk's (up to 16KB) full text from blowing up the
+/// response payload.
+const SNIPPET_MAX_CHARS: usize = 500;
+
+/// The embedding/chunk/repo-index state `SemanticSearch` needs to reach —
+/// `execute_tool` is otherwise a pure function with no access to
+/// Tauri-managed state. Mirrors exactly what
+/// `commands::embeddings::embedding_sync` already receives as
+/// `State<'_, Arc<T>>` params; `commands::ai_tools::ai_execute_tool` clones
+/// each into this struct before calling `execute_tool`.
+pub struct EmbeddingDeps {
+    pub repo_index: Arc<RepositoryIndex>,
+    pub chunk_index: Arc<ChunkIndex>,
+    pub embedding_index: Arc<EmbeddingIndexSlot>,
+    pub index_store: Arc<IndexStoreSlot>,
+    pub embedding_provider: Arc<EmbeddingProviderSlot>,
+    pub sync_guard: Arc<EmbeddingSyncGuard>,
+}
+
+#[cfg(test)]
+impl EmbeddingDeps {
+    /// Fresh, empty instances of every slot — for `ReadFile`/`ListFiles`
+    /// tests (which never touch these) and as a base for `SemanticSearch`
+    /// tests that need to populate specific state.
+    pub fn empty() -> Self {
+        Self {
+            repo_index: Arc::new(RepositoryIndex::new()),
+            chunk_index: Arc::new(ChunkIndex::new()),
+            embedding_index: Arc::new(EmbeddingIndexSlot::new(None)),
+            index_store: Arc::new(IndexStoreSlot::new(None)),
+            embedding_provider: Arc::new(EmbeddingProviderSlot::new(None)),
+            sync_guard: Arc::new(EmbeddingSyncGuard::new(())),
+        }
+    }
+}
 
 /// Single entry point for the harness: one allowlist check (via
 /// `scope.allows`), one place to serialize a call/result at the LLM
 /// boundary (`ToolCall`/`ToolResult` both derive `serde`), and — later —
 /// one place to log every tool invocation (not wired up yet).
-pub fn execute_tool(scope: &ToolScope, call: ToolCall) -> Result<ToolResult, ToolError> {
+pub fn execute_tool(
+    scope: &ToolScope,
+    call: ToolCall,
+    deps: &EmbeddingDeps,
+) -> Result<ToolResult, ToolError> {
     if !scope.allows(call.name()) {
         return Err(ToolError::NotAllowed(call.name()));
     }
     match call {
         ToolCall::ReadFile(args) => read_file(scope, args).map(ToolResult::File),
         ToolCall::ListFiles(args) => list_files(scope, args).map(ToolResult::FileList),
+        ToolCall::SemanticSearch(args) => {
+            semantic_search(scope, args, deps).map(ToolResult::SemanticSearchResults)
+        }
     }
 }
 
@@ -160,6 +217,263 @@ fn list_full_repo(
         .collect()
 }
 
+/// Cascade entry point: an exact symbol-name hit (cheapest, always tried)
+/// is prepended to whichever of the semantic/lexical tiers fills the
+/// remaining `top_k` budget, chosen by `is_semantic_ready`.
+fn semantic_search(
+    scope: &ToolScope,
+    args: SemanticSearchArgs,
+    deps: &EmbeddingDeps,
+) -> Result<Vec<ToolMatch>, ToolError> {
+    let top_k = args.top_k.unwrap_or(DEFAULT_TOP_K).clamp(1, MAX_TOP_K);
+
+    let mut results = symbol_matches(&deps.repo_index, &scope.root, &args.query, top_k);
+
+    let remaining = top_k.saturating_sub(results.len());
+    if remaining == 0 {
+        return Ok(results);
+    }
+
+    if is_semantic_ready(deps) {
+        results.extend(semantic_matches(scope, deps, &args.query, remaining)?);
+    } else {
+        results.extend(lexical_matches(
+            &deps.chunk_index,
+            &scope.root,
+            &args.query,
+            remaining,
+        ));
+    }
+    Ok(results)
+}
+
+/// Mirrors `commands::embeddings::embedding_index_status`'s readiness check
+/// exactly (`resolve_index_paths` -> `attach_index_store` -> stale check ->
+/// `attach_embedding_index(allow_repair: false)` -> `embedded_count > 0`),
+/// plus a `try_lock` peek at `EmbeddingSyncGuard` for "a sync is actively
+/// running right now". The guard is never held through this check or the
+/// search that follows — its `try_lock` guard value is dropped immediately
+/// (never bound to a variable), matching `embedding_index_status`'s own
+/// precedent of never acquiring this guard at all for a read. Any failure
+/// along this sequence (poisoned lock, no project open, a transient
+/// store-open error) degrades to "not ready" rather than propagating —
+/// consistent with the whole feature being a graceful cascade, not a
+/// pipeline that should hard-fail just because the fast path had a hiccup.
+fn is_semantic_ready(deps: &EmbeddingDeps) -> bool {
+    if deps.sync_guard.try_lock().is_err() {
+        return false;
+    }
+
+    let Ok(Some(project)) = project_open::get_project() else {
+        return false;
+    };
+    let Ok((index_root, storage_dir)) = resolve_index_paths(&project) else {
+        return false;
+    };
+    let Ok((store, stale)) =
+        attach_index_store(&deps.chunk_index, &deps.index_store, &storage_dir, &index_root)
+    else {
+        return false;
+    };
+    if stale {
+        return false;
+    }
+
+    let Ok(config) = embedding_config::load_embedding_config() else {
+        return false;
+    };
+    let dimensions = embedding_providers::expected_dimensions(&config);
+    if attach_embedding_index(&deps.embedding_index, &store, &index_root, dimensions, false).is_err()
+    {
+        return false;
+    }
+
+    let Ok(slot) = deps.embedding_index.lock() else {
+        return false;
+    };
+    slot.as_ref().is_some_and(|(_, _, index)| index.len() > 0)
+}
+
+/// Embeds `query`, searches the resident `EmbeddingIndex`, and resolves
+/// each hit's chunk text. Independently re-derives `index_root`/attaches
+/// the store/index rather than reusing `is_semantic_ready`'s work — cheap
+/// and idempotent (each attach short-circuits when already current),
+/// matching how `embedding_sync`/`embedding_index_status` each separately
+/// re-resolve this instead of sharing state across calls.
+fn semantic_matches(
+    scope: &ToolScope,
+    deps: &EmbeddingDeps,
+    query: &str,
+    top_k: usize,
+) -> Result<Vec<ToolMatch>, ToolError> {
+    let project = project_open::get_project()
+        .map_err(|e| ToolError::SemanticSearch(e.to_string()))?
+        .ok_or_else(|| ToolError::SemanticSearch("no project is open".to_string()))?;
+    let (index_root, storage_dir) =
+        resolve_index_paths(&project).map_err(ToolError::SemanticSearch)?;
+    let (store, _stale) = attach_index_store(
+        &deps.chunk_index,
+        &deps.index_store,
+        &storage_dir,
+        &index_root,
+    )
+    .map_err(ToolError::SemanticSearch)?;
+
+    let config = embedding_config::load_embedding_config()
+        .map_err(|e| ToolError::SemanticSearch(e.to_string()))?;
+    let dimensions = embedding_providers::expected_dimensions(&config);
+    attach_embedding_index(&deps.embedding_index, &store, &index_root, dimensions, false)
+        .map_err(ToolError::SemanticSearch)?;
+
+    let api_key = embedding_credentials_store::get_api_key();
+    let provider = ensure_provider(&deps.embedding_provider, &config, api_key)
+        .map_err(ToolError::SemanticSearch)?;
+
+    let query_embedding = provider
+        .embed(&[query])?
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            ToolError::SemanticSearch("embedding provider returned no vector".to_string())
+        })?;
+
+    let hits = {
+        let slot = deps.embedding_index.lock().map_err(|_| {
+            ToolError::SemanticSearch("embedding index lock poisoned".to_string())
+        })?;
+        let Some((_, _, index)) = slot.as_ref() else {
+            return Ok(Vec::new());
+        };
+        index.search(&query_embedding, top_k)?
+    };
+
+    let mut out = Vec::with_capacity(hits.len());
+    for (chunk_id, distance) in hits {
+        let Some(metadata) = deps.chunk_index.get(&chunk_id) else {
+            continue;
+        };
+        let Ok(text) = resolve_text(&scope.root, &metadata) else {
+            continue;
+        };
+        out.push(ToolMatch {
+            path: metadata.file_id.0,
+            snippet: truncate_snippet(&text),
+            // `EmbeddingIndex::search` returns cosine distance (lower is
+            // closer) — flip to a "higher is better" similarity score.
+            score: 1.0 - distance,
+            start_byte: metadata.start_byte,
+            end_byte: metadata.end_byte,
+            qualified_name: metadata.qualified_name,
+            source: MatchSource::Semantic,
+        });
+    }
+    Ok(out)
+}
+
+/// No-embeddings fallback: scans every chunk's resolved text for a
+/// case-insensitive substring match, ranked by occurrence count (a weak
+/// proxy score — not comparable to the semantic tier's cosine similarity).
+fn lexical_matches(
+    chunk_index: &ChunkIndex,
+    repo_root: &Path,
+    query: &str,
+    top_k: usize,
+) -> Vec<ToolMatch> {
+    let needle = query.to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    let mut scored: Vec<(usize, ChunkMetadata, String)> = Vec::new();
+    for metadata in chunk_index.all() {
+        let Ok(text) = resolve_text(repo_root, &metadata) else {
+            continue;
+        };
+        let count = text.to_lowercase().matches(&needle).count();
+        if count > 0 {
+            scored.push((count, metadata, text));
+        }
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.truncate(top_k);
+
+    scored
+        .into_iter()
+        .map(|(count, metadata, text)| ToolMatch {
+            path: metadata.file_id.0,
+            snippet: truncate_snippet(&text),
+            score: count as f32,
+            start_byte: metadata.start_byte,
+            end_byte: metadata.end_byte,
+            qualified_name: metadata.qualified_name,
+            source: MatchSource::Lexical,
+        })
+        .collect()
+}
+
+/// Cheapest tier: an exact (case-insensitive) symbol-name match, no disk
+/// I/O beyond a best-effort snippet read. Always tried first, regardless
+/// of whether the embedding index is ready.
+fn symbol_matches(
+    repo_index: &RepositoryIndex,
+    scope_root: &Path,
+    query: &str,
+    top_k: usize,
+) -> Vec<ToolMatch> {
+    repo_index
+        .find_symbol(query)
+        .into_iter()
+        .take(top_k)
+        .filter_map(|(file_id, symbol)| {
+            let all_symbols = repo_index.get(&file_id)?.symbols;
+            let qualified_name =
+                qualified_name_for(&symbol, &all_symbols).or_else(|| Some(symbol.name.clone()));
+            let snippet = read_symbol_snippet(scope_root, &file_id, &symbol).unwrap_or_default();
+            Some(ToolMatch {
+                path: file_id.0,
+                snippet,
+                score: 1.0,
+                start_byte: symbol.start_byte,
+                end_byte: symbol.end_byte,
+                qualified_name,
+                source: MatchSource::Symbol,
+            })
+        })
+        .collect()
+}
+
+/// Best-effort slice of `[symbol.start_byte..symbol.end_byte)` off whatever
+/// is on disk right now. Unlike `chunk_text::resolve_text`, there's no
+/// per-symbol content hash to check staleness against (`Symbol` carries no
+/// hash, only `IndexedFile.metadata.hash` does, at the whole-file level) —
+/// this simply returns `None` (dropping the snippet, not the whole match)
+/// if the byte range is no longer valid for the file's current content.
+fn read_symbol_snippet(scope_root: &Path, file_id: &FileId, symbol: &Symbol) -> Option<String> {
+    let path = scope_root.join(&file_id.0);
+    let content = fs::read_to_string(&path).ok()?;
+    let start = symbol.start_byte as usize;
+    let end = symbol.end_byte as usize;
+    if end > content.len()
+        || start > end
+        || !content.is_char_boundary(start)
+        || !content.is_char_boundary(end)
+    {
+        return None;
+    }
+    Some(truncate_snippet(&content[start..end]))
+}
+
+fn truncate_snippet(text: &str) -> String {
+    if text.len() <= SNIPPET_MAX_CHARS {
+        return text.to_string();
+    }
+    let mut end = SNIPPET_MAX_CHARS;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +518,7 @@ mod tests {
             ToolCall::ReadFile(ReadFileArgs {
                 path: path.to_string(),
             }),
+            &EmbeddingDeps::empty(),
         )? {
             ToolResult::File(content) => Ok(content),
             other => panic!("expected ToolResult::File, got {other:?}"),
@@ -216,6 +531,7 @@ mod tests {
             ToolCall::ListFiles(ListFilesArgs {
                 path: path.map(str::to_string),
             }),
+            &EmbeddingDeps::empty(),
         )? {
             ToolResult::FileList(entries) => Ok(entries),
             other => panic!("expected ToolResult::FileList, got {other:?}"),
@@ -339,6 +655,27 @@ mod tests {
     }
 
     #[test]
+    fn execute_tool_denies_semantic_search_missing_from_a_customized_allowlist() {
+        let (repo, docs) = fixture_repo();
+        let only_list: HashSet<ToolName> =
+            [ToolName::ListFiles, ToolName::ReadFile].into_iter().collect();
+        let scope = ToolScope::new(&repo, &docs, AiAccessMode::DocsOnly, only_list);
+
+        let err = execute_tool(
+            &scope,
+            ToolCall::SemanticSearch(SemanticSearchArgs {
+                query: "intro".to_string(),
+                top_k: None,
+            }),
+            &EmbeddingDeps::empty(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, ToolError::NotAllowed(ToolName::SemanticSearch)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn scope_for_config_defaults_to_both_tools_when_unset() {
         let (repo, docs) = fixture_repo();
         let config = ProjectConfig::new(".");
@@ -379,5 +716,66 @@ mod tests {
         let result = ToolResult::File("= Intro\n".to_string());
         let json = serde_json::to_string(&result).unwrap();
         assert_eq!(json, r#"{"tool":"file","result":"= Intro\n"}"#);
+    }
+
+    #[test]
+    fn symbol_matches_finds_an_exact_case_insensitive_name() {
+        let (repo, _docs) = fixture_repo();
+        fs::write(
+            repo.join("src/UserService.java"),
+            "public class UserService {\n    public String getName() { return null; }\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+
+        let matches = symbol_matches(&repo_index, &repo, "userservice", 10);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].source, MatchSource::Symbol);
+        assert!(matches[0].path.ends_with("UserService.java"));
+        assert_eq!(matches[0].score, 1.0);
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_is_empty_for_an_unknown_name() {
+        let (repo, _docs) = fixture_repo();
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+
+        assert!(symbol_matches(&repo_index, &repo, "NoSuchSymbol", 10).is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn lexical_matches_finds_a_case_insensitive_substring() {
+        use crate::domain::chunk_index::ChunkBuildOptions;
+        use crate::services::chunk_builder::ChunkBuilder;
+
+        let (repo, _docs) = fixture_repo();
+        fs::write(repo.join("docs/needle.adoc"), "= Guide\n\nfind the NEEDLE here\n").unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let chunk_index = ChunkIndex::new();
+        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
+
+        let matches = lexical_matches(&chunk_index, &repo, "needle", 10);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].source, MatchSource::Lexical);
+        assert!(matches[0].snippet.to_lowercase().contains("needle"));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn lexical_matches_is_empty_for_an_empty_query() {
+        let (repo, _docs) = fixture_repo();
+        let chunk_index = ChunkIndex::new();
+        assert!(lexical_matches(&chunk_index, &repo, "", 10).is_empty());
+        fs::remove_dir_all(&repo).ok();
     }
 }

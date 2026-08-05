@@ -109,7 +109,7 @@ pub type IndexStoreSlot = Mutex<Option<(PathBuf, Arc<IndexStore>, bool)>>;
 /// (`AppSettings.embedding`), not per-repo.
 pub type EmbeddingProviderSlot = Mutex<Option<(EmbeddingProviderConfig, Option<String>, Arc<dyn EmbeddingProvider>)>>;
 
-fn ensure_provider(
+pub(crate) fn ensure_provider(
     slot: &EmbeddingProviderSlot,
     config: &EmbeddingProviderConfig,
     api_key: Option<String>,
@@ -218,7 +218,7 @@ pub fn embedding_cancel_model_download(state: State<'_, Arc<DownloadState>>) {
 ///   convention for no reason. The `{mode}` subfolder keeps `DocsOnly` and
 ///   `FullRepo` persisted separately (same reason `index_root` differs
 ///   between them — see `index_store_ensure` module docs).
-fn resolve_index_paths(project: &OpenedProject) -> Result<(PathBuf, PathBuf), String> {
+pub(crate) fn resolve_index_paths(project: &OpenedProject) -> Result<(PathBuf, PathBuf), String> {
     let config = project_store::load(&project.root)
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| ProjectConfig::new(project.docs_root.clone()));
@@ -313,7 +313,7 @@ fn direct_dependencies(
 /// describe an incompatible chunking algorithm or a different
 /// `index_root` — the caller decides what to do with a stale attach
 /// (`embedding_sync` repairs it; `embedding_index_status` just reports it).
-fn attach_index_store(
+pub(crate) fn attach_index_store(
     chunk_index: &ChunkIndex,
     index_store: &IndexStoreSlot,
     storage_dir: &Path,
@@ -348,7 +348,7 @@ fn attach_index_store(
 /// `false` (from the read-only `embedding_index_status`) just returns a
 /// blank in-memory index without touching disk, leaving whatever's
 /// persisted for that other dimension alone.
-fn attach_embedding_index(
+pub(crate) fn attach_embedding_index(
     embedding_index: &EmbeddingIndexSlot,
     store: &IndexStore,
     index_root: &Path,

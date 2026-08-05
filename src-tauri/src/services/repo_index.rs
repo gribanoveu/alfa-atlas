@@ -12,7 +12,8 @@ use dashmap::DashMap;
 
 use crate::domain::paths;
 use crate::domain::repo_index::{
-    FileId, FileMetadata, IndexedFile, Language, LanguageIndexer, RepoIndexError, INDEX_VERSION,
+    FileId, FileMetadata, IndexedFile, Language, LanguageIndexer, RepoIndexError, Symbol,
+    INDEX_VERSION,
 };
 use crate::infra::language_indexers;
 use crate::infra::workspace_scanner;
@@ -129,6 +130,28 @@ impl RepositoryIndex {
             .iter()
             .filter(|entry| entry.value().metadata.language == language)
             .map(|entry| entry.value().clone())
+            .collect()
+    }
+
+    /// Every symbol named exactly `name` (case-insensitive — every
+    /// supported language's identifiers are ASCII, so
+    /// `eq_ignore_ascii_case` is sufficient), across every indexed file —
+    /// the cheapest tier of `SemanticSearch`'s cascade, for "where is X
+    /// defined" queries. Returns a `Vec` (not a single result) since the
+    /// same name can legitimately appear in more than one file.
+    pub fn find_symbol(&self, name: &str) -> Vec<(FileId, Symbol)> {
+        self.files
+            .iter()
+            .flat_map(|entry| {
+                let file_id = entry.key().clone();
+                entry
+                    .value()
+                    .symbols
+                    .iter()
+                    .filter(|s| s.name.eq_ignore_ascii_case(name))
+                    .map(|s| (file_id.clone(), s.clone()))
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 

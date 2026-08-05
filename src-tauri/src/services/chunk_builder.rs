@@ -191,6 +191,14 @@ impl ChunkIndex {
         self.chunks.get(id).map(|entry| entry.value().clone())
     }
 
+    /// Every chunk's metadata, across every file — what a lexical (no
+    /// embeddings) search fallback scans. No secondary index by content;
+    /// this is a full scan, same cost class as `chunk_ids()` just with the
+    /// full `ChunkMetadata` instead of only the key.
+    pub fn all(&self) -> Vec<ChunkMetadata> {
+        self.chunks.iter().map(|entry| entry.value().clone()).collect()
+    }
+
     /// `get` plus an on-demand read of the chunk's text from `repo_root`.
     /// `None` if `id` isn't in this index; `Some(Err(_))` if the metadata
     /// exists but the text couldn't be resolved (file missing, or changed

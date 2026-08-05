@@ -24,6 +24,7 @@ pub enum AiAccessMode {
 pub enum ToolName {
     ListFiles,
     ReadFile,
+    SemanticSearch,
 }
 
 /// Tools available when a project hasn't customized its allowlist
@@ -35,7 +36,7 @@ pub enum ToolName {
 /// way `AiAccessMode::default()` chooses the safer `DocsOnly` rather than
 /// silently granting repo-wide access.
 pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
-    [ToolName::ListFiles, ToolName::ReadFile]
+    [ToolName::ListFiles, ToolName::ReadFile, ToolName::SemanticSearch]
         .into_iter()
         .collect()
 }
