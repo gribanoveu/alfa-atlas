@@ -67,6 +67,20 @@
   flex-direction: column;
 }
 
+/* Non-blocking notice while the index is still building — the assistant
+   itself isn't gated on this (see AssistantPanel.tsx's doc comment), so
+   this is informational, not a replacement for the old blocking "sync
+   first" screen. */
+.assistant-chat-index-note {
+  flex: none;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
 .assistant-chat-messages {
   flex: 1;
   min-height: 0;

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { FileText, FolderGit2, Send, Settings2, Sparkles } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
@@ -20,11 +21,23 @@ type AssistantPanelProps = {
  * checklist (the previous design) just ate the space chat needs. Below the
  * access-mode toggle (the one control that's genuinely specific to talking
  * to the assistant, not to indexing) this renders exactly one of two
- * states: a single compact setup prompt pointing at whatever's missing, or
- * — once ready — the chat surface. No LLM is wired up yet (see
- * AI_HARNESS.md's "not built yet" section), so the chat state today is a
- * static, disabled shell: it establishes the panel's final layout now so
- * wiring in real messages later doesn't require another restructure.
+ * states: a compact setup prompt (only when the embedding provider itself
+ * isn't configured — there's genuinely nothing to fall back to without
+ * one), or the chat surface.
+ *
+ * The index being incomplete is deliberately *not* a second gate: `ReadFile`/
+ * `ListFiles` and the lexical/symbol tiers of `services::ai_tools::
+ * semantic_search` all work with zero embeddings, and `embedding_sync`
+ * already prioritizes documentation and fills in the rest in the
+ * background — so the assistant is meant to get smarter as indexing
+ * progresses, not sit blocked behind it. Indexing itself starts
+ * automatically (see the effect below) instead of waiting on a manual
+ * "Синхронизировать" click.
+ *
+ * No LLM is wired up yet (see AI_HARNESS.md's "not built yet" section), so
+ * the chat input stays a static, disabled shell regardless of index
+ * readiness — this establishes the panel's final layout now so wiring in
+ * real messages later doesn't require another restructure.
  */
 export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
   const { providerConfigured, indexStatus, lastSync, syncProgress, busy, sync } =
@@ -44,7 +57,19 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
   // right after a sync finishes, until the next `embedding_index_status`
   // refetch.
   const indexReady = Boolean(indexStatus?.synced) || lastSync !== null;
-  const ready = providerConfigured && indexReady;
+
+  // Fires once per mount rather than requiring the user to click
+  // "Синхронизировать" — `embedding_sync`'s own hash comparison makes a
+  // redundant call cheap, but there's no reason to re-trigger on every
+  // render, and `indexReady` flips true as soon as *anything* is embedded
+  // (not full completeness), so in practice this only ever does real work
+  // the first time a project has never been synced.
+  const autoSyncTriggered = useRef(false);
+  useEffect(() => {
+    if (!providerConfigured || indexReady || busy || autoSyncTriggered.current) return;
+    autoSyncTriggered.current = true;
+    void sync();
+  }, [providerConfigured, indexReady, busy, sync]);
 
   return (
     <div className="assistant-panel">
@@ -67,14 +92,21 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
         </div>
         <p className="assistant-access-hint">
           {accessMode === "fullRepo"
-            ? "AI-ассистент видит весь репозиторий, включая исходный код."
-            : "AI-ассистент видит только папку документации."}
+            ? "Ассистент видит весь репозиторий, включая исходный код."
+            : "Ассистент видит только папку документации."}
         </p>
       </section>
 
       <div className="assistant-chat">
-        {ready ? (
+        {providerConfigured ? (
           <>
+            {!indexReady ? (
+              <p className="assistant-chat-index-note">
+                {busy && syncProgress
+                  ? `Строится индекс документации: ${syncProgress.current}/${syncProgress.total}…`
+                  : "Индекс документации ещё строится — ответы будут менее точными, пока индексация не завершится."}
+              </p>
+            ) : null}
             <div className="assistant-chat-messages">
               <div className="assistant-chat-placeholder">
                 <Sparkles size={22} strokeWidth={1.5} aria-hidden />
@@ -99,32 +131,13 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
         ) : (
           <div className="assistant-setup-prompt">
             <Settings2 size={22} strokeWidth={1.5} aria-hidden />
-            <p className="assistant-setup-title">
-              {!providerConfigured ? "Провайдер эмбеддингов не настроен" : "Индекс ещё не синхронизирован"}
-            </p>
+            <p className="assistant-setup-title">Провайдер эмбеддингов не настроен</p>
             <p className="assistant-setup-desc">
-              {!providerConfigured
-                ? "Чтобы включить ассистента, настройте провайдера эмбеддингов."
-                : "Чтобы ассистент мог отвечать по репозиторию, синхронизируйте индекс — документация индексируется в первую очередь."}
+              Чтобы включить ассистента, настройте провайдера эмбеддингов.
             </p>
-            {!providerConfigured ? (
-              <button type="button" className="assistant-btn primary" onClick={onOpenSettings}>
-                Открыть настройки
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="assistant-btn primary"
-                disabled={busy}
-                onClick={() => void sync()}
-              >
-                {busy
-                  ? syncProgress
-                    ? `${syncProgress.current}/${syncProgress.total}`
-                    : "Синхронизация…"
-                  : "Синхронизировать"}
-              </button>
-            )}
+            <button type="button" className="assistant-btn primary" onClick={onOpenSettings}>
+              Открыть настройки
+            </button>
           </div>
         )}
       </div>
