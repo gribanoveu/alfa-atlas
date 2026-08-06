@@ -4,15 +4,12 @@
   display: flex;
   flex-direction: column;
   background: var(--bg-0);
-  overflow-y: auto;
 }
 
-.assistant-panel-section {
+.assistant-panel-access {
+  flex: none;
   padding: 10px;
-}
-
-.assistant-panel-section + .assistant-panel-section {
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
 }
 
 .assistant-access-toggle {
@@ -59,79 +56,119 @@
   line-height: 1.4;
 }
 
-.assistant-panel-section-title {
-  font-size: var(--font-ui-sm);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-2);
-  margin-bottom: 8px;
-}
-
-.assistant-checklist {
+/* Chat surface — fills the rest of the panel below the access toggle,
+   regardless of which of the two states (setup prompt / chat shell) below
+   is showing, so the panel's overall layout doesn't jump when readiness
+   changes. */
+.assistant-chat {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 
-.assistant-checklist-item {
-  display: flex;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-1);
-}
-
-.assistant-checklist-item.is-completed {
-  opacity: 0.6;
-}
-
-.assistant-checklist-icon {
-  flex: none;
-  width: 24px;
-  height: 24px;
+.assistant-chat-messages {
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
-  background: var(--bg-2);
-  color: var(--accent);
+  overflow-y: auto;
+  padding: 16px;
 }
 
-.assistant-checklist-item.is-completed .assistant-checklist-icon {
-  color: var(--text-2);
-}
-
-.assistant-checklist-body {
-  flex: 1;
-  min-width: 0;
+.assistant-chat-placeholder {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  text-align: center;
+  color: var(--text-2);
 }
 
-.assistant-checklist-title {
+.assistant-chat-placeholder-title {
   font-size: var(--font-ui);
   font-weight: 600;
-  color: var(--text-0);
+  color: var(--text-1);
 }
 
-.assistant-checklist-desc {
+.assistant-chat-placeholder-desc {
   font-size: var(--font-ui-sm);
-  color: var(--text-2);
   line-height: 1.4;
 }
 
-.assistant-checklist-actions {
+.assistant-chat-input-row {
+  flex: none;
   display: flex;
   gap: 6px;
-  margin-top: 4px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
 }
 
-.assistant-checklist-btn {
+.assistant-chat-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text-1);
   font-size: var(--font-ui-sm);
-  padding: 3px 9px;
+}
+
+.assistant-chat-input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.assistant-chat-send {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-2);
+}
+
+.assistant-chat-send:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Setup prompt — the single compact "here's what's missing" state,
+   replacing the old multi-card checklist (that setup flow now lives fully
+   in Settings → Эмбеддинги; this is just a pointer at it). */
+.assistant-setup-prompt {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  padding: 16px;
+  text-align: center;
+  color: var(--text-2);
+}
+
+.assistant-setup-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.assistant-setup-desc {
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-btn {
+  font-size: var(--font-ui-sm);
+  padding: 5px 12px;
   border-radius: 4px;
   border: 1px solid var(--border);
   background: var(--bg-2);
@@ -139,32 +176,22 @@
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
-.assistant-checklist-btn:hover:not(:disabled) {
+.assistant-btn:hover:not(:disabled) {
   color: var(--text-0);
   border-color: var(--text-2);
 }
 
-.assistant-checklist-btn:disabled {
+.assistant-btn:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.assistant-checklist-btn.primary {
+.assistant-btn.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
 }
 
-.assistant-checklist-btn.primary:hover:not(:disabled) {
+.assistant-btn.primary:hover:not(:disabled) {
   filter: brightness(1.08);
-}
-
-.assistant-checklist-done {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 2px;
-  font-size: var(--font-ui-sm);
-  font-weight: 600;
-  color: var(--green);
 }

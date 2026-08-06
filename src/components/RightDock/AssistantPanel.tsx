@@ -1,4 +1,4 @@
-import { Check, Download, FileText, FolderGit2, RefreshCw, Settings2 } from "lucide-react";
+import { FileText, FolderGit2, Send, Settings2, Sparkles } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
@@ -14,36 +14,21 @@ type AssistantPanelProps = {
   onOpenSettings: () => void;
 };
 
-type ChecklistItem = {
-  id: string;
-  Icon: LucideIcon;
-  title: string;
-  description: string;
-  completed: boolean;
-  actionLabel?: string;
-  onAction?: () => void;
-  actionDisabled?: boolean;
-  secondaryLabel?: string;
-  onSecondaryAction?: () => void;
-  /** For steps that stay repeatable after their first success (e.g. "sync
-   * index" — docs keep changing) — keeps the action button visible instead
-   * of permanently replacing it with the "Готово" badge once `completed`. */
-  alwaysShowAction?: boolean;
-};
-
+/** This panel is the assistant's actual interaction surface (chat), not a
+ * setup wizard — provider/model/index setup already has a full UI in
+ * Settings → Эмбеддинги (`EmbeddingsTab`); duplicating it here as a
+ * checklist (the previous design) just ate the space chat needs. Below the
+ * access-mode toggle (the one control that's genuinely specific to talking
+ * to the assistant, not to indexing) this renders exactly one of two
+ * states: a single compact setup prompt pointing at whatever's missing, or
+ * — once ready — the chat surface. No LLM is wired up yet (see
+ * AI_HARNESS.md's "not built yet" section), so the chat state today is a
+ * static, disabled shell: it establishes the panel's final layout now so
+ * wiring in real messages later doesn't require another restructure.
+ */
 export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
-  const {
-    config,
-    modelStatus,
-    providerConfigured,
-    lastSync,
-    indexStatus,
-    syncProgress,
-    busy,
-    downloadModel,
-    cancelDownload,
-    sync,
-  } = useEmbeddingSetup();
+  const { providerConfigured, indexStatus, lastSync, syncProgress, busy, sync } =
+    useEmbeddingSetup();
   const { mode: accessMode, busy: accessModeBusy, setMode: setAccessMode } = useAiAccessMode();
 
   // One index now covers the whole repository regardless of `accessMode`
@@ -54,86 +39,16 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
     void setAccessMode(value);
   };
 
-  const items: ChecklistItem[] = [];
-
-  items.push({
-    id: "provider",
-    Icon: Settings2,
-    title: "Настроить провайдера",
-    description:
-      config?.kind === "remote"
-        ? "Внешний API — укажите base URL, модель и API ключ в настройках."
-        : "Локальная модель BGE-M3 — выполняется на устройстве.",
-    completed: providerConfigured,
-    actionLabel: "Открыть настройки",
-    onAction: onOpenSettings,
-  });
-
-  if (config?.kind === "local") {
-    items.push({
-      id: "model",
-      Icon: Download,
-      title: "Загрузить модель",
-      description:
-        modelStatus.status === "downloading"
-          ? `Загрузка… ${Math.round(modelStatus.progress * 100)}%`
-          : modelStatus.status === "error"
-            ? `Ошибка: ${modelStatus.message}`
-            : "BGE-M3, int8 ONNX, ~570 МБ. Загружается один раз и кэшируется локально.",
-      completed: modelStatus.status === "ready",
-      actionLabel: modelStatus.status === "downloading" ? "Загрузка…" : "Скачать",
-      onAction: () => void downloadModel(),
-      actionDisabled: busy || modelStatus.status === "downloading",
-      secondaryLabel: modelStatus.status === "downloading" ? "Отменить" : undefined,
-      onSecondaryAction:
-        modelStatus.status === "downloading" ? () => void cancelDownload() : undefined,
-    });
-  }
-
-  const syncPhaseLabel =
-    syncProgress?.phase === "chunking" ? "Индексация файлов" : "Расчёт эмбеддингов";
-  // Non-blocking: a fresh project's background backlog catch-up (see
-  // `backgroundSyncProgress`/`indexStatus.backgroundPending`) never disables
-  // the sync action or replaces the description above — it's appended as an
-  // extra note, same "show partial progress without gating anything on 100%"
-  // approach `useWorkspaceIndex`'s status bar already uses.
-  const backgroundNote =
-    indexStatus && indexStatus.backgroundPending > 0
-      ? ` Индексация остальной части репозитория продолжается в фоне (осталось файлов: ${indexStatus.backgroundPending}).`
-      : "";
-
-  items.push({
-    id: "sync",
-    Icon: RefreshCw,
-    title: "Синхронизировать индекс",
-    description:
-      busy && syncProgress
-        ? `${syncPhaseLabel}: ${syncProgress.current}/${syncProgress.total}`
-        : lastSync
-          ? `Добавлено ${lastSync.embedded}, без изменений ${lastSync.skippedUnchanged}, удалено ${lastSync.removed}.${backgroundNote}`
-          : indexStatus?.stale
-            ? "Индекс устарел (обновилось приложение) — требуется повторная синхронизация."
-            : indexStatus?.synced
-              ? `Проиндексировано чанков: ${indexStatus.embeddedCount}.${backgroundNote}`
-              : "Построить/обновить эмбеддинги чанков репозитория для текущего проекта — документация синхронизируется в первую очередь.",
-    // `indexStatus` reflects the backend's persisted/resident index, so this
-    // stays accurate across a remount — `lastSync` alone (this session's
-    // last sync() call) would reset to "not done" every time the panel
-    // unmounts even though the index itself is still fully built.
-    completed: lastSync !== null || Boolean(indexStatus?.synced),
-    // Unlike "configure provider"/"download model" (genuinely one-time),
-    // syncing stays a repeatable action — docs keep changing — so the
-    // button must not disappear behind "Готово" after the first success.
-    alwaysShowAction: true,
-    actionLabel: busy ? (syncProgress ? `${syncProgress.current}/${syncProgress.total}` : "Синхронизация…") : "Синхронизировать",
-    onAction: () => void sync(),
-    actionDisabled: busy || !providerConfigured,
-  });
+  // `lastSync` (this session's own sync) counts as ready immediately, same
+  // as before — `indexStatus.synced` alone would lag by one round trip
+  // right after a sync finishes, until the next `embedding_index_status`
+  // refetch.
+  const indexReady = Boolean(indexStatus?.synced) || lastSync !== null;
+  const ready = providerConfigured && indexReady;
 
   return (
     <div className="assistant-panel">
-      <section className="assistant-panel-section">
-        <h3 className="assistant-panel-section-title">Доступ</h3>
+      <section className="assistant-panel-access">
         <div className="assistant-access-toggle" role="radiogroup" aria-label="Область доступа AI">
           {ACCESS_MODE_OPTIONS.map((option) => (
             <button
@@ -157,51 +72,62 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
         </p>
       </section>
 
-      <section className="assistant-panel-section">
-        <h3 className="assistant-panel-section-title">Настройка эмбеддингов</h3>
-        <div className="assistant-checklist">
-          {items.map((item) => (
-            <div
-              key={item.id}
-              className={`assistant-checklist-item ${item.completed ? "is-completed" : ""}`}
-            >
-              <div className="assistant-checklist-icon">
-                <item.Icon size={14} strokeWidth={1.75} aria-hidden />
-              </div>
-              <div className="assistant-checklist-body">
-                <span className="assistant-checklist-title">{item.title}</span>
-                <span className="assistant-checklist-desc">{item.description}</span>
-                {item.completed && !item.alwaysShowAction ? (
-                  <span className="assistant-checklist-done">
-                    <Check size={11} strokeWidth={2} aria-hidden />
-                    Готово
-                  </span>
-                ) : (
-                  <div className="assistant-checklist-actions">
-                    <button
-                      type="button"
-                      className="assistant-checklist-btn primary"
-                      disabled={item.actionDisabled}
-                      onClick={item.onAction}
-                    >
-                      {item.actionLabel}
-                    </button>
-                    {item.secondaryLabel ? (
-                      <button
-                        type="button"
-                        className="assistant-checklist-btn"
-                        onClick={item.onSecondaryAction}
-                      >
-                        {item.secondaryLabel}
-                      </button>
-                    ) : null}
-                  </div>
-                )}
+      <div className="assistant-chat">
+        {ready ? (
+          <>
+            <div className="assistant-chat-messages">
+              <div className="assistant-chat-placeholder">
+                <Sparkles size={22} strokeWidth={1.5} aria-hidden />
+                <p className="assistant-chat-placeholder-title">Ассистент готов</p>
+                <p className="assistant-chat-placeholder-desc">
+                  Общение с ассистентом появится здесь в одном из следующих обновлений.
+                </p>
               </div>
             </div>
-          ))}
-        </div>
-      </section>
+            <div className="assistant-chat-input-row">
+              <input
+                className="assistant-chat-input"
+                type="text"
+                placeholder="Чат скоро будет доступен…"
+                disabled
+              />
+              <button type="button" className="assistant-chat-send" disabled aria-label="Отправить">
+                <Send size={15} strokeWidth={1.75} aria-hidden />
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="assistant-setup-prompt">
+            <Settings2 size={22} strokeWidth={1.5} aria-hidden />
+            <p className="assistant-setup-title">
+              {!providerConfigured ? "Провайдер эмбеддингов не настроен" : "Индекс ещё не синхронизирован"}
+            </p>
+            <p className="assistant-setup-desc">
+              {!providerConfigured
+                ? "Чтобы включить ассистента, настройте провайдера эмбеддингов."
+                : "Чтобы ассистент мог отвечать по репозиторию, синхронизируйте индекс — документация индексируется в первую очередь."}
+            </p>
+            {!providerConfigured ? (
+              <button type="button" className="assistant-btn primary" onClick={onOpenSettings}>
+                Открыть настройки
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="assistant-btn primary"
+                disabled={busy}
+                onClick={() => void sync()}
+              >
+                {busy
+                  ? syncProgress
+                    ? `${syncProgress.current}/${syncProgress.total}`
+                    : "Синхронизация…"
+                  : "Синхронизировать"}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
