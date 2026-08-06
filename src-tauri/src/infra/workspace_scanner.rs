@@ -16,6 +16,11 @@ use crate::domain::workspace_index::WorkspaceIndexError;
 pub struct ScannedFile {
     pub path: PathBuf,
     pub modified: SystemTime,
+    /// Byte length, from the same `std::fs::metadata` call `modified` is
+    /// read from — free to carry along, and what lets a caller cheaply
+    /// pre-filter "definitely unchanged since I last saw it" (mtime+size
+    /// match) before ever reading the file's content.
+    pub size: u64,
 }
 
 /// Walk `root` honoring `.gitignore` and the standard skip-list, returning
@@ -67,7 +72,8 @@ fn walk(root: &Path, filter_supported: bool) -> Result<Vec<ScannedFile>, Workspa
             Err(_) => continue,
         };
         let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        files.push(ScannedFile { path, modified });
+        let size = meta.len();
+        files.push(ScannedFile { path, modified, size });
     }
 
     files.sort_by(|a, b| a.path.cmp(&b.path));

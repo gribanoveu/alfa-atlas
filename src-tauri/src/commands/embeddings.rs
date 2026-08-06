@@ -12,7 +12,7 @@ use crate::domain::embeddings::{
 };
 use crate::domain::paths;
 use crate::domain::project_config::{OpenedProject, ProjectConfig};
-use crate::domain::repo_index::{detect_language, FileId, RepoIndexError, Symbol};
+use crate::domain::repo_index::{detect_language, FileId, FileMetadata, RepoIndexError, Symbol};
 use crate::domain::workspace_index::DocumentId;
 use crate::infra::index_store::IndexStore;
 use crate::infra::{embedding_credentials_store, embedding_providers, project_store};
@@ -403,21 +403,23 @@ pub(crate) fn attach_embedding_index(
     Ok(())
 }
 
-/// Combines `store`'s persisted per-file content hash with its persisted
-/// symbols into the shape `RepositoryIndex::build_reusing_symbols` wants —
-/// what a fresh (e.g. just-restarted) `embedding_sync` call feeds it so a
-/// file whose content hasn't changed since the last sync skips a
-/// tree-sitter/pulldown-cmark re-parse entirely, not just re-embedding.
+/// Combines `store`'s persisted per-file metadata (content hash, size,
+/// mtime, language) with its persisted symbols into the shape
+/// `RepositoryIndex::build_reusing_symbols` wants — what a fresh (e.g.
+/// just-restarted) `embedding_sync` call feeds it so a file whose mtime/size
+/// (cheapest check) or content hash (fallback) still match the last sync
+/// skips a tree-sitter/pulldown-cmark re-parse entirely, not just
+/// re-embedding.
 fn load_persisted_symbols(
     store: &IndexStore,
-) -> Result<HashMap<FileId, (blake3::Hash, Vec<Symbol>)>, String> {
-    let file_hashes = store.load_all_file_hashes().map_err(|e| e.to_string())?;
+) -> Result<HashMap<FileId, (FileMetadata, Vec<Symbol>)>, String> {
+    let files = store.load_all_files().map_err(|e| e.to_string())?;
     let mut symbols_by_file = store.load_all_symbols().map_err(|e| e.to_string())?;
-    Ok(file_hashes
+    Ok(files
         .into_iter()
-        .map(|(file_id, hash)| {
+        .map(|(file_id, metadata)| {
             let symbols = symbols_by_file.remove(&file_id).unwrap_or_default();
-            (file_id, (hash, symbols))
+            (file_id, (metadata, symbols))
         })
         .collect())
 }

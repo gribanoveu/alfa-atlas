@@ -375,21 +375,40 @@ impl IndexStore {
         Ok(out)
     }
 
-    /// Every persisted file's content hash — the other half (alongside
-    /// `load_all_symbols`) `RepositoryIndex::build_reusing_symbols` needs to
-    /// decide "does this file's current content still match what was last
-    /// persisted" without re-parsing it to find out.
-    pub fn load_all_file_hashes(&self) -> Result<HashMap<FileId, blake3::Hash>, IndexStoreError> {
+    /// Every persisted file's full metadata (content hash, size, mtime,
+    /// language) — the other half (alongside `load_all_symbols`)
+    /// `RepositoryIndex::build_reusing_symbols` needs to decide "does this
+    /// file's current content still match what was last persisted" (via
+    /// `hash`), and, more cheaply first, "does it even look touched" (via
+    /// `size_bytes`/`modified_at`) — without re-parsing it to find out.
+    pub fn load_all_files(&self) -> Result<HashMap<FileId, FileMetadata>, IndexStoreError> {
         let conn = self.lock()?;
-        let mut stmt = conn.prepare("SELECT file_id, file_hash FROM files")?;
+        let mut stmt =
+            conn.prepare("SELECT file_id, file_hash, size_bytes, mtime_secs, language FROM files")?;
         let rows = stmt.query_map([], |row| {
             let file_id: String = row.get(0)?;
             let hash_bytes: Vec<u8> = row.get(1)?;
-            Ok((FileId(file_id), hash_bytes))
+            let size_bytes: i64 = row.get(2)?;
+            let mtime_secs: i64 = row.get(3)?;
+            let language = str_to_language(&row.get::<_, String>(4)?).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(4, "language".into(), rusqlite::types::Type::Text)
+            })?;
+            Ok((file_id, hash_bytes, size_bytes, mtime_secs, language))
         })?;
-        rows.map(|r| r.map(|(id, bytes)| (id, hash_from_bytes(&bytes))))
-            .collect::<Result<HashMap<_, _>, _>>()
-            .map_err(IndexStoreError::from)
+
+        let mut out = HashMap::new();
+        for row in rows {
+            let (file_id, hash_bytes, size_bytes, mtime_secs, language) = row?;
+            let metadata = FileMetadata {
+                relative_path: file_id.clone(),
+                size_bytes: size_bytes as u64,
+                modified_at: UNIX_EPOCH + std::time::Duration::from_secs(mtime_secs.max(0) as u64),
+                hash: hash_from_bytes(&hash_bytes),
+                language,
+            };
+            out.insert(FileId(file_id), metadata);
+        }
+        Ok(out)
     }
 }
 
@@ -643,15 +662,18 @@ mod tests {
     }
 
     #[test]
-    fn load_all_file_hashes_reflects_upserted_files() {
+    fn load_all_files_reflects_upserted_files() {
         let dir = fixture_dir();
         let store = IndexStore::open(&dir).unwrap();
 
         let hash = blake3::hash(b"content");
         store.upsert_files(&[sample_file("a.json", hash)]).unwrap();
 
-        let hashes = store.load_all_file_hashes().unwrap();
-        assert_eq!(hashes.get(&FileId("a.json".to_string())), Some(&hash));
+        let files = store.load_all_files().unwrap();
+        let metadata = files.get(&FileId("a.json".to_string())).unwrap();
+        assert_eq!(metadata.hash, hash);
+        assert_eq!(metadata.size_bytes, 10);
+        assert_eq!(metadata.language, Language::Json);
 
         std::fs::remove_dir_all(&dir).ok();
     }

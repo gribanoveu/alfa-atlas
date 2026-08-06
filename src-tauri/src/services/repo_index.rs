@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 
@@ -17,6 +18,17 @@ use crate::domain::repo_index::{
 };
 use crate::infra::language_indexers;
 use crate::infra::workspace_scanner;
+
+/// Compares two `SystemTime`s at whole-second precision — matching what
+/// `infra::index_store::IndexStore` actually persists (`mtime_secs`, an
+/// `i64` seconds column). A live `fs::metadata` read carries sub-second
+/// precision that a value round-tripped through SQLite never does, so
+/// comparing them with plain `==` would fail for practically every
+/// persisted-but-unchanged file.
+fn mtime_secs_eq(a: SystemTime, b: SystemTime) -> bool {
+    let secs = |t: SystemTime| t.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    secs(a) == secs(b)
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct RepoIndexStats {
@@ -70,17 +82,16 @@ impl RepositoryIndex {
     }
 
     /// Same full walk as `build`, but additionally reuses `persisted`'s
-    /// symbols for a file whose current content hash still matches what was
-    /// last persisted (`infra::index_store::IndexStore::load_all_file_hashes`/
-    /// `load_all_symbols`) — skipping a tree-sitter/pulldown-cmark re-parse
-    /// entirely for every unchanged file. `build` itself already gets an
-    /// equivalent, session-local version of this for free (see
-    /// `build_internal`'s `resident` snapshot); this additionally covers a
-    /// cold app restart, when nothing is resident yet.
+    /// file metadata + symbols for a file this project already knew about
+    /// before this call — a cold-start caller populates this from
+    /// `infra::index_store::IndexStore::load_all_files`/`load_all_symbols`.
+    /// `build` itself already gets an equivalent, session-local version of
+    /// this for free (see `build_internal`'s `resident` snapshot); this
+    /// additionally covers a cold app restart, when nothing is resident yet.
     pub fn build_reusing_symbols(
         &self,
         repo_root: &Path,
-        persisted: &HashMap<FileId, (blake3::Hash, Vec<Symbol>)>,
+        persisted: &HashMap<FileId, (FileMetadata, Vec<Symbol>)>,
     ) -> Result<RepoIndexStats, RepoIndexError> {
         self.build_internal(repo_root, Some(persisted))
     }
@@ -88,7 +99,7 @@ impl RepositoryIndex {
     fn build_internal(
         &self,
         repo_root: &Path,
-        persisted: Option<&HashMap<FileId, (blake3::Hash, Vec<Symbol>)>>,
+        persisted: Option<&HashMap<FileId, (FileMetadata, Vec<Symbol>)>>,
     ) -> Result<RepoIndexStats, RepoIndexError> {
         // Snapshot whatever's already resident *before* clearing — a file
         // whose content hasn't changed since this session's own last build
@@ -96,13 +107,13 @@ impl RepositoryIndex {
         // via `persisted` (which only a cold-start caller populates from
         // SQLite). This is what makes a second `build()` call in the same
         // session cheap even with no `persisted` map at all.
-        let resident: HashMap<FileId, (blake3::Hash, Vec<Symbol>)> = self
+        let resident: HashMap<FileId, (FileMetadata, Vec<Symbol>)> = self
             .files
             .iter()
             .map(|entry| {
                 (
                     entry.key().clone(),
-                    (entry.value().metadata.hash, entry.value().symbols.clone()),
+                    (entry.value().metadata.clone(), entry.value().symbols.clone()),
                 )
             })
             .collect();
@@ -122,6 +133,44 @@ impl RepositoryIndex {
                 continue;
             };
 
+            let relative_path = paths::relative_to(repo_root, &file.path)?;
+            let file_id = FileId(relative_path.clone());
+            let resident_entry = resident.get(&file_id);
+            let persisted_entry = persisted.and_then(|p| p.get(&file_id));
+
+            // Cheap pre-filter: mtime+size identical to what we already knew
+            // about this file means "almost certainly unchanged" — skip
+            // reading and hashing its content entirely, reusing that prior
+            // metadata and symbols wholesale. A mismatch here doesn't mean
+            // the file changed, only that this heuristic can't confirm it
+            // didn't — the fallback below still re-hashes to find out for
+            // sure, since mtime/size alone are too weak to trust outright
+            // (a `git checkout` can bump mtime with unchanged content; the
+            // reverse — identical mtime+size but different content — is the
+            // one failure mode this optimization accepts as negligible).
+            // Checked against `resident` and `persisted` independently
+            // (rather than picking whichever source has *any* entry first)
+            // so a `resident` entry that happens not to match still lets a
+            // matching `persisted` one win, same as the hash-based fallback
+            // below does.
+            let mtime_size_match = |metadata: &FileMetadata| {
+                metadata.size_bytes == file.size && mtime_secs_eq(metadata.modified_at, file.modified)
+            };
+            let prefiltered = resident_entry
+                .filter(|(metadata, _)| mtime_size_match(metadata))
+                .or_else(|| persisted_entry.filter(|(metadata, _)| mtime_size_match(metadata)));
+            if let Some((prior_metadata, prior_symbols)) = prefiltered {
+                stats.record(language);
+                self.files.insert(
+                    file_id,
+                    IndexedFile {
+                        metadata: prior_metadata.clone(),
+                        symbols: prior_symbols.clone(),
+                    },
+                );
+                continue;
+            }
+
             let content = match fs::read_to_string(&file.path) {
                 Ok(content) => content,
                 Err(e) => {
@@ -133,8 +182,6 @@ impl RepositoryIndex {
                 }
             };
 
-            let relative_path = paths::relative_to(repo_root, &file.path)?;
-            let file_id = FileId(relative_path.clone());
             let hash = blake3::hash(content.as_bytes());
             let metadata = FileMetadata {
                 relative_path,
@@ -144,26 +191,23 @@ impl RepositoryIndex {
                 language,
             };
 
-            let reused = resident
-                .get(&file_id)
-                .filter(|(resident_hash, _)| *resident_hash == hash)
-                .or_else(|| {
-                    persisted
-                        .and_then(|p| p.get(&file_id))
-                        .filter(|(persisted_hash, _)| *persisted_hash == hash)
-                })
-                .map(|(_, symbols)| symbols.clone());
-
-            let symbols = match reused {
-                Some(symbols) => symbols,
-                None => {
+            // mtime/size looked different (or there was no prior record),
+            // but the actual content hash might still match — e.g. a touch
+            // with no real edit. Reuse symbols in that case too, without
+            // trusting the weaker mtime/size signal for it. `resident` and
+            // `persisted` are checked independently here too, same reasoning
+            // as the pre-filter above.
+            let symbols = resident_entry
+                .filter(|(prior_metadata, _)| prior_metadata.hash == hash)
+                .or_else(|| persisted_entry.filter(|(prior_metadata, _)| prior_metadata.hash == hash))
+                .map(|(_, symbols)| symbols.clone())
+                .unwrap_or_else(|| {
                     self.indexers
                         .get(&language)
                         .expect("default_indexers registers every Language variant")
                         .index(&content)
                         .symbols
-                }
-            };
+                });
 
             stats.record(language);
             self.files.insert(file_id, IndexedFile { metadata, symbols });
@@ -645,26 +689,140 @@ mod tests {
     }
 
     #[test]
-    fn build_reusing_symbols_reuses_persisted_symbols_for_an_unchanged_file() {
+    fn build_reusing_symbols_skips_content_read_when_mtime_and_size_match() {
         let root = fixture_repo();
+        let path = root.join("src/UserService.java");
+        let meta = fs::metadata(&path).unwrap();
 
-        // Seed `persisted` with the exact hash the fixture file currently
-        // has, paired with a recognizable, distinct symbol set.
-        let content = fs::read_to_string(root.join("src/UserService.java")).unwrap();
-        let file_hash = blake3::hash(content.as_bytes());
+        // A deliberately *wrong* hash — if this ends up on the resulting
+        // `IndexedFile` unchanged, that proves the file's real content was
+        // never read/hashed at all, only the mtime+size pre-filter fired.
+        let stale_hash = blake3::hash(b"never actually read");
+        let prior_metadata = FileMetadata {
+            relative_path: "src/UserService.java".to_string(),
+            size_bytes: meta.len(),
+            modified_at: meta.modified().unwrap(),
+            hash: stale_hash,
+            language: Language::Java,
+        };
         let mut persisted = HashMap::new();
         persisted.insert(
             FileId("src/UserService.java".to_string()),
-            (file_hash, fixed_symbols()),
+            (prior_metadata, fixed_symbols()),
         );
 
-        // Fresh index, nothing resident — only `persisted` can supply
-        // reused symbols. The call counter proves it wasn't re-parsed.
         let calls = Arc::new(AtomicUsize::new(0));
         let index = index_with_counting_java_indexer(calls.clone());
         index.build_reusing_symbols(&root, &persisted).unwrap();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 0, "must not re-parse — hash matched persisted");
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "must not parse — mtime/size matched");
+        let result = index
+            .get(&FileId("src/UserService.java".to_string()))
+            .unwrap();
+        assert_eq!(result.symbols, fixed_symbols());
+        assert_eq!(result.metadata.hash, stale_hash);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_reusing_symbols_skips_content_read_when_mtime_only_matches_at_second_precision() {
+        // Regression test: `infra::index_store::IndexStore` persists mtime
+        // as whole seconds (`mtime_secs`), so a `persisted` entry loaded
+        // after a cold restart never carries the sub-second precision a
+        // live `fs::metadata` read has. Truncate to seconds here the same
+        // way the store's round-trip does, and confirm the pre-filter still
+        // matches instead of silently missing on every persisted entry.
+        let root = fixture_repo();
+        let path = root.join("src/UserService.java");
+        let meta = fs::metadata(&path).unwrap();
+        let truncated_modified = UNIX_EPOCH
+            + std::time::Duration::from_secs(
+                meta.modified().unwrap().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            );
+
+        let stale_hash = blake3::hash(b"never actually read");
+        let prior_metadata = FileMetadata {
+            relative_path: "src/UserService.java".to_string(),
+            size_bytes: meta.len(),
+            modified_at: truncated_modified,
+            hash: stale_hash,
+            language: Language::Java,
+        };
+        let mut persisted = HashMap::new();
+        persisted.insert(
+            FileId("src/UserService.java".to_string()),
+            (prior_metadata, fixed_symbols()),
+        );
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let index = index_with_counting_java_indexer(calls.clone());
+        index.build_reusing_symbols(&root, &persisted).unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "must not parse — mtime/size matched at second precision"
+        );
+        let result = index
+            .get(&FileId("src/UserService.java".to_string()))
+            .unwrap();
+        assert_eq!(result.symbols, fixed_symbols());
+        assert_eq!(result.metadata.hash, stale_hash);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_reusing_symbols_falls_back_to_persisted_hash_when_resident_hash_differs() {
+        // Regression test: a `resident` entry for a file shouldn't block
+        // falling back to a matching `persisted` entry — both sources must
+        // be checked independently, not just whichever one has any entry.
+        let root = fixture_repo();
+        let content = fs::read_to_string(root.join("src/UserService.java")).unwrap();
+        let file_hash = blake3::hash(content.as_bytes());
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let index = index_with_counting_java_indexer(calls.clone());
+
+        // Seed `resident` (via a prior `build()`) with a stale hash for this
+        // file by pre-inserting an `IndexedFile` whose hash doesn't match
+        // current content — `build_internal`'s `resident` snapshot is taken
+        // from `self.files` before it clears and rewalks.
+        index.files.insert(
+            FileId("src/UserService.java".to_string()),
+            IndexedFile {
+                metadata: FileMetadata {
+                    relative_path: "src/UserService.java".to_string(),
+                    size_bytes: 999_999,
+                    modified_at: SystemTime::UNIX_EPOCH,
+                    hash: blake3::hash(b"stale resident content"),
+                    language: Language::Java,
+                },
+                symbols: vec![],
+            },
+        );
+
+        let mut persisted = HashMap::new();
+        let persisted_metadata = FileMetadata {
+            relative_path: "src/UserService.java".to_string(),
+            size_bytes: 999_999,
+            modified_at: SystemTime::UNIX_EPOCH,
+            hash: file_hash,
+            language: Language::Java,
+        };
+        persisted.insert(
+            FileId("src/UserService.java".to_string()),
+            (persisted_metadata, fixed_symbols()),
+        );
+
+        index.build_reusing_symbols(&root, &persisted).unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "must not re-parse — persisted hash matched despite stale resident entry"
+        );
         let result = index
             .get(&FileId("src/UserService.java".to_string()))
             .unwrap();
@@ -674,19 +832,68 @@ mod tests {
     }
 
     #[test]
-    fn build_reusing_symbols_reparses_when_content_hash_differs() {
+    fn build_reusing_symbols_falls_back_to_content_hash_when_mtime_size_dont_match() {
         let root = fixture_repo();
+        let content = fs::read_to_string(root.join("src/UserService.java")).unwrap();
+        let file_hash = blake3::hash(content.as_bytes());
+
+        // mtime/size are deliberately wrong (so the cheap pre-filter must
+        // miss), but the content hash is real — the fallback re-hash should
+        // still find a match and reuse symbols instead of re-parsing.
+        let prior_metadata = FileMetadata {
+            relative_path: "src/UserService.java".to_string(),
+            size_bytes: 999_999,
+            modified_at: std::time::SystemTime::UNIX_EPOCH,
+            hash: file_hash,
+            language: Language::Java,
+        };
         let mut persisted = HashMap::new();
         persisted.insert(
             FileId("src/UserService.java".to_string()),
-            (blake3::hash(b"stale content, not what's on disk"), vec![]),
+            (prior_metadata, fixed_symbols()),
+        );
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let index = index_with_counting_java_indexer(calls.clone());
+        index.build_reusing_symbols(&root, &persisted).unwrap();
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "must not re-parse — hash matched persisted despite mtime/size mismatch"
+        );
+        let result = index
+            .get(&FileId("src/UserService.java".to_string()))
+            .unwrap();
+        assert_eq!(result.symbols, fixed_symbols());
+        // Metadata gets refreshed to the freshly-read size once content was
+        // actually read, even though symbols were reused.
+        assert_eq!(result.metadata.size_bytes, content.len() as u64);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_reusing_symbols_reparses_when_content_hash_differs() {
+        let root = fixture_repo();
+        let stale_metadata = FileMetadata {
+            relative_path: "src/UserService.java".to_string(),
+            size_bytes: 0,
+            modified_at: std::time::SystemTime::UNIX_EPOCH,
+            hash: blake3::hash(b"stale content, not what's on disk"),
+            language: Language::Java,
+        };
+        let mut persisted = HashMap::new();
+        persisted.insert(
+            FileId("src/UserService.java".to_string()),
+            (stale_metadata, vec![]),
         );
 
         let index = RepositoryIndex::new();
         index.build_reusing_symbols(&root, &persisted).unwrap();
 
-        // The persisted hash didn't match current content, so this must
-        // have re-parsed rather than reusing the (empty) stale entry.
+        // Neither mtime/size nor hash matched, so this must have re-parsed
+        // rather than reusing the (empty) stale entry.
         let result = index
             .get(&FileId("src/UserService.java".to_string()))
             .unwrap();
