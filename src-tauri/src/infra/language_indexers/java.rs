@@ -41,9 +41,31 @@ fn walk(node: Node, source: &[u8], out: &mut Vec<Symbol>, imports: &mut Vec<Impo
         "interface_declaration" => push_named(node, source, SymbolKind::Interface, out),
         "enum_declaration" => push_named(node, source, SymbolKind::Enum, out),
         "method_declaration" | "constructor_declaration" => {
-            push_named(node, source, SymbolKind::Method, out)
+            push_named(node, source, SymbolKind::Method, out);
+            // Deliberately does not recurse into a method/constructor's own
+            // body: a local or anonymous class declared inside it (e.g. `new
+            // Runnable() { public void run() { ... } }`) would otherwise
+            // contribute its own nested `method_declaration`/
+            // `field_declaration` nodes — flattened into this same `out`
+            // list alongside every top-level symbol, with a byte range
+            // *inside* the enclosing method's own range. `ChunkBuilder`'s
+            // Java strategy (`spans_from_backward_gap_symbols`) assumes its
+            // anchors are sequential and non-overlapping; a nested anchor
+            // breaks that (its end_byte can land before the *previous*
+            // anchor's end_byte), which previously crashed the whole
+            // embedding-sync worker on `content[start..end]` once
+            // `start > end`. Stopping here means only genuinely top-level
+            // members of a type ever become anchors — anything nested
+            // inside a method body is already covered by that method's own
+            // (correctly non-overlapping) span.
+            return;
         }
-        "field_declaration" => push_field_declarators(node, source, out),
+        "field_declaration" => {
+            push_field_declarators(node, source, out);
+            // Same reasoning as above — a field initializer can also embed
+            // an anonymous class with its own methods.
+            return;
+        }
         "import_declaration" => push_import(node, source, imports),
         _ => {}
     }
@@ -203,5 +225,49 @@ class C {}
         let facts = JavaIndexer.index("public class Broken {\n    public void f( {\n");
         // No panic is the assertion; a partial/empty symbol list is fine.
         let _ = facts;
+    }
+
+    /// Regression test: an anonymous class declared inside a method body
+    /// (a common Mockito/Runnable/etc. pattern) used to contribute its own
+    /// nested `method_declaration` as a flat top-level `Method` symbol,
+    /// with a byte range *inside* the enclosing method's range — breaking
+    /// `ChunkBuilder`'s assumption that anchors are sequential and
+    /// non-overlapping (`domain::chunk_index::
+    /// spans_from_backward_gap_symbols`) and crashing the embedding-sync
+    /// worker on a `content[start..end]` slice once a later anchor's
+    /// `end_byte` landed before an earlier one's.
+    #[test]
+    fn does_not_extract_a_nested_method_from_an_anonymous_class() {
+        let src = r#"
+public class Setup {
+    public void configure() {
+        doSomething(new Runnable() {
+            @Override
+            public void run() {
+                System.out.println("nested");
+            }
+        });
+    }
+
+    public void teardown() {
+    }
+}
+"#;
+        let facts = JavaIndexer.index(src);
+        let methods: Vec<&Symbol> = facts
+            .symbols
+            .iter()
+            .filter(|s| s.kind == SymbolKind::Method)
+            .collect();
+
+        assert!(
+            !methods.iter().any(|s| s.name == "run"),
+            "an anonymous class's method must not be extracted as a top-level symbol"
+        );
+        let configure = methods.iter().find(|s| s.name == "configure").unwrap();
+        let teardown = methods.iter().find(|s| s.name == "teardown").unwrap();
+        // The two real top-level methods must not overlap — `configure`
+        // must fully end before `teardown` starts.
+        assert!(configure.end_byte <= teardown.start_byte);
     }
 }

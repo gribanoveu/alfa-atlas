@@ -138,6 +138,21 @@ pub(crate) fn ensure_provider(
 /// simply waits it out (typically sub-second) rather than racing it.
 pub type EmbeddingSyncGuard = Mutex<()>;
 
+/// Every `.lock()` on `EmbeddingSyncGuard` goes through this rather than
+/// propagating `PoisonError` as a hard failure. The guarded value is `()`
+/// — there is no actual data a panic mid-hold could leave inconsistent,
+/// only the mutual-exclusion property itself, which is still perfectly
+/// intact after a panic unwinds. Without this, a single panic anywhere
+/// between acquiring and releasing this lock (e.g. a language-indexer bug
+/// producing a malformed chunk span, as `services::chunk_builder` guards
+/// against independently) would poison it *permanently* — every later
+/// `embedding_sync` call, incremental-watcher tick, and semantic-search
+/// readiness check would fail with "poisoned" for the rest of the app's
+/// lifetime, with no recovery short of restarting the app.
+pub(crate) fn lock_sync_guard(guard: &EmbeddingSyncGuard) -> std::sync::MutexGuard<'_, ()> {
+    guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// The running file-watcher-driven incremental sync for `index_root`, if
 /// one is active. Restarted (drop old, start new) whenever `index_root`
 /// changes — a project switch — via `ensure_incremental_watcher`.
@@ -441,9 +456,7 @@ fn run_incremental_sync(
 ) -> Result<(), String> {
     // Same guard `embedding_sync` acquires first, before anything else —
     // see `EmbeddingSyncGuard`'s doc comment.
-    let _guard = sync_guard
-        .lock()
-        .map_err(|_| "embedding sync guard poisoned".to_string())?;
+    let _guard = lock_sync_guard(sync_guard);
 
     let relative =
         crate::domain::paths::relative_to_lenient(index_root, &path).map_err(|e| e.to_string())?;
@@ -824,13 +837,7 @@ fn run_background_backlog_sync(
             (batch, total_hint)
         };
 
-        let guard = match sync_guard.lock() {
-            Ok(g) => g,
-            Err(_) => {
-                eprintln!("[embedding-sync] background backlog: sync guard poisoned");
-                return;
-            }
-        };
+        let guard = lock_sync_guard(&sync_guard);
         let on_progress = |current: usize, total_pending: usize| {
             emit_sync_progress(&app, SyncPhase::Embedding, current, total_pending, SyncTrigger::Background);
         };
@@ -962,9 +969,7 @@ pub async fn embedding_sync(
         // Acquired first, before any other slot, and held for the entire
         // pipeline — see `EmbeddingSyncGuard`'s doc comment for why a full
         // sync and an incremental tick must never interleave.
-        let _guard = sync_guard
-            .lock()
-            .map_err(|_| "embedding sync guard poisoned".to_string())?;
+        let _guard = lock_sync_guard(&sync_guard);
 
         let project = project_open::get_project()
             .map_err(|e| e.to_string())?

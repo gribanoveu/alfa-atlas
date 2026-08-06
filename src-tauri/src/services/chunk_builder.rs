@@ -72,14 +72,35 @@ impl ChunkBuilder {
 
         let chunks: Vec<Chunk> = spans
             .into_iter()
-            .map(|span| {
+            .filter_map(|span| {
+                // A `ChunkStrategy` bug (or, historically, a language
+                // indexer handing it overlapping anchors — see
+                // `infra::language_indexers::java`'s regression test) can
+                // produce a span whose `start_byte`/`end_byte` don't
+                // actually bound a valid slice of `content`. Skipping just
+                // that span — rather than letting `content[start..end]`
+                // panic — matches this codebase's existing resilience
+                // policy elsewhere (an unreadable file, a file that fails
+                // to build, still don't abort the whole pass); a slicing
+                // panic here previously crashed the whole embedding-sync
+                // worker thread.
+                if span.start_byte > span.end_byte || span.end_byte as usize > content.len() {
+                    eprintln!(
+                        "[chunk-builder] skipping invalid span {}#{}-{} (content len {})",
+                        file_id.0,
+                        span.start_byte,
+                        span.end_byte,
+                        content.len()
+                    );
+                    return None;
+                }
                 let text = content[span.start_byte as usize..span.end_byte as usize].to_string();
                 let hash = chunk_hash(file_hash, span.start_byte, span.end_byte);
                 let qualified_name = span
                     .anchor_symbol
                     .as_ref()
                     .and_then(|anchor| qualified_name_for(anchor, &symbols));
-                Chunk {
+                Some(Chunk {
                     metadata: ChunkMetadata {
                         id: ChunkId(format!(
                             "{}#{}-{}",
@@ -96,7 +117,7 @@ impl ChunkBuilder {
                         ordinal: 0,
                     },
                     text,
-                }
+                })
             })
             .collect();
 
@@ -374,6 +395,51 @@ public class UserService {
             assert!(chunk.text.len() <= options.max_chunk_bytes);
             assert_eq!(chunk.metadata.qualified_name.as_deref(), Some("Big.run"));
         }
+        assert_full_coverage_no_overlap(&chunks, content.len());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// End-to-end regression test for the crash this session fixed: a
+    /// method containing an anonymous class (a common Mockito/Runnable/etc.
+    /// pattern, also produced by JUnit5 `@Nested` classes with methods
+    /// nested even deeper) used to make the Java indexer emit an
+    /// overlapping `Method` symbol, which `spans_from_backward_gap_symbols`
+    /// turned into a span with `start_byte > end_byte` — panicking on
+    /// `content[start..end]` inside `build_file` and taking down the whole
+    /// embedding-sync worker thread. See
+    /// `infra::language_indexers::java`'s own regression test for the
+    /// symbol-extraction half of this fix — this test instead exercises
+    /// the full `RepositoryIndex` -> `ChunkBuilder` pipeline, so a
+    /// regression here would be caught even if some *other* future
+    /// language indexer reintroduces overlapping anchors.
+    #[test]
+    fn anonymous_class_inside_a_method_does_not_panic_while_chunking() {
+        let root = fixture_repo();
+        let content = r#"public class Setup {
+    public void configure() {
+        doSomething(new Runnable() {
+            @Override
+            public void run() {
+                System.out.println("nested");
+            }
+        });
+    }
+
+    public void teardown() {
+    }
+}
+"#;
+        fs::write(root.join("src/Setup.java"), content).unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        let builder = ChunkBuilder::new();
+        let options = ChunkBuildOptions::default();
+
+        let file_id = FileId("src/Setup.java".to_string());
+        let chunks = builder.build_file(&repo_index, &file_id, &options).unwrap();
+
+        assert!(!chunks.is_empty());
         assert_full_coverage_no_overlap(&chunks, content.len());
         fs::remove_dir_all(&root).ok();
     }

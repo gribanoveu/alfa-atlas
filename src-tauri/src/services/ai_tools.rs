@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, TryLockError};
 
 use crate::commands::embeddings::{
     attach_embedding_index, attach_index_store, ensure_provider, resolve_index_paths,
@@ -250,12 +250,18 @@ fn semantic_search(
 /// search that follows — its `try_lock` guard value is dropped immediately
 /// (never bound to a variable), matching `embedding_index_status`'s own
 /// precedent of never acquiring this guard at all for a read. Any failure
-/// along this sequence (poisoned lock, no project open, a transient
+/// along the rest of this sequence (no project open, a transient
 /// store-open error) degrades to "not ready" rather than propagating —
 /// consistent with the whole feature being a graceful cascade, not a
 /// pipeline that should hard-fail just because the fast path had a hiccup.
 fn is_semantic_ready(deps: &EmbeddingDeps) -> bool {
-    if deps.sync_guard.try_lock().is_err() {
+    // `WouldBlock` (a sync is actively running right now) is the only
+    // `try_lock` outcome that should degrade this call — `Poisoned` must
+    // not, or a single panic elsewhere while holding this guard (see
+    // `commands::embeddings::lock_sync_guard`'s doc comment) would disable
+    // semantic search for the rest of the app's lifetime instead of just
+    // this one call.
+    if matches!(deps.sync_guard.try_lock(), Err(TryLockError::WouldBlock)) {
         return false;
     }
 
