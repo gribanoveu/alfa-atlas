@@ -135,6 +135,20 @@ impl EmbeddingIndex {
             }
         }
 
+        // Sorted by text length before batching — the local BGE-M3 provider
+        // pads each batch to its longest member (`PaddingStrategy::
+        // BatchLongest`), and ONNX Runtime's memory-pattern optimizer caches
+        // one allocation plan per distinct `[batch_size, seq_len]` shape a
+        // session ever sees, for the life of that session, with no eviction.
+        // Chunks arrive here in arbitrary `ChunkId` order, so unsorted
+        // batching produces a new seq_len on nearly every batch (a repo
+        // mixes byte-sized JSON chunks with 16KB Java methods) — resident
+        // memory then climbs with corpus size and never comes back down.
+        // Grouping similarly-sized chunks together collapses that to a
+        // handful of distinct shapes, independent of how many chunks or
+        // files are being synced.
+        pending.sort_by_key(|(_, text, _)| text.len());
+
         let total_pending = pending.len();
         let mut embedded_so_far = 0usize;
         for batch in pending.chunks(EMBED_PROGRESS_BATCH) {
