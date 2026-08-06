@@ -43,19 +43,15 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
     downloadModel,
     cancelDownload,
     sync,
-    refresh,
   } = useEmbeddingSetup();
   const { mode: accessMode, busy: accessModeBusy, setMode: setAccessMode } = useAiAccessMode();
 
-  // The index is per-access-mode (`DocsOnly`/`FullRepo` index different
-  // roots, each with its own persisted store — see `resolve_index_root` in
-  // `commands/embeddings.rs`), so switching modes must re-fetch
-  // `indexStatus` — otherwise it keeps showing whichever mode's count was
-  // last fetched. Awaiting `setAccessMode` first (rather than a `useEffect`
-  // on `accessMode`) avoids racing `embedding_index_status` against the
-  // backend's own persist of the new mode.
+  // One index now covers the whole repository regardless of `accessMode`
+  // (see `resolve_index_paths` in `commands/embeddings.rs`) — the mode only
+  // changes what the AI assistant is allowed to read/search, not what's
+  // indexed, so switching it no longer needs to re-fetch `indexStatus`.
   const handleAccessModeChange = (value: AiAccessMode) => {
-    void setAccessMode(value).then(() => refresh());
+    void setAccessMode(value);
   };
 
   const items: ChecklistItem[] = [];
@@ -119,7 +115,7 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
             ? "Индекс устарел (обновилось приложение) — требуется повторная синхронизация."
             : indexStatus?.synced
               ? `Проиндексировано чанков: ${indexStatus.embeddedCount}.${backgroundNote}`
-              : "Построить/обновить эмбеддинги чанков документации для текущего проекта.",
+              : "Построить/обновить эмбеддинги чанков репозитория для текущего проекта — документация синхронизируется в первую очередь.",
     // `indexStatus` reflects the backend's persisted/resident index, so this
     // stays accurate across a remount — `lastSync` alone (this session's
     // last sync() call) would reset to "not done" every time the panel
@@ -156,8 +152,8 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
         </div>
         <p className="assistant-access-hint">
           {accessMode === "fullRepo"
-            ? "Индексируется весь репозиторий, включая исходный код — синхронизация займёт заметно больше времени и памяти."
-            : "Индексируется только папка документации."}
+            ? "AI-ассистент видит весь репозиторий, включая исходный код."
+            : "AI-ассистент видит только папку документации."}
         </p>
       </section>
 

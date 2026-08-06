@@ -5,17 +5,16 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::domain::ai_access::AiAccessMode;
 use crate::domain::chunk_index::ChunkBuildOptions;
 use crate::domain::embeddings::{
     EmbeddingIndexStatus, EmbeddingProvider, EmbeddingProviderConfig, ModelStatus, SyncStats,
 };
 use crate::domain::paths;
-use crate::domain::project_config::{OpenedProject, ProjectConfig};
+use crate::domain::project_config::OpenedProject;
 use crate::domain::repo_index::{detect_language, FileId, RepoIndexError};
 use crate::domain::workspace_index::DocumentId;
 use crate::infra::index_store::IndexStore;
-use crate::infra::{embedding_credentials_store, embedding_providers, project_store};
+use crate::infra::{embedding_credentials_store, embedding_providers};
 use crate::services::chunk_builder::{ChunkBuilder, ChunkIndex};
 use crate::services::embedding_config;
 use crate::services::embedding_index::{EmbeddingBuilder, EmbeddingIndex};
@@ -85,8 +84,9 @@ fn emit_sync_progress(
 /// the managed state is a lazily-(re)built slot, not a bare `EmbeddingIndex`
 /// constructed once at app startup like `RepositoryIndex`/`ChunkIndex` are.
 /// Keyed by `(index_root, dimensions)` — either changing (a different
-/// project/access-mode opened, or the provider's dimension count changed)
-/// invalidates the resident index the same way.
+/// project opened, or the provider's dimension count changed) invalidates
+/// the resident index the same way. `AiAccessMode` no longer affects
+/// `index_root`, so switching it is a no-op here.
 pub type EmbeddingIndexSlot = Mutex<Option<(PathBuf, usize, EmbeddingIndex)>>;
 
 /// One `IndexStore` (SQLite connection) per `index_root`, shared by
@@ -140,7 +140,9 @@ pub type EmbeddingSyncGuard = Mutex<()>;
 
 /// The running file-watcher-driven incremental sync for `index_root`, if
 /// one is active. Restarted (drop old, start new) whenever `index_root`
-/// changes — a project/access-mode switch — via `ensure_incremental_watcher`.
+/// changes — a project switch — via `ensure_incremental_watcher`.
+/// `AiAccessMode` no longer affects `index_root` (see `resolve_index_paths`),
+/// so switching it no longer restarts this.
 pub type IndexWatcherSlot = Mutex<Option<(PathBuf, IndexWatcher)>>;
 
 /// Open-editor-tab hint for a fresh project's first `embedding_sync` (see
@@ -149,10 +151,26 @@ pub type IndexWatcherSlot = Mutex<Option<(PathBuf, IndexWatcher)>>;
 /// advisory and read only once, near the top of that branch: a
 /// stale-by-one-call snapshot is harmless (the next `embedding_set_priority_files`
 /// call supersedes it, and worst case a stale snapshot just fails to match
-/// anything in `current_set`, falling back to today's untiered behavior —
-/// see the module docs on the `AiAccessMode`-switch-without-touching-tabs
-/// edge case this leaves unhandled).
+/// anything in `current_set`, falling back to today's untiered behavior).
 pub type PriorityFilesSlot = Mutex<HashSet<FileId>>;
+
+/// Background-eligible `FileId`s (see `split_sync_tiers`) queued for
+/// `run_background_backlog_sync`, merged across however many `embedding_sync`
+/// calls contribute to it, plus the single-flight guard (`running`) that
+/// stops a routine sync's newly-discovered backlog from spawning a second,
+/// independent drain loop while an earlier one (e.g. a fresh project's first
+/// sync) is still working through `pending`. Keyed by `index_root`: a sync
+/// for a *different* project than whatever this slot currently holds
+/// replaces it outright rather than merging into stale cross-project data —
+/// the old entry's own drain loop notices the mismatch on its next
+/// iteration (see `run_background_backlog_sync`) and stops itself without
+/// touching the new one.
+pub struct BackgroundBacklog {
+    index_root: PathBuf,
+    pending: HashSet<FileId>,
+    running: bool,
+}
+pub type BackgroundBacklogSlot = Mutex<Option<BackgroundBacklog>>;
 
 #[tauri::command]
 pub fn embedding_get_config() -> Result<EmbeddingProviderConfig, String> {
@@ -203,97 +221,57 @@ pub fn embedding_cancel_model_download(state: State<'_, Arc<DownloadState>>) {
     embedding_model::cancel_download(&state);
 }
 
-/// Resolves both paths a project's index needs:
-/// - `index_root` — same access-mode boundary `ai_execute_tool` already
-///   respects (`services::ai_tools::current_scope`): `DocsOnly` (the
-///   default) walks just the docs subtree, not the whole backend repo.
-///   This is what `RepositoryIndex`/`ChunkBuilder`/`chunk_text::resolve_text`
-///   resolve relative `FileId`s against, and what keys the
-///   `ChunkIndex`/`EmbeddingIndexSlot` attach state.
-/// - `storage_dir` — where that mode's persisted index lives on disk:
-///   always under `{project.root}/.atlas/index/{mode}`, **never** under
-///   `docs_root` — `.atlas` is the one place this app keeps per-project
-///   state (`infra::project_store`'s `project.json` already lives there),
-///   and nesting a second one under the docs subtree would split that
-///   convention for no reason. The `{mode}` subfolder keeps `DocsOnly` and
-///   `FullRepo` persisted separately (same reason `index_root` differs
-///   between them — see `index_store_ensure` module docs).
+/// Resolves both paths a project's index needs. `index_root` is always
+/// `project.root` — the index covers the whole repository unconditionally
+/// now, `AiAccessMode` no longer selects a subtree to walk (see
+/// `domain::ai_tools::ToolScope` for how the `DocsOnly` boundary is
+/// preserved instead, at query time rather than by physically indexing
+/// less). This is what `RepositoryIndex`/`ChunkBuilder`/
+/// `chunk_text::resolve_text` resolve relative `FileId`s against, and what
+/// keys the `ChunkIndex`/`EmbeddingIndexSlot` attach state.
+///
+/// `storage_dir` is always `{project.root}/.atlas/index/full-repo/` —
+/// **never** under `docs_root` (`.atlas` is the one place this app keeps
+/// per-project state). The literal `full-repo` name is kept from the old
+/// per-mode layout on purpose: a project that ever ran a `FullRepo` sync
+/// before this change already has a compatible store here (same
+/// `index_root`, `index_store_ensure::open_for` sees it as current, not
+/// stale) — reusing the name gives every such user a free migration with
+/// zero recompute. A project that only ever ran `DocsOnly` has no
+/// `full-repo/` store yet; `open_for` reports it stale (no meta rows), and
+/// `embedding_sync`'s existing repair-and-rebuild path takes it from there
+/// like any other fresh index. Either way, no dedicated migration code is
+/// needed. Stale `.atlas/index/docs-only/` directories from before this
+/// change are left on disk as harmless orphans.
 pub(crate) fn resolve_index_paths(project: &OpenedProject) -> Result<(PathBuf, PathBuf), String> {
-    let config = project_store::load(&project.root)
-        .map_err(|e| e.to_string())?
-        .unwrap_or_else(|| ProjectConfig::new(project.docs_root.clone()));
-    let (index_root, mode_dir) = match config.ai_access_mode {
-        AiAccessMode::DocsOnly => (PathBuf::from(&project.docs_root), "docs-only"),
-        AiAccessMode::FullRepo => (PathBuf::from(&project.root), "full-repo"),
-    };
-    let storage_dir = PathBuf::from(&project.root)
-        .join(".atlas")
-        .join("index")
-        .join(mode_dir);
+    let index_root = PathBuf::from(&project.root);
+    let storage_dir = index_root.join(".atlas").join("index").join("full-repo");
     Ok((index_root, storage_dir))
-}
-
-/// `index_root`'s path relative to `project.root` — empty in `FullRepo`
-/// mode (`index_root == project.root`), e.g. `"src/docs/asciidoc"` in
-/// `DocsOnly` mode. The pure string relationship
-/// `document_id_to_file_id`/`file_id_to_document_id` bridge on, since a
-/// `WorkspaceIndex::DocumentId` is always repo-root-relative while a
-/// `FileId` is `index_root`-relative.
-fn index_root_suffix_for(project: &OpenedProject, index_root: &Path) -> Result<String, String> {
-    let repo_root = PathBuf::from(&project.root);
-    let suffix = paths::relative_to(&repo_root, index_root).map_err(|e| e.to_string())?;
-    Ok(if suffix == "." { String::new() } else { suffix })
-}
-
-/// A `WorkspaceIndex::find_includes`/`find_references` target — already a
-/// resolved, repo-root-relative string (see `WorkspaceIndex::insert_parsed`,
-/// which runs every include/xref target through `resolve_against_document`
-/// before storing it) — into this sync's `FileId` space. `None` when the
-/// target falls outside `index_root` (e.g. an include reaching outside
-/// `docs_root` in `DocsOnly` mode — `RepositoryIndex` never walked it, so
-/// there's no `FileId` for it).
-fn document_id_to_file_id(repo_relative: &str, index_root_suffix: &str) -> Option<FileId> {
-    if index_root_suffix.is_empty() {
-        return Some(FileId(repo_relative.to_string()));
-    }
-    repo_relative
-        .strip_prefix(index_root_suffix)
-        .and_then(|s| s.strip_prefix('/'))
-        .map(|s| FileId(s.to_string()))
-}
-
-/// Inverse of `document_id_to_file_id` — what `direct_dependencies` uses to
-/// turn an open file's `FileId` into the `DocumentId` key
-/// `WorkspaceIndex::find_includes`/`find_references` expect.
-fn file_id_to_document_id(file_id: &FileId, index_root_suffix: &str) -> DocumentId {
-    if index_root_suffix.is_empty() {
-        DocumentId::new(file_id.0.clone())
-    } else {
-        DocumentId::new(format!("{index_root_suffix}/{}", file_id.0))
-    }
 }
 
 /// One open file's direct (one-hop, non-transitive) AsciiDoc dependencies —
 /// its `include::`/`xref:` targets. Empty for a file `WorkspaceIndex`
 /// doesn't know about (not built yet this session, or a non-AsciiDoc file
 /// with no include/xref syntax) — graceful degradation, not an error: the
-/// priority tier then just contains the open file itself.
-fn direct_dependencies(
-    workspace_index: &WorkspaceIndex,
-    file_id: &FileId,
-    index_root_suffix: &str,
-) -> Vec<FileId> {
-    let doc_id = file_id_to_document_id(file_id, index_root_suffix);
+/// priority tier then just contains the open file itself. `WorkspaceIndex`
+/// always walks `project.repoRoot` (see `commands::workspace_index::
+/// build_index`), and `index_root` is now always `project.root` too, so a
+/// `FileId` and a `WorkspaceIndex::DocumentId` are always the same
+/// repo-relative string — no bridging needed (unlike before this change,
+/// when `DocsOnly`'s `index_root` was `docs_root`, a strict subset of
+/// `repoRoot`).
+fn direct_dependencies(workspace_index: &WorkspaceIndex, file_id: &FileId) -> Vec<FileId> {
+    let doc_id = DocumentId::new(file_id.0.clone());
     let mut out = Vec::new();
     for inc in workspace_index.find_includes(&doc_id) {
-        out.extend(document_id_to_file_id(&inc.path, index_root_suffix));
+        out.push(FileId(inc.path));
     }
     for r in workspace_index.find_references(&doc_id) {
         if r.target_document.is_empty() {
             // Same-document `#anchor` xref — not a cross-file dependency.
             continue;
         }
-        out.extend(document_id_to_file_id(&r.target_document, index_root_suffix));
+        out.push(FileId(r.target_document));
     }
     out
 }
@@ -679,14 +657,116 @@ fn is_current_index_root(index_root: &Path) -> bool {
     root == index_root
 }
 
-/// The rest of a fresh project's files, processed after the first sync's
-/// priority tier (open files + direct deps) already returned to the
-/// caller. Runs entirely on its own `spawn_blocking` task — nothing awaits
-/// this, mirroring how `IndexWatcher`'s own dispatcher spawns a further
-/// `spawn_blocking` per dispatched event. Acquires `EmbeddingSyncGuard` only
-/// for the duration of each batch (not once for the whole backlog), so a
-/// manual "Синхронизировать" click or an incremental fs-tick can interleave
-/// with this catch-up rather than wait it out entirely.
+/// How many changed non-priority, non-doc files a sync processes inline
+/// before deferring the rest to the background backlog — same rationale as
+/// `BACKGROUND_BATCH_FILES`: small enough that splitting wouldn't have
+/// helped (today's common routine-sync case), large enough that a real bulk
+/// change (a big `git pull`, a fresh project's first sync) doesn't block the
+/// caller. See `split_sync_tiers`.
+const INLINE_TIER2_FILE_LIMIT: usize = 25;
+
+/// Splits `current_ids` into what `embedding_sync` chunks+embeds
+/// synchronously this call vs. what it defers to the background backlog.
+/// Two things always land in the synchronous set: files under `docs_prefix`
+/// (`project.docs_root`, repo-relative — documentation changes are meant to
+/// be searchable immediately, on every sync, not just the first) and
+/// `priority_ids` (open editor tabs + their direct deps, only ever
+/// non-empty on a first sync — see `PriorityFilesSlot`). Everything else
+/// *also* stays synchronous unless enough of it actually changed
+/// (`INLINE_TIER2_FILE_LIMIT`) to be worth deferring — checked via the same
+/// `chunk_index.file_hash_for(id) == repo_index.get(id).hash` comparison
+/// the synchronous chunking loop below already makes, so an unchanged file
+/// never counts against the limit.
+fn split_sync_tiers(
+    current_ids: &[FileId],
+    chunk_index: &ChunkIndex,
+    repo_index: &RepositoryIndex,
+    docs_prefix: &str,
+    priority_ids: &HashSet<FileId>,
+) -> (Vec<FileId>, Vec<FileId>) {
+    // "." (and, defensively, "") both mean "docs_root is the repo root" —
+    // `paths::is_under_relative_prefix` only recognizes an actual nested
+    // prefix, so that case is handled here rather than inside it.
+    let in_docs = |id: &FileId| {
+        docs_prefix.is_empty()
+            || docs_prefix == "."
+            || paths::is_under_relative_prefix(&id.0, docs_prefix)
+    };
+    let is_changed = |id: &FileId| {
+        repo_index.get(id).is_some_and(|indexed| {
+            !chunk_index
+                .file_hash_for(id)
+                .is_some_and(|hash| hash == indexed.metadata.hash)
+        })
+    };
+
+    let mut sync_ids = Vec::new();
+    let mut rest = Vec::new();
+    for id in current_ids {
+        if priority_ids.contains(id) || in_docs(id) {
+            sync_ids.push(id.clone());
+        } else {
+            rest.push(id.clone());
+        }
+    }
+
+    let changed_rest_count = rest.iter().filter(|id| is_changed(id)).count();
+    if changed_rest_count <= INLINE_TIER2_FILE_LIMIT {
+        sync_ids.extend(rest);
+        (sync_ids, Vec::new())
+    } else {
+        (sync_ids, rest)
+    }
+}
+
+/// Merges `new_ids` into `slot`'s queue for `index_root`, replacing
+/// whatever was there if it belonged to a different `index_root` (a project
+/// switch — the old entry's own drain loop notices the mismatch on its next
+/// iteration and stops itself, see `run_background_backlog_sync`), and
+/// returns whether the caller should spawn a fresh drain task: only when no
+/// drain loop is currently claiming this queue (`running` was `false`).
+/// This is the single-flight guard — without it, a routine sync's small
+/// newly-discovered backlog could spawn a second, independent drain loop
+/// while an earlier one (e.g. a fresh project's first sync) is still
+/// working through `pending`.
+fn merge_background_backlog(
+    slot: &BackgroundBacklogSlot,
+    index_root: &Path,
+    new_ids: Vec<FileId>,
+) -> Result<bool, String> {
+    let mut guard = slot
+        .lock()
+        .map_err(|_| "background backlog lock poisoned".to_string())?;
+    let is_same_root = matches!(guard.as_ref(), Some(b) if b.index_root == index_root);
+    if !is_same_root {
+        *guard = Some(BackgroundBacklog {
+            index_root: index_root.to_path_buf(),
+            pending: HashSet::new(),
+            running: false,
+        });
+    }
+    let backlog = guard.as_mut().expect("just set above if missing");
+    backlog.pending.extend(new_ids);
+    if backlog.running {
+        Ok(false)
+    } else {
+        backlog.running = true;
+        Ok(true)
+    }
+}
+
+/// Background-eligible files (see `split_sync_tiers`), processed after
+/// `embedding_sync`'s synchronous tier already returned to the caller. Runs
+/// entirely on its own `spawn_blocking` task — nothing awaits this,
+/// mirroring how `IndexWatcher`'s own dispatcher spawns a further
+/// `spawn_blocking` per dispatched event. Loops draining
+/// `background_backlog` (rather than a fixed snapshot) so a later sync's
+/// newly-discovered backlog can merge into an already-running drain instead
+/// of needing its own task (see `merge_background_backlog`) — acquiring
+/// `EmbeddingSyncGuard` only for the duration of each batch (not once for
+/// the whole backlog), so a manual "Синхронизировать" click or an
+/// incremental fs-tick can interleave with this catch-up rather than wait
+/// it out entirely.
 #[allow(clippy::too_many_arguments)]
 fn run_background_backlog_sync(
     repo_index: Arc<RepositoryIndex>,
@@ -697,18 +777,52 @@ fn run_background_backlog_sync(
     store: Arc<IndexStore>,
     index_root: PathBuf,
     app: AppHandle,
-    backlog: Vec<FileId>,
+    background_backlog: Arc<BackgroundBacklogSlot>,
 ) {
-    let total = backlog.len();
     let mut done = 0usize;
-
-    for batch in backlog.chunks(BACKGROUND_BATCH_FILES) {
+    loop {
         if !is_current_index_root(&index_root) {
             eprintln!(
                 "[embedding-sync] background backlog abandoned — project/index_root changed"
             );
+            // Only reset the slot if it's still ours to reset — a
+            // subsequent sync for a different project may have already
+            // replaced it with its own fresh entry (see
+            // `merge_background_backlog`), which must not be touched here.
+            if let Ok(mut guard) = background_backlog.lock() {
+                if matches!(guard.as_ref(), Some(b) if b.index_root == index_root) {
+                    *guard = None;
+                }
+            }
             return;
         }
+
+        let (batch, total_hint) = {
+            let Ok(mut guard) = background_backlog.lock() else {
+                eprintln!("[embedding-sync] background backlog: lock poisoned");
+                return;
+            };
+            let Some(backlog) = guard.as_mut() else {
+                return;
+            };
+            if backlog.index_root != index_root {
+                // A different project's sync has claimed this slot for
+                // itself since we started — that entry's own drain loop
+                // owns it now, nothing left for this one to do.
+                return;
+            }
+            if backlog.pending.is_empty() {
+                backlog.running = false;
+                return;
+            }
+            let batch: Vec<FileId> =
+                backlog.pending.iter().take(BACKGROUND_BATCH_FILES).cloned().collect();
+            for id in &batch {
+                backlog.pending.remove(id);
+            }
+            let total_hint = done + batch.len() + backlog.pending.len();
+            (batch, total_hint)
+        };
 
         let guard = match sync_guard.lock() {
             Ok(g) => g,
@@ -727,7 +841,7 @@ fn run_background_backlog_sync(
             &embedding_provider,
             &index_root,
             &store,
-            batch,
+            &batch,
             Some(&on_progress),
         ) {
             eprintln!("[embedding-sync] background backlog batch failed: {e}");
@@ -735,7 +849,7 @@ fn run_background_backlog_sync(
         drop(guard);
 
         done += batch.len();
-        emit_sync_progress(&app, SyncPhase::Chunking, done, total, SyncTrigger::Background);
+        emit_sync_progress(&app, SyncPhase::Chunking, done, total_hint, SyncTrigger::Background);
     }
 }
 
@@ -831,6 +945,7 @@ pub async fn embedding_sync(
     index_watcher: State<'_, Arc<IndexWatcherSlot>>,
     workspace_index: State<'_, Arc<WorkspaceIndex>>,
     priority_files: State<'_, Arc<PriorityFilesSlot>>,
+    background_backlog: State<'_, Arc<BackgroundBacklogSlot>>,
 ) -> Result<SyncStats, String> {
     let repo_index = repo_index.inner().clone();
     let chunk_index = chunk_index.inner().clone();
@@ -841,6 +956,7 @@ pub async fn embedding_sync(
     let index_watcher = index_watcher.inner().clone();
     let workspace_index = workspace_index.inner().clone();
     let priority_files = priority_files.inner().clone();
+    let background_backlog = background_backlog.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<SyncStats, String> {
         // Acquired first, before any other slot, and held for the entire
@@ -891,55 +1007,51 @@ pub async fn embedding_sync(
             .map_err(|e| e.to_string())?;
 
         // A fresh project (nothing chunked yet, in this store or ever) is
-        // the only case that gets the two-tier open-files-first treatment
-        // below — a routine re-sync's changed-file count is normally small
-        // enough that splitting it wouldn't help, so it keeps behaving
-        // exactly as before.
+        // the only case that additionally prioritizes open editor files —
+        // documentation itself is always prioritized below, on every sync.
         let is_first_sync = chunk_index.chunk_ids().is_empty();
 
         let current_ids = repo_index.file_ids();
         let current_set: HashSet<_> = current_ids.iter().cloned().collect();
 
         // Open editor files (plus their direct includes/xrefs, resolved via
-        // `WorkspaceIndex`) get chunked+embedded first so this call returns
-        // quickly with a useful partial index; the rest of a fresh
-        // project's files are deferred to `run_background_backlog_sync`
-        // below. Empty on anything but a first sync, and also empty
-        // whenever no priority file survives the `current_set` intersection
-        // (nothing open, or a stale `PriorityFilesSlot` snapshot from a
-        // different `index_root` — see that type's doc comment) — either
-        // way `tier1_ids` then simply becomes every file, matching today's
-        // untiered behavior.
+        // `WorkspaceIndex`) get chunked+embedded first so a fresh project's
+        // first sync returns quickly with a useful partial index. Empty on
+        // anything but a first sync, and also empty whenever no priority
+        // file survives the `current_set` intersection (nothing open, or a
+        // stale `PriorityFilesSlot` snapshot — see that type's doc comment).
         let priority_ids: HashSet<FileId> = if is_first_sync {
             let opened = priority_files
                 .lock()
                 .map_err(|_| "priority files lock poisoned".to_string())?
                 .clone();
             let mut set = opened.clone();
-            if !opened.is_empty() {
-                let suffix = index_root_suffix_for(&project, &index_root)?;
-                for file_id in &opened {
-                    set.extend(direct_dependencies(&workspace_index, file_id, &suffix));
-                    // Java's import graph lives directly in `FileId` space
-                    // (no `WorkspaceIndex`/`DocumentId` translation needed —
-                    // `.java` is never a `WorkspaceIndex` document) — see
-                    // `RepositoryIndex::java_dependencies`.
-                    set.extend(repo_index.java_dependencies(file_id));
-                }
+            for file_id in &opened {
+                set.extend(direct_dependencies(&workspace_index, file_id));
+                // Java's import graph lives directly in `FileId` space (no
+                // `WorkspaceIndex`/`DocumentId` translation needed — `.java`
+                // is never a `WorkspaceIndex` document) — see
+                // `RepositoryIndex::java_dependencies`.
+                set.extend(repo_index.java_dependencies(file_id));
             }
             set.retain(|id| current_set.contains(id));
             set
         } else {
             HashSet::new()
         };
-        let (tier1_ids, tier2_ids): (Vec<FileId>, Vec<FileId>) = if !priority_ids.is_empty() {
-            current_ids
-                .iter()
-                .cloned()
-                .partition(|id| priority_ids.contains(id))
-        } else {
-            (current_ids.clone(), Vec::new())
-        };
+
+        // Documentation changes always sync ahead of the rest of the repo
+        // (`project.docs_root`) — every call, not just the first — with any
+        // remaining non-doc backlog either folded in here too (small
+        // change sets) or deferred to the background (large ones). See
+        // `split_sync_tiers`.
+        let (tier1_ids, tier2_ids) = split_sync_tiers(
+            &current_ids,
+            &chunk_index,
+            &repo_index,
+            &project.docs_root,
+            &priority_ids,
+        );
 
         let chunk_builder = ChunkBuilder::new();
         let options = ChunkBuildOptions::default();
@@ -949,8 +1061,8 @@ pub async fn embedding_sync(
         // read it requires) is skipped entirely, and `EmbeddingIndex::sync`
         // below will correctly see their chunks' hashes as unchanged
         // without this sync ever touching their text. Scoped to `tier1_ids`
-        // — `tier2_ids` (empty outside a first sync) is handled by the
-        // background backlog task, not here.
+        // — `tier2_ids` is handled by the background backlog task, not
+        // here.
         let mut changed_files = Vec::new();
         for file_id in &tier1_ids {
             let Some(indexed) = repo_index.get(file_id) else {
@@ -1028,33 +1140,39 @@ pub async fn embedding_sync(
                 .map_err(|e| e.to_string())?
         };
 
-        // The rest of a fresh project's files, if any — dispatched to its
-        // own task so this call can return `stats` (the priority tier's
-        // result) now instead of waiting out the whole repo. See
-        // `run_background_backlog_sync`'s doc comment for why it acquires
-        // `EmbeddingSyncGuard` per batch rather than once up front.
-        if is_first_sync && !tier2_ids.is_empty() {
-            let repo_index = repo_index.clone();
-            let chunk_index = chunk_index.clone();
-            let embedding_index = embedding_index.clone();
-            let embedding_provider = embedding_provider.clone();
-            let sync_guard = sync_guard.clone();
-            let store = store.clone();
-            let index_root = index_root.clone();
-            let app = app.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                run_background_backlog_sync(
-                    repo_index,
-                    chunk_index,
-                    embedding_index,
-                    embedding_provider,
-                    sync_guard,
-                    store,
-                    index_root,
-                    app,
-                    tier2_ids,
-                );
-            });
+        // Any large non-doc backlog (a fresh project's first sync, or a
+        // routine sync catching up after a big upstream change), merged
+        // into whatever this project's background queue already has and
+        // dispatched to its own task only if nothing is draining it yet —
+        // see `merge_background_backlog`/`run_background_backlog_sync`'s
+        // doc comments for why a fixed-`Vec` dispatch isn't safe once this
+        // can fire on every sync, not just the first.
+        if !tier2_ids.is_empty() {
+            let should_spawn = merge_background_backlog(&background_backlog, &index_root, tier2_ids)?;
+            if should_spawn {
+                let repo_index = repo_index.clone();
+                let chunk_index = chunk_index.clone();
+                let embedding_index = embedding_index.clone();
+                let embedding_provider = embedding_provider.clone();
+                let sync_guard = sync_guard.clone();
+                let store = store.clone();
+                let index_root = index_root.clone();
+                let app = app.clone();
+                let background_backlog = background_backlog.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    run_background_backlog_sync(
+                        repo_index,
+                        chunk_index,
+                        embedding_index,
+                        embedding_provider,
+                        sync_guard,
+                        store,
+                        index_root,
+                        app,
+                        background_backlog,
+                    );
+                });
+            }
         }
 
         Ok(stats)
@@ -1086,6 +1204,7 @@ pub async fn embedding_index_status(
     embedding_provider: State<'_, Arc<EmbeddingProviderSlot>>,
     sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
     index_watcher: State<'_, Arc<IndexWatcherSlot>>,
+    background_backlog: State<'_, Arc<BackgroundBacklogSlot>>,
 ) -> Result<EmbeddingIndexStatus, String> {
     let repo_index = repo_index.inner().clone();
     let chunk_index = chunk_index.inner().clone();
@@ -1094,6 +1213,7 @@ pub async fn embedding_index_status(
     let embedding_provider = embedding_provider.inner().clone();
     let sync_guard = sync_guard.inner().clone();
     let index_watcher = index_watcher.inner().clone();
+    let background_backlog = background_backlog.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<EmbeddingIndexStatus, String> {
         let Some(project) = project_open::get_project().map_err(|e| e.to_string())? else {
@@ -1147,14 +1267,22 @@ pub async fn embedding_index_status(
             .map_err(|_| "embedding index lock poisoned".to_string())?;
         let (_, _, index) = slot.as_ref().expect("attach_embedding_index just set this");
         let embedded_count = index.len();
-        // Files the repo walk found but that haven't been chunked yet —
-        // `0` outside a fresh project's first-sync backlog, since every
-        // other path chunks every known file in the same pass. See
-        // `EmbeddingIndexStatus::background_pending`'s doc comment.
-        let background_pending = repo_index
-            .file_ids()
-            .len()
-            .saturating_sub(chunk_index.file_ids().len());
+        // Whatever `run_background_backlog_sync` still has left to process
+        // for *this* project — `0` if nothing's ever been queued, or if the
+        // slot currently belongs to a different `index_root` (a stale entry
+        // some other project's sync will reclaim/replace on its own, not
+        // this one's to report). See `EmbeddingIndexStatus::
+        // background_pending`'s doc comment.
+        let background_pending = background_backlog
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .as_ref()
+                    .filter(|b| b.index_root == index_root)
+                    .map(|b| b.pending.len())
+            })
+            .unwrap_or(0);
         Ok(EmbeddingIndexStatus {
             synced: embedded_count > 0,
             embedded_count,
@@ -1267,37 +1395,17 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &second));
     }
 
-    // --- `document_id_to_file_id` / `file_id_to_document_id` ---
+    // --- `resolve_index_paths` ---
 
     #[test]
-    fn file_id_document_id_round_trip_with_empty_suffix() {
-        // `FullRepo` mode: index_root == project.root, so the two spaces
-        // are identical strings.
-        let file_id = FileId("docs/guide.adoc".to_string());
-        let doc_id = file_id_to_document_id(&file_id, "");
-        assert_eq!(doc_id, DocumentId::new("docs/guide.adoc"));
-        assert_eq!(document_id_to_file_id(&doc_id.0, ""), Some(file_id));
-    }
-
-    #[test]
-    fn file_id_document_id_round_trip_with_a_suffix() {
-        // `DocsOnly` mode: index_root == project.docs_root, a subdirectory
-        // of project.root.
-        let file_id = FileId("guide.adoc".to_string());
-        let suffix = "src/docs/asciidoc";
-        let doc_id = file_id_to_document_id(&file_id, suffix);
-        assert_eq!(doc_id, DocumentId::new("src/docs/asciidoc/guide.adoc"));
-        assert_eq!(document_id_to_file_id(&doc_id.0, suffix), Some(file_id));
-    }
-
-    #[test]
-    fn document_id_to_file_id_is_none_outside_the_index_root() {
-        // An include/xref reaching outside `docs_root` in `DocsOnly` mode —
-        // `RepositoryIndex` never walked it, so there's no `FileId` for it.
-        assert_eq!(
-            document_id_to_file_id("src/main/java/Foo.java", "src/docs/asciidoc"),
-            None
-        );
+    fn resolve_index_paths_always_indexes_the_whole_repo() {
+        let project = OpenedProject {
+            root: "/repo".to_string(),
+            docs_root: "/repo/docs".to_string(),
+        };
+        let (index_root, storage_dir) = resolve_index_paths(&project).unwrap();
+        assert_eq!(index_root, PathBuf::from("/repo"));
+        assert_eq!(storage_dir, PathBuf::from("/repo/.atlas/index/full-repo"));
     }
 
     // --- `direct_dependencies` ---
@@ -1310,7 +1418,7 @@ mod tests {
         let workspace_index =
             WorkspaceIndex::new(crate::infra::parsers::registry::ParserRegistry::new());
         let file_id = FileId("guide.adoc".to_string());
-        assert!(direct_dependencies(&workspace_index, &file_id, "").is_empty());
+        assert!(direct_dependencies(&workspace_index, &file_id).is_empty());
     }
 
     // --- `sync_backlog_batch` ---
@@ -1446,5 +1554,119 @@ mod tests {
 
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&store_dir).ok();
+    }
+
+    // --- `split_sync_tiers` ---
+
+    #[test]
+    fn split_sync_tiers_puts_doc_changes_in_the_synchronous_tier_on_a_routine_sync() {
+        let root = fixture_dir("repo");
+        fs::write(root.join("guide.json"), "1").unwrap();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(root.join("docs/intro.json"), "1").unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        // Nothing chunked yet in `chunk_index` — mirrors a routine sync
+        // where both files are freshly-changed, not a first sync (that
+        // distinction only matters for `priority_ids`, computed
+        // separately in `embedding_sync`; `split_sync_tiers` itself
+        // doesn't know or care whether this is a first sync).
+        let chunk_index = ChunkIndex::new();
+
+        let current_ids = repo_index.file_ids();
+        let (tier1, tier2) =
+            split_sync_tiers(&current_ids, &chunk_index, &repo_index, "docs", &HashSet::new());
+
+        assert!(tier1.contains(&FileId("docs/intro.json".to_string())));
+        assert!(tier2.is_empty(), "small change set folds into tier1 regardless of docs prefix");
+        // Both land in tier1 here since the non-doc change set is small
+        // (`INLINE_TIER2_FILE_LIMIT`) — see the large-change-set test below
+        // for the case where a non-doc file is actually deferred.
+        assert!(tier1.contains(&FileId("guide.json".to_string())));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn split_sync_tiers_defers_a_large_non_doc_change_set_to_the_background() {
+        let root = fixture_dir("repo");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(root.join("docs/intro.json"), "1").unwrap();
+        for i in 0..(INLINE_TIER2_FILE_LIMIT + 5) {
+            fs::write(root.join(format!("f{i}.json")), "1").unwrap();
+        }
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        let chunk_index = ChunkIndex::new();
+
+        let current_ids = repo_index.file_ids();
+        let (tier1, tier2) =
+            split_sync_tiers(&current_ids, &chunk_index, &repo_index, "docs", &HashSet::new());
+
+        assert!(tier1.contains(&FileId("docs/intro.json".to_string())), "docs always sync");
+        assert_eq!(tier2.len(), INLINE_TIER2_FILE_LIMIT + 5);
+        assert!(tier2.iter().all(|id| !id.0.starts_with("docs/")));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn split_sync_tiers_does_not_count_unchanged_files_toward_the_inline_limit() {
+        let root = fixture_dir("repo");
+        for i in 0..(INLINE_TIER2_FILE_LIMIT + 5) {
+            fs::write(root.join(format!("f{i}.json")), "1").unwrap();
+        }
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        // Chunk every file up front so `split_sync_tiers` sees them all as
+        // unchanged (matching hash) — none of them should count against
+        // `INLINE_TIER2_FILE_LIMIT`, so everything stays synchronous.
+        let chunk_index = ChunkIndex::new();
+        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
+
+        let current_ids = repo_index.file_ids();
+        let (tier1, tier2) =
+            split_sync_tiers(&current_ids, &chunk_index, &repo_index, "docs", &HashSet::new());
+
+        assert_eq!(tier1.len(), INLINE_TIER2_FILE_LIMIT + 5);
+        assert!(tier2.is_empty());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    // --- `merge_background_backlog` ---
+
+    #[test]
+    fn merge_background_backlog_requests_a_spawn_only_when_not_already_running() {
+        let slot = BackgroundBacklogSlot::new(None);
+        let root = PathBuf::from("/repo");
+
+        let first = merge_background_backlog(&slot, &root, vec![FileId("a.json".to_string())]).unwrap();
+        assert!(first, "nothing running yet — must request a spawn");
+
+        let second = merge_background_backlog(&slot, &root, vec![FileId("b.json".to_string())]).unwrap();
+        assert!(!second, "a drain is already claimed — must merge without spawning again");
+
+        let pending = slot.lock().unwrap().as_ref().unwrap().pending.len();
+        assert_eq!(pending, 2, "both merges' ids must be present in the queue");
+    }
+
+    #[test]
+    fn merge_background_backlog_resets_for_a_different_index_root() {
+        let slot = BackgroundBacklogSlot::new(None);
+        let root_a = PathBuf::from("/repo-a");
+        let root_b = PathBuf::from("/repo-b");
+
+        merge_background_backlog(&slot, &root_a, vec![FileId("a.json".to_string())]).unwrap();
+        let should_spawn = merge_background_backlog(&slot, &root_b, vec![FileId("b.json".to_string())]).unwrap();
+
+        assert!(should_spawn, "a different index_root must not inherit the stale running flag");
+        let guard = slot.lock().unwrap();
+        let backlog = guard.as_ref().unwrap();
+        assert_eq!(backlog.index_root, root_b);
+        assert_eq!(backlog.pending, HashSet::from([FileId("b.json".to_string())]));
     }
 }

@@ -227,7 +227,7 @@ fn semantic_search(
 ) -> Result<Vec<ToolMatch>, ToolError> {
     let top_k = args.top_k.unwrap_or(DEFAULT_TOP_K).clamp(1, MAX_TOP_K);
 
-    let mut results = symbol_matches(&deps.repo_index, &scope.root, &args.query, top_k);
+    let mut results = symbol_matches(&deps.repo_index, scope, &args.query, top_k);
 
     let remaining = top_k.saturating_sub(results.len());
     if remaining == 0 {
@@ -237,12 +237,7 @@ fn semantic_search(
     if is_semantic_ready(deps) {
         results.extend(semantic_matches(scope, deps, &args.query, remaining)?);
     } else {
-        results.extend(lexical_matches(
-            &deps.chunk_index,
-            &scope.root,
-            &args.query,
-            remaining,
-        ));
+        results.extend(lexical_matches(&deps.chunk_index, scope, &args.query, remaining));
     }
     Ok(results)
 }
@@ -344,15 +339,32 @@ fn semantic_matches(
         let Some((_, _, index)) = slot.as_ref() else {
             return Ok(Vec::new());
         };
-        index.search(&query_embedding, top_k)?
+        // This `usearch` wrapper has no predicate-aware ANN search — when
+        // this scope filters results (`DocsOnly`), over-fetch the whole
+        // corpus so filtering below can still fill `top_k` from whatever's
+        // left, rather than silently returning fewer hits than the caller
+        // asked for just because the nearest raw neighbors happened to be
+        // outside `docs_root`.
+        let search_k = if scope.mode == AiAccessMode::DocsOnly {
+            top_k.max(index.len())
+        } else {
+            top_k
+        };
+        index.search(&query_embedding, search_k)?
     };
 
-    let mut out = Vec::with_capacity(hits.len());
+    let mut out = Vec::with_capacity(top_k.min(hits.len()));
     for (chunk_id, distance) in hits {
+        if out.len() >= top_k {
+            break;
+        }
         let Some(metadata) = deps.chunk_index.get(&chunk_id) else {
             continue;
         };
-        let Ok(text) = resolve_text(&scope.root, &metadata) else {
+        if !scope.allows_search_result(&metadata.file_id) {
+            continue;
+        }
+        let Ok(text) = resolve_text(&scope.repo_root, &metadata) else {
             continue;
         };
         out.push(ToolMatch {
@@ -375,7 +387,7 @@ fn semantic_matches(
 /// proxy score — not comparable to the semantic tier's cosine similarity).
 fn lexical_matches(
     chunk_index: &ChunkIndex,
-    repo_root: &Path,
+    scope: &ToolScope,
     query: &str,
     top_k: usize,
 ) -> Vec<ToolMatch> {
@@ -386,7 +398,10 @@ fn lexical_matches(
 
     let mut scored: Vec<(usize, ChunkMetadata, String)> = Vec::new();
     for metadata in chunk_index.all() {
-        let Ok(text) = resolve_text(repo_root, &metadata) else {
+        if !scope.allows_search_result(&metadata.file_id) {
+            continue;
+        }
+        let Ok(text) = resolve_text(&scope.repo_root, &metadata) else {
             continue;
         };
         let count = text.to_lowercase().matches(&needle).count();
@@ -416,19 +431,21 @@ fn lexical_matches(
 /// of whether the embedding index is ready.
 fn symbol_matches(
     repo_index: &RepositoryIndex,
-    scope_root: &Path,
+    scope: &ToolScope,
     query: &str,
     top_k: usize,
 ) -> Vec<ToolMatch> {
     repo_index
         .find_symbol(query)
         .into_iter()
+        .filter(|(file_id, _)| scope.allows_search_result(file_id))
         .take(top_k)
         .filter_map(|(file_id, symbol)| {
             let all_symbols = repo_index.get(&file_id)?.symbols;
             let qualified_name =
                 qualified_name_for(&symbol, &all_symbols).or_else(|| Some(symbol.name.clone()));
-            let snippet = read_symbol_snippet(scope_root, &file_id, &symbol).unwrap_or_default();
+            let snippet =
+                read_symbol_snippet(&scope.repo_root, &file_id, &symbol).unwrap_or_default();
             Some(ToolMatch {
                 path: file_id.0,
                 snippet,
@@ -720,7 +737,7 @@ mod tests {
 
     #[test]
     fn symbol_matches_finds_an_exact_case_insensitive_name() {
-        let (repo, _docs) = fixture_repo();
+        let (repo, docs) = fixture_repo();
         fs::write(
             repo.join("src/UserService.java"),
             "public class UserService {\n    public String getName() { return null; }\n}\n",
@@ -729,8 +746,9 @@ mod tests {
 
         let repo_index = RepositoryIndex::new();
         repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        let matches = symbol_matches(&repo_index, &repo, "userservice", 10);
+        let matches = symbol_matches(&repo_index, &scope, "userservice", 10);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].source, MatchSource::Symbol);
         assert!(matches[0].path.ends_with("UserService.java"));
@@ -741,11 +759,30 @@ mod tests {
 
     #[test]
     fn symbol_matches_is_empty_for_an_unknown_name() {
-        let (repo, _docs) = fixture_repo();
+        let (repo, docs) = fixture_repo();
         let repo_index = RepositoryIndex::new();
         repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        assert!(symbol_matches(&repo_index, &repo, "NoSuchSymbol", 10).is_empty());
+        assert!(symbol_matches(&repo_index, &scope, "NoSuchSymbol", 10).is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_excludes_non_doc_symbols_in_docs_only() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/UserService.java"),
+            "public class UserService {\n    public String getName() { return null; }\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        assert!(symbol_matches(&repo_index, &scope, "userservice", 10).is_empty());
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -755,15 +792,16 @@ mod tests {
         use crate::domain::chunk_index::ChunkBuildOptions;
         use crate::services::chunk_builder::ChunkBuilder;
 
-        let (repo, _docs) = fixture_repo();
+        let (repo, docs) = fixture_repo();
         fs::write(repo.join("docs/needle.adoc"), "= Guide\n\nfind the NEEDLE here\n").unwrap();
 
         let repo_index = RepositoryIndex::new();
         repo_index.build(&repo).unwrap();
         let chunk_index = ChunkIndex::new();
         chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        let matches = lexical_matches(&chunk_index, &repo, "needle", 10);
+        let matches = lexical_matches(&chunk_index, &scope, "needle", 10);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].source, MatchSource::Lexical);
         assert!(matches[0].snippet.to_lowercase().contains("needle"));
@@ -773,9 +811,33 @@ mod tests {
 
     #[test]
     fn lexical_matches_is_empty_for_an_empty_query() {
-        let (repo, _docs) = fixture_repo();
+        let (repo, docs) = fixture_repo();
         let chunk_index = ChunkIndex::new();
-        assert!(lexical_matches(&chunk_index, &repo, "", 10).is_empty());
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+        assert!(lexical_matches(&chunk_index, &scope, "", 10).is_empty());
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn lexical_matches_excludes_non_doc_chunks_in_docs_only() {
+        use crate::domain::chunk_index::ChunkBuildOptions;
+        use crate::services::chunk_builder::ChunkBuilder;
+
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/Needle.java"),
+            "public class Needle {\n    // find the NEEDLE here\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let chunk_index = ChunkIndex::new();
+        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        assert!(lexical_matches(&chunk_index, &scope, "needle", 10).is_empty());
+
         fs::remove_dir_all(&repo).ok();
     }
 }

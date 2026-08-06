@@ -6,7 +6,9 @@ use thiserror::Error;
 
 use super::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use super::embeddings::EmbeddingError;
+use super::paths;
 use super::project_config::ProjectError;
+use super::repo_index::FileId;
 use super::workspace_index::WorkspaceIndexError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +162,26 @@ impl From<WorkspaceIndexError> for ToolError {
 pub struct ToolScope {
     pub mode: AiAccessMode,
     pub root: PathBuf,
+    /// Always `project.root`, regardless of `mode` — the single embedding
+    /// index (`RepositoryIndex`/`ChunkIndex`/`EmbeddingIndex`) always covers
+    /// the whole repo now, so every `FileId` it hands back is
+    /// `repo_root`-relative in both modes. `root` above stays `docs_root` in
+    /// `DocsOnly` mode for `ReadFile`/`ListFiles` containment — this field
+    /// exists so the three `SemanticSearch` match tiers have the *correct*
+    /// root to resolve a `FileId`'s on-disk text against, instead of
+    /// (incorrectly) reusing `root`.
+    pub repo_root: PathBuf,
+    /// `None` when a search result needs no filtering (`FullRepo` mode, or
+    /// a `DocsOnly` project whose `docs_root` *is* the repo root) — `Some`
+    /// carries `docs_root`'s path relative to `repo_root` (`/`-separated,
+    /// e.g. `"docs"`), the same shape `domain::repo_index::FileId` uses, so
+    /// `allows_search_result` is a plain string-prefix check
+    /// (`paths::is_under_relative_prefix`) rather than a filesystem
+    /// resolution per candidate. A `DocsOnly` project whose `docs_root`
+    /// somehow isn't under `repo_root` (`paths::relative_to` erroring) falls
+    /// back to `Some(String::new())` — fails closed (nothing matches)
+    /// rather than silently widening access.
+    docs_filter_prefix: Option<String>,
     allowed_tools: HashSet<ToolName>,
 }
 
@@ -181,9 +203,19 @@ impl ToolScope {
             AiAccessMode::DocsOnly => docs_root,
             AiAccessMode::FullRepo => repo_root,
         };
+        let docs_filter_prefix = match mode {
+            AiAccessMode::FullRepo => None,
+            AiAccessMode::DocsOnly => match paths::relative_to(repo_root, docs_root) {
+                Ok(rel) if rel == "." => None,
+                Ok(rel) => Some(rel),
+                Err(_) => Some(String::new()),
+            },
+        };
         Self {
             mode,
             root: root.to_path_buf(),
+            repo_root: repo_root.to_path_buf(),
+            docs_filter_prefix,
             allowed_tools,
         }
     }
@@ -196,5 +228,76 @@ impl ToolScope {
 
     pub fn allows(&self, tool: ToolName) -> bool {
         self.allowed_tools.contains(&tool)
+    }
+
+    /// Whether a `SemanticSearch` match tier may surface `file_id` under
+    /// this scope — the query-time counterpart to `root`'s filesystem
+    /// containment, needed now that the index behind every tier always
+    /// covers the whole repo regardless of `mode`.
+    pub fn allows_search_result(&self, file_id: &FileId) -> bool {
+        match &self.docs_filter_prefix {
+            None => true,
+            Some(prefix) => paths::is_under_relative_prefix(&file_id.0, prefix),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// `(repo_root, docs_root)`, both canonicalized real directories —
+    /// `ToolScope::new` canonicalizes via `paths::relative_to`, so a
+    /// non-existent `docs_root` would hit the fail-closed `Err` branch
+    /// rather than the case these tests mean to exercise.
+    fn fixture_dirs() -> (PathBuf, PathBuf) {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let repo = std::env::temp_dir().join(format!("alfa-atlas-tool-scope-{nanos}-{n}"));
+        let docs = repo.join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        (repo.canonicalize().unwrap(), docs.canonicalize().unwrap())
+    }
+
+    #[test]
+    fn full_repo_scope_allows_every_search_result() {
+        let (repo, docs) = fixture_dirs();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        assert!(scope.allows_search_result(&FileId("docs/guide.adoc".to_string())));
+        assert!(scope.allows_search_result(&FileId("src/Main.java".to_string())));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn docs_only_scope_allows_only_files_under_docs_root() {
+        let (repo, docs) = fixture_dirs();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        assert!(scope.allows_search_result(&FileId("docs/guide.adoc".to_string())));
+        assert!(scope.allows_search_result(&FileId("docs/nested/page.adoc".to_string())));
+        assert!(!scope.allows_search_result(&FileId("src/Main.java".to_string())));
+        // A sibling directory that merely shares `docs`' prefix textually
+        // must not pass — `is_under_relative_prefix` guards this, not a raw
+        // `starts_with("docs")`.
+        assert!(!scope.allows_search_result(&FileId("docs-legacy/old.adoc".to_string())));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn docs_only_scope_allows_everything_when_docs_root_is_the_repo_root() {
+        let (repo, _docs) = fixture_dirs();
+        let scope = ToolScope::for_project(&repo, &repo, AiAccessMode::DocsOnly);
+
+        assert!(scope.allows_search_result(&FileId("src/Main.java".to_string())));
+
+        fs::remove_dir_all(&repo).ok();
     }
 }

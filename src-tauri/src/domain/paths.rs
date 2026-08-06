@@ -103,6 +103,21 @@ pub fn relative_to_lenient(root: &Path, absolute: &Path) -> Result<String, Proje
     Ok(parts.join("/"))
 }
 
+/// Plain string check, no filesystem access: `candidate` equals `prefix` or
+/// starts with `"{prefix}/"`. `candidate` and `prefix` are already-relative,
+/// `/`-separated strings (a `FileId` and a project's `docs_root`,
+/// respectively) — used to filter search results to a subtree without
+/// resolving each candidate against disk. An empty `prefix` is a
+/// fail-closed sentinel: it matches nothing, not everything — a caller that
+/// means "no filtering" represents that as `None` one level up, never as
+/// `""` here.
+pub fn is_under_relative_prefix(candidate: &str, prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return false;
+    }
+    candidate == prefix || candidate.starts_with(&format!("{prefix}/"))
+}
+
 /// Join `root` with a relative path that uses `/` separators. Rejects `..`.
 pub fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, ProjectError> {
     if relative.is_empty() || relative == "." {
@@ -157,6 +172,24 @@ mod tests {
         let root = temp_dir();
         assert!(join_relative(&root, "../outside").is_err());
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn is_under_relative_prefix_matches_exact_and_nested() {
+        assert!(is_under_relative_prefix("docs", "docs"));
+        assert!(is_under_relative_prefix("docs/guide.adoc", "docs"));
+    }
+
+    #[test]
+    fn is_under_relative_prefix_rejects_a_sibling() {
+        assert!(!is_under_relative_prefix("docsx/guide.adoc", "docs"));
+        assert!(!is_under_relative_prefix("src/main.rs", "docs"));
+    }
+
+    #[test]
+    fn is_under_relative_prefix_empty_prefix_matches_nothing() {
+        assert!(!is_under_relative_prefix("docs/guide.adoc", ""));
+        assert!(!is_under_relative_prefix("", ""));
     }
 
     #[test]

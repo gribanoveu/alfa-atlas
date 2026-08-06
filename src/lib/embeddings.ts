@@ -34,11 +34,14 @@ export type EmbeddingIndexStatus = {
    * index root) — left untouched on disk, not loaded; needs a real sync to
    * repair, distinct from "never synced". */
   stale: boolean;
-  /** Files the repo walk found but that haven't been chunked yet — always
-   * `0` outside a fresh project's first-sync backlog (see `SyncTrigger`'s
-   * `"background"` value). Non-zero means the rest of the repo is still
-   * being indexed in the background; the index itself is safe to use in
-   * the meantime, just incomplete. */
+  /** Files still queued for background processing (see `SyncTrigger`'s
+   * `"background"` value) — `0` when nothing's deferred, which is most
+   * syncs (a small non-doc change set is folded into the synchronous pass
+   * instead). Non-zero after a fresh project's first sync, or after a
+   * routine sync catches a large upstream change; documentation itself is
+   * always prioritized ahead of this backlog, on every sync. The index
+   * itself is safe to use in the meantime, just incomplete outside
+   * `docs_root`. */
   backgroundPending: number;
 };
 

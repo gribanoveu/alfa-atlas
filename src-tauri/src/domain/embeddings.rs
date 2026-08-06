@@ -135,13 +135,17 @@ pub struct EmbeddingIndexStatus {
     /// `embedding_sync` will repair and rebuild it, not start from a blank
     /// slate.
     pub stale: bool,
-    /// Files `RepositoryIndex` knows about but that haven't been chunked
-    /// yet — always `0` outside a fresh project's first-sync backlog
-    /// (every other code path chunks every known file in the same pass).
-    /// Derived from live state (`repo_index.file_ids().len() -
-    /// chunk_index.file_ids().len()`), not a hand-maintained counter, so it
-    /// survives an app restart or a panicked background task without
-    /// drifting.
+    /// Files still queued for `run_background_backlog_sync` — `0` when
+    /// nothing's deferred (the common case: `embedding_sync` folds a small
+    /// non-doc change set inline rather than deferring it, see
+    /// `commands::embeddings::split_sync_tiers`). Non-zero after a fresh
+    /// project's first sync, or after a routine sync catches a large
+    /// upstream change (e.g. a big `git pull`) — either way this can be
+    /// nonzero on more than just a project's very first sync now that
+    /// documentation is prioritized on every sync, not just the first.
+    /// Read from `commands::embeddings::BackgroundBacklogSlot`, not a
+    /// hand-maintained counter, so it survives an app restart or a panicked
+    /// background task without drifting.
     pub background_pending: usize,
 }
 
