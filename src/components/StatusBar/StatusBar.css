@@ -47,6 +47,30 @@
   animation: statusbar-spin 0.9s linear infinite;
 }
 
+.statusbar .seg.embed {
+  color: var(--text-2);
+}
+
+.statusbar .seg.embed.syncing {
+  color: var(--text-2);
+}
+
+.statusbar .seg.embed.synced {
+  color: var(--text-1);
+}
+
+.statusbar .seg.embed.stale {
+  color: #d9a441;
+}
+
+.statusbar .seg.embed.unsynced {
+  color: var(--text-2);
+}
+
+.statusbar .seg.embed .spin {
+  animation: statusbar-spin 0.9s linear infinite;
+}
+
 @keyframes statusbar-spin {
   from {
     transform: rotate(0deg);

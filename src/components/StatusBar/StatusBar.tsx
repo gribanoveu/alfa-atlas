@@ -1,6 +1,7 @@
 import { AlertCircle, AlertTriangle, Check, Loader2 } from "lucide-react";
 import type { IndexStats } from "../../lib/workspaceIndex";
 import type { IndexStatus, IndexProgress } from "../../hooks/useWorkspaceIndex";
+import type { EmbeddingIndexStatus, SyncProgress } from "../../lib/embeddings";
 import "./StatusBar.css";
 
 type StatusBarProps = {
@@ -12,7 +13,50 @@ type StatusBarProps = {
   indexStatus: IndexStatus;
   indexProgress: IndexProgress | null;
   indexStats: IndexStats | null;
+  /** `null` before the first fetch resolves, or when no project is open —
+   * the embedding/RAG index segment hides entirely in that case, same as
+   * the workspace index segment hides for `indexStatus === "idle"`. */
+  embedIndexStatus: EmbeddingIndexStatus | null;
+  embedSyncProgress: SyncProgress | null;
 };
+
+type EmbedIndexState = "syncing" | "stale" | "synced" | "unsynced";
+
+function embedIndexState(
+  status: EmbeddingIndexStatus | null,
+  progress: SyncProgress | null,
+): EmbedIndexState | null {
+  if (progress) return "syncing";
+  if (!status) return null;
+  if (status.stale) return "stale";
+  if (status.synced) return "synced";
+  return "unsynced";
+}
+
+function embedIndexLabel(
+  state: EmbedIndexState,
+  status: EmbeddingIndexStatus | null,
+  progress: SyncProgress | null,
+): string {
+  switch (state) {
+    case "syncing": {
+      const phase = progress?.phase === "chunking" ? "Индексация файлов" : "Расчёт эмбеддингов";
+      return progress && progress.total > 0
+        ? `${phase}: ${progress.current}/${progress.total}`
+        : `${phase}…`;
+    }
+    case "stale":
+      return "Индекс устарел";
+    case "synced": {
+      const base = `Проиндексировано чанков: ${status?.embeddedCount ?? 0}`;
+      return status && status.backgroundPending > 0
+        ? `${base} (+${status.backgroundPending} в фоне)`
+        : base;
+    }
+    case "unsynced":
+      return "Индекс не синхронизирован";
+  }
+}
 
 function indexLabel(
   status: IndexStatus,
@@ -83,6 +127,8 @@ export function StatusBar({
   indexStatus,
   indexProgress,
   indexStats,
+  embedIndexStatus,
+  embedSyncProgress,
 }: StatusBarProps) {
   const showIndex = indexStatus !== "idle";
   const Icon =
@@ -95,6 +141,16 @@ export function StatusBar({
           : indexStatus === "error"
             ? AlertCircle
             : null;
+
+  const embedState = embedIndexState(embedIndexStatus, embedSyncProgress);
+  const EmbedIcon =
+    embedState === "syncing"
+      ? Loader2
+      : embedState === "synced"
+        ? Check
+        : embedState === "stale"
+          ? AlertTriangle
+          : null;
 
   return (
     <footer className="statusbar">
@@ -114,6 +170,14 @@ export function StatusBar({
             />
           ) : null}
           {indexLabel(indexStatus, indexProgress, indexStats)}
+        </div>
+      ) : null}
+      {embedState ? (
+        <div className={`seg embed ${embedState}`} title="Индекс эмбеддингов (документация и репозиторий)">
+          {EmbedIcon ? (
+            <EmbedIcon size={11} className={embedState === "syncing" ? "spin" : ""} />
+          ) : null}
+          {embedIndexLabel(embedState, embedIndexStatus, embedSyncProgress)}
         </div>
       ) : null}
       {hasActiveFile ? (

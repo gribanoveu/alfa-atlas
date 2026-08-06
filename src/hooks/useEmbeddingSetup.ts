@@ -127,6 +127,18 @@ export function useEmbeddingSetup() {
     void listenSyncProgress((payload) => {
       if (payload.trigger === "full") {
         setSyncProgress(payload);
+        // A passive instance of this hook (one that never calls `sync()`
+        // itself — e.g. the status bar, which only ever observes) has no
+        // other signal that a sync triggered elsewhere just finished, so it
+        // would otherwise show a stale `indexStatus`/frozen progress
+        // forever. Mirrors what the initiating instance's own `sync()`
+        // already does in its `finally` block once the embedding phase
+        // reaches 100% — harmless to also run there (an idempotent extra
+        // refresh/reset).
+        if (payload.phase === "embedding" && payload.current >= payload.total) {
+          setSyncProgress(null);
+          void refresh();
+        }
       } else if (payload.trigger === "background") {
         setBackgroundSyncProgress(payload);
         if (payload.phase === "chunking") void refresh();

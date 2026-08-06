@@ -53,6 +53,7 @@ import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
 import { useStandardsCheck } from "./hooks/useStandardsCheck";
 import { useEmbeddingIndexWarmup } from "./hooks/useEmbeddingIndexWarmup";
 import { useEmbeddingPriorityFiles } from "./hooks/useEmbeddingPriorityFiles";
+import { useEmbeddingSetup } from "./hooks/useEmbeddingSetup";
 import { findAnchors } from "./lib/workspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
@@ -433,6 +434,12 @@ function App() {
     active: hasProject,
   });
   useEmbeddingIndexWarmup(project.repoRoot, { active: hasProject });
+  // Read-only observer feeding the status bar's embedding-index segment —
+  // never calls `sync()`/`updateConfig()`/etc. itself, only ever displays
+  // whatever `AssistantPanel`/`EmbeddingsTab`'s own instances (or the
+  // incremental file watcher) triggered. See those hooks' doc comment on
+  // why each panel keeps its own separate instance rather than sharing one.
+  const embeddingSetup = useEmbeddingSetup();
   useEmbeddingPriorityFiles(
     editor.tabs.map((t) => t.path),
     { active: hasProject },
@@ -1386,6 +1393,8 @@ function App() {
         indexStatus={workspaceIndex.status}
         indexProgress={workspaceIndex.progress}
         indexStats={workspaceIndex.stats}
+        embedIndexStatus={hasProject ? embeddingSetup.indexStatus : null}
+        embedSyncProgress={hasProject ? embeddingSetup.syncProgress : null}
       />
 
       {project.pendingOpen ? (
