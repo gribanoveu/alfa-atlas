@@ -4,15 +4,26 @@
 //! trigger a download, and downloading must not require constructing a
 //! provider a caller intends to keep using afterward.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use fastembed::{Bgem3Embedding, Bgem3InitOptions, Bgem3Model};
+use hf_hub::api::sync::ApiBuilder;
+use hf_hub::api::Progress;
 use hf_hub::{Cache, Repo, RepoType};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::domain::embeddings::{EmbeddingError, ModelStatus};
 use crate::infra::embedding_providers::local::{model_cache_dir, MODEL_FILE, MODEL_REPO};
+
+/// Mirrors `HF_ENDPOINT`'s hardcoded default inside `hf_hub`/`fastembed`
+/// itself — not part of either crate's public API, so this needs its own
+/// copy to reproduce the same `Api`/`ApiRepo` construction
+/// `fastembed::common::pull_from_hf` does internally (see
+/// `download_weights_with_progress`'s doc comment for why that reproduction
+/// has to match exactly, not just approximately).
+const HF_ENDPOINT_DEFAULT: &str = "https://huggingface.co";
 
 pub const MODEL_DOWNLOAD_PROGRESS_EVENT: &str = "embedding:model-download-progress";
 
@@ -84,30 +95,40 @@ pub fn cancel_download(state: &DownloadState) {
     state.cancel_current();
 }
 
-/// Triggers the model download — via `fastembed`'s own
-/// `Bgem3Embedding::try_new`, which downloads on a cache miss — and emits
-/// [`MODEL_DOWNLOAD_PROGRESS_EVENT`] before/after.
+/// Triggers the model download and emits [`MODEL_DOWNLOAD_PROGRESS_EVENT`]
+/// with real byte-level progress while the ~570MB weights file downloads,
+/// then hands off to `fastembed`'s own `Bgem3Embedding::try_new` to load it
+/// (plus fetch the handful of small tokenizer files BGE-M3 also needs).
 ///
-/// **Known limitation, not a bug to fix quietly later**: `fastembed`'s
-/// `InitOptions::show_download_progress` only toggles an `indicatif`
-/// console progress bar — there is no programmatic callback through
-/// fastembed's own API for a real byte-level percentage. `hf_hub` itself
-/// *does* expose one (`CacheRepo::download_with_progress`), but using it
-/// would mean bypassing fastembed's automatic download-on-init and
-/// pre-populating its cache directory ourselves to fastembed's exact
-/// expected layout — a real, more invasive integration, deliberately
-/// deferred rather than guessed at here. For now this emits a coarse
-/// two-step progress: `0.0` right before the (blocking, potentially
-/// multi-minute) download+load call, `1.0` once it returns successfully.
+/// `fastembed`'s `InitOptions::show_download_progress` only toggles an
+/// `indicatif` *console* progress bar — there's no programmatic callback
+/// through fastembed's own API for a real percentage. `hf_hub` (the crate
+/// fastembed itself downloads through) does expose one
+/// (`ApiRepo::download_with_progress`), so `download_weights_with_progress`
+/// below calls that directly for [`MODEL_FILE`] first — writing into the
+/// exact same on-disk cache layout (`Api`'s blob/pointer/ref files)
+/// `Bgem3Embedding::try_new`'s own internal `ApiRepo::get` will look for —
+/// so that subsequent call finds a cache hit and does no redundant network
+/// work, just a fast local lookup. The small tokenizer files
+/// `try_new` fetches after that stay coarse (no dedicated progress) since
+/// they're negligible next to the weights file's size — not worth a second
+/// progress-reporting path for a few hundred KB.
 pub fn download_model(app_handle: &AppHandle, state: &DownloadState) -> Result<(), EmbeddingError> {
     let generation = state.begin();
     emit_progress(app_handle, 0.0, None, None);
 
-    let options = Bgem3InitOptions::new(Bgem3Model::BGEM3Q)
-        .with_cache_dir(model_cache_dir()?)
-        .with_show_download_progress(false);
-
-    let result = Bgem3Embedding::try_new(options);
+    let cache_dir = model_cache_dir()?;
+    let result = download_weights_with_progress(app_handle, cache_dir.clone()).and_then(|_| {
+        let options = Bgem3InitOptions::new(Bgem3Model::BGEM3Q)
+            .with_cache_dir(cache_dir)
+            .with_show_download_progress(false);
+        Bgem3Embedding::try_new(options)
+            // `anyhow::Error::to_string()` only prints the outermost
+            // context ("Failed to retrieve model_quantized.onnx"),
+            // silently dropping the actual cause (network/TLS/timeout
+            // error) chained underneath it. `{:#}` prints the full chain.
+            .map_err(|e| EmbeddingError::Provider(format!("{e:#}")))
+    });
 
     if state.is_cancelled(generation) {
         emit_progress(app_handle, 0.0, None, Some(true));
@@ -120,15 +141,100 @@ pub fn download_model(app_handle: &AppHandle, state: &DownloadState) -> Result<(
             Ok(())
         }
         Err(e) => {
-            // `anyhow::Error::to_string()` only prints the outermost
-            // context ("Failed to retrieve model_quantized.onnx"),
-            // silently dropping the actual cause (network/TLS/timeout
-            // error) chained underneath it. `{:#}` prints the full chain.
-            let message = format!("{e:#}");
+            let message = e.to_string();
             emit_progress(app_handle, 0.0, Some(message.clone()), None);
-            Err(EmbeddingError::Provider(message))
+            Err(e)
         }
     }
+}
+
+/// Pre-populates [`MODEL_FILE`]'s cache entry via `hf_hub`'s
+/// `ApiRepo::download_with_progress`, emitting real byte progress as it
+/// goes. Constructs the `Api`/`ApiRepo` exactly the way `fastembed`'s own
+/// (private) `common::pull_from_hf` does — same `HF_HOME`/`HF_ENDPOINT`
+/// env var precedence, same `ApiBuilder` calls — because `Api`/`Cache`
+/// resolve a fixed on-disk layout from these inputs; anything less than an
+/// exact match would make this populate a *different* cache entry than the
+/// one `Bgem3Embedding::try_new` looks up afterward, turning this into
+/// wasted bandwidth instead of a shared cache hit. A no-op (near-instant)
+/// if the file's already cached — `download_with_progress` checks the
+/// blob's etag-keyed path itself, same as a plain cache lookup would.
+fn download_weights_with_progress(
+    app_handle: &AppHandle,
+    default_cache_dir: PathBuf,
+) -> Result<(), EmbeddingError> {
+    let cache_dir = std::env::var("HF_HOME")
+        .map(PathBuf::from)
+        .unwrap_or(default_cache_dir);
+    let endpoint = std::env::var("HF_ENDPOINT").unwrap_or_else(|_| HF_ENDPOINT_DEFAULT.to_string());
+
+    let api = ApiBuilder::new()
+        .with_cache_dir(cache_dir)
+        .with_endpoint(endpoint)
+        .with_progress(false)
+        .build()
+        .map_err(|e| EmbeddingError::Provider(e.to_string()))?;
+    let repo = api.model(MODEL_REPO.to_string());
+
+    repo.download_with_progress(MODEL_FILE, ProgressReporter::new(app_handle))
+        .map_err(|e| EmbeddingError::Provider(e.to_string()))?;
+    Ok(())
+}
+
+/// Reports [`MODEL_FILE`]'s download progress via
+/// [`MODEL_DOWNLOAD_PROGRESS_EVENT`], throttled to roughly 1% steps —
+/// `hf_hub::api::Progress::update` fires once per raw read chunk (a few
+/// tens of KB at a time for a ~570MB file), so emitting a Tauri IPC event
+/// on every call would flood the frontend with tens of thousands of events
+/// for one download.
+struct ProgressReporter<'a> {
+    app_handle: &'a AppHandle,
+    total: usize,
+    downloaded: usize,
+    last_emitted_fraction: f32,
+}
+
+impl<'a> ProgressReporter<'a> {
+    fn new(app_handle: &'a AppHandle) -> Self {
+        Self {
+            app_handle,
+            total: 0,
+            downloaded: 0,
+            last_emitted_fraction: 0.0,
+        }
+    }
+}
+
+impl Progress for ProgressReporter<'_> {
+    fn init(&mut self, size: usize, _filename: &str) {
+        self.total = size;
+        self.downloaded = 0;
+        self.last_emitted_fraction = 0.0;
+    }
+
+    fn update(&mut self, size: usize) {
+        self.downloaded += size;
+        if self.total == 0 {
+            return;
+        }
+        let fraction = (self.downloaded as f32 / self.total as f32).min(1.0);
+        if should_emit_progress(self.last_emitted_fraction, fraction) {
+            self.last_emitted_fraction = fraction;
+            emit_progress(self.app_handle, fraction, None, None);
+        }
+    }
+
+    fn finish(&mut self) {}
+}
+
+/// The throttling decision itself, pulled out of `ProgressReporter::update`
+/// as a pure function so it's testable without an `AppHandle` (this
+/// codebase has no mock/test `AppHandle` construction anywhere yet — every
+/// other `AppHandle`-taking function is left untested for the same reason,
+/// e.g. `commands::embeddings::sync_backlog_batch`'s tests call it directly
+/// rather than through the `AppHandle`-taking wrappers above it).
+fn should_emit_progress(last_emitted_fraction: f32, fraction: f32) -> bool {
+    fraction - last_emitted_fraction >= 0.01 || fraction >= 1.0
 }
 
 fn emit_progress(app_handle: &AppHandle, progress: f32, error: Option<String>, cancelled: Option<bool>) {
@@ -140,4 +246,33 @@ fn emit_progress(app_handle: &AppHandle, progress: f32, error: Option<String>, c
             cancelled,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_emit_progress_fires_on_a_one_percent_step() {
+        assert!(should_emit_progress(0.0, 0.01));
+        assert!(!should_emit_progress(0.0, 0.005));
+    }
+
+    #[test]
+    fn should_emit_progress_always_fires_on_completion_even_for_a_tiny_step() {
+        // A file whose last chunk pushes `fraction` from e.g. 0.999 to 1.0
+        // must still emit — the UI needs a definitive "done" tick, not just
+        // "close enough to 100%".
+        assert!(should_emit_progress(0.999, 1.0));
+    }
+
+    #[test]
+    fn should_emit_progress_does_not_regress_on_a_resumed_download() {
+        // `hf_hub`'s `download_from` calls `progress.update(current)` once
+        // up front to account for bytes a resumed download already has on
+        // disk — `last_emitted_fraction` starts at `0.0` (reset in `init`)
+        // regardless, so the first post-resume update should still emit if
+        // it clears the 1% threshold from zero.
+        assert!(should_emit_progress(0.0, 0.42));
+    }
 }
