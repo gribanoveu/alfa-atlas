@@ -50,7 +50,7 @@ impl LanguageIndexer for MarkdownIndexer {
             }
         }
 
-        LanguageFacts { symbols }
+        LanguageFacts { symbols, imports: Vec::new() }
     }
 }
 

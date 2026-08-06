@@ -12,7 +12,7 @@ use crate::domain::embeddings::{
 };
 use crate::domain::paths;
 use crate::domain::project_config::{OpenedProject, ProjectConfig};
-use crate::domain::repo_index::{detect_language, FileId, FileMetadata, RepoIndexError, Symbol};
+use crate::domain::repo_index::{detect_language, FileId, RepoIndexError};
 use crate::domain::workspace_index::DocumentId;
 use crate::infra::index_store::IndexStore;
 use crate::infra::{embedding_credentials_store, embedding_providers, project_store};
@@ -23,7 +23,7 @@ use crate::services::embedding_model::{self, DownloadState};
 use crate::services::index_store_ensure;
 use crate::services::index_watcher::{FileChangeKind, IndexWatcher};
 use crate::services::project_open;
-use crate::services::repo_index::RepositoryIndex;
+use crate::services::repo_index::{RepositoryIndex, ReusableFileData};
 use crate::services::workspace_index::WorkspaceIndex;
 
 const META_EMBEDDING_DIMENSIONS: &str = "embedding_dimensions";
@@ -409,17 +409,19 @@ pub(crate) fn attach_embedding_index(
 /// just-restarted) `embedding_sync` call feeds it so a file whose mtime/size
 /// (cheapest check) or content hash (fallback) still match the last sync
 /// skips a tree-sitter/pulldown-cmark re-parse entirely, not just
-/// re-embedding.
-fn load_persisted_symbols(
-    store: &IndexStore,
-) -> Result<HashMap<FileId, (FileMetadata, Vec<Symbol>)>, String> {
+/// re-embedding. `imports` is deliberately always empty here — Java imports
+/// aren't persisted to SQLite (see `ReusableFileData`'s doc comment); a
+/// reused entry's imports go stale until that file is genuinely re-parsed,
+/// which is fine only because nothing reads `imports` outside a *true* first
+/// sync, when `persisted`/`resident` are both empty by construction anyway.
+fn load_persisted_symbols(store: &IndexStore) -> Result<HashMap<FileId, ReusableFileData>, String> {
     let files = store.load_all_files().map_err(|e| e.to_string())?;
     let mut symbols_by_file = store.load_all_symbols().map_err(|e| e.to_string())?;
     Ok(files
         .into_iter()
         .map(|(file_id, metadata)| {
             let symbols = symbols_by_file.remove(&file_id).unwrap_or_default();
-            (file_id, (metadata, symbols))
+            (file_id, ReusableFileData { metadata, symbols, imports: Vec::new() })
         })
         .collect())
 }
@@ -918,6 +920,11 @@ pub async fn embedding_sync(
                 let suffix = index_root_suffix_for(&project, &index_root)?;
                 for file_id in &opened {
                     set.extend(direct_dependencies(&workspace_index, file_id, &suffix));
+                    // Java's import graph lives directly in `FileId` space
+                    // (no `WorkspaceIndex`/`DocumentId` translation needed —
+                    // `.java` is never a `WorkspaceIndex` document) — see
+                    // `RepositoryIndex::java_dependencies`.
+                    set.extend(repo_index.java_dependencies(file_id));
                 }
             }
             set.retain(|id| current_set.contains(id));

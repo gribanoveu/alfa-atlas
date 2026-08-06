@@ -8,7 +8,7 @@
 
 use tree_sitter::{Node, Parser};
 
-use crate::domain::repo_index::{LanguageFacts, LanguageIndexer, Symbol, SymbolKind};
+use crate::domain::repo_index::{ImportRef, LanguageFacts, LanguageIndexer, Symbol, SymbolKind};
 
 pub struct JavaIndexer;
 
@@ -29,12 +29,13 @@ impl LanguageIndexer for JavaIndexer {
         };
 
         let mut symbols = Vec::new();
-        walk(tree.root_node(), content.as_bytes(), &mut symbols);
-        LanguageFacts { symbols }
+        let mut imports = Vec::new();
+        walk(tree.root_node(), content.as_bytes(), &mut symbols, &mut imports);
+        LanguageFacts { symbols, imports }
     }
 }
 
-fn walk(node: Node, source: &[u8], out: &mut Vec<Symbol>) {
+fn walk(node: Node, source: &[u8], out: &mut Vec<Symbol>, imports: &mut Vec<ImportRef>) {
     match node.kind() {
         "class_declaration" => push_named(node, source, SymbolKind::Class, out),
         "interface_declaration" => push_named(node, source, SymbolKind::Interface, out),
@@ -43,12 +44,42 @@ fn walk(node: Node, source: &[u8], out: &mut Vec<Symbol>) {
             push_named(node, source, SymbolKind::Method, out)
         }
         "field_declaration" => push_field_declarators(node, source, out),
+        "import_declaration" => push_import(node, source, imports),
         _ => {}
     }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk(child, source, out);
+        walk(child, source, out, imports);
+    }
+}
+
+/// `import_declaration`'s children (per the grammar) are, in order: an
+/// optional `static` keyword token, the dotted name as either an
+/// `identifier` or `scoped_identifier` node (already-joined text — no
+/// reconstruction needed), and an optional `asterisk` node for a wildcard
+/// import (`import foo.bar.*;`). A `static` member import's name includes
+/// the member (e.g. `com.foo.Bar.method`), which won't suffix-match any
+/// real file — that's an accepted, silent under-resolution (see
+/// `RepositoryIndex::java_dependencies`'s "no match" fallback), not
+/// specially handled here.
+fn push_import(node: Node, source: &[u8], out: &mut Vec<ImportRef>) {
+    let mut cursor = node.walk();
+    let mut fqn: Option<String> = None;
+    let mut is_wildcard = false;
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "identifier" | "scoped_identifier" => {
+                if let Ok(text) = child.utf8_text(source) {
+                    fqn = Some(text.to_string());
+                }
+            }
+            "asterisk" => is_wildcard = true,
+            _ => {}
+        }
+    }
+    if let Some(fqn) = fqn {
+        out.push(ImportRef { fqn, is_wildcard });
     }
 }
 
@@ -143,6 +174,28 @@ enum Status {
         assert_eq!(age_field.kind, SymbolKind::Field);
         let score_field = by_name("score").expect("multi-declarator field symbol");
         assert_ne!(age_field.start_byte, score_field.start_byte);
+    }
+
+    #[test]
+    fn extracts_regular_static_and_wildcard_imports() {
+        let src = r#"
+import com.example.Foo;
+import static com.example.Bar.method;
+import com.example.util.*;
+
+class C {}
+"#;
+        let facts = JavaIndexer.index(src);
+        let by_fqn = |fqn: &str| facts.imports.iter().find(|i| i.fqn == fqn);
+
+        let foo = by_fqn("com.example.Foo").expect("regular import");
+        assert!(!foo.is_wildcard);
+
+        let bar = by_fqn("com.example.Bar.method").expect("static import");
+        assert!(!bar.is_wildcard);
+
+        let util = by_fqn("com.example.util").expect("wildcard import");
+        assert!(util.is_wildcard);
     }
 
     #[test]

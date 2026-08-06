@@ -1050,6 +1050,26 @@ mod tests {
     }
 
     #[test]
+    fn build_indexes_json_ref_as_an_include() {
+        let root = temp_dir();
+        fs::write(
+            root.join("api.json"),
+            r#"{"components": {"$ref": "./common.json"}}"#,
+        )
+        .unwrap();
+        fs::write(root.join("common.json"), "{}").unwrap();
+
+        let idx = build_index(&root);
+        assert_eq!(idx.documents.len(), 2);
+        let includes = idx.find_includes(&DocumentId::new("api.json"));
+        assert_eq!(includes.len(), 1);
+        // `insert_parsed` resolves the raw `./common.json` target to a
+        // repo-relative key before storing it.
+        assert_eq!(includes[0].path, "common.json");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn build_emits_finished_event_stats() {
         let root = temp_dir();
         fs::write(root.join("a.adoc"), "[[a]]\n= A\n").unwrap();

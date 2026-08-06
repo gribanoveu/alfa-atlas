@@ -3,7 +3,7 @@
 //! for the "why" behind the data shapes (no content stored, ranges on every
 //! symbol, etc.) and `infra::language_indexers` for the per-language logic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -13,11 +13,23 @@ use dashmap::DashMap;
 
 use crate::domain::paths;
 use crate::domain::repo_index::{
-    FileId, FileMetadata, IndexedFile, Language, LanguageIndexer, RepoIndexError, Symbol,
-    INDEX_VERSION,
+    FileId, FileMetadata, ImportRef, IndexedFile, Language, LanguageIndexer, RepoIndexError,
+    Symbol, INDEX_VERSION,
 };
 use crate::infra::language_indexers;
 use crate::infra::workspace_scanner;
+
+/// A file's already-known facts a cold-start (`persisted`, from
+/// `infra::index_store::IndexStore`) or same-session (`resident`) caller can
+/// hand back to `build_reusing_symbols` to skip a re-parse. Named (rather
+/// than a `(FileMetadata, Vec<Symbol>, Vec<ImportRef>)` tuple) purely for
+/// readability now that it's three fields.
+#[derive(Debug, Clone)]
+pub struct ReusableFileData {
+    pub metadata: FileMetadata,
+    pub symbols: Vec<Symbol>,
+    pub imports: Vec<ImportRef>,
+}
 
 /// Compares two `SystemTime`s at whole-second precision — matching what
 /// `infra::index_store::IndexStore` actually persists (`mtime_secs`, an
@@ -91,7 +103,7 @@ impl RepositoryIndex {
     pub fn build_reusing_symbols(
         &self,
         repo_root: &Path,
-        persisted: &HashMap<FileId, (FileMetadata, Vec<Symbol>)>,
+        persisted: &HashMap<FileId, ReusableFileData>,
     ) -> Result<RepoIndexStats, RepoIndexError> {
         self.build_internal(repo_root, Some(persisted))
     }
@@ -99,7 +111,7 @@ impl RepositoryIndex {
     fn build_internal(
         &self,
         repo_root: &Path,
-        persisted: Option<&HashMap<FileId, (FileMetadata, Vec<Symbol>)>>,
+        persisted: Option<&HashMap<FileId, ReusableFileData>>,
     ) -> Result<RepoIndexStats, RepoIndexError> {
         // Snapshot whatever's already resident *before* clearing — a file
         // whose content hasn't changed since this session's own last build
@@ -107,13 +119,17 @@ impl RepositoryIndex {
         // via `persisted` (which only a cold-start caller populates from
         // SQLite). This is what makes a second `build()` call in the same
         // session cheap even with no `persisted` map at all.
-        let resident: HashMap<FileId, (FileMetadata, Vec<Symbol>)> = self
+        let resident: HashMap<FileId, ReusableFileData> = self
             .files
             .iter()
             .map(|entry| {
                 (
                     entry.key().clone(),
-                    (entry.value().metadata.clone(), entry.value().symbols.clone()),
+                    ReusableFileData {
+                        metadata: entry.value().metadata.clone(),
+                        symbols: entry.value().symbols.clone(),
+                        imports: entry.value().imports.clone(),
+                    },
                 )
             })
             .collect();
@@ -157,15 +173,16 @@ impl RepositoryIndex {
                 metadata.size_bytes == file.size && mtime_secs_eq(metadata.modified_at, file.modified)
             };
             let prefiltered = resident_entry
-                .filter(|(metadata, _)| mtime_size_match(metadata))
-                .or_else(|| persisted_entry.filter(|(metadata, _)| mtime_size_match(metadata)));
-            if let Some((prior_metadata, prior_symbols)) = prefiltered {
+                .filter(|data| mtime_size_match(&data.metadata))
+                .or_else(|| persisted_entry.filter(|data| mtime_size_match(&data.metadata)));
+            if let Some(prior) = prefiltered {
                 stats.record(language);
                 self.files.insert(
                     file_id,
                     IndexedFile {
-                        metadata: prior_metadata.clone(),
-                        symbols: prior_symbols.clone(),
+                        metadata: prior.metadata.clone(),
+                        symbols: prior.symbols.clone(),
+                        imports: prior.imports.clone(),
                     },
                 );
                 continue;
@@ -193,24 +210,27 @@ impl RepositoryIndex {
 
             // mtime/size looked different (or there was no prior record),
             // but the actual content hash might still match — e.g. a touch
-            // with no real edit. Reuse symbols in that case too, without
-            // trusting the weaker mtime/size signal for it. `resident` and
-            // `persisted` are checked independently here too, same reasoning
-            // as the pre-filter above.
-            let symbols = resident_entry
-                .filter(|(prior_metadata, _)| prior_metadata.hash == hash)
-                .or_else(|| persisted_entry.filter(|(prior_metadata, _)| prior_metadata.hash == hash))
-                .map(|(_, symbols)| symbols.clone())
-                .unwrap_or_else(|| {
-                    self.indexers
+            // with no real edit. Reuse symbols/imports in that case too,
+            // without trusting the weaker mtime/size signal for it.
+            // `resident` and `persisted` are checked independently here too,
+            // same reasoning as the pre-filter above.
+            let reused = resident_entry
+                .filter(|data| data.metadata.hash == hash)
+                .or_else(|| persisted_entry.filter(|data| data.metadata.hash == hash));
+            let (symbols, imports) = match reused {
+                Some(data) => (data.symbols.clone(), data.imports.clone()),
+                None => {
+                    let facts = self
+                        .indexers
                         .get(&language)
                         .expect("default_indexers registers every Language variant")
-                        .index(&content)
-                        .symbols
-                });
+                        .index(&content);
+                    (facts.symbols, facts.imports)
+                }
+            };
 
             stats.record(language);
-            self.files.insert(file_id, IndexedFile { metadata, symbols });
+            self.files.insert(file_id, IndexedFile { metadata, symbols, imports });
         }
 
         Ok(stats)
@@ -248,6 +268,63 @@ impl RepositoryIndex {
                     .collect::<Vec<_>>()
             })
             .collect()
+    }
+
+    /// One-hop Java import expansion, in `FileId` space: resolves
+    /// `file_id`'s already-parsed `imports` (`domain::repo_index::ImportRef`,
+    /// extracted by `infra::language_indexers::java::JavaIndexer`) against
+    /// every other currently-indexed `Language::Java` file's
+    /// `relative_path`, using a suffix-match heuristic — no build-system or
+    /// classpath awareness. `com.foo.Bar` matches any indexed file whose
+    /// path ends with `com/foo/Bar.java` on a path-segment boundary; a
+    /// wildcard `com.foo.*` matches every indexed file directly inside a
+    /// `com/foo` directory. An import that resolves to nothing (an
+    /// external/library class, or — for a `static` member import — one
+    /// whose last segment is a method/field rather than a class, see
+    /// `push_import`'s doc comment in `java.rs`) is silently dropped, the
+    /// same graceful-degradation philosophy
+    /// `commands::embeddings::direct_dependencies` already uses for an
+    /// AsciiDoc document `WorkspaceIndex` doesn't know about. Ambiguous
+    /// matches (more than one file with the same suffix, e.g. two source
+    /// roots) are all included rather than guessed between.
+    pub fn java_dependencies(&self, file_id: &FileId) -> Vec<FileId> {
+        // Clone `imports` out and let the `DashMap` entry guard drop before
+        // iterating `self.files` again below — holding it across the loop
+        // risks a shard-lock deadlock if `file_id` and some other entry land
+        // in the same shard (same hazard `build_internal`'s `resident`
+        // snapshot already sidesteps by cloning up front).
+        let imports = match self.files.get(file_id) {
+            Some(entry) => entry.value().imports.clone(),
+            None => return Vec::new(),
+        };
+        if imports.is_empty() {
+            return Vec::new();
+        }
+
+        let mut out: HashSet<FileId> = HashSet::new();
+        for import in &imports {
+            let package_path = import.fqn.replace('.', "/");
+            if package_path.is_empty() {
+                continue;
+            }
+            for entry in self.files.iter() {
+                if entry.value().metadata.language != Language::Java {
+                    continue;
+                }
+                let path = &entry.value().metadata.relative_path;
+                let matched = if import.is_wildcard {
+                    let parent = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
+                    parent == package_path || parent.ends_with(&format!("/{package_path}"))
+                } else {
+                    let suffix = format!("{package_path}.java");
+                    path == &suffix || path.ends_with(&format!("/{suffix}"))
+                };
+                if matched {
+                    out.insert(entry.key().clone());
+                }
+            }
+        }
+        out.into_iter().collect()
     }
 
     /// Every indexed file's id — deliberately cheap (clones only the small
@@ -333,6 +410,7 @@ impl RepositoryIndex {
             IndexedFile {
                 metadata,
                 symbols: facts.symbols,
+                imports: facts.imports,
             },
         );
         Ok(())
@@ -445,6 +523,96 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    /// A small Java-only package tree for `java_dependencies` tests —
+    /// separate from `fixture_repo()`, which has only one flat `.java` file
+    /// and no import-worthy package structure.
+    fn java_package_fixture() -> std::path::PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!("alfa-atlas-java-deps-{nanos}-{n}"));
+        fs::create_dir_all(root.join("com/example/util")).unwrap();
+
+        fs::write(
+            root.join("com/example/Foo.java"),
+            "package com.example;\n\
+             import com.example.util.Bar;\n\
+             import com.example.util.*;\n\
+             import java.util.List;\n\
+             class Foo {}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("com/example/util/Bar.java"),
+            "package com.example.util;\nclass Bar {}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("com/example/util/Baz.java"),
+            "package com.example.util;\nclass Baz {}\n",
+        )
+        .unwrap();
+
+        root.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn java_dependencies_resolves_a_regular_import_to_its_file() {
+        let root = java_package_fixture();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        let deps = index.java_dependencies(&FileId("com/example/Foo.java".to_string()));
+        assert!(deps.contains(&FileId("com/example/util/Bar.java".to_string())));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn java_dependencies_resolves_a_wildcard_import_to_every_file_in_the_package() {
+        let root = java_package_fixture();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        let deps = index.java_dependencies(&FileId("com/example/Foo.java".to_string()));
+        assert!(deps.contains(&FileId("com/example/util/Bar.java".to_string())));
+        assert!(deps.contains(&FileId("com/example/util/Baz.java".to_string())));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn java_dependencies_ignores_unresolvable_external_imports() {
+        let root = java_package_fixture();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        // `java.util.List` has no matching indexed file (no `java/util/`
+        // directory in this repo) — it must not produce a bogus edge.
+        let deps = index.java_dependencies(&FileId("com/example/Foo.java".to_string()));
+        assert!(!deps.iter().any(|d| d.0.contains("List")));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn java_dependencies_is_empty_for_a_file_with_no_imports() {
+        let root = java_package_fixture();
+        let index = RepositoryIndex::new();
+        index.build(&root).unwrap();
+
+        let deps = index.java_dependencies(&FileId("com/example/util/Bar.java".to_string()));
+        assert!(deps.is_empty());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn java_dependencies_is_empty_for_an_unknown_file() {
+        let index = RepositoryIndex::new();
+        let deps = index.java_dependencies(&FileId("nope.java".to_string()));
+        assert!(deps.is_empty());
+    }
+
     #[test]
     fn file_ids_lists_every_indexed_file() {
         let root = fixture_repo();
@@ -527,6 +695,7 @@ mod tests {
                     language: Language::Java,
                 },
                 symbols: Vec::new(),
+                imports: Vec::new(),
             },
         );
         assert!(index.get(&file_id).is_some());
@@ -631,6 +800,7 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             LanguageFacts {
                 symbols: self.symbols.clone(),
+                imports: Vec::new(),
             }
         }
     }
@@ -708,7 +878,7 @@ mod tests {
         let mut persisted = HashMap::new();
         persisted.insert(
             FileId("src/UserService.java".to_string()),
-            (prior_metadata, fixed_symbols()),
+            ReusableFileData { metadata: prior_metadata, symbols: fixed_symbols(), imports: Vec::new() },
         );
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -752,7 +922,7 @@ mod tests {
         let mut persisted = HashMap::new();
         persisted.insert(
             FileId("src/UserService.java".to_string()),
-            (prior_metadata, fixed_symbols()),
+            ReusableFileData { metadata: prior_metadata, symbols: fixed_symbols(), imports: Vec::new() },
         );
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -800,6 +970,7 @@ mod tests {
                     language: Language::Java,
                 },
                 symbols: vec![],
+                imports: vec![],
             },
         );
 
@@ -813,7 +984,7 @@ mod tests {
         };
         persisted.insert(
             FileId("src/UserService.java".to_string()),
-            (persisted_metadata, fixed_symbols()),
+            ReusableFileData { metadata: persisted_metadata, symbols: fixed_symbols(), imports: Vec::new() },
         );
 
         index.build_reusing_symbols(&root, &persisted).unwrap();
@@ -850,7 +1021,7 @@ mod tests {
         let mut persisted = HashMap::new();
         persisted.insert(
             FileId("src/UserService.java".to_string()),
-            (prior_metadata, fixed_symbols()),
+            ReusableFileData { metadata: prior_metadata, symbols: fixed_symbols(), imports: Vec::new() },
         );
 
         let calls = Arc::new(AtomicUsize::new(0));
@@ -886,7 +1057,7 @@ mod tests {
         let mut persisted = HashMap::new();
         persisted.insert(
             FileId("src/UserService.java".to_string()),
-            (stale_metadata, vec![]),
+            ReusableFileData { metadata: stale_metadata, symbols: vec![], imports: vec![] },
         );
 
         let index = RepositoryIndex::new();
