@@ -57,7 +57,11 @@ mod tests {
     fn bundled_manifest_contains_alfagen() {
         let alfagen = find_system_provider("alfagen").expect("alfagen preset present");
         assert_eq!(alfagen.label, "AlfaGen");
-        assert_eq!(alfagen.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev");
+        assert_eq!(alfagen.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
+        assert_eq!(
+            alfagen.limit,
+            Some(crate::domain::llm::ModelLimit { context: 1_000_000, output: 30_000 })
+        );
     }
 
     /// AlfaGen sits behind an internal corporate CA (`Alfa-Bank ST CA

@@ -49,8 +49,8 @@ type TopBarProps = {
   onCloneProject?: (probe: ProbeResult) => Promise<void>;
   /** Bump this (e.g. `n => n + 1`) to open Settings on the "standards" tab. */
   openStandardsSettingsSignal?: number;
-  /** Bump this (e.g. `n => n + 1`) to open Settings on the "embeddings" tab. */
-  openEmbeddingsSettingsSignal?: number;
+  /** Bump this (e.g. `n => n + 1`) to open Settings on the "llm" tab. */
+  openLlmSettingsSignal?: number;
 };
 
 export function TopBar({
@@ -86,7 +86,7 @@ export function TopBar({
   onSelectProject,
   onCloneProject,
   openStandardsSettingsSignal,
-  openEmbeddingsSettingsSignal,
+  openLlmSettingsSignal,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
@@ -94,7 +94,7 @@ export function TopBar({
   const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
   const standardsSignalRef = useRef(openStandardsSettingsSignal);
-  const embeddingsSignalRef = useRef(openEmbeddingsSettingsSignal);
+  const llmSignalRef = useRef(openLlmSettingsSignal);
 
   useEffect(() => {
     if (
@@ -109,16 +109,13 @@ export function TopBar({
   }, [openStandardsSettingsSignal]);
 
   useEffect(() => {
-    if (
-      openEmbeddingsSettingsSignal === undefined ||
-      openEmbeddingsSettingsSignal === embeddingsSignalRef.current
-    ) {
+    if (openLlmSettingsSignal === undefined || openLlmSettingsSignal === llmSignalRef.current) {
       return;
     }
-    embeddingsSignalRef.current = openEmbeddingsSettingsSignal;
-    setSettingsInitialSection("embeddings");
+    llmSignalRef.current = openLlmSettingsSignal;
+    setSettingsInitialSection("llm");
     setSettingsOpen(true);
-  }, [openEmbeddingsSettingsSignal]);
+  }, [openLlmSettingsSignal]);
 
   const onAction = useCallback(
     (action: MenuActionId) => {

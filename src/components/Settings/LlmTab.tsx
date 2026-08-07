@@ -1,12 +1,10 @@
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
+import { AUTO_MODEL_LABEL, AUTO_MODEL_VALUE } from "../../lib/assistantConfig";
 import type { LlmModelInfo } from "../../lib/llm";
 import "../Welcome/CloneRepoModal.css";
 import "./LlmTab.css";
-
-const AUTO_MODEL_VALUE = "";
-const AUTO_MODEL_LABEL = "Авто (первая доступная)";
 
 /** Derives a stable settings-key id from a user-typed label — the "Добавить
  * провайдера" form only asks for a name, not a raw identifier, so this is

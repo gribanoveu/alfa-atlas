@@ -19,6 +19,19 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Token limits for a provider's (currently configured) model — informational
+/// only, not enforced anywhere in this client; surfaced to the frontend so
+/// the chat UI can show the user what they're working with. Not fetched
+/// live (OpenAI-compatible `/models` responses don't reliably carry this),
+/// so it travels through the same manifest-preset/settings-override layers
+/// as `model` itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelLimit {
+    pub context: u32,
+    pub output: u32,
+}
+
 /// One entry in a project-independent, globally-persisted list of
 /// configured LLM providers (`AppSettings.llm.providers`). For a `System`
 /// provider (an id that also appears in the compiled-in manifest, see
@@ -48,6 +61,12 @@ pub struct LlmProviderConfig {
     /// doesn't already trust.
     #[serde(default)]
     pub trusted_cert_pem: Option<String>,
+    /// Overrides the manifest's baked-in `limit` for a system provider, or
+    /// supplies one outright for a custom provider — same "override wins
+    /// when `Some`" merge as the other fields, see
+    /// `services::llm_config::resolve_provider`.
+    #[serde(default)]
+    pub limit: Option<ModelLimit>,
 }
 
 /// Persisted globally (`AppSettings.llm`) — provider configuration is not
@@ -79,6 +98,8 @@ pub struct LlmProviderPreset {
     pub default_model: Option<String>,
     #[serde(default)]
     pub trusted_cert_pem: Option<String>,
+    #[serde(default)]
+    pub limit: Option<ModelLimit>,
 }
 
 /// The merged, ready-to-use view of one provider — a manifest preset (if
@@ -105,6 +126,9 @@ pub struct ResolvedLlmProvider {
     /// model name.
     pub model: Option<String>,
     pub trusted_cert_pem: Option<String>,
+    /// Token limits for whichever model `model` names — informational only,
+    /// `None` when the provider (system or custom) doesn't specify one.
+    pub limit: Option<ModelLimit>,
 }
 
 /// A chat message's speaker. `Tool` is needed even though nothing sends one
@@ -208,6 +232,14 @@ pub enum LlmError {
 /// callers run this inside `spawn_blocking`.
 pub trait LlmProvider: Send + Sync {
     fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError>;
+    /// Streams a completion, invoking `on_delta` once per non-empty text
+    /// chunk as it arrives, and returning the full accumulated text once
+    /// the stream ends — a caller that also wants the authoritative final
+    /// text (e.g. as a safety net against a dropped event on the way to a
+    /// frontend) reads the return value rather than re-deriving it from the
+    /// callback calls. `&dyn Fn` (not a generic parameter) because this
+    /// trait is used as a trait object (`Arc<dyn LlmProvider>`).
+    fn chat_stream(&self, request: ChatRequest, on_delta: &dyn Fn(&str)) -> Result<String, LlmError>;
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError>;
 }
 

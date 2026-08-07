@@ -1,24 +1,37 @@
 //! Tauri commands for the LLM provider registry: settings/credential CRUD,
 //! resolving the merged provider list for the Settings picker, live model
-//! listing, and a lightweight "test connection" check. Mirrors
-//! `commands::embeddings`'s config-CRUD shape closely — most of these are
-//! thin delegations to `services::llm_config`/`infra::llm_credentials_store`.
+//! listing, a lightweight "test connection" check, and streaming chat.
+//! Mirrors `commands::embeddings`'s config-CRUD shape closely — most of
+//! these are thin delegations to
+//! `services::llm_config`/`infra::llm_credentials_store`.
 //!
-//! No chat UI or tool-execution loop calls into this yet, and
-//! `LlmProvider::chat` isn't invoked anywhere yet either — `llm_test_connection`
-//! verifies the stack (config → credentials → TLS → HTTP → response parsing)
-//! via `list_models` alone, without spending a completion or depending on a
-//! model being pinned/resolvable.
+//! No tool-execution loop calls into this yet — `llm_chat_stream` is a
+//! plain conversation turn (no `tools`), the first real caller of
+//! `LlmProvider::chat_stream`.
 
 use std::sync::{Arc, Mutex};
 
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::domain::llm::{
-    LlmModelInfo, LlmProvider, LlmProviderConfig, LlmSettings, ResolvedLlmProvider,
+    ChatRequest, LlmMessage, LlmModelInfo, LlmProvider, LlmProviderConfig, LlmSettings,
+    ResolvedLlmProvider,
 };
 use crate::infra::{llm_credentials_store, llm_providers};
 use crate::services::llm_config;
+
+/// Fires once per non-empty text chunk while `llm_chat_stream`'s promise is
+/// still in flight. Global/unscoped, matching `SYNC_PROGRESS_EVENT`'s
+/// precedent in `commands::embeddings` — this app has exactly one chat
+/// panel / one in-flight conversation at a time, so no per-request id is
+/// threaded through.
+pub const CHAT_STREAM_DELTA_EVENT: &str = "llm:chat-stream-delta";
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatStreamDeltaPayload {
+    delta: String,
+}
 
 /// Caches the constructed `LlmProvider` across calls, same reasoning as
 /// `commands::embeddings::EmbeddingProviderSlot`: keyed by
@@ -137,6 +150,40 @@ pub async fn llm_test_connection(
             0 => "Соединение установлено, но провайдер не вернул ни одной модели.".to_string(),
             n => format!("Соединение установлено. Доступно моделей: {n}."),
         })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// A plain conversation turn, streamed. The frontend owns building the full
+/// message list (including any system prompt) — this command does no
+/// message-list logic of its own. Resolves the provider/model exactly like
+/// `llm_test_connection`, then streams the reply as
+/// `CHAT_STREAM_DELTA_EVENT` deltas while also returning the authoritative
+/// full text once the stream ends (a safety net for the frontend against a
+/// dropped event).
+#[tauri::command]
+pub async fn llm_chat_stream(
+    app: AppHandle,
+    provider_id: String,
+    messages: Vec<LlmMessage>,
+    llm_provider: State<'_, Arc<LlmProviderSlot>>,
+) -> Result<String, String> {
+    let llm_provider = llm_provider.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
+        let resolved =
+            llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
+        let api_key = llm_credentials_store::get_api_key(&provider_id);
+        let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
+        let model = llm_config::effective_model(&resolved, provider.as_ref())
+            .map_err(|e| e.to_string())?;
+
+        let request = ChatRequest { messages, tools: vec![], model };
+        let on_delta = |delta: &str| {
+            let _ = app.emit(CHAT_STREAM_DELTA_EVENT, ChatStreamDeltaPayload { delta: delta.to_string() });
+        };
+        provider.chat_stream(request, &on_delta).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

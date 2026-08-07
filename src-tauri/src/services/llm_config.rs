@@ -44,6 +44,7 @@ pub fn resolve_provider(
         let trusted_cert_pem = over
             .and_then(|o| o.trusted_cert_pem.clone())
             .or_else(|| preset.trusted_cert_pem.clone());
+        let limit = over.and_then(|o| o.limit).or(preset.limit);
         return Ok(ResolvedLlmProvider {
             id: id.to_string(),
             label,
@@ -51,6 +52,7 @@ pub fn resolve_provider(
             is_system: true,
             model,
             trusted_cert_pem,
+            limit,
         });
     }
 
@@ -67,6 +69,7 @@ pub fn resolve_provider(
         is_system: false,
         model: over.model.clone(),
         trusted_cert_pem: over.trusted_cert_pem.clone(),
+        limit: over.limit,
     })
 }
 
@@ -140,7 +143,7 @@ pub fn remove_provider_config(settings: &mut LlmSettings, provider_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::llm::{ChatRequest, ChatResponse, LlmModelInfo};
+    use crate::domain::llm::{ChatRequest, ChatResponse, LlmModelInfo, ModelLimit};
 
     struct FakeProvider {
         models: Vec<&'static str>,
@@ -149,6 +152,10 @@ mod tests {
 
     impl LlmProvider for FakeProvider {
         fn chat(&self, _request: ChatRequest) -> Result<ChatResponse, LlmError> {
+            unimplemented!("not exercised by these tests")
+        }
+
+        fn chat_stream(&self, _request: ChatRequest, _on_delta: &dyn Fn(&str)) -> Result<String, LlmError> {
             unimplemented!("not exercised by these tests")
         }
 
@@ -165,13 +172,17 @@ mod tests {
         let settings = LlmSettings::default();
         let resolved = resolve_provider("alfagen", &settings).unwrap();
         assert_eq!(resolved.label, "AlfaGen");
-        assert_eq!(resolved.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev");
+        assert_eq!(resolved.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
         assert!(resolved.is_system);
-        assert_eq!(resolved.model, None);
+        // AlfaGen ships with a pinned manifest default model (see
+        // `system_llm_providers.json`) so the no-override case resolves to
+        // that, not `None`.
+        assert_eq!(resolved.model.as_deref(), Some("DeepSeek-V4-Flash"));
         // AlfaGen ships with a real bundled trust cert (its internal CA
         // root) — see `infra::llm_provider_manifest`'s doc comment — so the
         // no-override case must still resolve to *that*, not `None`.
         assert!(resolved.trusted_cert_pem.unwrap().contains("BEGIN CERTIFICATE"));
+        assert_eq!(resolved.limit, Some(ModelLimit { context: 1_000_000, output: 30_000 }));
     }
 
     #[test]
@@ -184,12 +195,14 @@ mod tests {
                 base_url: None,
                 model: Some("gpt-4o-mini".to_string()),
                 trusted_cert_pem: Some("-----BEGIN CERTIFICATE-----\n...".to_string()),
+                limit: None,
             }],
         };
         let resolved = resolve_provider("alfagen", &settings).unwrap();
         // Unset override fields still fall back to the manifest.
         assert_eq!(resolved.label, "AlfaGen");
-        assert_eq!(resolved.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev");
+        assert_eq!(resolved.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
+        assert_eq!(resolved.limit, Some(ModelLimit { context: 1_000_000, output: 30_000 }));
         // Set override fields win.
         assert_eq!(resolved.model.as_deref(), Some("gpt-4o-mini"));
         assert!(resolved.trusted_cert_pem.unwrap().starts_with("-----BEGIN CERTIFICATE-----"));
@@ -211,6 +224,7 @@ mod tests {
                 base_url: None,
                 model: None,
                 trusted_cert_pem: None,
+                limit: None,
             }],
         };
         assert!(resolve_provider("my-custom", &settings).is_err());
@@ -226,6 +240,7 @@ mod tests {
                 base_url: Some("https://api.openai.com/v1".to_string()),
                 model: Some("gpt-4o".to_string()),
                 trusted_cert_pem: None,
+                limit: None,
             }],
         };
         let resolved = resolve_provider("my-custom", &settings).unwrap();
@@ -244,6 +259,7 @@ mod tests {
                 base_url: None,
                 model: Some("pinned-model".to_string()),
                 trusted_cert_pem: None,
+                limit: None,
             }],
         };
         let list = list_resolved_providers(&settings);
@@ -262,6 +278,7 @@ mod tests {
                 base_url: Some("https://example.com/v1".to_string()),
                 model: None,
                 trusted_cert_pem: None,
+                limit: None,
             }],
         };
         let list = list_resolved_providers(&settings);
@@ -279,6 +296,7 @@ mod tests {
                 base_url: None,
                 model: None,
                 trusted_cert_pem: None,
+                limit: None,
             }],
         };
         let list = list_resolved_providers(&settings);
@@ -294,6 +312,7 @@ mod tests {
             is_system: true,
             model: Some("pinned-model".to_string()),
             trusted_cert_pem: None,
+            limit: None,
         };
         let provider = FakeProvider { models: vec![], panics_on_list: true };
         let model = effective_model(&resolved, &provider).unwrap();
@@ -309,6 +328,7 @@ mod tests {
             is_system: true,
             model: None,
             trusted_cert_pem: None,
+            limit: None,
         };
         let provider = FakeProvider { models: vec!["model-a", "model-b"], panics_on_list: false };
         let model = effective_model(&resolved, &provider).unwrap();
@@ -324,6 +344,7 @@ mod tests {
             is_system: true,
             model: None,
             trusted_cert_pem: None,
+            limit: None,
         };
         let provider = FakeProvider { models: vec![], panics_on_list: false };
         assert!(effective_model(&resolved, &provider).is_err());
@@ -334,11 +355,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None, limit: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None, limit: None },
         );
         assert_eq!(settings.providers.len(), 1);
         assert_eq!(settings.providers[0].label.as_deref(), Some("Second"));
@@ -349,11 +370,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None },
+            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None },
+            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None },
         );
         assert_eq!(settings.providers.len(), 2);
     }
@@ -362,7 +383,7 @@ mod tests {
     fn remove_provider_config_clears_active_id_when_it_matches() {
         let mut settings = LlmSettings {
             active_provider_id: Some("a".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None }],
         };
         remove_provider_config(&mut settings, "a");
         assert!(settings.providers.is_empty());
@@ -373,7 +394,7 @@ mod tests {
     fn remove_provider_config_leaves_active_id_alone_when_it_does_not_match() {
         let mut settings = LlmSettings {
             active_provider_id: Some("b".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None }],
         };
         remove_provider_config(&mut settings, "a");
         assert_eq!(settings.active_provider_id.as_deref(), Some("b"));

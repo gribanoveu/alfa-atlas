@@ -83,6 +83,7 @@ export function useLlmSetup() {
         baseUrl: existing?.baseUrl ?? null,
         model: existing?.model ?? null,
         trustedCertPem: existing?.trustedCertPem ?? null,
+        limit: existing?.limit ?? null,
         ...patch,
       };
       setBusy(true);

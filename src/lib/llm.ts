@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 // Mirrors `domain::llm::LlmProviderConfig`. Every field but `id` is
 // nullable — for a system provider id this is an *override* (`null` means
@@ -11,6 +12,15 @@ export type LlmProviderConfig = {
   baseUrl: string | null;
   model: string | null;
   trustedCertPem: string | null;
+  limit: ModelLimit | null;
+};
+
+// Mirrors `domain::llm::ModelLimit` — informational token limits for
+// whichever model is currently configured, not enforced anywhere in this
+// client.
+export type ModelLimit = {
+  context: number;
+  output: number;
 };
 
 // Mirrors `domain::llm::LlmSettings`.
@@ -29,11 +39,25 @@ export type ResolvedLlmProvider = {
   isSystem: boolean;
   model: string | null;
   trustedCertPem: string | null;
+  limit: ModelLimit | null;
 };
 
 // Mirrors `domain::llm::LlmModelInfo`.
 export type LlmModelInfo = {
   id: string;
+};
+
+// Mirrors `domain::llm::LlmRole`/`LlmMessage`.
+export type LlmRole = "system" | "user" | "assistant" | "tool";
+
+export type LlmMessage = {
+  role: LlmRole;
+  content: string | null;
+  toolCallId: string | null;
+};
+
+export type LlmChatStreamDelta = {
+  delta: string;
 };
 
 export function getLlmSettings(): Promise<LlmSettings> {
@@ -82,4 +106,20 @@ export function listLlmModels(providerId: string): Promise<LlmModelInfo[]> {
  * trust, and HTTP/parsing all actually work end to end. */
 export function testLlmConnection(providerId: string): Promise<string> {
   return invoke<string>("llm_test_connection", { providerId });
+}
+
+/** A plain conversation turn, streamed. The caller owns building the full
+ * message list (including any system prompt). Resolves with the
+ * authoritative full reply text once the stream ends — subscribe via
+ * `listenLlmChatDelta` for the live text meanwhile. */
+export function streamLlmChat(providerId: string, messages: LlmMessage[]): Promise<string> {
+  return invoke<string>("llm_chat_stream", { providerId, messages });
+}
+
+/** Fires once per non-empty text chunk while a `streamLlmChat()` call is in
+ * flight. */
+export function listenLlmChatDelta(
+  onDelta: (payload: LlmChatStreamDelta) => void,
+): Promise<UnlistenFn> {
+  return listen<LlmChatStreamDelta>("llm:chat-stream-delta", (event) => onDelta(event.payload));
 }

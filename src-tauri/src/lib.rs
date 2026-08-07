@@ -255,6 +255,7 @@ pub fn run() {
             commands::llm::llm_has_api_key,
             commands::llm::llm_list_models,
             commands::llm::llm_test_connection,
+            commands::llm::llm_chat_stream,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

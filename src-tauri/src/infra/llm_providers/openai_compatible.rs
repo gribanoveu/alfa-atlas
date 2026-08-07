@@ -84,6 +84,11 @@ struct ChatCompletionRequest<'a> {
     tools: Vec<WireTool<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'static str>,
+    /// Omitted (not just `false`) for a non-streaming request — matches
+    /// today's exact wire shape when unset, since some servers treat an
+    /// explicit `"stream":false` differently from the key being absent.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,6 +157,60 @@ struct ModelsListDatum {
     id: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct StreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: StreamDelta,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamChunk {
+    choices: Vec<StreamChoice>,
+}
+
+/// One piece of information extracted from a single raw line of an
+/// OpenAI-compatible SSE chat-completions stream.
+#[derive(Debug, PartialEq)]
+enum SseLine {
+    /// A `data: {...}` line — `Some(text)` when this chunk's
+    /// `delta.content` was present and non-null, `None` when it carried no
+    /// text (e.g. a role-only first chunk, a finish-reason-only last one).
+    Delta(Option<String>),
+    /// The terminal `data: [DONE]` line.
+    Done,
+    /// Not a `data:` line — a blank event-separator line, or (defensively)
+    /// anything else this protocol doesn't actually send.
+    Ignore,
+}
+
+/// Pure, network-free parsing of one SSE line — kept separate from
+/// `chat_stream` so it's directly unit-testable against fixed strings, the
+/// same convention this file's other wire-shape tests already follow.
+fn parse_sse_line(line: &str) -> Result<SseLine, LlmError> {
+    // Some servers use CRLF line endings; `BufRead::lines()` only strips
+    // the trailing `\n`, so a stray `\r` can survive into the payload.
+    let line = line.trim_end_matches('\r');
+    let Some(data) = line.strip_prefix("data:") else {
+        return Ok(SseLine::Ignore);
+    };
+    let data = data.trim();
+    if data.is_empty() {
+        return Ok(SseLine::Ignore);
+    }
+    if data == "[DONE]" {
+        return Ok(SseLine::Done);
+    }
+    let chunk: StreamChunk =
+        serde_json::from_str(data).map_err(|e| LlmError::Provider(e.to_string()))?;
+    Ok(SseLine::Delta(chunk.choices.into_iter().next().and_then(|c| c.delta.content)))
+}
+
 pub struct OpenAiCompatibleProvider {
     agent: ureq::Agent,
     base_url: String,
@@ -170,10 +229,10 @@ impl OpenAiCompatibleProvider {
     fn models_url(&self) -> String {
         format!("{}/models", self.base_url.trim_end_matches('/'))
     }
-}
 
-impl LlmProvider for OpenAiCompatibleProvider {
-    fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
+    /// Shared request-body construction for both `chat` and `chat_stream` —
+    /// only `stream` differs between them.
+    fn build_body<'a>(&self, request: &'a ChatRequest, stream: bool) -> ChatCompletionRequest<'a> {
         let messages: Vec<WireMessage> = request
             .messages
             .iter()
@@ -199,7 +258,13 @@ impl LlmProvider for OpenAiCompatibleProvider {
         // empty `tools` array with `tool_choice: "auto"` is a needless
         // (and, on some OpenAI-compatible servers, rejected) combination.
         let tool_choice = if tools.is_empty() { None } else { Some("auto") };
-        let body = ChatCompletionRequest { model: &request.model, messages, tools, tool_choice };
+        ChatCompletionRequest { model: &request.model, messages, tools, tool_choice, stream }
+    }
+}
+
+impl LlmProvider for OpenAiCompatibleProvider {
+    fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
+        let body = self.build_body(&request, false);
 
         let mut response = self
             .agent
@@ -232,6 +297,32 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 })
                 .collect(),
         })
+    }
+
+    fn chat_stream(&self, request: ChatRequest, on_delta: &dyn Fn(&str)) -> Result<String, LlmError> {
+        let body = self.build_body(&request, true);
+
+        let response = self
+            .agent
+            .post(self.chat_url())
+            .header("Authorization", &format!("Bearer {}", self.api_key))
+            .send_json(&body)
+            .map_err(|e| LlmError::Http(e.to_string()))?;
+
+        let reader = std::io::BufReader::new(response.into_body().into_reader());
+        let mut full = String::new();
+        for line in std::io::BufRead::lines(reader) {
+            let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
+            match parse_sse_line(&line)? {
+                SseLine::Delta(Some(text)) => {
+                    on_delta(&text);
+                    full.push_str(&text);
+                }
+                SseLine::Delta(None) | SseLine::Ignore => {}
+                SseLine::Done => break,
+            }
+        }
+        Ok(full)
     }
 
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
@@ -282,6 +373,7 @@ mod tests {
             messages: vec![WireMessage { role: "user", content: Some("hi"), tool_call_id: None }],
             tools: vec![],
             tool_choice: None,
+            stream: false,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert_eq!(
@@ -301,6 +393,7 @@ mod tests {
                 function: WireFunction { name: "read_file", description: "reads a file", parameters: &params },
             }],
             tool_choice: Some("auto"),
+            stream: false,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains(r#""tool_choice":"auto""#));
@@ -417,5 +510,60 @@ YoQlQIWF38mOPRxLRBxKA7g=\n\
     fn build_agent_succeeds_with_a_multi_certificate_chain() {
         let chain = format!("{TEST_CERT_1}{TEST_CERT_2}");
         assert!(build_agent(Some(&chain)).is_ok());
+    }
+
+    #[test]
+    fn build_body_sets_stream_true_for_streaming_requests() {
+        let p = provider("https://api.example.com/v1");
+        let request = ChatRequest { messages: vec![], tools: vec![], model: "m".to_string() };
+        let json = serde_json::to_string(&p.build_body(&request, true)).unwrap();
+        assert!(json.contains(r#""stream":true"#));
+    }
+
+    #[test]
+    fn build_body_omits_stream_for_non_streaming_requests() {
+        let p = provider("https://api.example.com/v1");
+        let request = ChatRequest { messages: vec![], tools: vec![], model: "m".to_string() };
+        let json = serde_json::to_string(&p.build_body(&request, false)).unwrap();
+        assert!(!json.contains("stream"));
+    }
+
+    #[test]
+    fn parse_sse_line_extracts_delta_text() {
+        let line = r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#;
+        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Delta(Some("Hel".to_string())));
+    }
+
+    #[test]
+    fn parse_sse_line_treats_missing_content_as_no_delta() {
+        let line = r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#;
+        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Delta(None));
+    }
+
+    #[test]
+    fn parse_sse_line_recognizes_the_done_sentinel() {
+        assert_eq!(parse_sse_line("data: [DONE]").unwrap(), SseLine::Done);
+    }
+
+    #[test]
+    fn parse_sse_line_ignores_blank_separator_lines() {
+        assert_eq!(parse_sse_line("").unwrap(), SseLine::Ignore);
+    }
+
+    #[test]
+    fn parse_sse_line_ignores_non_data_lines() {
+        assert_eq!(parse_sse_line("event: ping").unwrap(), SseLine::Ignore);
+    }
+
+    #[test]
+    fn parse_sse_line_errors_clearly_on_malformed_json() {
+        let err = parse_sse_line("data: {not json}").unwrap_err();
+        assert!(matches!(err, LlmError::Provider(_)));
+    }
+
+    #[test]
+    fn parse_sse_line_strips_trailing_carriage_return() {
+        let line = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r";
+        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Delta(Some("hi".to_string())));
     }
 }
