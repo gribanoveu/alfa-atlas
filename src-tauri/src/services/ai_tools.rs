@@ -20,6 +20,7 @@ use crate::domain::ai_tools::{
     ToolFileEntry, ToolMatch, ToolResult, ToolScope,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
+use crate::domain::llm::{LlmToolCall, LlmToolDefinition};
 use crate::domain::paths;
 use crate::domain::project_config::{ProjectConfig, ProjectError, TreeNode};
 use crate::domain::repo_index::{FileId, Symbol};
@@ -119,6 +120,101 @@ pub fn current_scope() -> Result<ToolScope, ProjectError> {
         Path::new(&opened.docs_root),
         &config,
     ))
+}
+
+/// Parses a model-supplied `LlmToolCall` into a concrete `ToolCall` — the
+/// step `domain::llm::LlmToolCall`'s own doc comment names this module as
+/// the intended home for. A model can send a `name` this executor doesn't
+/// recognize, or `arguments` that don't deserialize into the matching args
+/// struct (a hallucinated field, wrong type, plain non-JSON); both are
+/// `ToolError` variants meant to be fed back to the model as a `Tool`-role
+/// message (see `commands::llm::llm_chat_stream`), not to hard-fail the
+/// whole turn — a model recovering from a bad tool call of its own making
+/// is normal, expected tool-calling behavior.
+pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
+    match call.name.as_str() {
+        "readFile" => serde_json::from_str::<ReadFileArgs>(&call.arguments)
+            .map(ToolCall::ReadFile)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        "listFiles" => serde_json::from_str::<ListFilesArgs>(&call.arguments)
+            .map(ToolCall::ListFiles)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        "semanticSearch" => serde_json::from_str::<SemanticSearchArgs>(&call.arguments)
+            .map(ToolCall::SemanticSearch)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        other => Err(ToolError::UnknownTool(other.to_string())),
+    }
+}
+
+/// One `LlmToolDefinition` per tool `scope` allows, to advertise to the
+/// model — so a customized (narrowed) allowlist only offers tools that will
+/// actually succeed if called, rather than the model discovering
+/// `ToolError::NotAllowed` only at execution time. Wire tag values
+/// (`"readFile"`/`"listFiles"`/`"semanticSearch"`) and argument field names
+/// (`path`, `query`+`topK`) are hand-kept in sync with `ToolCall`/
+/// `ReadFileArgs`/`ListFilesArgs`/`SemanticSearchArgs` — see this module's
+/// schema round-trip test, which catches drift between the two.
+pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
+    let mut defs = Vec::new();
+    if scope.allows(ToolName::ListFiles) {
+        defs.push(LlmToolDefinition {
+            name: "listFiles".to_string(),
+            description:
+                "List files and directories under a path in the project. Omit `path` (or pass null) to list the root."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": ["string", "null"],
+                        "description": "Subdirectory relative to the project root, or omitted/null for the root."
+                    }
+                },
+                "required": []
+            }),
+        });
+    }
+    if scope.allows(ToolName::ReadFile) {
+        defs.push(LlmToolDefinition {
+            name: "readFile".to_string(),
+            description: "Read the full text content of one file by its path relative to the project root."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the project root."
+                    }
+                },
+                "required": ["path"]
+            }),
+        });
+    }
+    if scope.allows(ToolName::SemanticSearch) {
+        defs.push(LlmToolDefinition {
+            name: "semanticSearch".to_string(),
+            description:
+                "Search the project's documentation/code for content relevant to a natural-language query."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language search query."
+                    },
+                    "topK": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "description": "Max number of results, default 10, capped at 50."
+                    }
+                },
+                "required": ["query"]
+            }),
+        });
+    }
+    defs
 }
 
 fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<ToolFileEntry>, ToolError> {
@@ -843,6 +939,116 @@ mod tests {
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
         assert!(lexical_matches(&chunk_index, &scope, "needle", 10).is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn parse_tool_call_parses_read_file_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: r#"{"path":"intro.adoc"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string() }));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_list_files_args_with_null_path() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: r#"{"path":null}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None }));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_semantic_search_args_with_top_k() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "semanticSearch".to_string(),
+            arguments: r#"{"query":"auth flow","topK":5}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::SemanticSearch(SemanticSearchArgs { query: "auth flow".to_string(), top_k: Some(5) })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_unknown_tool_name() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "deleteFile".to_string(),
+            arguments: "{}".to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::UnknownTool(name) if name == "deleteFile"));
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_malformed_arguments_json() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: "{not json}".to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "readFile"));
+    }
+
+    #[test]
+    fn llm_tool_definitions_includes_all_three_by_default() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let defs = llm_tool_definitions(&scope);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, vec!["listFiles", "readFile", "semanticSearch"]);
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn llm_tool_definitions_excludes_a_tool_missing_from_a_customized_allowlist() {
+        let (repo, docs) = fixture_repo();
+        let only_list: HashSet<ToolName> = [ToolName::ListFiles].into_iter().collect();
+        let scope = ToolScope::new(&repo, &docs, AiAccessMode::DocsOnly, only_list);
+
+        let defs = llm_tool_definitions(&scope);
+        let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, vec!["listFiles"]);
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn llm_tool_definitions_parameters_round_trip_a_realistic_arguments_payload() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let defs = llm_tool_definitions(&scope);
+
+        let read_file = defs.iter().find(|d| d.name == "readFile").unwrap();
+        assert_eq!(read_file.parameters["required"], serde_json::json!(["path"]));
+        let args: ReadFileArgs =
+            serde_json::from_value(serde_json::json!({"path": "intro.adoc"})).unwrap();
+        assert_eq!(args.path, "intro.adoc");
+
+        let list_files = defs.iter().find(|d| d.name == "listFiles").unwrap();
+        assert_eq!(list_files.parameters["required"], serde_json::json!([]));
+        let args: ListFilesArgs = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(args.path, None);
+
+        let semantic_search = defs.iter().find(|d| d.name == "semanticSearch").unwrap();
+        assert_eq!(semantic_search.parameters["required"], serde_json::json!(["query"]));
+        let args: SemanticSearchArgs =
+            serde_json::from_value(serde_json::json!({"query": "x", "topK": 3})).unwrap();
+        assert_eq!(args.query, "x");
+        assert_eq!(args.top_k, Some(3));
 
         fs::remove_dir_all(&repo).ok();
     }

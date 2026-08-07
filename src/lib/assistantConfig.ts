@@ -41,6 +41,8 @@ export function buildAssistantSystemPrompt(mode: AiAccessMode): string {
 
 Users are business and system analysts, not always deeply technical. Your job is to help write, edit, structure, and review documentation: catching contradictions, suggesting wording, keeping terminology and style consistent, and drafting sections from existing content. Documents are in AsciiDoc, edited in a Monaco-based editor.
 
+You have real tools — \`readFile\`, \`listFiles\`, \`semanticSearch\` — scoped to your current access mode below. Call them to check actual file content or search the project before answering; don't guess or reconstruct file content from memory or from a file's name alone. A tool call can fail (path outside your current access mode, file not found) — when it does, tell the user what happened rather than substituting a guess.
+
 You operate in one of two access modes, set by the environment, not by the user's request:
 
 - **Docs-only mode** — you have access only to documentation files (e.g. \`docs/**/*.adoc\`, glossaries, templates) and their git history. You have no access to source code, configuration, secrets, CI/CD, or infrastructure.
@@ -115,6 +117,33 @@ export function buildAccessModeChangeNotice(mode: AiAccessMode): string {
       : "**Docs-only** — you now have access only to documentation files and their git history. You no longer have access to source code, configuration, secrets, CI/CD, or infrastructure.";
 
   return `[System notice] The user just switched your access mode. Current access mode: ${modeDescription} Disregard any earlier statement you made in this conversation about your access — it may no longer be accurate.`;
+}
+
+// Human-readable status shown in place of the typing-dots indicator while
+// a `listenLlmToolCall` event is in flight (see `useLlmChat`'s
+// `toolActivity` state). `argumentsJson` is the raw JSON string off the
+// wire (`LlmToolCallEvent.arguments`) — parsed defensively since this is
+// purely cosmetic and must never throw regardless of what the model sent.
+export function describeToolActivity(name: string, argumentsJson: string): string {
+  let args: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(argumentsJson);
+    if (parsed && typeof parsed === "object") args = parsed as Record<string, unknown>;
+  } catch {
+    // Malformed arguments JSON — fall through to the generic label below;
+    // the model itself will see the resulting tool error, this is just
+    // cosmetic status text.
+  }
+  switch (name) {
+    case "readFile":
+      return typeof args.path === "string" ? `Читает файл: ${args.path}…` : "Читает файл…";
+    case "listFiles":
+      return typeof args.path === "string" ? `Просматривает: ${args.path}…` : "Просматривает файлы…";
+    case "semanticSearch":
+      return typeof args.query === "string" ? `Ищет: «${args.query}»…` : "Ищет в документации…";
+    default:
+      return "Выполняет действие…";
+  }
 }
 
 // Synthetic model-picker value/label for "no explicit pin — resolve the

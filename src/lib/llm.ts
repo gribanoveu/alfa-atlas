@@ -27,6 +27,11 @@ export type ModelLimit = {
 export type LlmSettings = {
   activeProviderId: string | null;
   providers: LlmProviderConfig[];
+  /** Off by default. When on, `llm_chat_stream` appends every request/
+   * response (or error) of every tool-calling round to
+   * `~/.atlas/logs/llm.jsonl` — see `infra::llm_debug_log` on the Rust
+   * side. Toggled from the LLM settings tab. */
+  debugLogging: boolean;
 };
 
 // Mirrors `domain::llm::ResolvedLlmProvider` — the merged, ready-to-use
@@ -138,4 +143,26 @@ export function listenLlmChatDelta(
   onDelta: (payload: LlmChatStreamDelta) => void,
 ): Promise<UnlistenFn> {
   return listen<LlmChatStreamDelta>("llm:chat-stream-delta", (event) => onDelta(event.payload));
+}
+
+// Mirrors `commands::llm::ToolCallEventPayload` — fired just before the
+// backend executes one tool call inside a `streamLlmChat()` round (the
+// whole tool-calling loop is internal to that one call; this event is the
+// only thing that surfaces a round's activity mid-flight). `arguments`
+// stays a raw JSON string, same as `domain::llm::LlmToolCall` — this event
+// doesn't pre-parse it.
+export type LlmToolCallEvent = {
+  name: string;
+  arguments: string;
+};
+
+/** Fires immediately before the backend executes one tool call while a
+ * `streamLlmChat()` call is in flight — lets the UI show a transient status
+ * (e.g. "Reading docs/x.adoc…") while the (possibly slow) tool execution is
+ * actually happening. No matching "done" event: the caller clears its own
+ * status once real text resumes streaming or the call settles. */
+export function listenLlmToolCall(
+  onToolCall: (payload: LlmToolCallEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<LlmToolCallEvent>("llm:tool-call", (event) => onToolCall(event.payload));
 }

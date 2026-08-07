@@ -28,7 +28,13 @@ use crate::domain::llm::{
 /// every provider gets its own `Agent`, there's no cross-provider trust
 /// interference either way.
 pub fn build_agent(trusted_cert_pem: Option<&str>) -> Result<ureq::Agent, LlmError> {
-    let mut builder = ureq::Agent::config_builder();
+    // Disables ureq's default behavior of turning a non-2xx status into a
+    // bare `Error::StatusCode(code)` *before* the caller can read the
+    // response body — that's exactly what made a provider error like a
+    // rejected request or a server-side failure show up as an
+    // undiagnosable "http status: 500" with no detail. `ok_or_status_error`
+    // reads the body itself and folds it into the error message instead.
+    let mut builder = ureq::Agent::config_builder().http_status_as_error(false);
     if let Some(pem) = trusted_cert_pem {
         let certs = parse_trusted_certs(pem)?;
         let tls_config = ureq::tls::TlsConfig::builder()
@@ -66,6 +72,37 @@ fn parse_trusted_certs(pem: &str) -> Result<Vec<ureq::tls::Certificate<'static>>
         return Err(LlmError::Tls("no PEM-encoded certificate found".to_string()));
     }
     Ok(certs)
+}
+
+/// Cap on how many characters of an error response body get folded into
+/// the error message — a provider's error page can be arbitrarily large
+/// (an HTML error page, a stack trace), and the goal here is a diagnosable
+/// message, not a full dump.
+const ERROR_BODY_MAX_CHARS: usize = 2000;
+
+/// Turns a non-2xx response into a detailed `LlmError::Http` that includes
+/// the response body — `build_agent` disables ureq's default
+/// `http_status_as_error` specifically so the body is still readable here
+/// (ureq's own status-to-error conversion discards it). Returns the
+/// response unchanged on a success status.
+fn ok_or_status_error(
+    mut response: http::Response<ureq::Body>,
+) -> Result<http::Response<ureq::Body>, LlmError> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    let body = response
+        .body_mut()
+        .read_to_string()
+        .unwrap_or_else(|e| format!("<failed to read error response body: {e}>"));
+    let truncated = if body.chars().count() > ERROR_BODY_MAX_CHARS {
+        let head: String = body.chars().take(ERROR_BODY_MAX_CHARS).collect();
+        format!("{head}… (truncated)")
+    } else {
+        body
+    };
+    Err(LlmError::Http(format!("http status {}: {}", status.as_u16(), truncated)))
 }
 
 fn role_str(role: LlmRole) -> &'static str {
@@ -111,6 +148,28 @@ struct WireMessage<'a> {
     content: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_calls: Vec<WireToolCallOut<'a>>,
+}
+
+/// Outgoing shape of one tool call an assistant message previously
+/// requested — round-tripped back to the provider so it sees its own prior
+/// turn. Distinct from `WireToolCall`/`WireToolCallFunction` below (those
+/// are the *incoming*, non-streaming response shape) purely because
+/// `Serialize`/`Deserialize` want their fields borrowed vs. owned
+/// differently; the wire JSON shape is otherwise identical.
+#[derive(Debug, Serialize)]
+struct WireToolCallOut<'a> {
+    id: &'a str,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: WireToolCallFunctionOut<'a>,
+}
+
+#[derive(Debug, Serialize)]
+struct WireToolCallFunctionOut<'a> {
+    name: &'a str,
+    arguments: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,7 +200,13 @@ struct WireChoice {
 struct WireResponseMessage {
     #[serde(default)]
     content: Option<String>,
-    #[serde(default)]
+    // `#[serde(default)]` alone only covers a *missing* key — many
+    // OpenAI-compatible servers, once `tools` is present on the request,
+    // explicitly send `"tool_calls":null` on a turn that didn't request
+    // any, which `Vec<T>`'s own `Deserialize` rejects ("invalid type:
+    // null, expected a sequence"). `deserialize_null_default` treats an
+    // explicit `null` the same as a missing key.
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     tool_calls: Vec<WireToolCall>,
 }
 
@@ -174,6 +239,48 @@ struct ModelsListDatum {
 struct StreamDelta {
     #[serde(default)]
     content: Option<String>,
+    // See `WireResponseMessage.tool_calls`'s comment — a content-only delta
+    // chunk commonly carries an explicit `"tool_calls":null` once `tools`
+    // was offered on the request, which plain `#[serde(default)]` doesn't
+    // cover (that only fills in a *missing* key, not an explicit `null`).
+    #[serde(default, deserialize_with = "deserialize_null_default")]
+    tool_calls: Vec<StreamToolCallDelta>,
+}
+
+/// Treats an explicit JSON `null` the same as a missing key — plain
+/// `#[serde(default)]` only covers the latter, and `Vec<T>`'s own
+/// `Deserialize` rejects `null` outright ("invalid type: null, expected a
+/// sequence"). Generic so both `WireResponseMessage.tool_calls` and
+/// `StreamDelta.tool_calls` share one implementation.
+fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// One fragment of a streamed tool call. OpenAI sends `id`/`function.name`
+/// only on the fragment where a given `index` first appears, then
+/// `function.arguments` incrementally across however many further
+/// fragments share that `index` — this type is the raw per-chunk fragment,
+/// not yet merged; `ToolCallAccumulator` does the merging.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+struct StreamToolCallDelta {
+    #[serde(default)]
+    index: Option<usize>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<StreamToolCallFunctionDelta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+struct StreamToolCallFunctionDelta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -220,8 +327,12 @@ enum SseLine {
     /// `delta.content` was present and non-null (`None` for e.g. a
     /// role-only first chunk, or the usage-only trailing chunk).  `usage` is
     /// `Some` only on that trailing chunk — a chunk can in principle carry
-    /// both, so these are independent, not an either/or.
-    Chunk { delta: Option<String>, usage: Option<ChatUsage> },
+    /// both, so these are independent, not an either/or. `tool_calls` is
+    /// the chunk's raw (unmerged) tool-call fragments, empty for a chunk
+    /// that carries none — a chunk can carry both `delta` text and
+    /// `tool_calls` fragments (the model can emit prose before invoking a
+    /// tool in the same turn).
+    Chunk { delta: Option<String>, usage: Option<ChatUsage>, tool_calls: Vec<StreamToolCallDelta> },
     /// The terminal `data: [DONE]` line.
     Done,
     /// Not a `data:` line — a blank event-separator line, or (defensively)
@@ -248,9 +359,79 @@ fn parse_sse_line(line: &str) -> Result<SseLine, LlmError> {
     }
     let chunk: StreamChunk =
         serde_json::from_str(data).map_err(|e| LlmError::Provider(e.to_string()))?;
-    let delta = chunk.choices.into_iter().next().and_then(|c| c.delta.content);
     let usage = chunk.usage.map(ChatUsage::from);
-    Ok(SseLine::Chunk { delta, usage })
+    let (delta, tool_calls) = match chunk.choices.into_iter().next() {
+        Some(choice) => (choice.delta.content, choice.delta.tool_calls),
+        None => (None, Vec::new()),
+    };
+    Ok(SseLine::Chunk { delta, usage, tool_calls })
+}
+
+/// Accumulates fragmented `delta.tool_calls` entries across an SSE stream,
+/// keyed by the wire's own `index` — see `StreamToolCallDelta`'s doc
+/// comment for why a call's `id`/`name` and `arguments` arrive split across
+/// however many fragments share that index.
+#[derive(Debug, Default)]
+struct ToolCallAccumulator {
+    // Insertion-order-preserving (a `Vec`, not a `HashMap`) so `finish()`
+    // emits calls in the order the model started them — order matters when
+    // this becomes one assistant message's `tool_calls` array.
+    entries: Vec<(usize, PartialToolCall)>,
+    // Counter for a fragment with no `index` at all (malformed, but
+    // shouldn't happen against a spec-compliant server). Offset well past
+    // any realistic real index so it can never collide with one.
+    next_synthetic_index: usize,
+}
+
+#[derive(Debug, Default)]
+struct PartialToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+impl ToolCallAccumulator {
+    fn ingest(&mut self, fragments: Vec<StreamToolCallDelta>) {
+        for frag in fragments {
+            // A fragment missing `index` is treated as its own new entry
+            // rather than guessed into whichever entry is last — merging
+            // it wrong would corrupt an unrelated, still-accumulating
+            // call's `arguments` string with unrelated text, which is
+            // worse than emitting one extra malformed call: that call
+            // simply fails `parse_tool_call`'s JSON parse downstream and
+            // gets reported back to the model as a recoverable tool error.
+            let index = frag.index.unwrap_or_else(|| {
+                let synthetic = 1_000_000 + self.next_synthetic_index;
+                self.next_synthetic_index += 1;
+                synthetic
+            });
+            let entry = match self.entries.iter_mut().find(|(i, _)| *i == index) {
+                Some((_, e)) => e,
+                None => {
+                    self.entries.push((index, PartialToolCall::default()));
+                    &mut self.entries.last_mut().expect("just pushed").1
+                }
+            };
+            if let Some(id) = frag.id {
+                entry.id = id;
+            }
+            if let Some(function) = frag.function {
+                if let Some(name) = function.name {
+                    entry.name = name;
+                }
+                if let Some(args) = function.arguments {
+                    entry.arguments.push_str(&args);
+                }
+            }
+        }
+    }
+
+    fn finish(self) -> Vec<LlmToolCall> {
+        self.entries
+            .into_iter()
+            .map(|(_, e)| LlmToolCall { id: e.id, name: e.name, arguments: e.arguments })
+            .collect()
+    }
 }
 
 pub struct OpenAiCompatibleProvider {
@@ -282,6 +463,15 @@ impl OpenAiCompatibleProvider {
                 role: role_str(m.role),
                 content: m.content.as_deref(),
                 tool_call_id: m.tool_call_id.as_deref(),
+                tool_calls: m
+                    .tool_calls
+                    .iter()
+                    .map(|tc| WireToolCallOut {
+                        id: &tc.id,
+                        kind: "function",
+                        function: WireToolCallFunctionOut { name: &tc.name, arguments: &tc.arguments },
+                    })
+                    .collect(),
             })
             .collect();
         let tools: Vec<WireTool> = request
@@ -322,6 +512,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             .header("Authorization", &format!("Bearer {}", self.api_key))
             .send_json(&body)
             .map_err(|e| LlmError::Http(e.to_string()))?;
+        response = ok_or_status_error(response)?;
 
         let parsed: ChatCompletionResponse = response
             .body_mut()
@@ -362,14 +553,16 @@ impl LlmProvider for OpenAiCompatibleProvider {
             .header("Authorization", &format!("Bearer {}", self.api_key))
             .send_json(&body)
             .map_err(|e| LlmError::Http(e.to_string()))?;
+        let response = ok_or_status_error(response)?;
 
         let reader = std::io::BufReader::new(response.into_body().into_reader());
         let mut full = String::new();
         let mut usage = None;
+        let mut tool_calls_acc = ToolCallAccumulator::default();
         for line in std::io::BufRead::lines(reader) {
             let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
             match parse_sse_line(&line)? {
-                SseLine::Chunk { delta, usage: chunk_usage } => {
+                SseLine::Chunk { delta, usage: chunk_usage, tool_calls } => {
                     if let Some(text) = delta {
                         on_delta(&text);
                         full.push_str(&text);
@@ -380,12 +573,13 @@ impl LlmProvider for OpenAiCompatibleProvider {
                     if chunk_usage.is_some() {
                         usage = chunk_usage;
                     }
+                    tool_calls_acc.ingest(tool_calls);
                 }
                 SseLine::Ignore => {}
                 SseLine::Done => break,
             }
         }
-        Ok(ChatStreamResult { text: full, usage })
+        Ok(ChatStreamResult { text: full, usage, tool_calls: tool_calls_acc.finish() })
     }
 
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
@@ -395,6 +589,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             .header("Authorization", &format!("Bearer {}", self.api_key))
             .call()
             .map_err(|e| LlmError::Http(e.to_string()))?;
+        response = ok_or_status_error(response)?;
 
         let parsed: ModelsListResponse = response
             .body_mut()
@@ -433,7 +628,12 @@ mod tests {
     fn request_omits_tools_and_tool_choice_when_no_tools_given() {
         let body = ChatCompletionRequest {
             model: "gpt-4o-mini",
-            messages: vec![WireMessage { role: "user", content: Some("hi"), tool_call_id: None }],
+            messages: vec![WireMessage {
+                role: "user",
+                content: Some("hi"),
+                tool_call_id: None,
+                tool_calls: vec![],
+            }],
             tools: vec![],
             tool_choice: None,
             stream: false,
@@ -451,7 +651,12 @@ mod tests {
         let params = serde_json::json!({"type": "object", "properties": {}});
         let body = ChatCompletionRequest {
             model: "gpt-4o-mini",
-            messages: vec![WireMessage { role: "user", content: Some("hi"), tool_call_id: None }],
+            messages: vec![WireMessage {
+                role: "user",
+                content: Some("hi"),
+                tool_call_id: None,
+                tool_calls: vec![],
+            }],
             tools: vec![WireTool {
                 kind: "function",
                 function: WireFunction { name: "read_file", description: "reads a file", parameters: &params },
@@ -468,9 +673,29 @@ mod tests {
 
     #[test]
     fn tool_message_serializes_null_content_with_tool_call_id() {
-        let body = WireMessage { role: "tool", content: None, tool_call_id: Some("call_1") };
+        let body =
+            WireMessage { role: "tool", content: None, tool_call_id: Some("call_1"), tool_calls: vec![] };
         let json = serde_json::to_string(&body).unwrap();
         assert_eq!(json, r#"{"role":"tool","tool_call_id":"call_1"}"#);
+    }
+
+    #[test]
+    fn assistant_message_serializes_tool_calls_when_present() {
+        let body = WireMessage {
+            role: "assistant",
+            content: None,
+            tool_call_id: None,
+            tool_calls: vec![WireToolCallOut {
+                id: "call_1",
+                kind: "function",
+                function: WireToolCallFunctionOut { name: "read_file", arguments: r#"{"path":"a.md"}"# },
+            }],
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert_eq!(
+            json,
+            r#"{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.md\"}"}}]}"#
+        );
     }
 
     #[test]
@@ -499,6 +724,37 @@ mod tests {
         let parsed: ModelsListResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.data.len(), 2);
         assert_eq!(parsed.data[0].id, "model-a");
+    }
+
+    #[test]
+    fn ok_or_status_error_passes_through_a_success_response() {
+        let body = ureq::Body::builder().data("ok");
+        let response = http::Response::builder().status(200).body(body).unwrap();
+        let response = ok_or_status_error(response).unwrap();
+        assert_eq!(response.status(), 200);
+    }
+
+    #[test]
+    fn ok_or_status_error_includes_the_response_body_on_failure() {
+        let body = ureq::Body::builder().data("{\"error\":\"invalid tool_calls format\"}");
+        let response = http::Response::builder().status(500).body(body).unwrap();
+        let err = ok_or_status_error(response).unwrap_err();
+        assert!(matches!(
+            err,
+            LlmError::Http(msg)
+                if msg.contains("500") && msg.contains("invalid tool_calls format")
+        ));
+    }
+
+    #[test]
+    fn ok_or_status_error_truncates_an_oversized_body() {
+        let long_body = "x".repeat(ERROR_BODY_MAX_CHARS + 500);
+        let body = ureq::Body::builder().data(long_body);
+        let response = http::Response::builder().status(502).body(body).unwrap();
+        let err = ok_or_status_error(response).unwrap_err();
+        let LlmError::Http(msg) = err else { panic!("expected LlmError::Http") };
+        assert!(msg.contains("(truncated)"));
+        assert!(msg.len() < ERROR_BODY_MAX_CHARS + 100, "message should be capped, got {} chars", msg.len());
     }
 
     #[test]
@@ -606,14 +862,14 @@ YoQlQIWF38mOPRxLRBxKA7g=\n\
         let line = r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#;
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: Some("Hel".to_string()), usage: None }
+            SseLine::Chunk { delta: Some("Hel".to_string()), usage: None, tool_calls: vec![] }
         );
     }
 
     #[test]
     fn parse_sse_line_treats_missing_content_as_no_delta() {
         let line = r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#;
-        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Chunk { delta: None, usage: None });
+        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Chunk { delta: None, usage: None, tool_calls: vec![] });
     }
 
     #[test]
@@ -624,6 +880,7 @@ YoQlQIWF38mOPRxLRBxKA7g=\n\
             SseLine::Chunk {
                 delta: None,
                 usage: Some(ChatUsage { prompt_tokens: 67, completion_tokens: 2, total_tokens: 69 }),
+                tool_calls: vec![],
             }
         );
     }
@@ -631,7 +888,7 @@ YoQlQIWF38mOPRxLRBxKA7g=\n\
     #[test]
     fn parse_sse_line_handles_a_chunk_with_neither_delta_nor_usage() {
         let line = r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
-        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Chunk { delta: None, usage: None });
+        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Chunk { delta: None, usage: None, tool_calls: vec![] });
     }
 
     #[test]
@@ -660,7 +917,168 @@ YoQlQIWF38mOPRxLRBxKA7g=\n\
         let line = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r";
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: Some("hi".to_string()), usage: None }
+            SseLine::Chunk { delta: Some("hi".to_string()), usage: None, tool_calls: vec![] }
         );
+    }
+
+    #[test]
+    fn parse_sse_line_extracts_a_single_chunk_tool_call_fragment() {
+        let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.md\"}"}}]}}]}"#;
+        let parsed = parse_sse_line(line).unwrap();
+        assert_eq!(
+            parsed,
+            SseLine::Chunk {
+                delta: None,
+                usage: None,
+                tool_calls: vec![StreamToolCallDelta {
+                    index: Some(0),
+                    id: Some("call_1".to_string()),
+                    function: Some(StreamToolCallFunctionDelta {
+                        name: Some("read_file".to_string()),
+                        arguments: Some(r#"{"path":"a.md"}"#.to_string()),
+                    }),
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sse_line_treats_an_explicit_null_tool_calls_as_none() {
+        // Real-world regression: once `tools` is present on the request,
+        // several OpenAI-compatible servers explicitly send
+        // `"tool_calls":null` on a content-only chunk instead of omitting
+        // the key — plain `#[serde(default)]` only covers a missing key,
+        // and `Vec<T>`'s own `Deserialize` otherwise rejects `null`
+        // ("invalid type: null, expected a sequence").
+        let line = r#"data: {"choices":[{"delta":{"content":"Hello","tool_calls":null}}]}"#;
+        assert_eq!(
+            parse_sse_line(line).unwrap(),
+            SseLine::Chunk { delta: Some("Hello".to_string()), usage: None, tool_calls: vec![] }
+        );
+    }
+
+    #[test]
+    fn parses_a_response_with_an_explicit_null_tool_calls() {
+        let json = r#"{"choices":[{"message":{"role":"assistant","content":"hi","tool_calls":null}}]}"#;
+        let parsed: ChatCompletionResponse = serde_json::from_str(json).unwrap();
+        assert!(parsed.choices[0].message.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn tool_call_accumulator_merges_a_single_chunk_call() {
+        let mut acc = ToolCallAccumulator::default();
+        acc.ingest(vec![StreamToolCallDelta {
+            index: Some(0),
+            id: Some("call_1".to_string()),
+            function: Some(StreamToolCallFunctionDelta {
+                name: Some("readFile".to_string()),
+                arguments: Some(r#"{"path":"a.md"}"#.to_string()),
+            }),
+        }]);
+        let calls = acc.finish();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "readFile");
+        assert_eq!(calls[0].arguments, r#"{"path":"a.md"}"#);
+    }
+
+    #[test]
+    fn tool_call_accumulator_merges_arguments_across_multiple_fragments_by_index() {
+        let mut acc = ToolCallAccumulator::default();
+        acc.ingest(vec![StreamToolCallDelta {
+            index: Some(0),
+            id: Some("call_1".to_string()),
+            function: Some(StreamToolCallFunctionDelta {
+                name: Some("readFile".to_string()),
+                arguments: Some(r#"{"pa"#.to_string()),
+            }),
+        }]);
+        acc.ingest(vec![StreamToolCallDelta {
+            index: Some(0),
+            id: None,
+            function: Some(StreamToolCallFunctionDelta {
+                name: None,
+                arguments: Some(r#"th":"a"#.to_string()),
+            }),
+        }]);
+        acc.ingest(vec![StreamToolCallDelta {
+            index: Some(0),
+            id: None,
+            function: Some(StreamToolCallFunctionDelta {
+                name: None,
+                arguments: Some(r#".md"}"#.to_string()),
+            }),
+        }]);
+        let calls = acc.finish();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "readFile");
+        assert_eq!(calls[0].arguments, r#"{"path":"a.md"}"#);
+    }
+
+    #[test]
+    fn tool_call_accumulator_keeps_two_interleaved_indices_separate() {
+        let mut acc = ToolCallAccumulator::default();
+        acc.ingest(vec![
+            StreamToolCallDelta {
+                index: Some(0),
+                id: Some("call_0".to_string()),
+                function: Some(StreamToolCallFunctionDelta {
+                    name: Some("listFiles".to_string()),
+                    arguments: Some("{".to_string()),
+                }),
+            },
+            StreamToolCallDelta {
+                index: Some(1),
+                id: Some("call_1".to_string()),
+                function: Some(StreamToolCallFunctionDelta {
+                    name: Some("readFile".to_string()),
+                    arguments: Some(r#"{"path":"#.to_string()),
+                }),
+            },
+        ]);
+        acc.ingest(vec![
+            StreamToolCallDelta { index: Some(0), id: None, function: Some(StreamToolCallFunctionDelta { name: None, arguments: Some("}".to_string()) }) },
+            StreamToolCallDelta { index: Some(1), id: None, function: Some(StreamToolCallFunctionDelta { name: None, arguments: Some(r#""a.md"}"#.to_string()) }) },
+        ]);
+        let calls = acc.finish();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].id, "call_0");
+        assert_eq!(calls[0].name, "listFiles");
+        assert_eq!(calls[0].arguments, "{}");
+        assert_eq!(calls[1].id, "call_1");
+        assert_eq!(calls[1].name, "readFile");
+        assert_eq!(calls[1].arguments, r#"{"path":"a.md"}"#);
+    }
+
+    #[test]
+    fn tool_call_accumulator_treats_a_missing_index_fragment_as_its_own_entry() {
+        let mut acc = ToolCallAccumulator::default();
+        acc.ingest(vec![
+            StreamToolCallDelta {
+                index: None,
+                id: Some("call_a".to_string()),
+                function: Some(StreamToolCallFunctionDelta {
+                    name: Some("listFiles".to_string()),
+                    arguments: Some("{}".to_string()),
+                }),
+            },
+            StreamToolCallDelta {
+                index: None,
+                id: Some("call_b".to_string()),
+                function: Some(StreamToolCallFunctionDelta {
+                    name: Some("semanticSearch".to_string()),
+                    arguments: Some(r#"{"query":"x"}"#.to_string()),
+                }),
+            },
+        ]);
+        let calls = acc.finish();
+        assert_eq!(
+            calls.len(),
+            2,
+            "two fragments both missing `index` must not be merged into one call"
+        );
+        assert_eq!(calls[0].id, "call_a");
+        assert_eq!(calls[1].id, "call_b");
     }
 }

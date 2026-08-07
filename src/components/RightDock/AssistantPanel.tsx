@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileText, FolderGit2, Send, Settings2, Sparkles } from "lucide-react";
+import { FileText, FolderGit2, Loader2, Send, Settings2, Sparkles } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
@@ -69,7 +69,7 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
   // resolves; "docsOnly" is the same safe default the backend itself falls
   // back to (`AiAccessMode::default()`), so the very first system prompt
   // built before that resolves is never wrong about being unrestricted.
-  const { messages, sending, error, sendMessage, contextTokens } = useLlmChat(
+  const { messages, sending, error, sendMessage, contextTokens, toolActivity } = useLlmChat(
     activeProviderId,
     accessMode ?? "docsOnly",
   );
@@ -278,7 +278,24 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
               ) : (
                 messages.map((m) => (
                   <div key={m.id} className={`assistant-chat-message ${m.role}${m.failed ? " failed" : ""}`}>
-                    {m.role === "assistant" && m.streaming && m.content === "" ? (
+                    {m.role === "assistant" && m.streaming && m.content === "" && toolActivity.length > 0 ? (
+                      <div className="assistant-chat-tool-activity-list">
+                        {toolActivity.map((entry, i) => {
+                          const isActive = i === toolActivity.length - 1;
+                          return (
+                            <span
+                              key={entry.id}
+                              className={`assistant-chat-tool-activity${isActive ? " active" : " done"}`}
+                            >
+                              {isActive ? (
+                                <Loader2 className="assistant-chat-tool-spinner" size={12} aria-hidden />
+                              ) : null}
+                              {entry.text}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : m.role === "assistant" && m.streaming && m.content === "" ? (
                       <span className="assistant-chat-typing" aria-label="Ассистент печатает…">
                         <span />
                         <span />

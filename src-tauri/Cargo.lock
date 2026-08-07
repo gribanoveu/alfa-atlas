@@ -78,6 +78,7 @@ dependencies = [
  "fastembed",
  "git2",
  "hf-hub",
+ "http",
  "ignore",
  "keyring",
  "moka",

@@ -201,6 +201,7 @@ mod tests {
                 trusted_cert_pem: Some("-----BEGIN CERTIFICATE-----\n...".to_string()),
                 limit: None,
             }],
+            debug_logging: false,
         };
         let resolved = resolve_provider("alfagen", &settings).unwrap();
         // Unset override fields still fall back to the manifest.
@@ -230,6 +231,7 @@ mod tests {
                 trusted_cert_pem: None,
                 limit: None,
             }],
+            debug_logging: false,
         };
         assert!(resolve_provider("my-custom", &settings).is_err());
     }
@@ -246,6 +248,7 @@ mod tests {
                 trusted_cert_pem: None,
                 limit: None,
             }],
+            debug_logging: false,
         };
         let resolved = resolve_provider("my-custom", &settings).unwrap();
         assert!(!resolved.is_system);
@@ -265,6 +268,7 @@ mod tests {
                 trusted_cert_pem: None,
                 limit: None,
             }],
+            debug_logging: false,
         };
         let list = list_resolved_providers(&settings);
         let alfagen_rows: Vec<_> = list.iter().filter(|p| p.id == "alfagen").collect();
@@ -284,6 +288,7 @@ mod tests {
                 trusted_cert_pem: None,
                 limit: None,
             }],
+            debug_logging: false,
         };
         let list = list_resolved_providers(&settings);
         let ids: Vec<&str> = list.iter().map(|p| p.id.as_str()).collect();
@@ -302,6 +307,7 @@ mod tests {
                 trusted_cert_pem: None,
                 limit: None,
             }],
+            debug_logging: false,
         };
         let list = list_resolved_providers(&settings);
         assert!(!list.iter().any(|p| p.id == "unfinished"));
@@ -388,6 +394,7 @@ mod tests {
         let mut settings = LlmSettings {
             active_provider_id: Some("a".to_string()),
             providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None }],
+            debug_logging: false,
         };
         remove_provider_config(&mut settings, "a");
         assert!(settings.providers.is_empty());
@@ -399,6 +406,7 @@ mod tests {
         let mut settings = LlmSettings {
             active_provider_id: Some("b".to_string()),
             providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None }],
+            debug_logging: false,
         };
         remove_provider_config(&mut settings, "a");
         assert_eq!(settings.active_provider_id.as_deref(), Some("b"));

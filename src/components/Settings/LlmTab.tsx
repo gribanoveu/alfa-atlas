@@ -37,6 +37,7 @@ export function LlmTab() {
     error,
     selectActiveProvider,
     updateProviderConfig,
+    setDebugLogging,
     removeProvider,
     saveApiKey,
     loadModels,
@@ -180,6 +181,22 @@ export function LlmTab() {
         Провайдер языковой модели для будущего чата с ассистентом (отдельно от
         провайдера эмбеддингов). Встроенные провайдеры уже настроены — нужно
         только вставить API-ключ; можно также добавить свой.
+      </p>
+
+      <label className="credentials-checkbox-label">
+        <input
+          type="checkbox"
+          className="credentials-checkbox"
+          checked={settings?.debugLogging ?? false}
+          disabled={busy || !settings}
+          onChange={(event) => void setDebugLogging(event.target.checked)}
+        />
+        <span>Логировать запросы и ответы модели</span>
+      </label>
+      <p className="settings-hint" style={{ paddingLeft: 0 }}>
+        Записывает каждый запрос и ответ (включая промежуточные шаги вызова инструментов) в{" "}
+        <code>~/.atlas/logs/llm.jsonl</code> — полезно, чтобы разобраться в ошибке провайдера.
+        Выключено по умолчанию: переписка может содержать содержимое документов.
       </p>
 
       <div className="llm-provider-list">

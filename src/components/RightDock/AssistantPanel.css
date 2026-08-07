@@ -214,6 +214,44 @@
   }
 }
 
+/* Growing log of this turn's tool calls (see useLlmChat's `toolActivity`)
+   — replaces the typing dots in the same slot. A list, not one line, so a
+   multi-round tool-calling exchange visibly advances (each call appends a
+   row) instead of one line silently swapping for another, which reads as
+   frozen even while genuinely still working. */
+.assistant-chat-tool-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.assistant-chat-tool-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+  font-style: italic;
+}
+
+/* An already-finished call in this turn's log — dimmed so the active one
+   (below) reads as the current step, not just another line in a list. */
+.assistant-chat-tool-activity.done {
+  opacity: 0.55;
+}
+
+.assistant-chat-tool-spinner {
+  flex: none;
+  color: var(--accent);
+  animation: assistant-chat-spin 0.8s linear infinite;
+}
+
+@keyframes assistant-chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .assistant-chat-error {
   flex: none;
   padding: 6px 10px;

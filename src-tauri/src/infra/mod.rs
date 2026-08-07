@@ -11,6 +11,7 @@ pub mod key_management;
 pub mod language_indexers;
 pub mod layout_store;
 pub mod llm_credentials_store;
+pub mod llm_debug_log;
 pub mod llm_provider_manifest;
 pub mod llm_providers;
 pub mod onboarding_store;

@@ -122,6 +122,19 @@ pub enum ToolError {
     Io(#[source] std::io::Error),
     #[error("semantic search failed: {0}")]
     SemanticSearch(String),
+    /// A model-supplied `LlmToolCall::name` that doesn't match any known
+    /// `ToolCall` variant — see `services::ai_tools::parse_tool_call`.
+    #[error("unknown tool: {0}")]
+    UnknownTool(String),
+    /// A model-supplied `LlmToolCall::arguments` that doesn't deserialize
+    /// into the args struct its `name` maps to (missing/extra/wrong-typed
+    /// field, or plain non-JSON) — see `services::ai_tools::parse_tool_call`.
+    #[error("invalid arguments for {tool}: {source}")]
+    InvalidArguments {
+        tool: String,
+        #[source]
+        source: serde_json::Error,
+    },
 }
 
 impl From<EmbeddingError> for ToolError {

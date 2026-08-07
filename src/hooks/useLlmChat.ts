@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AiAccessMode } from "../lib/aiTools";
-import { buildAccessModeChangeNotice, buildAssistantSystemPrompt } from "../lib/assistantConfig";
-import { listenLlmChatDelta, streamLlmChat, type ChatUsage, type LlmMessage } from "../lib/llm";
+import {
+  buildAccessModeChangeNotice,
+  buildAssistantSystemPrompt,
+  describeToolActivity,
+} from "../lib/assistantConfig";
+import {
+  listenLlmChatDelta,
+  listenLlmToolCall,
+  streamLlmChat,
+  type ChatUsage,
+  type LlmMessage,
+} from "../lib/llm";
 import { estimateTokenCount } from "../lib/tokens";
 
 export type ChatMessage = {
@@ -15,8 +25,20 @@ export type ChatMessage = {
   usage?: ChatUsage;
 };
 
-/** Owns one conversation's state for the assistant chat panel — plain
- * request/reply for now, no tool-calling (see AI_HARNESS.md).
+/** One `listenLlmToolCall` event turned into a display line. `id` is a
+ * fresh uuid per event (not derived from anything on the wire) purely as a
+ * stable React key — several tool calls can share the same `name`. */
+export type ToolActivityEntry = {
+  id: string;
+  text: string;
+};
+
+/** Owns one conversation's state for the assistant chat panel. The
+ * tool-calling loop itself (ReadFile/ListFiles/SemanticSearch) runs
+ * entirely inside the backend's `llm_chat_stream` — this hook still does
+ * exactly one `streamLlmChat()` call per turn and gets back one resolved
+ * reply, unaware of how many model↔tool round trips happened underneath;
+ * `toolActivity` is the one bit of that visible here, via a status event.
  *
  * `accessMode` is threaded in (rather than read internally) so the caller's
  * `useAiAccessMode` stays the single source of truth; it's read fresh on
@@ -27,6 +49,14 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Growing log of this turn's tool calls (e.g. "Читает файл: docs/x.adoc…")
+  // — an array, not just the latest one, so a multi-round tool-calling
+  // exchange visibly advances (each new call appends a line) instead of
+  // silently swapping one static line for another, which reads as frozen
+  // even while genuinely still working. Reset at the start of every
+  // `sendMessage` and cleared once real text resumes streaming or the turn
+  // ends, see the two listeners below.
+  const [toolActivity, setToolActivity] = useState<ToolActivityEntry[]>([]);
 
   // The mode the *previous* request actually went out with — `null` until
   // the first send, so the very first turn never fires a spurious "just
@@ -44,11 +74,31 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenLlmChatDelta(({ delta }) => {
+      setToolActivity([]);
       setMessages((prev) => {
         const last = prev[prev.length - 1];
         if (!last || last.role !== "assistant" || !last.streaming) return prev;
         return [...prev.slice(0, -1), { ...last, content: last.content + delta }];
       });
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Tool-round status — same effect shape as the delta listener above.
+  // Fires before the backend executes each tool call; cleared either here
+  // by the next real delta, or in `sendMessage`'s `finally` as a backstop
+  // for a turn that ends via error before any delta ever arrives.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenLlmToolCall(({ name, arguments: args }) => {
+      setToolActivity((prev) => [...prev, { id: crypto.randomUUID(), text: describeToolActivity(name, args) }]);
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -74,6 +124,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
       ]);
       setSending(true);
       setError(null);
+      setToolActivity([]);
 
       // Placed as its own message right before the new user turn (not just
       // folded into the system prompt above) so a mode switch is impossible
@@ -111,6 +162,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
         setError(message);
       } finally {
         setSending(false);
+        setToolActivity([]);
       }
     },
     [providerId, sending, messages, accessMode],
@@ -149,6 +201,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
     error,
     sendMessage,
     contextTokens,
+    toolActivity,
     systemPrompt: buildAssistantSystemPrompt(accessMode),
   };
 }

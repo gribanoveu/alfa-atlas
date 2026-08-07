@@ -81,6 +81,14 @@ pub struct LlmSettings {
     pub active_provider_id: Option<String>,
     #[serde(default)]
     pub providers: Vec<LlmProviderConfig>,
+    /// Off by default — a conversation can contain sensitive document
+    /// content the user may not want written to disk. When on,
+    /// `commands::llm::llm_chat_stream` appends every request/response of
+    /// every tool-calling round to `~/.atlas/logs/llm.jsonl` (see
+    /// `infra::llm_debug_log`), so a provider error can be correlated with
+    /// the exact payload that produced it.
+    #[serde(default)]
+    pub debug_logging: bool,
 }
 
 /// One entry from the compiled-in provider manifest (see
@@ -157,6 +165,14 @@ pub struct LlmMessage {
     /// result of.
     #[serde(default)]
     pub tool_call_id: Option<String>,
+    /// Non-empty only for an `Assistant` message that requested tool
+    /// calls — round-tripped back to the provider so it sees its own prior
+    /// request when the matching `Tool` result messages follow. `skip_serializing_if`
+    /// keeps a plain `{role, content, toolCallId}` message (everything the
+    /// frontend itself ever builds) byte-identical to before this field
+    /// existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<LlmToolCall>,
 }
 
 /// One callable tool, as the model needs to see it. `parameters` is a raw
@@ -194,6 +210,36 @@ pub struct LlmToolCall {
     pub id: String,
     pub name: String,
     pub arguments: String,
+}
+
+/// Replaces `arguments` with `"{}"` on any call whose `arguments` doesn't
+/// parse as a JSON *object* — used by `commands::llm::llm_chat_stream`
+/// before round-tripping a model's tool calls back into the next request's
+/// message history (never on the copy handed to `services::ai_tools::
+/// parse_tool_call` for actual execution, which needs the real string to
+/// report an accurate error back to the model).
+///
+/// A model occasionally streams malformed `arguments` (e.g. trailing
+/// garbage after a complete JSON value — a real observed case:
+/// `"{}\"\""`). The OpenAI wire format doesn't require the *echoed* copy to
+/// be valid JSON (the field is opaque to the protocol), but at least one
+/// real gateway 500s server-side when it is not — this sanitizes
+/// defensively regardless of which provider is in use, since "malformed
+/// JSON crashes a provider's own request validation" isn't something this
+/// client can rely on any given provider tolerating.
+pub fn sanitize_tool_call_arguments(calls: &[LlmToolCall]) -> Vec<LlmToolCall> {
+    calls
+        .iter()
+        .map(|call| {
+            let is_valid_object = serde_json::from_str::<serde_json::Value>(&call.arguments)
+                .is_ok_and(|v| v.is_object());
+            LlmToolCall {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                arguments: if is_valid_object { call.arguments.clone() } else { "{}".to_string() },
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -238,6 +284,16 @@ pub struct ChatStreamResult {
     pub text: String,
     #[serde(default)]
     pub usage: Option<ChatUsage>,
+    /// Non-empty when this round ended with the model requesting tool
+    /// calls instead of (or alongside) a final answer. This is both
+    /// `LlmProvider::chat_stream`'s per-round return value — the
+    /// tool-calling loop in `commands::llm::llm_chat_stream` reads this to
+    /// decide whether to continue — and, incidentally, the same type that
+    /// command itself returns to the frontend; by construction the command
+    /// only ever returns once a round's `tool_calls` is empty, so the
+    /// frontend never actually observes a non-empty value here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<LlmToolCall>,
 }
 
 #[derive(Debug, Error)]
@@ -315,6 +371,7 @@ mod tests {
         assert_eq!(message.role, LlmRole::Assistant);
         assert_eq!(message.content, None);
         assert_eq!(message.tool_call_id, None);
+        assert_eq!(message.tool_calls, vec![]);
     }
 
     #[test]
@@ -324,5 +381,93 @@ mod tests {
         )
         .unwrap();
         assert_eq!(call.arguments, r#"{"path":"a.md"}"#);
+    }
+
+    #[test]
+    fn sanitize_tool_call_arguments_leaves_a_valid_object_untouched() {
+        let calls = vec![LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: r#"{"path":"a.md"}"#.to_string(),
+        }];
+        let sanitized = sanitize_tool_call_arguments(&calls);
+        assert_eq!(sanitized, calls);
+    }
+
+    #[test]
+    fn sanitize_tool_call_arguments_replaces_malformed_json_with_an_empty_object() {
+        // The real observed case: valid `{}` followed by stray trailing
+        // characters — `serde_json` rejects this as "trailing characters".
+        let calls = vec![LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: "{}\"\"".to_string(),
+        }];
+        let sanitized = sanitize_tool_call_arguments(&calls);
+        assert_eq!(sanitized[0].arguments, "{}");
+        assert_eq!(sanitized[0].id, "call_1");
+        assert_eq!(sanitized[0].name, "listFiles");
+    }
+
+    #[test]
+    fn sanitize_tool_call_arguments_replaces_a_non_object_json_value() {
+        // Valid JSON, but not an object — `arguments` must be an object per
+        // the OpenAI function-calling convention.
+        let calls = vec![LlmToolCall {
+            id: "call_1".to_string(),
+            name: "semanticSearch".to_string(),
+            arguments: "\"just a string\"".to_string(),
+        }];
+        let sanitized = sanitize_tool_call_arguments(&calls);
+        assert_eq!(sanitized[0].arguments, "{}");
+    }
+
+    #[test]
+    fn llm_message_round_trips_tool_calls() {
+        let message = LlmMessage {
+            role: LlmRole::Assistant,
+            content: None,
+            tool_call_id: None,
+            tool_calls: vec![LlmToolCall {
+                id: "call_1".to_string(),
+                name: "readFile".to_string(),
+                arguments: r#"{"path":"a.md"}"#.to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&message).unwrap();
+        assert!(json.contains(r#""toolCalls":[{"#), "expected toolCalls in {json}");
+        let round_tripped: LlmMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, message);
+    }
+
+    #[test]
+    fn llm_message_omits_tool_calls_when_empty() {
+        let message =
+            LlmMessage { role: LlmRole::User, content: Some("hi".to_string()), tool_call_id: None, tool_calls: vec![] };
+        let json = serde_json::to_string(&message).unwrap();
+        assert!(!json.contains("toolCalls"), "expected no toolCalls key in {json}");
+    }
+
+    #[test]
+    fn chat_stream_result_round_trips_tool_calls() {
+        let result = ChatStreamResult {
+            text: String::new(),
+            usage: None,
+            tool_calls: vec![LlmToolCall {
+                id: "call_1".to_string(),
+                name: "listFiles".to_string(),
+                arguments: "{}".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let round_tripped: ChatStreamResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, result);
+    }
+
+    #[test]
+    fn chat_stream_result_omits_tool_calls_when_empty() {
+        let result = ChatStreamResult { text: "hi".to_string(), usage: None, tool_calls: vec![] };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("toolCalls"), "expected no toolCalls key in {json}");
     }
 }
