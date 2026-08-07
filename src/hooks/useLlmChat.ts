@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ASSISTANT_SYSTEM_PROMPT } from "../lib/assistantConfig";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AiAccessMode } from "../lib/aiTools";
+import { buildAccessModeChangeNotice, buildAssistantSystemPrompt } from "../lib/assistantConfig";
 import { listenLlmChatDelta, streamLlmChat, type ChatUsage, type LlmMessage } from "../lib/llm";
 import { estimateTokenCount } from "../lib/tokens";
 
@@ -15,11 +16,24 @@ export type ChatMessage = {
 };
 
 /** Owns one conversation's state for the assistant chat panel — plain
- * request/reply for now, no tool-calling (see AI_HARNESS.md). */
-export function useLlmChat(providerId: string | null) {
+ * request/reply for now, no tool-calling (see AI_HARNESS.md).
+ *
+ * `accessMode` is threaded in (rather than read internally) so the caller's
+ * `useAiAccessMode` stays the single source of truth; it's read fresh on
+ * every `sendMessage`/`contextTokens` computation, not captured once, so
+ * flipping the docs-only/full-repo toggle mid-conversation is reflected on
+ * the very next turn. */
+export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The mode the *previous* request actually went out with — `null` until
+  // the first send, so the very first turn never fires a spurious "just
+  // switched" notice (the system prompt alone already states the mode
+  // correctly for a fresh conversation; the notice exists only for a
+  // mid-conversation switch, see `buildAccessModeChangeNotice`).
+  const lastSentModeRef = useRef<AiAccessMode | null>(null);
 
   // Live token deltas — subscribed once for the hook's lifetime, matching
   // `useEmbeddingSetup`'s `listenSyncProgress` effect shape. Appends only
@@ -61,9 +75,20 @@ export function useLlmChat(providerId: string | null) {
       setSending(true);
       setError(null);
 
+      // Placed as its own message right before the new user turn (not just
+      // folded into the system prompt above) so a mode switch is impossible
+      // for the model to skim past — see `buildAccessModeChangeNotice`'s
+      // doc comment for why the system prompt's own mode line isn't
+      // reliably enough on its own once a conversation has some history.
+      const modeChanged = lastSentModeRef.current !== null && lastSentModeRef.current !== accessMode;
+      lastSentModeRef.current = accessMode;
+
       const wireMessages: LlmMessage[] = [
-        { role: "system", content: ASSISTANT_SYSTEM_PROMPT, toolCallId: null },
+        { role: "system", content: buildAssistantSystemPrompt(accessMode), toolCallId: null },
         ...priorTurns.map((m): LlmMessage => ({ role: m.role, content: m.content, toolCallId: null })),
+        ...(modeChanged
+          ? [{ role: "system" as const, content: buildAccessModeChangeNotice(accessMode), toolCallId: null }]
+          : []),
         { role: "user", content: trimmed, toolCallId: null },
       ];
 
@@ -88,7 +113,7 @@ export function useLlmChat(providerId: string | null) {
         setSending(false);
       }
     },
-    [providerId, sending, messages],
+    [providerId, sending, messages, accessMode],
   );
 
   // Context-window usage so far. Every request resends the *entire* message
@@ -107,7 +132,7 @@ export function useLlmChat(providerId: string | null) {
     );
     if (lastUsageIndex === -1) {
       return (
-        estimateTokenCount(ASSISTANT_SYSTEM_PROMPT) +
+        estimateTokenCount(buildAssistantSystemPrompt(accessMode)) +
         messages.reduce((sum, m) => sum + estimateTokenCount(m.content), 0)
       );
     }
@@ -116,7 +141,14 @@ export function useLlmChat(providerId: string | null) {
       .slice(lastUsageIndex + 1)
       .reduce((sum, m) => sum + estimateTokenCount(m.content), 0);
     return baseline + tail;
-  }, [messages]);
+  }, [messages, accessMode]);
 
-  return { messages, sending, error, sendMessage, contextTokens, systemPrompt: ASSISTANT_SYSTEM_PROMPT };
+  return {
+    messages,
+    sending,
+    error,
+    sendMessage,
+    contextTokens,
+    systemPrompt: buildAssistantSystemPrompt(accessMode),
+  };
 }

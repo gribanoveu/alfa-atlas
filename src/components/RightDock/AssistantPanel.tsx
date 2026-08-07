@@ -65,7 +65,14 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
   const activeProviderId = settings?.activeProviderId ?? providers[0]?.id ?? null;
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;
   const llmReady = activeProviderId !== null && Boolean(hasApiKeyMap[activeProviderId]);
-  const { messages, sending, error, sendMessage, contextTokens } = useLlmChat(activeProviderId);
+  // `accessMode` is `null` only until the first `getAiAccessMode` round trip
+  // resolves; "docsOnly" is the same safe default the backend itself falls
+  // back to (`AiAccessMode::default()`), so the very first system prompt
+  // built before that resolves is never wrong about being unrestricted.
+  const { messages, sending, error, sendMessage, contextTokens } = useLlmChat(
+    activeProviderId,
+    accessMode ?? "docsOnly",
+  );
   const contextLimit = activeProvider?.limit?.context ?? null;
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;
   const [draft, setDraft] = useState("");
