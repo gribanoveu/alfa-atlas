@@ -212,6 +212,34 @@ pub struct LlmModelInfo {
     pub id: String,
 }
 
+/// Token accounting for one completed chat turn, as an OpenAI-compatible
+/// server reports it — protocol-agnostic here (see this module's top-level
+/// doc comment); `infra::llm_providers::openai_compatible` carries the
+/// wire-shaped equivalent and converts into this. Since every request
+/// resends the full message history, `total_tokens` for the latest turn is
+/// the authoritative context-window usage at that point in the
+/// conversation, not just a per-turn stat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+/// `LlmProvider::chat_stream`'s return value: the authoritative full reply
+/// text (a safety net against a dropped delta event), plus real usage if the
+/// server reported one on the final chunk — `None` for a provider that
+/// doesn't send it (the frontend falls back to its own character estimate
+/// in that case, see `estimateTokenCount`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStreamResult {
+    pub text: String,
+    #[serde(default)]
+    pub usage: Option<ChatUsage>,
+}
+
 #[derive(Debug, Error)]
 pub enum LlmError {
     #[error("provider error: {0}")]
@@ -239,7 +267,11 @@ pub trait LlmProvider: Send + Sync {
     /// frontend) reads the return value rather than re-deriving it from the
     /// callback calls. `&dyn Fn` (not a generic parameter) because this
     /// trait is used as a trait object (`Arc<dyn LlmProvider>`).
-    fn chat_stream(&self, request: ChatRequest, on_delta: &dyn Fn(&str)) -> Result<String, LlmError>;
+    fn chat_stream(
+        &self,
+        request: ChatRequest,
+        on_delta: &dyn Fn(&str),
+    ) -> Result<ChatStreamResult, LlmError>;
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError>;
 }
 

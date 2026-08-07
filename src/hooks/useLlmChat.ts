@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ASSISTANT_SYSTEM_PROMPT } from "../lib/assistantConfig";
-import { listenLlmChatDelta, streamLlmChat, type LlmMessage } from "../lib/llm";
+import { listenLlmChatDelta, streamLlmChat, type ChatUsage, type LlmMessage } from "../lib/llm";
 import { estimateTokenCount } from "../lib/tokens";
 
 export type ChatMessage = {
@@ -9,6 +9,9 @@ export type ChatMessage = {
   content: string;
   streaming?: boolean;
   failed?: boolean;
+  /** Real token usage for this turn, when the provider reported one on the
+   * final SSE chunk — only ever set on a completed assistant message. */
+  usage?: ChatUsage;
 };
 
 /** Owns one conversation's state for the assistant chat panel — plain
@@ -67,9 +70,13 @@ export function useLlmChat(providerId: string | null) {
       try {
         // Authoritative full text overwrites whatever was accumulated from
         // deltas — a safety net in case an event was dropped in transit.
-        const full = await streamLlmChat(providerId, wireMessages);
+        const { text, usage } = await streamLlmChat(providerId, wireMessages);
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, content: full, streaming: false } : m)),
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: text, streaming: false, usage: usage ?? undefined }
+              : m,
+          ),
         );
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -84,16 +91,32 @@ export function useLlmChat(providerId: string | null) {
     [providerId, sending, messages],
   );
 
-  // Estimated context-window usage (system prompt + every turn sent/
-  // received so far, including whatever's streamed in so far for the
-  // in-flight reply) — see `estimateTokenCount` for why this is an
-  // approximation, not an exact count.
-  const contextTokens = useMemo(
-    () =>
-      estimateTokenCount(ASSISTANT_SYSTEM_PROMPT) +
-      messages.reduce((sum, m) => sum + estimateTokenCount(m.content), 0),
-    [messages],
-  );
+  // Context-window usage so far. Every request resends the *entire* message
+  // history, so a completed turn's `usage.totalTokens` (prompt + completion,
+  // as the provider itself counted it) already is the authoritative total
+  // context size at that point — not just a per-turn stat. Once one exists,
+  // it anchors the count and only the messages after it (a new user message,
+  // or the still-streaming reply) fall back to `estimateTokenCount`. Before
+  // any turn has completed (a fresh conversation, or a provider that never
+  // reports usage), the whole thing is the character-count estimate, same
+  // as before.
+  const contextTokens = useMemo(() => {
+    const lastUsageIndex = messages.reduce(
+      (found, m, i) => (m.usage ? i : found),
+      -1,
+    );
+    if (lastUsageIndex === -1) {
+      return (
+        estimateTokenCount(ASSISTANT_SYSTEM_PROMPT) +
+        messages.reduce((sum, m) => sum + estimateTokenCount(m.content), 0)
+      );
+    }
+    const baseline = messages[lastUsageIndex].usage!.totalTokens;
+    const tail = messages
+      .slice(lastUsageIndex + 1)
+      .reduce((sum, m) => sum + estimateTokenCount(m.content), 0);
+    return baseline + tail;
+  }, [messages]);
 
   return { messages, sending, error, sendMessage, contextTokens, systemPrompt: ASSISTANT_SYSTEM_PROMPT };
 }

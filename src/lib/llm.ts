@@ -60,6 +60,21 @@ export type LlmChatStreamDelta = {
   delta: string;
 };
 
+// Mirrors `domain::llm::ChatUsage` — real token accounting for one completed
+// turn, when the provider reports it (requested via `stream_options.
+// include_usage`; not every OpenAI-compatible server sends it).
+export type ChatUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+};
+
+// Mirrors `domain::llm::ChatStreamResult`.
+export type ChatStreamResult = {
+  text: string;
+  usage: ChatUsage | null;
+};
+
 export function getLlmSettings(): Promise<LlmSettings> {
   return invoke<LlmSettings>("llm_get_settings");
 }
@@ -110,10 +125,11 @@ export function testLlmConnection(providerId: string): Promise<string> {
 
 /** A plain conversation turn, streamed. The caller owns building the full
  * message list (including any system prompt). Resolves with the
- * authoritative full reply text once the stream ends — subscribe via
- * `listenLlmChatDelta` for the live text meanwhile. */
-export function streamLlmChat(providerId: string, messages: LlmMessage[]): Promise<string> {
-  return invoke<string>("llm_chat_stream", { providerId, messages });
+ * authoritative full reply text (and real token usage, if the provider
+ * reported one) once the stream ends — subscribe via `listenLlmChatDelta`
+ * for the live text meanwhile. */
+export function streamLlmChat(providerId: string, messages: LlmMessage[]): Promise<ChatStreamResult> {
+  return invoke<ChatStreamResult>("llm_chat_stream", { providerId, messages });
 }
 
 /** Fires once per non-empty text chunk while a `streamLlmChat()` call is in

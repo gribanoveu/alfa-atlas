@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::llm::{
-    ChatRequest, ChatResponse, LlmError, LlmModelInfo, LlmProvider, LlmRole, LlmToolCall,
+    ChatRequest, ChatResponse, ChatStreamResult, ChatUsage, LlmError, LlmModelInfo, LlmProvider,
+    LlmRole, LlmToolCall,
 };
 
 /// Builds the `ureq::Agent` a provider's requests go through. When
@@ -89,6 +90,18 @@ struct ChatCompletionRequest<'a> {
     /// explicit `"stream":false` differently from the key being absent.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     stream: bool,
+    /// Opts into a trailing `usage`-only SSE chunk on streaming requests —
+    /// the standard OpenAI flag, without which many spec-compliant servers
+    /// never emit `usage` at all. `None` for non-streaming requests, where
+    /// `usage` is irrelevant (a plain `chat` response doesn't stream chunks
+    /// to attach it to).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -169,19 +182,46 @@ struct StreamChoice {
     delta: StreamDelta,
 }
 
+/// Wire shape of the trailing `usage`-only chunk requested via
+/// `stream_options.include_usage` — snake_case, unlike `ChatUsage`'s
+/// `camelCase` (that rename is for the frontend-facing side, not this
+/// deserialize side), hence a distinct type rather than deserializing
+/// straight into `ChatUsage`.
+#[derive(Debug, Deserialize)]
+struct StreamUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
+    total_tokens: u32,
+}
+
+impl From<StreamUsage> for ChatUsage {
+    fn from(u: StreamUsage) -> Self {
+        ChatUsage {
+            prompt_tokens: u.prompt_tokens,
+            completion_tokens: u.completion_tokens,
+            total_tokens: u.total_tokens,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct StreamChunk {
+    #[serde(default)]
     choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<StreamUsage>,
 }
 
 /// One piece of information extracted from a single raw line of an
 /// OpenAI-compatible SSE chat-completions stream.
 #[derive(Debug, PartialEq)]
 enum SseLine {
-    /// A `data: {...}` line — `Some(text)` when this chunk's
-    /// `delta.content` was present and non-null, `None` when it carried no
-    /// text (e.g. a role-only first chunk, a finish-reason-only last one).
-    Delta(Option<String>),
+    /// A `data: {...}` line. `delta` is `Some(text)` when this chunk's
+    /// `delta.content` was present and non-null (`None` for e.g. a
+    /// role-only first chunk, or the usage-only trailing chunk).  `usage` is
+    /// `Some` only on that trailing chunk — a chunk can in principle carry
+    /// both, so these are independent, not an either/or.
+    Chunk { delta: Option<String>, usage: Option<ChatUsage> },
     /// The terminal `data: [DONE]` line.
     Done,
     /// Not a `data:` line — a blank event-separator line, or (defensively)
@@ -208,7 +248,9 @@ fn parse_sse_line(line: &str) -> Result<SseLine, LlmError> {
     }
     let chunk: StreamChunk =
         serde_json::from_str(data).map_err(|e| LlmError::Provider(e.to_string()))?;
-    Ok(SseLine::Delta(chunk.choices.into_iter().next().and_then(|c| c.delta.content)))
+    let delta = chunk.choices.into_iter().next().and_then(|c| c.delta.content);
+    let usage = chunk.usage.map(ChatUsage::from);
+    Ok(SseLine::Chunk { delta, usage })
 }
 
 pub struct OpenAiCompatibleProvider {
@@ -258,7 +300,15 @@ impl OpenAiCompatibleProvider {
         // empty `tools` array with `tool_choice: "auto"` is a needless
         // (and, on some OpenAI-compatible servers, rejected) combination.
         let tool_choice = if tools.is_empty() { None } else { Some("auto") };
-        ChatCompletionRequest { model: &request.model, messages, tools, tool_choice, stream }
+        let stream_options = stream.then_some(StreamOptions { include_usage: true });
+        ChatCompletionRequest {
+            model: &request.model,
+            messages,
+            tools,
+            tool_choice,
+            stream,
+            stream_options,
+        }
     }
 }
 
@@ -299,7 +349,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
         })
     }
 
-    fn chat_stream(&self, request: ChatRequest, on_delta: &dyn Fn(&str)) -> Result<String, LlmError> {
+    fn chat_stream(
+        &self,
+        request: ChatRequest,
+        on_delta: &dyn Fn(&str),
+    ) -> Result<ChatStreamResult, LlmError> {
         let body = self.build_body(&request, true);
 
         let response = self
@@ -311,18 +365,27 @@ impl LlmProvider for OpenAiCompatibleProvider {
 
         let reader = std::io::BufReader::new(response.into_body().into_reader());
         let mut full = String::new();
+        let mut usage = None;
         for line in std::io::BufRead::lines(reader) {
             let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
             match parse_sse_line(&line)? {
-                SseLine::Delta(Some(text)) => {
-                    on_delta(&text);
-                    full.push_str(&text);
+                SseLine::Chunk { delta, usage: chunk_usage } => {
+                    if let Some(text) = delta {
+                        on_delta(&text);
+                        full.push_str(&text);
+                    }
+                    // Only the trailing usage-only chunk is expected to
+                    // carry this, but take whichever chunk has it rather
+                    // than assuming position.
+                    if chunk_usage.is_some() {
+                        usage = chunk_usage;
+                    }
                 }
-                SseLine::Delta(None) | SseLine::Ignore => {}
+                SseLine::Ignore => {}
                 SseLine::Done => break,
             }
         }
-        Ok(full)
+        Ok(ChatStreamResult { text: full, usage })
     }
 
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
@@ -374,6 +437,7 @@ mod tests {
             tools: vec![],
             tool_choice: None,
             stream: false,
+            stream_options: None,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert_eq!(
@@ -394,6 +458,7 @@ mod tests {
             }],
             tool_choice: Some("auto"),
             stream: false,
+            stream_options: None,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains(r#""tool_choice":"auto""#));
@@ -521,6 +586,14 @@ YoQlQIWF38mOPRxLRBxKA7g=\n\
     }
 
     #[test]
+    fn build_body_requests_usage_on_streaming_requests() {
+        let p = provider("https://api.example.com/v1");
+        let request = ChatRequest { messages: vec![], tools: vec![], model: "m".to_string() };
+        let json = serde_json::to_string(&p.build_body(&request, true)).unwrap();
+        assert!(json.contains(r#""stream_options":{"include_usage":true}"#));
+    }
+
+    #[test]
     fn build_body_omits_stream_for_non_streaming_requests() {
         let p = provider("https://api.example.com/v1");
         let request = ChatRequest { messages: vec![], tools: vec![], model: "m".to_string() };
@@ -531,13 +604,34 @@ YoQlQIWF38mOPRxLRBxKA7g=\n\
     #[test]
     fn parse_sse_line_extracts_delta_text() {
         let line = r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#;
-        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Delta(Some("Hel".to_string())));
+        assert_eq!(
+            parse_sse_line(line).unwrap(),
+            SseLine::Chunk { delta: Some("Hel".to_string()), usage: None }
+        );
     }
 
     #[test]
     fn parse_sse_line_treats_missing_content_as_no_delta() {
         let line = r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#;
-        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Delta(None));
+        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Chunk { delta: None, usage: None });
+    }
+
+    #[test]
+    fn parse_sse_line_extracts_usage_from_the_trailing_chunk() {
+        let line = r#"data: {"choices":[{"delta":{},"finish_reason":null}],"usage":{"prompt_tokens":67,"completion_tokens":2,"total_tokens":69}}"#;
+        assert_eq!(
+            parse_sse_line(line).unwrap(),
+            SseLine::Chunk {
+                delta: None,
+                usage: Some(ChatUsage { prompt_tokens: 67, completion_tokens: 2, total_tokens: 69 }),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_sse_line_handles_a_chunk_with_neither_delta_nor_usage() {
+        let line = r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
+        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Chunk { delta: None, usage: None });
     }
 
     #[test]
@@ -564,6 +658,9 @@ YoQlQIWF38mOPRxLRBxKA7g=\n\
     #[test]
     fn parse_sse_line_strips_trailing_carriage_return() {
         let line = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r";
-        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Delta(Some("hi".to_string())));
+        assert_eq!(
+            parse_sse_line(line).unwrap(),
+            SseLine::Chunk { delta: Some("hi".to_string()), usage: None }
+        );
     }
 }

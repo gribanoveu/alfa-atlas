@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::domain::llm::{
-    ChatRequest, LlmMessage, LlmModelInfo, LlmProvider, LlmProviderConfig, LlmSettings,
-    ResolvedLlmProvider,
+    ChatRequest, ChatStreamResult, LlmMessage, LlmModelInfo, LlmProvider, LlmProviderConfig,
+    LlmSettings, ResolvedLlmProvider,
 };
 use crate::infra::{llm_credentials_store, llm_providers};
 use crate::services::llm_config;
@@ -160,17 +160,18 @@ pub async fn llm_test_connection(
 /// message-list logic of its own. Resolves the provider/model exactly like
 /// `llm_test_connection`, then streams the reply as
 /// `CHAT_STREAM_DELTA_EVENT` deltas while also returning the authoritative
-/// full text once the stream ends (a safety net for the frontend against a
-/// dropped event).
+/// full text (and real token usage, if the provider reported one) once the
+/// stream ends — a safety net for the frontend against a dropped event, and
+/// the only place usage arrives since it's a one-shot value, not a stream.
 #[tauri::command]
 pub async fn llm_chat_stream(
     app: AppHandle,
     provider_id: String,
     messages: Vec<LlmMessage>,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
-) -> Result<String, String> {
+) -> Result<ChatStreamResult, String> {
     let llm_provider = llm_provider.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamResult, String> {
         let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
         let resolved =
             llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;

@@ -143,7 +143,7 @@ pub fn remove_provider_config(settings: &mut LlmSettings, provider_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::llm::{ChatRequest, ChatResponse, LlmModelInfo, ModelLimit};
+    use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmModelInfo, ModelLimit};
 
     struct FakeProvider {
         models: Vec<&'static str>,
@@ -155,7 +155,11 @@ mod tests {
             unimplemented!("not exercised by these tests")
         }
 
-        fn chat_stream(&self, _request: ChatRequest, _on_delta: &dyn Fn(&str)) -> Result<String, LlmError> {
+        fn chat_stream(
+            &self,
+            _request: ChatRequest,
+            _on_delta: &dyn Fn(&str),
+        ) -> Result<ChatStreamResult, LlmError> {
             unimplemented!("not exercised by these tests")
         }
 
