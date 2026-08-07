@@ -227,6 +227,12 @@ pub struct AppSettings {
     /// `settings.json` — see `infra::embedding_credentials_store`.
     #[serde(default)]
     pub embedding: crate::domain::embeddings::EmbeddingProviderConfig,
+    /// Global — configured LLM providers (system-provider overrides plus
+    /// any custom ones) and which is active, across every project. API
+    /// keys are never part of this (or any) `settings.json` — see
+    /// `infra::llm_credentials_store`.
+    #[serde(default)]
+    pub llm: crate::domain::llm::LlmSettings,
 }
 
 #[derive(Debug, Error)]
@@ -344,6 +350,14 @@ mod tests {
             crate::domain::embeddings::EmbeddingProviderKind::Local
         );
         assert_eq!(settings.embedding.remote_base_url, None);
+    }
+
+    #[test]
+    fn deserializes_legacy_settings_without_llm() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
+        assert_eq!(settings.llm.active_provider_id, None);
+        assert!(settings.llm.providers.is_empty());
     }
 
     #[test]

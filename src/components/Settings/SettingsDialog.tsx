@@ -19,6 +19,7 @@ import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
 import { CredentialsTab } from "./CredentialsTab";
 import { EmbeddingsTab } from "./EmbeddingsTab";
+import { LlmTab } from "./LlmTab";
 import { SpellcheckTab } from "./SpellcheckTab";
 import { StandardsRulesTab } from "./StandardsRulesTab";
 
@@ -30,7 +31,8 @@ export type SectionId =
   | "credentials"
   | "standards"
   | "spellcheck"
-  | "embeddings";
+  | "embeddings"
+  | "llm";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "Общие" },
@@ -41,6 +43,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "standards", label: "Стандарты" },
   { id: "spellcheck", label: "Орфография" },
   { id: "embeddings", label: "Эмбеддинги" },
+  { id: "llm", label: "LLM" },
 ];
 
 type FontSizePrefKey =
@@ -600,6 +603,8 @@ export function SettingsDialog({
             ) : null}
 
             {section === "embeddings" ? <EmbeddingsTab /> : null}
+
+            {section === "llm" ? <LlmTab /> : null}
 
             {error ? <div className="settings-error">{error}</div> : null}
           </div>

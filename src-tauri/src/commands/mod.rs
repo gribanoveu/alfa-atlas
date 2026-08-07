@@ -3,6 +3,7 @@ pub mod asciidoc;
 pub mod embeddings;
 pub mod git;
 pub mod layout;
+pub mod llm;
 pub mod onboarding;
 pub mod openapi;
 pub mod prefs;

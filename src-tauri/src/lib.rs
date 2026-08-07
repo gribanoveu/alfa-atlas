@@ -13,6 +13,7 @@ use crate::commands::embeddings::{
     BackgroundBacklogSlot, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard,
     IndexStoreSlot, IndexWatcherSlot, PriorityFilesSlot,
 };
+use crate::commands::llm::LlmProviderSlot;
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::embedding_model::DownloadState;
@@ -119,6 +120,7 @@ pub fn run() {
             app.manage(Arc::new(PriorityFilesSlot::new(HashSet::new())));
             app.manage(Arc::new(BackgroundBacklogSlot::new(None)));
             app.manage(Arc::new(DownloadState::default()));
+            app.manage(Arc::new(LlmProviderSlot::new(None)));
 
             Ok(())
         })
@@ -244,6 +246,15 @@ pub fn run() {
             commands::embeddings::embedding_index_status,
             commands::embeddings::embedding_index_teardown,
             commands::embeddings::embedding_set_priority_files,
+            commands::llm::llm_get_settings,
+            commands::llm::llm_set_settings,
+            commands::llm::llm_list_providers,
+            commands::llm::llm_upsert_provider,
+            commands::llm::llm_remove_provider,
+            commands::llm::llm_set_api_key,
+            commands::llm::llm_has_api_key,
+            commands::llm::llm_list_models,
+            commands::llm::llm_test_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
