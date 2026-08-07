@@ -82,13 +82,25 @@ export function LlmTab() {
   // keeps the intent explicit).
   useEffect(() => {
     setBaseUrlDraft(expanded?.baseUrl ?? "");
-    setCertDraft(expanded?.trustedCertPem ?? "");
     setModels([]);
     setModelsError(null);
     setTestResult(null);
     setModelSelectOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded?.id]);
+
+  // Separate from the effect above: the cert draft must also resync when
+  // the *resolved* cert value itself changes for the same provider, not
+  // just on provider switch — "Сбросить к встроенному" saves `null` (an
+  // intentional divergence from whatever's currently in the draft, unlike
+  // every other save here, which round-trips the same value the user just
+  // typed) and relies on this effect to then show the restored built-in
+  // certificate once `providers` refreshes, instead of leaving the
+  // textarea on whatever it was set to right before the save.
+  useEffect(() => {
+    setCertDraft(expanded?.trustedCertPem ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded?.id, expanded?.trustedCertPem]);
 
   useEffect(() => {
     if (!modelSelectOpen) return;
@@ -341,10 +353,7 @@ export function LlmTab() {
                         type="button"
                         className="settings-btn"
                         disabled={busy}
-                        onClick={() => {
-                          setCertDraft("");
-                          void updateProviderConfig(provider.id, { trustedCertPem: null });
-                        }}
+                        onClick={() => void updateProviderConfig(provider.id, { trustedCertPem: null })}
                       >
                         Сбросить к встроенному
                       </button>
