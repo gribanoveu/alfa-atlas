@@ -13,6 +13,7 @@ import {
 } from "../../lib/assistantConfig";
 import type { AiAccessMode } from "../../lib/aiTools";
 import type { LlmModelInfo } from "../../lib/llm";
+import { AssistantMarkdown } from "./AssistantMarkdown";
 import "../Welcome/CloneRepoModal.css";
 import "./AssistantPanel.css";
 
@@ -276,6 +277,8 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
                         <span />
                         <span />
                       </span>
+                    ) : m.role === "assistant" ? (
+                      <AssistantMarkdown content={m.content} streaming={Boolean(m.streaming)} />
                     ) : (
                       m.content
                     )}

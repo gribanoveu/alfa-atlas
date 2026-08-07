@@ -170,6 +170,10 @@
   background: var(--bg-1);
   color: var(--text-1);
   border: 1px solid var(--border);
+  /* Content is real rendered Markdown (AssistantMarkdown/Streamdown), not
+     preserved raw text — the base rule's `pre-wrap` would otherwise double
+     up whitespace text nodes between block elements. */
+  white-space: normal;
 }
 
 .assistant-chat-message.failed {
