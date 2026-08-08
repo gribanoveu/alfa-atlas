@@ -264,7 +264,7 @@ export function useLlmChat(
         // again.
         let outcome = await streamLlmChat(providerId, wireMessages);
         while (outcome.status === "pendingApproval") {
-          const { history, round, calls } = outcome.value;
+          const { history, round, budgetUsed, calls } = outcome.value;
           const risky = calls.filter((c) => c.requiresConfirmation);
           const autoApprovedIds = new Set<string>();
           const needsDecision = risky.filter((c) => {
@@ -284,7 +284,7 @@ export function useLlmChat(
                 ];
 
           autoApprovedIdsRef.current = autoApprovedIds;
-          outcome = await streamLlmChatResume(providerId, history, round, decisions);
+          outcome = await streamLlmChatResume(providerId, history, round, budgetUsed, decisions);
         }
 
         // Authoritative full text of the *final* round corrects only the

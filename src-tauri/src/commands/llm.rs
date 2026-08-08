@@ -75,8 +75,22 @@ pub const TOOL_RESULT_EVENT: &str = "llm:tool-result";
 
 /// A misbehaving/looping model shouldn't be able to hold the UI in a
 /// "thinking" state indefinitely — this caps how many model↔tool round
-/// trips one `llm_chat_stream` call will run before hard-failing.
+/// trips one `llm_chat_stream` call will run before hard-failing. Kept as
+/// a backstop alongside `MAX_TOOL_BUDGET` (a misconfigured/zero tool
+/// weight must never make the loop unstoppable), but `MAX_TOOL_BUDGET` is
+/// the more sensitive limit in practice — see its doc comment.
 const MAX_TOOL_ITERATIONS: usize = 20;
+
+/// The primary loop limit: unlike `MAX_TOOL_ITERATIONS`, this weighs each
+/// round by what it actually cost (`round_cost`, sum of
+/// `ToolName::loop_weight` over that round's calls) rather than counting
+/// every round as "1" regardless of whether it called the cheap
+/// `ListFiles`/`ReadFile` or the much more expensive `SemanticSearch`.
+/// Sized so an all-cheap-tool sequence is still effectively bounded by
+/// `MAX_TOOL_ITERATIONS` (no regression there), while a
+/// `SemanticSearch`-heavy sequence now cuts off around 10 calls instead of
+/// 20.
+const MAX_TOOL_BUDGET: u32 = 40;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -239,6 +253,20 @@ pub async fn llm_test_connection(
     .map_err(|e| e.to_string())?
 }
 
+/// One round's cost against `MAX_TOOL_BUDGET` — the sum of
+/// `ToolName::loop_weight` over every call the round contains (a round can
+/// bundle several parallel calls, each adding to the cost). An
+/// unrecognized/malformed tool name (fails `ToolName::from_wire_name`)
+/// costs `1`, the same floor as the cheapest real tool, so budget always
+/// makes forward progress even for a hallucinated tool name. A pure
+/// function so it's testable without a mock `LlmProvider`.
+fn round_cost(calls: &[LlmToolCall]) -> u32 {
+    calls
+        .iter()
+        .map(|c| ToolName::from_wire_name(&c.name).map(ToolName::loop_weight).unwrap_or(1))
+        .sum()
+}
+
 /// Bundles the read-only pieces `run_tool_loop` needs so its own signature
 /// doesn't grow a long, drifting parameter list — everything here is fixed
 /// for the lifetime of one `llm_chat_stream`/`llm_chat_stream_resume` call.
@@ -271,12 +299,13 @@ fn run_tool_loop(
     mut tools: Vec<LlmToolDefinition>,
     mut history: Vec<LlmMessage>,
     mut round: u32,
+    mut budget_used: u32,
     mut resume: Option<(Vec<LlmToolCall>, Vec<ToolCallDecision>)>,
 ) -> Result<ChatStreamOutcome, String> {
     loop {
-        if round >= MAX_TOOL_ITERATIONS as u32 {
+        if round >= MAX_TOOL_ITERATIONS as u32 || budget_used >= MAX_TOOL_BUDGET {
             return Err(format!(
-                "assistant did not produce a final answer within {MAX_TOOL_ITERATIONS} tool-call rounds"
+                "assistant did not produce a final answer within {MAX_TOOL_ITERATIONS} tool-call rounds (budget {budget_used}/{MAX_TOOL_BUDGET})"
             ));
         }
         round += 1;
@@ -287,6 +316,12 @@ fn run_tool_loop(
                 // them are already known — skip calling the model, skip
                 // re-pushing the assistant turn (it's already the tail of
                 // `history`, since `PendingApproval.history` included it).
+                // Charged here (not just on the fresh pass that first
+                // computed these calls, below) so a paused-then-resumed
+                // round is billed on both passes, same as `round` already
+                // double-counts it — otherwise pausing would be a free way
+                // to dodge the budget.
+                budget_used += round_cost(&calls);
                 (calls, decisions)
             } else {
                 let request = ChatRequest {
@@ -320,6 +355,11 @@ fn run_tool_loop(
                     tool_calls: sanitize_tool_call_arguments(&result.tool_calls),
                 });
 
+                // Charged before the pause check below, so a round that
+                // immediately pauses for approval is still billed — see the
+                // matching comment on the resumed branch above.
+                budget_used += round_cost(&result.tool_calls);
+
                 let pending: Vec<PendingToolCall> = result
                     .tool_calls
                     .iter()
@@ -335,6 +375,7 @@ fn run_tool_loop(
                     return Ok(ChatStreamOutcome::PendingApproval(PendingApproval {
                         history,
                         round,
+                        budget_used,
                         calls: pending,
                     }));
                 }
@@ -464,7 +505,7 @@ pub async fn llm_chat_stream(
             settings: &settings,
             deps: &deps,
         };
-        run_tool_loop(&ctx, scope, tools, messages, 0, None)
+        run_tool_loop(&ctx, scope, tools, messages, 0, 0, None)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -472,19 +513,21 @@ pub async fn llm_chat_stream(
 
 /// Continues a conversation paused by a `ChatStreamOutcome::PendingApproval`
 /// from `llm_chat_stream` (or a previous `llm_chat_stream_resume` — a
-/// resumed turn can itself pause again on a later round). `history`/`round`
-/// must be exactly what that `PendingApproval` carried, sent back
-/// unmodified — the backend keeps no server-side session state between
-/// calls, so this is the entire resumable checkpoint. `decisions` must
-/// cover exactly the ids of that round's calls whose
-/// `requires_confirmation` was `true`; anything else is rejected up front
-/// rather than silently executing calls the user never actually saw.
+/// resumed turn can itself pause again on a later round). `history`/
+/// `round`/`budget_used` must be exactly what that `PendingApproval`
+/// carried, sent back unmodified — the backend keeps no server-side
+/// session state between calls, so this is the entire resumable
+/// checkpoint. `decisions` must cover exactly the ids of that round's
+/// calls whose `requires_confirmation` was `true`; anything else is
+/// rejected up front rather than silently executing calls the user never
+/// actually saw.
 #[tauri::command]
 pub async fn llm_chat_stream_resume(
     app: AppHandle,
     provider_id: String,
     history: Vec<LlmMessage>,
     round: u32,
+    budget_used: u32,
     decisions: Vec<ToolCallDecision>,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
@@ -545,8 +588,38 @@ pub async fn llm_chat_stream_resume(
             settings: &settings,
             deps: &deps,
         };
-        run_tool_loop(&ctx, scope, tools, history, round, Some((calls, decisions)))
+        run_tool_loop(&ctx, scope, tools, history, round, budget_used, Some((calls, decisions)))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(name: &str) -> LlmToolCall {
+        LlmToolCall { id: "1".to_string(), name: name.to_string(), arguments: "{}".to_string() }
+    }
+
+    #[test]
+    fn round_cost_of_no_calls_is_zero() {
+        assert_eq!(round_cost(&[]), 0);
+    }
+
+    #[test]
+    fn round_cost_sums_weights_of_every_call_in_the_round() {
+        // `readFile` (1) + `writeFile` (2) + `semanticSearch` (4) bundled
+        // into one round, mirroring how a model can request several
+        // parallel calls in a single completion.
+        let calls = [call("readFile"), call("writeFile"), call("semanticSearch")];
+        assert_eq!(round_cost(&calls), 7);
+    }
+
+    #[test]
+    fn round_cost_of_an_unrecognized_tool_name_floors_to_one() {
+        // A hallucinated/unknown tool name must still make forward
+        // progress against the budget, same as the cheapest real tool.
+        assert_eq!(round_cost(&[call("notARealTool")]), 1);
+    }
 }

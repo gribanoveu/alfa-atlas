@@ -63,6 +63,24 @@ impl ToolName {
             _ => None,
         }
     }
+
+    /// Relative cost this tool's call charges against `commands::llm`'s
+    /// tool-call budget (see `MAX_TOOL_BUDGET`) — an approximation of
+    /// time/expense, not risk (risk is `requires_confirmation`'s job).
+    /// Local-filesystem-only tools are cheap; `SemanticSearch` is the one
+    /// that can hit a network embedding-provider API after cascading
+    /// through symbol/lexical matching first (`services::ai_tools::
+    /// semantic_search`), so it costs the most.
+    pub fn loop_weight(self) -> u32 {
+        match self {
+            ToolName::ListFiles => 1,
+            ToolName::ReadFile => 1,
+            ToolName::SemanticSearch => 4,
+            ToolName::WriteFile => 2,
+            ToolName::CreateDirectory => 1,
+            ToolName::RequestFullRepoAccess => 1,
+        }
+    }
 }
 
 /// Tools available when a project hasn't customized its allowlist
@@ -119,6 +137,16 @@ mod tests {
             Some(ToolName::RequestFullRepoAccess)
         );
         assert_eq!(ToolName::from_wire_name("somethingElse"), None);
+    }
+
+    #[test]
+    fn loop_weight_reflects_relative_cost_per_tool() {
+        assert_eq!(ToolName::ListFiles.loop_weight(), 1);
+        assert_eq!(ToolName::ReadFile.loop_weight(), 1);
+        assert_eq!(ToolName::CreateDirectory.loop_weight(), 1);
+        assert_eq!(ToolName::RequestFullRepoAccess.loop_weight(), 1);
+        assert_eq!(ToolName::WriteFile.loop_weight(), 2);
+        assert_eq!(ToolName::SemanticSearch.loop_weight(), 4);
     }
 
     #[test]

@@ -92,13 +92,14 @@ export type PendingToolCall = {
   requiresConfirmation: boolean;
 };
 
-// Mirrors `domain::llm::PendingApproval`. `history`/`round` are opaque to
-// the frontend — never rendered, just round-tripped verbatim into
-// `streamLlmChatResume` alongside the user's decisions, since the backend
-// keeps no server-side session state between calls.
+// Mirrors `domain::llm::PendingApproval`. `history`/`round`/`budgetUsed`
+// are opaque to the frontend — never rendered, just round-tripped verbatim
+// into `streamLlmChatResume` alongside the user's decisions, since the
+// backend keeps no server-side session state between calls.
 export type PendingApproval = {
   history: LlmMessage[];
   round: number;
+  budgetUsed: number;
   calls: PendingToolCall[];
 };
 
@@ -178,18 +179,25 @@ export function streamLlmChat(providerId: string, messages: LlmMessage[]): Promi
 
 /** Continues a conversation paused by a `{status: "pendingApproval"}`
  * outcome from `streamLlmChat` (or a previous `streamLlmChatResume` — a
- * resumed turn can itself pause again on a later round). `history`/`round`
- * must be exactly what that outcome carried, sent back unmodified — the
- * backend keeps no server-side session state between calls. `decisions`
- * must cover exactly the ids of that round's calls whose
- * `requiresConfirmation` was `true`. */
+ * resumed turn can itself pause again on a later round). `history`/
+ * `round`/`budgetUsed` must be exactly what that outcome carried, sent
+ * back unmodified — the backend keeps no server-side session state
+ * between calls. `decisions` must cover exactly the ids of that round's
+ * calls whose `requiresConfirmation` was `true`. */
 export function streamLlmChatResume(
   providerId: string,
   history: LlmMessage[],
   round: number,
+  budgetUsed: number,
   decisions: ToolCallDecision[],
 ): Promise<ChatStreamOutcome> {
-  return invoke<ChatStreamOutcome>("llm_chat_stream_resume", { providerId, history, round, decisions });
+  return invoke<ChatStreamOutcome>("llm_chat_stream_resume", {
+    providerId,
+    history,
+    round,
+    budgetUsed,
+    decisions,
+  });
 }
 
 /** Fires once per non-empty text chunk while a `streamLlmChat()` call is in

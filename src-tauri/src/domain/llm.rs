@@ -309,10 +309,10 @@ pub enum ChatStreamOutcome {
     PendingApproval(PendingApproval),
 }
 
-/// A whole round paused, unexecuted. `history`/`round` must be sent back
-/// verbatim to `llm_chat_stream_resume` (along with the caller's
-/// decisions) — the backend keeps no server-side session state, so this is
-/// the entire resumable checkpoint.
+/// A whole round paused, unexecuted. `history`/`round`/`budget_used` must
+/// be sent back verbatim to `llm_chat_stream_resume` (along with the
+/// caller's decisions) — the backend keeps no server-side session state,
+/// so this is the entire resumable checkpoint.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingApproval {
@@ -322,6 +322,11 @@ pub struct PendingApproval {
     /// Rounds consumed so far (this round included) — threaded through so
     /// resuming can't bypass `MAX_TOOL_ITERATIONS` by pausing repeatedly.
     pub round: u32,
+    /// Weighted tool-call budget consumed so far (this round included,
+    /// via `commands::llm::round_cost`) — same anti-bypass purpose as
+    /// `round`, but sensitive to which tools were actually called instead
+    /// of treating every round as equal cost. See `MAX_TOOL_BUDGET`.
+    pub budget_used: u32,
     /// Every call this round requested, in original order — including
     /// non-risky calls bundled into the same round (their
     /// `requires_confirmation` is `false`; they need no decision and
