@@ -218,15 +218,24 @@ mod tests {
     use crate::services::workspace_index::WorkspaceIndex;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Nanosecond timestamps alone aren't guaranteed unique across threads
+    // (clock resolution varies by platform), and tests run in parallel by
+    // default, so a collision would make two tests share a directory and
+    // clobber each other's same-named fixture files. Mix in a process-wide
+    // counter to guarantee uniqueness regardless of clock resolution.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temp_dir() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("alfa-atlas-diag-{nanos}"));
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-diag-{nanos}-{n}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }

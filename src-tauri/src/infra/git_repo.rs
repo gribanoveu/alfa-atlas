@@ -69,6 +69,14 @@ fn validate_relative_path(path: &str) -> Result<&Path, GitError> {
     if trimmed.is_empty() || trimmed.starts_with('/') || trimmed.starts_with('\\') {
         return Err(GitError::InvalidPath(path.to_string()));
     }
+    // `Component::Prefix` only fires when compiled for Windows, so a
+    // drive-letter prefix like `C:\foo` would otherwise slip through
+    // unrecognized on macOS/Linux, where `Path` treats it as one opaque
+    // component. Check for it explicitly so the rejection is platform-independent.
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return Err(GitError::InvalidPath(path.to_string()));
+    }
     let p = Path::new(trimmed);
     if p.components().any(|c| {
         matches!(
