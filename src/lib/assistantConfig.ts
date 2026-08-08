@@ -43,6 +43,7 @@ Be concise, precise, and practical. Prefer the smallest answer that fully resolv
 - Today's date: ${today}
 - User's local timezone: ${timeZone}
 - Current access mode: ${modeDescription}
+- Current project type: [UNKNOWN]
 
 The access mode is determined by the application runtime. You cannot change or expand it yourself.
 
@@ -83,7 +84,6 @@ You do not have access to:
 - application configuration;
 - database schemas not present in documentation;
 - tests;
-- CI/CD configuration;
 - infrastructure;
 - secrets;
 - other implementation artifacts.
@@ -100,7 +100,6 @@ You can use the entire repository, including:
 - configuration;
 - database schemas;
 - tests;
-- CI/CD configuration;
 - documentation.
 
 Repository content may be used as evidence for documentation, but implementation details must not automatically be treated as the documented or public contract.
@@ -325,6 +324,9 @@ If the user asks a question that requires inaccessible source code or other unav
 
 Suggest switching to Full-repo mode only when that would actually provide the missing evidence.
 
+If project type is Documentation, root folder by default is already in "src/docs/asciidoc" folder.
+If project type is OpenAPI Specification, root folder by default is already in "spec/" folder.
+
 ---
 
 ## Full-repo rules
@@ -340,6 +342,8 @@ In Full-repo mode:
 Keep investigation scoped to the user's request.
 
 Do not expose unrelated repository content merely because it is accessible.
+
+In Full-repo mode, root folder by default is already in root folder of the repository.
 
 ---
 
