@@ -258,6 +258,22 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
                   </div>
                 ) : null}
               </div>
+              {contextLimit !== null ? (
+                <div
+                  className={`assistant-context-bar${contextUsageRatio !== null && contextUsageRatio >= CONTEXT_NEAR_LIMIT_RATIO ? " near-limit" : ""}`}
+                  title={`Оценка использования контекста: ~${contextTokens.toLocaleString("ru-RU")} из ${contextLimit.toLocaleString("ru-RU")} токенов`}
+                >
+                  <div className="assistant-context-bar-track">
+                    <div
+                      className="assistant-context-bar-fill"
+                      style={{ width: `${(contextUsageRatio ?? 0) * 100}%` }}
+                    />
+                  </div>
+                  <span className="assistant-context-bar-label">
+                    {formatTokenCount(contextTokens)} / {formatTokenCount(contextLimit)}
+                  </span>
+                </div>
+              ) : null}
             </div>
 
             {!embeddingConfigured ? (
@@ -314,22 +330,6 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
                 })
               )}
             </div>
-            {contextLimit !== null ? (
-              <div
-                className={`assistant-context-bar${contextUsageRatio !== null && contextUsageRatio >= CONTEXT_NEAR_LIMIT_RATIO ? " near-limit" : ""}`}
-                title={`Оценка использования контекста: ~${contextTokens.toLocaleString("ru-RU")} из ${contextLimit.toLocaleString("ru-RU")} токенов`}
-              >
-                <div className="assistant-context-bar-track">
-                  <div
-                    className="assistant-context-bar-fill"
-                    style={{ width: `${(contextUsageRatio ?? 0) * 100}%` }}
-                  />
-                </div>
-                <span className="assistant-context-bar-label">
-                  {formatTokenCount(contextTokens)} / {formatTokenCount(contextLimit)}
-                </span>
-              </div>
-            ) : null}
             {error ? <div className="assistant-chat-error">{error}</div> : null}
             <div className="assistant-chat-input-row">
               <div className="assistant-chat-input-wrap">

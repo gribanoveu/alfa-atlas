@@ -67,16 +67,22 @@
   flex-direction: column;
 }
 
+/* Holds both the model picker and the context-usage indicator side by
+   side — `.assistant-model-select` flexes to fill whatever the
+   fixed-width context bar (see below) doesn't need, so both fit
+   comfortably on one row regardless of how long the model name is. */
 .assistant-model-bar {
   flex: none;
   display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
 }
 
 .assistant-model-select {
-  flex: none;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .assistant-model-select .clone-select-trigger {
@@ -86,12 +92,17 @@
   gap: 6px;
 }
 
-/* Overrides `.clone-select-path`'s default single-line ellipsis (fine in
-   Settings' wider dialog, not here) — wrap instead of clipping the model
-   name, for both the trigger's own value and every option in the open
-   menu (which shares this same `.clone-select-path` class). */
 .assistant-model-select .clone-select-path {
   font-size: var(--font-ui-sm);
+}
+
+/* The trigger itself now shares its row with the context-usage bar (see
+   `.assistant-model-bar`), so its value stays single-line + ellipsis (the
+   base `.clone-select-path` behavior) rather than wrapping — a wrapped
+   model name would grow the row tall and crowd the context bar next to
+   it. The open *menu*'s own options still get full room below, so those
+   wrap instead of clipping a long model id. */
+.assistant-model-select .clone-select-menu .clone-select-path {
   white-space: normal;
   overflow: visible;
   text-overflow: unset;
@@ -119,7 +130,7 @@
   flex-direction: column;
   gap: 10px;
   overflow-y: auto;
-  padding: 3px;
+  padding: 6px;
 }
 
 .assistant-chat-placeholder {
@@ -439,19 +450,19 @@
    for why this is a rough character-based approximation, not an exact
    count. Only rendered when the active provider's `limit.context` is
    known, since there's no denominator to show a percentage against
-   otherwise. */
+   otherwise. Lives in `.assistant-model-bar`, next to the model picker —
+   a fixed width (not `flex: 1`) so it stays compact and leaves the model
+   select the rest of the row. */
 .assistant-context-bar {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-top: 1px solid var(--border);
+  gap: 6px;
 }
 
 .assistant-context-bar-track {
-  flex: 1;
-  min-width: 0;
+  flex: none;
+  width: 56px;
   height: 4px;
   border-radius: 999px;
   background: var(--bg-2);
@@ -472,6 +483,7 @@
   flex: none;
   font-size: var(--font-ui-sm);
   color: var(--text-2);
+  white-space: nowrap;
 }
 
 .assistant-chat-input-row {
