@@ -76,14 +76,14 @@ function indexLabel(
       return stats ? `Проиндексировано документов: ${stats.documents}` : "Индекс готов";
     case "warning":
       if (stats && stats.errors > 0) {
-        return `Индекс готов, ошибок: ${stats.errors}`;
+        return `Ошибок в файлах: ${stats.errors}`;
       }
       if (stats && stats.warnings > 0) {
-        return `Индекс готов, предупреждений: ${stats.warnings}`;
+        return `Предупреждений в файлах: ${stats.warnings}`;
       }
-      return "Индекс готов с предупреждениями";
+      return "Файлы проверены с предупреждениями";
     case "error":
-      return "Ошибка индексации";
+      return "Ошибка проверки файлов";
     case "idle":
     default:
       return "—";
@@ -96,22 +96,22 @@ function indexTitle(
 ): string {
   switch (status) {
     case "building":
-      return "Построение индекса документации";
+      return "Проверка файлов";
     case "ready":
       return stats
         ? `Документов: ${stats.documents} • якорей: ${stats.anchors} • включений: ${stats.includes} • перекрёстных ссылок: ${stats.references} • изображений: ${stats.images}`
-        : "Индекс готов";
+        : "Файлы проверены";
     case "warning":
       if (stats && stats.errors > 0) {
-        return `Индекс готов, ошибок: ${stats.errors}, предупреждений: ${stats.warnings} — см. панель Проблемы`;
+        return `Ошибок в файлах: ${stats.errors}, предупреждений: ${stats.warnings} — см. панель Проблемы`;
       }
       return stats
-        ? `Индекс готов, предупреждений: ${stats.warnings}`
-        : "Индекс готов с предупреждениями";
+        ? `Предупреждений в файлах: ${stats.warnings}`
+        : "Файлы проверены с предупреждениями";
     case "error":
-      return "Ошибка построения индекса — см. панель Проблемы";
+      return "Ошибка проверки файлов — см. панель Проблемы";
     default:
-      return "Индекс документации не построен";
+      return "Файлы не проверены";
   }
 }
 
