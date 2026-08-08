@@ -54,6 +54,16 @@ pub struct WriteFileArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CreateDirectoryArgs {
+    /// Directory path relative to the docs root — same containment rules
+    /// as `WriteFileArgs::path` (always the docs subtree, regardless of
+    /// `AiAccessMode`; see `services::ai_tools::create_directory`). Parent
+    /// directories are created as needed.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RequestFullRepoAccessArgs {
     /// Required, not optional — forces the model to self-justify the
     /// request; shown verbatim in the user-facing approval prompt.
@@ -103,6 +113,7 @@ pub enum ToolCall {
     ListFiles(ListFilesArgs),
     SemanticSearch(SemanticSearchArgs),
     WriteFile(WriteFileArgs),
+    CreateDirectory(CreateDirectoryArgs),
     RequestFullRepoAccess(RequestFullRepoAccessArgs),
 }
 
@@ -113,6 +124,7 @@ impl ToolCall {
             ToolCall::ListFiles(_) => ToolName::ListFiles,
             ToolCall::SemanticSearch(_) => ToolName::SemanticSearch,
             ToolCall::WriteFile(_) => ToolName::WriteFile,
+            ToolCall::CreateDirectory(_) => ToolName::CreateDirectory,
             ToolCall::RequestFullRepoAccess(_) => ToolName::RequestFullRepoAccess,
         }
     }
@@ -129,6 +141,7 @@ pub enum ToolResult {
     FileList(Vec<ToolFileEntry>),
     SemanticSearchResults(Vec<ToolMatch>),
     FileWritten { path: String },
+    DirectoryCreated { path: String },
     AccessModeChanged { mode: AiAccessMode },
 }
 

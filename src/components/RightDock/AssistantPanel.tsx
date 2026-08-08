@@ -54,12 +54,13 @@ type AssistantPanelProps = {
    * `writeFile` diff preview (`AssistantToolCallBlock`) to fetch a file's
    * current content for the original/proposed comparison. */
   docsRoot: string;
-  /** Called once a `writeFile` tool call actually lands on disk (its block
-   * settles to `"done"`) — `App.tsx`'s own `useDocsTree` instance lives
-   * outside this component, so a successful assistant-driven write needs
-   * this callback to make the new/changed file show up in the sidebar tree,
-   * the same way every UI-driven file-creation flow already calls
-   * `tree.refresh()` itself after its backend command resolves. */
+  /** Called once a `writeFile`/`createDirectory` tool call actually lands
+   * on disk (its block settles to `"done"`) — `App.tsx`'s own `useDocsTree`
+   * instance lives outside this component, so a successful assistant-driven
+   * write needs this callback to make the new/changed file or folder show
+   * up in the sidebar tree, the same way every UI-driven file-creation flow
+   * already calls `tree.refresh()` itself after its backend command
+   * resolves. */
   onFileWritten: () => void;
 };
 
@@ -119,10 +120,11 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot, onFile
   // the actual work. Each `handledIdsRef` keeps its effect idempotent
   // across re-renders, since a block stays in `messages` forever once
   // settled: a granted `requestFullRepoAccess` needs `useAiAccessMode`'s
-  // local state refreshed so the mode toggle reflects it immediately, and
-  // a successful `writeFile` needs `App.tsx`'s docs-tree state refreshed
-  // (via `onFileWritten`) so the new/changed file actually shows up in the
-  // sidebar — nothing else invalidates that tree on the assistant's behalf.
+  // local state refreshed so the mode toggle reflects it immediately, and a
+  // successful `writeFile`/`createDirectory` needs `App.tsx`'s docs-tree
+  // state refreshed (via `onFileWritten`) so the new/changed file or folder
+  // actually shows up in the sidebar — nothing else invalidates that tree
+  // on the assistant's behalf.
   const handledAccessGrantIdsRef = useRef<Set<string>>(new Set());
   const handledFileWriteIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -134,7 +136,10 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot, onFile
         handledAccessGrantIdsRef.current.add(block.id);
         void refreshAccessMode();
       }
-      if (block.name === "writeFile" && !handledFileWriteIdsRef.current.has(block.id)) {
+      if (
+        (block.name === "writeFile" || block.name === "createDirectory") &&
+        !handledFileWriteIdsRef.current.has(block.id)
+      ) {
         handledFileWriteIdsRef.current.add(block.id);
         onFileWritten();
       }

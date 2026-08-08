@@ -35,6 +35,7 @@ export type ToolCall =
   | { tool: "listFiles"; args: { path: string | null } }
   | { tool: "semanticSearch"; args: { query: string; topK: number | null } }
   | { tool: "writeFile"; args: { path: string; content: string } }
+  | { tool: "createDirectory"; args: { path: string } }
   | { tool: "requestFullRepoAccess"; args: { reason: string } };
 
 export type ToolResult =
@@ -42,6 +43,7 @@ export type ToolResult =
   | { tool: "fileList"; result: ToolFileEntry[] }
   | { tool: "semanticSearchResults"; result: ToolMatch[] }
   | { tool: "fileWritten"; result: { path: string } }
+  | { tool: "directoryCreated"; result: { path: string } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } };
 
 /**

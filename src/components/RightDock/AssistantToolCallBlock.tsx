@@ -159,6 +159,11 @@ function ToolApprovalCard({
           <div className="assistant-tool-approval-path">{args.path}</div>
           <WriteFileDiffReview docsRoot={docsRoot} path={args.path} content={args.content} />
         </div>
+      ) : block.name === "createDirectory" && typeof args.path === "string" ? (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Папка</div>
+          <div className="assistant-tool-approval-path">{args.path}</div>
+        </div>
       ) : block.name === "requestFullRepoAccess" && typeof args.reason === "string" ? (
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Причина</div>
@@ -259,6 +264,13 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
       return (
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Файл записан</div>
+          <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
+        </div>
+      );
+    case "directoryCreated":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Папка создана</div>
           <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
         </div>
       );

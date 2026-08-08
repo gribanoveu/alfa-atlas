@@ -16,8 +16,9 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    ListFilesArgs, MatchSource, ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs,
-    ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
+    CreateDirectoryArgs, ListFilesArgs, MatchSource, ReadFileArgs, RequestFullRepoAccessArgs,
+    SemanticSearchArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope,
+    WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::llm::{LlmToolCall, LlmToolDefinition};
@@ -89,6 +90,9 @@ pub fn execute_tool(
         }
         ToolCall::WriteFile(args) => {
             write_file(scope, args).map(|path| ToolResult::FileWritten { path })
+        }
+        ToolCall::CreateDirectory(args) => {
+            create_directory(scope, args).map(|path| ToolResult::DirectoryCreated { path })
         }
         ToolCall::RequestFullRepoAccess(_args) => set_access_mode(AiAccessMode::FullRepo)
             .map(|()| ToolResult::AccessModeChanged { mode: AiAccessMode::FullRepo })
@@ -164,6 +168,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         "writeFile" => lenient_json_object::<WriteFileArgs>(&call.arguments)
             .map(ToolCall::WriteFile)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        "createDirectory" => lenient_json_object::<CreateDirectoryArgs>(&call.arguments)
+            .map(ToolCall::CreateDirectory)
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         "requestFullRepoAccess" => lenient_json_object::<RequestFullRepoAccessArgs>(&call.arguments)
             .map(ToolCall::RequestFullRepoAccess)
@@ -288,6 +295,24 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
+    if scope.allows(ToolName::CreateDirectory) {
+        defs.push(LlmToolDefinition {
+            name: "createDirectory".to_string(),
+            description:
+                "Create a directory (including any missing parent directories) given its path relative to the project root. Use this before writing a file into a folder that doesn't exist yet. Always requires explicit user approval before it actually happens — the user may deny it, in which case nothing is created. Fails if the path already exists as a file or directory."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path relative to the project root."
+                    }
+                },
+                "required": ["path"]
+            }),
+        });
+    }
     if scope.allows(ToolName::RequestFullRepoAccess) {
         defs.push(LlmToolDefinition {
             name: "requestFullRepoAccess".to_string(),
@@ -345,6 +370,16 @@ fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<String, ToolError>
 /// regardless of `AiAccessMode`.
 fn write_file(scope: &ToolScope, args: WriteFileArgs) -> Result<String, ToolError> {
     docs_fs::write_project_file(&scope.docs_root.to_string_lossy(), &args.path, &args.content)?;
+    Ok(args.path)
+}
+
+/// Always targets `scope.docs_root`, same reasoning as `write_file` —
+/// `FullRepo` widens what the assistant can read for context, not where it
+/// may create directories. Reuses `docs_fs::create_project_dir` as-is:
+/// creates missing parent directories, fails if the path already exists
+/// (as either a file or a directory).
+fn create_directory(scope: &ToolScope, args: CreateDirectoryArgs) -> Result<String, ToolError> {
+    docs_fs::create_project_dir(&scope.docs_root.to_string_lossy(), &args.path)?;
     Ok(args.path)
 }
 
@@ -775,6 +810,17 @@ mod tests {
         }
     }
 
+    fn create_dir(scope: &ToolScope, path: &str) -> Result<String, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::CreateDirectory(CreateDirectoryArgs { path: path.to_string() }),
+            &EmbeddingDeps::empty(),
+        )? {
+            ToolResult::DirectoryCreated { path } => Ok(path),
+            other => panic!("expected ToolResult::DirectoryCreated, got {other:?}"),
+        }
+    }
+
     #[test]
     fn read_file_inside_docs_root_succeeds_in_docs_only() {
         let (repo, docs) = fixture_repo();
@@ -881,6 +927,67 @@ mod tests {
         let err = write(&scope, "../outside.adoc", "= Leak\n").unwrap_err();
         assert!(matches!(err, ToolError::PathEscape(_)));
         assert!(!repo.join("outside.adoc").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn create_directory_creates_missing_parents_under_docs_root() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        create_dir(&scope, "guides/nested").unwrap();
+
+        assert!(docs.join("guides/nested").is_dir());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    /// Same containment guarantee as `write_file_full_repo_mode_still_targets_docs_root_not_repo_root`:
+    /// even in `FullRepo` mode a new directory must land under `docs_root`.
+    #[test]
+    fn create_directory_full_repo_mode_still_targets_docs_root_not_repo_root() {
+        let (repo, docs) = fixture_repo();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        create_dir(&full_repo, "endpoints").unwrap();
+
+        assert!(docs.join("endpoints").is_dir());
+        assert!(!repo.join("endpoints").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn create_directory_rejects_an_already_existing_path() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        create_dir(&scope, "guides").unwrap();
+        let err = create_dir(&scope, "guides").unwrap_err();
+        assert!(matches!(err, ToolError::Io(_)));
+
+        // Also rejected when the path is already occupied by a file.
+        let err = create_dir(&scope, "intro.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::Io(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn create_directory_rejects_path_escape() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        // Unlike `write_project_file`, `create_project_dir` runs
+        // `validate_relative_name` first, which rejects a `..` component
+        // itself (`ProjectError::InvalidName`) before `join_relative` ever
+        // gets a chance to produce `PathEscape` — still safely rejected,
+        // just via the generic `Io` catch-all in the `ProjectError` ->
+        // `ToolError` mapping, since `InvalidName` has no dedicated arm.
+        let err = create_dir(&scope, "../outside-dir").unwrap_err();
+        assert!(matches!(err, ToolError::Io(_)));
+        assert!(!repo.join("outside-dir").exists());
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -1170,6 +1277,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_create_directory_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "createDirectory".to_string(),
+            arguments: r#"{"path":"guides/nested"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::CreateDirectory(CreateDirectoryArgs { path: "guides/nested".to_string() })
+        );
+    }
+
+    #[test]
     fn parse_tool_call_parses_request_full_repo_access_args() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -1251,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_five_by_default() {
+    fn llm_tool_definitions_includes_all_six_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -1259,7 +1380,14 @@ mod tests {
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(
             names,
-            vec!["listFiles", "readFile", "semanticSearch", "writeFile", "requestFullRepoAccess"]
+            vec![
+                "listFiles",
+                "readFile",
+                "semanticSearch",
+                "writeFile",
+                "createDirectory",
+                "requestFullRepoAccess"
+            ]
         );
 
         fs::remove_dir_all(&repo).ok();
