@@ -1,5 +1,6 @@
 import type { AiAccessMode, MatchSource } from "./aiTools";
 import type { ToolCallBlock } from "./chatBlocks";
+import type { SpecsRepoInfo } from "./openapi";
 
 /** Central place for the assistant chat panel's tunable constants — system
  * prompt, model-picker labels, input sizing, context-bar thresholds.
@@ -17,8 +18,17 @@ import type { ToolCallBlock } from "./chatBlocks";
 //
 // NOTE: callers that previously read the plain `ASSISTANT_SYSTEM_PROMPT`
 // string constant (e.g. useLlmChat.ts) need to switch to calling
-// `buildAssistantSystemPrompt(mode)` instead.
-export function buildAssistantSystemPrompt(mode: AiAccessMode): string {
+// `buildAssistantSystemPrompt(mode, specsRepoInfo)` instead.
+//
+// `specsRepoInfo` is `useSpecsRepo`'s own detection result (`App.tsx` runs
+// it once per `repoRoot` via `detect_specs_repo`, threaded down through
+// `RightDock`/`AssistantPanel` rather than re-detected here) — `non-null`
+// means the open repository follows the `specs/{schemas,responses,
+// parameters,operations}` OpenAPI multi-file convention
+// (`services::openapi::detect_specs_repo` on the Rust side), `null` means
+// a plain documentation project. This is what used to show up in the
+// prompt as a hardcoded `[UNKNOWN]` placeholder.
+export function buildAssistantSystemPrompt(mode: AiAccessMode, specsRepoInfo: SpecsRepoInfo | null): string {
   const today = new Date().toLocaleDateString("en-US", {
     year: "numeric",
     month: "long",
@@ -32,6 +42,10 @@ export function buildAssistantSystemPrompt(mode: AiAccessMode): string {
       ? "**Full-repo** — you have access to the entire repository: source code, configuration, database schemas, tests, CI pipelines, and documentation."
       : "**Docs-only** — you have access only to documentation files and their git history. You do not have access to source code, configuration, secrets, CI/CD, or infrastructure.";
 
+  const projectTypeDescription = specsRepoInfo
+    ? `OpenAPI Specification${specsRepoInfo.title ? ` — "${specsRepoInfo.title}"${specsRepoInfo.version ? ` v${specsRepoInfo.version}` : ""}` : ""}`
+    : "Documentation";
+
   return `You are an assistant embedded in Atlas, a technical documentation editor at Alfa-Bank.
 
 Your primary purpose is to help analysts understand, write, edit, structure, review, and maintain technical documentation using information available through the current session.
@@ -43,7 +57,7 @@ Be concise, precise, and practical. Prefer the smallest answer that fully resolv
 - Today's date: ${today}
 - User's local timezone: ${timeZone}
 - Current access mode: ${modeDescription}
-- Current project type: [UNKNOWN]
+- Current project type: ${projectTypeDescription}
 
 The access mode is determined by the application runtime. You cannot change or expand it yourself.
 
@@ -325,7 +339,7 @@ If the user asks a question that requires inaccessible source code or other unav
 Suggest switching to Full-repo mode only when that would actually provide the missing evidence.
 
 If project type is Documentation, root folder by default is already in "src/docs/asciidoc" folder.
-If project type is OpenAPI Specification, root folder by default is already in "spec/" folder.
+If project type is OpenAPI Specification, root folder by default is already in "specs/" folder.
 
 ---
 

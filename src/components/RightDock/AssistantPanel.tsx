@@ -13,6 +13,7 @@ import {
 } from "../../lib/assistantConfig";
 import type { AiAccessMode } from "../../lib/aiTools";
 import type { LlmModelInfo } from "../../lib/llm";
+import type { SpecsRepoInfo } from "../../lib/openapi";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import "../Welcome/CloneRepoModal.css";
@@ -44,6 +45,10 @@ const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
 
 type AssistantPanelProps = {
   onOpenSettings: () => void;
+  /** `useSpecsRepo`'s detection result for the open project (`App.tsx`
+   * already runs it once per `repoRoot`) — forwarded into the system
+   * prompt's "Current project type" line, see `buildAssistantSystemPrompt`. */
+  specsRepoInfo: SpecsRepoInfo | null;
 };
 
 /** This panel is the assistant's actual interaction surface — a streamed
@@ -63,7 +68,7 @@ type AssistantPanelProps = {
  * semantic_search` already work with zero embeddings — so its readiness is
  * surfaced only as a non-blocking info note.
  */
-export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
+export function AssistantPanel({ onOpenSettings, specsRepoInfo }: AssistantPanelProps) {
   const {
     providerConfigured: embeddingConfigured,
     indexStatus,
@@ -85,6 +90,7 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
   const { messages, sending, error, sendMessage, contextTokens } = useLlmChat(
     activeProviderId,
     accessMode ?? "docsOnly",
+    specsRepoInfo,
   );
   const contextLimit = activeProvider?.limit?.context ?? null;
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;

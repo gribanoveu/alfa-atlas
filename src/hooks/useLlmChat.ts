@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AiAccessMode } from "../lib/aiTools";
 import { buildAccessModeChangeNotice, buildAssistantSystemPrompt } from "../lib/assistantConfig";
+import type { SpecsRepoInfo } from "../lib/openapi";
 import {
   appendDeltaToBlocks,
   appendToolCallBlock,
@@ -35,8 +36,11 @@ export type { ChatMessage, MessageBlock, TextBlock, ToolCallBlock, ToolCallStatu
  * `useAiAccessMode` stays the single source of truth; it's read fresh on
  * every `sendMessage`/`contextTokens` computation, not captured once, so
  * flipping the docs-only/full-repo toggle mid-conversation is reflected on
- * the very next turn. */
-export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) {
+ * the very next turn. `specsRepoInfo` is likewise threaded in rather than
+ * detected here — the caller's own `useSpecsRepo` (App.tsx) already runs
+ * it once per `repoRoot`, so this hook just forwards whatever it found
+ * into the system prompt's "Current project type" line. */
+export function useLlmChat(providerId: string | null, accessMode: AiAccessMode, specsRepoInfo: SpecsRepoInfo | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,7 +136,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
       lastSentModeRef.current = accessMode;
 
       const wireMessages: LlmMessage[] = [
-        { role: "system", content: buildAssistantSystemPrompt(accessMode), toolCallId: null },
+        { role: "system", content: buildAssistantSystemPrompt(accessMode, specsRepoInfo), toolCallId: null },
         ...priorTurns.map((m): LlmMessage => ({ role: m.role, content: chatMessageToPlainText(m), toolCallId: null })),
         ...(modeChanged
           ? [{ role: "system" as const, content: buildAccessModeChangeNotice(accessMode), toolCallId: null }]
@@ -166,7 +170,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
         setSending(false);
       }
     },
-    [providerId, sending, messages, accessMode],
+    [providerId, sending, messages, accessMode, specsRepoInfo],
   );
 
   // Context-window usage so far. Every request resends the *entire* message
@@ -192,7 +196,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
     });
     if (lastUsageIndex === -1 || lastUsageTotal === null) {
       return (
-        estimateTokenCount(buildAssistantSystemPrompt(accessMode)) +
+        estimateTokenCount(buildAssistantSystemPrompt(accessMode, specsRepoInfo)) +
         messages.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0)
       );
     }
@@ -200,7 +204,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
       .slice(lastUsageIndex + 1)
       .reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
     return lastUsageTotal + tail;
-  }, [messages, accessMode]);
+  }, [messages, accessMode, specsRepoInfo]);
 
   return {
     messages,
@@ -208,6 +212,6 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
     error,
     sendMessage,
     contextTokens,
-    systemPrompt: buildAssistantSystemPrompt(accessMode),
+    systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo),
   };
 }

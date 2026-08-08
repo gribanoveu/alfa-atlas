@@ -12,6 +12,7 @@ import type {
   GitDiffScope,
   GitFileStatus,
 } from "../../lib/git";
+import type { SpecsRepoInfo } from "../../lib/openapi";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import { AssistantPanel } from "./AssistantPanel";
@@ -110,6 +111,7 @@ type RightDockProps = {
   } | null;
   assistant?: {
     onOpenSettings: () => void;
+    specsRepoInfo: SpecsRepoInfo | null;
   } | null;
 };
 
@@ -199,7 +201,7 @@ export function RightDock({
             ) : activeTool === "suggestions" ? (
               <NotificationsPanel />
             ) : activeTool === "assistant" && assistant ? (
-              <AssistantPanel onOpenSettings={assistant.onOpenSettings} />
+              <AssistantPanel onOpenSettings={assistant.onOpenSettings} specsRepoInfo={assistant.specsRepoInfo} />
             ) : (
               <div className="panel-empty">{active.empty}</div>
             )}
