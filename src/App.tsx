@@ -1350,6 +1350,7 @@ function App() {
               onOpenSettings: () => setLlmSettingsSignal((n) => n + 1),
               specsRepoInfo: specsRepo.info,
               docsRoot: project.docsRoot ?? "",
+              onFileWritten: () => void tree.refresh(),
             }}
           />
         </div>

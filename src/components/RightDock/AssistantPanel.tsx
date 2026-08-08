@@ -54,6 +54,13 @@ type AssistantPanelProps = {
    * `writeFile` diff preview (`AssistantToolCallBlock`) to fetch a file's
    * current content for the original/proposed comparison. */
   docsRoot: string;
+  /** Called once a `writeFile` tool call actually lands on disk (its block
+   * settles to `"done"`) — `App.tsx`'s own `useDocsTree` instance lives
+   * outside this component, so a successful assistant-driven write needs
+   * this callback to make the new/changed file show up in the sidebar tree,
+   * the same way every UI-driven file-creation flow already calls
+   * `tree.refresh()` itself after its backend command resolves. */
+  onFileWritten: () => void;
 };
 
 /** This panel is the assistant's actual interaction surface — a streamed
@@ -73,7 +80,7 @@ type AssistantPanelProps = {
  * semantic_search` already work with zero embeddings — so its readiness is
  * surfaced only as a non-blocking info note.
  */
-export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot }: AssistantPanelProps) {
+export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot, onFileWritten }: AssistantPanelProps) {
   const {
     providerConfigured: embeddingConfigured,
     indexStatus,
@@ -105,29 +112,34 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot }: Assi
     toolDefinitions,
   );
 
-  // A granted `requestFullRepoAccess` call is only known once its block
-  // settles to "done" (the real `TOOL_RESULT_EVENT`, after the backend has
-  // actually persisted the mode) — reacting to the transcript here, rather
-  // than to the approval submission itself, avoids racing the resume call
-  // that does the actual persisting. `handledIdsRef` keeps this idempotent
-  // across re-renders, since the block stays in `messages` forever once
-  // settled.
+  // Two side effects that only become known once a tool-call block settles
+  // to "done" (the real `TOOL_RESULT_EVENT`, after the backend has actually
+  // applied the change) — reacting to the transcript here, rather than to
+  // the approval decision itself, avoids racing the resume call that does
+  // the actual work. Each `handledIdsRef` keeps its effect idempotent
+  // across re-renders, since a block stays in `messages` forever once
+  // settled: a granted `requestFullRepoAccess` needs `useAiAccessMode`'s
+  // local state refreshed so the mode toggle reflects it immediately, and
+  // a successful `writeFile` needs `App.tsx`'s docs-tree state refreshed
+  // (via `onFileWritten`) so the new/changed file actually shows up in the
+  // sidebar — nothing else invalidates that tree on the assistant's behalf.
   const handledAccessGrantIdsRef = useRef<Set<string>>(new Set());
+  const handledFileWriteIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const last = messages[messages.length - 1];
     if (!last || last.role !== "assistant") return;
     for (const block of last.blocks) {
-      if (
-        block.type === "toolCall" &&
-        block.name === "requestFullRepoAccess" &&
-        block.status === "done" &&
-        !handledAccessGrantIdsRef.current.has(block.id)
-      ) {
+      if (block.type !== "toolCall" || block.status !== "done") continue;
+      if (block.name === "requestFullRepoAccess" && !handledAccessGrantIdsRef.current.has(block.id)) {
         handledAccessGrantIdsRef.current.add(block.id);
         void refreshAccessMode();
       }
+      if (block.name === "writeFile" && !handledFileWriteIdsRef.current.has(block.id)) {
+        handledFileWriteIdsRef.current.add(block.id);
+        onFileWritten();
+      }
     }
-  }, [messages, refreshAccessMode]);
+  }, [messages, refreshAccessMode, onFileWritten]);
   const contextLimit = activeProvider?.limit?.context ?? null;
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;
   const [draft, setDraft] = useState("");
