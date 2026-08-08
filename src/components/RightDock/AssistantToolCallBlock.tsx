@@ -141,11 +141,11 @@ function ToolApprovalCard({
   docsRoot: string;
   onDecide: (id: string, approved: boolean, trust: boolean) => void;
 }) {
-  const [trust, setTrust] = useState(false);
   const [decided, setDecided] = useState(false);
+  const [showDiff, setShowDiff] = useState(false);
   const args = useMemo(() => parseArgs(block.argumentsJson), [block.argumentsJson]);
 
-  const handleDecide = (approved: boolean) => {
+  const handleDecide = (approved: boolean, trust = false) => {
     if (decided) return;
     setDecided(true);
     onDecide(block.id, approved, trust);
@@ -156,8 +156,20 @@ function ToolApprovalCard({
       {block.name === "writeFile" && typeof args.path === "string" && typeof args.content === "string" ? (
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Файл</div>
-          <div className="assistant-tool-approval-path">{args.path}</div>
-          <WriteFileDiffReview docsRoot={docsRoot} path={args.path} content={args.content} />
+          <button
+            type="button"
+            className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
+            aria-expanded={showDiff}
+            onClick={() => setShowDiff((v) => !v)}
+          >
+            {showDiff ? (
+              <ChevronDown className="assistant-tool-call-chevron" size={12} aria-hidden />
+            ) : (
+              <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
+            )}
+            <span>{args.path}</span>
+          </button>
+          {showDiff ? <WriteFileDiffReview docsRoot={docsRoot} path={args.path} content={args.content} /> : null}
         </div>
       ) : block.name === "createDirectory" && typeof args.path === "string" ? (
         <div className="assistant-tool-call-detail-section">
@@ -171,16 +183,19 @@ function ToolApprovalCard({
         </div>
       ) : null}
 
-      <ApprovalCountdown deadlineAt={block.deadlineAt} />
-
       <div className="assistant-tool-approval-actions">
-        <label className="assistant-tool-approval-trust">
-          <input type="checkbox" checked={trust} disabled={decided} onChange={(e) => setTrust(e.target.checked)} />
-          Больше не спрашивать в этом диалоге
-        </label>
         <div className="assistant-tool-approval-buttons">
           <button type="button" className="assistant-btn" disabled={decided} onClick={() => handleDecide(false)}>
             Отклонить
+          </button>
+          <button
+            type="button"
+            className="assistant-btn"
+            disabled={decided}
+            title="Больше не спрашивать в этом диалоге"
+            onClick={() => handleDecide(true, true)}
+          >
+            Разрешать всегда
           </button>
           <button
             type="button"
@@ -192,6 +207,8 @@ function ToolApprovalCard({
           </button>
         </div>
       </div>
+
+      <ApprovalCountdown deadlineAt={block.deadlineAt} />
     </div>
   );
 }

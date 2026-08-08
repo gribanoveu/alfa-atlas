@@ -823,6 +823,22 @@
   color: var(--text-1);
 }
 
+.assistant-tool-approval-path-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.assistant-tool-approval-path-toggle:hover {
+  color: var(--text-0, var(--text-1));
+}
+
 .assistant-tool-approval-reason {
   font-size: var(--font-ui-sm);
   color: var(--text-1);
@@ -831,7 +847,7 @@
 }
 
 .assistant-tool-approval-timer {
-  height: 2px;
+  height: 3px;
   border-radius: 1px;
   overflow: hidden;
   background: var(--bg-2);
@@ -839,7 +855,7 @@
 
 .assistant-tool-approval-timer-fill {
   height: 100%;
-  background: var(--text-2);
+  background: var(--accent, var(--text-2));
   transition-property: width;
   transition-timing-function: linear;
 }
@@ -847,17 +863,9 @@
 .assistant-tool-approval-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
-}
-
-.assistant-tool-approval-trust {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: calc(var(--font-ui-sm) * 0.92);
-  color: var(--text-2);
 }
 
 .assistant-tool-approval-buttons {
