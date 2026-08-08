@@ -33,6 +33,15 @@ function formatTokenCount(n: number): string {
   return String(n);
 }
 
+// Geometry for the context-usage ring (see `.assistant-context-ring` in
+// AssistantPanel.css) — an SVG circle's stroke-dasharray/-dashoffset trick,
+// not a library: the fill circle's dash length equals the full
+// circumference and its offset shrinks as usage grows, so the visible arc
+// sweeps clockwise from 12 o'clock (the ring itself is rotated -90deg in
+// CSS to make that the start point).
+const CONTEXT_RING_RADIUS = 8;
+const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
+
 type AssistantPanelProps = {
   onOpenSettings: () => void;
 };
@@ -199,6 +208,61 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
       <div className="assistant-chat">
         {llmReady ? (
           <>
+            {!embeddingConfigured ? (
+              <p className="assistant-chat-index-note">
+                Провайдер эмбеддингов не настроен — поиск по документации будет ограничен. Настройте
+                его в Настройки → Эмбеддинги.
+              </p>
+            ) : !indexReady ? (
+              <p className="assistant-chat-index-note">
+                {busy && syncProgress
+                  ? `Строится индекс документации: ${syncProgress.current}/${syncProgress.total}…`
+                  : "Индекс документации ещё строится — ответы будут менее точными, пока индексация не завершится."}
+              </p>
+            ) : null}
+            <div className="assistant-chat-messages" ref={messagesRef}>
+              {messages.length === 0 ? (
+                <div className="assistant-chat-placeholder">
+                  <Sparkles size={22} strokeWidth={1.5} aria-hidden />
+                  <p className="assistant-chat-placeholder-title">Ассистент готов</p>
+                  <p className="assistant-chat-placeholder-desc">Задайте вопрос о документации проекта.</p>
+                </div>
+              ) : (
+                messages.map((m) => {
+                  const failed = m.role === "assistant" && Boolean(m.failed);
+                  return (
+                    <div key={m.id} className={`assistant-chat-message ${m.role}${failed ? " failed" : ""}`}>
+                      {m.role === "assistant" ? (
+                        m.blocks.length === 0 && m.streaming ? (
+                          <span className="assistant-chat-typing" aria-label="Ассистент печатает…">
+                            <span />
+                            <span />
+                            <span />
+                          </span>
+                        ) : (
+                          <div className="assistant-chat-blocks">
+                            {m.blocks.map((block, i) =>
+                              block.type === "text" ? (
+                                <AssistantMarkdown
+                                  key={block.id}
+                                  content={block.content}
+                                  streaming={Boolean(m.streaming) && i === m.blocks.length - 1}
+                                />
+                              ) : (
+                                <AssistantToolCallBlock key={block.id} block={block} />
+                              ),
+                            )}
+                          </div>
+                        )
+                      ) : (
+                        m.content
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            {error ? <div className="assistant-chat-error">{error}</div> : null}
             <div className="assistant-model-bar">
               <div className="clone-select assistant-model-select" ref={modelSelectRef}>
                 <button
@@ -263,74 +327,23 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
                   className={`assistant-context-bar${contextUsageRatio !== null && contextUsageRatio >= CONTEXT_NEAR_LIMIT_RATIO ? " near-limit" : ""}`}
                   title={`Оценка использования контекста: ~${contextTokens.toLocaleString("ru-RU")} из ${contextLimit.toLocaleString("ru-RU")} токенов`}
                 >
-                  <div className="assistant-context-bar-track">
-                    <div
-                      className="assistant-context-bar-fill"
-                      style={{ width: `${(contextUsageRatio ?? 0) * 100}%` }}
+                  <svg className="assistant-context-ring" width="20" height="20" viewBox="0 0 20 20" aria-hidden>
+                    <circle className="assistant-context-ring-track" cx="10" cy="10" r={CONTEXT_RING_RADIUS} />
+                    <circle
+                      className="assistant-context-ring-fill"
+                      cx="10"
+                      cy="10"
+                      r={CONTEXT_RING_RADIUS}
+                      strokeDasharray={CONTEXT_RING_CIRCUMFERENCE}
+                      strokeDashoffset={CONTEXT_RING_CIRCUMFERENCE * (1 - (contextUsageRatio ?? 0))}
                     />
-                  </div>
+                  </svg>
                   <span className="assistant-context-bar-label">
                     {formatTokenCount(contextTokens)} / {formatTokenCount(contextLimit)}
                   </span>
                 </div>
               ) : null}
             </div>
-
-            {!embeddingConfigured ? (
-              <p className="assistant-chat-index-note">
-                Провайдер эмбеддингов не настроен — поиск по документации будет ограничен. Настройте
-                его в Настройки → Эмбеддинги.
-              </p>
-            ) : !indexReady ? (
-              <p className="assistant-chat-index-note">
-                {busy && syncProgress
-                  ? `Строится индекс документации: ${syncProgress.current}/${syncProgress.total}…`
-                  : "Индекс документации ещё строится — ответы будут менее точными, пока индексация не завершится."}
-              </p>
-            ) : null}
-            <div className="assistant-chat-messages" ref={messagesRef}>
-              {messages.length === 0 ? (
-                <div className="assistant-chat-placeholder">
-                  <Sparkles size={22} strokeWidth={1.5} aria-hidden />
-                  <p className="assistant-chat-placeholder-title">Ассистент готов</p>
-                  <p className="assistant-chat-placeholder-desc">Задайте вопрос о документации проекта.</p>
-                </div>
-              ) : (
-                messages.map((m) => {
-                  const failed = m.role === "assistant" && Boolean(m.failed);
-                  return (
-                    <div key={m.id} className={`assistant-chat-message ${m.role}${failed ? " failed" : ""}`}>
-                      {m.role === "assistant" ? (
-                        m.blocks.length === 0 && m.streaming ? (
-                          <span className="assistant-chat-typing" aria-label="Ассистент печатает…">
-                            <span />
-                            <span />
-                            <span />
-                          </span>
-                        ) : (
-                          <div className="assistant-chat-blocks">
-                            {m.blocks.map((block, i) =>
-                              block.type === "text" ? (
-                                <AssistantMarkdown
-                                  key={block.id}
-                                  content={block.content}
-                                  streaming={Boolean(m.streaming) && i === m.blocks.length - 1}
-                                />
-                              ) : (
-                                <AssistantToolCallBlock key={block.id} block={block} />
-                              ),
-                            )}
-                          </div>
-                        )
-                      ) : (
-                        m.content
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </div>
-            {error ? <div className="assistant-chat-error">{error}</div> : null}
             <div className="assistant-chat-input-row">
               <div className="assistant-chat-input-wrap">
                 <textarea

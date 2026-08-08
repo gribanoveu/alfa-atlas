@@ -84,7 +84,7 @@
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .assistant-model-select {
@@ -1225,29 +1225,33 @@
   gap: 6px;
 }
 
-.assistant-context-bar-track {
+.assistant-context-ring {
   flex: none;
 
-  width: 56px;
-  height: 4px;
-
-  border-radius: 999px;
-
-  background: var(--bg-2);
-
-  overflow: hidden;
+  /* SVG circles start at 3 o'clock by default — rotate so the fill arc
+     sweeps starting from 12 o'clock instead. */
+  transform: rotate(-90deg);
 }
 
-.assistant-context-bar-fill {
-  height: 100%;
+.assistant-context-ring-track {
+  fill: none;
 
-  background: var(--accent);
-
-  transition: width 0.2s ease;
+  stroke: var(--bg-2);
+  stroke-width: 3;
 }
 
-.assistant-context-bar.near-limit .assistant-context-bar-fill {
-  background: var(--red-tag);
+.assistant-context-ring-fill {
+  fill: none;
+
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+
+  transition: stroke-dashoffset 0.2s ease;
+}
+
+.assistant-context-bar.near-limit .assistant-context-ring-fill {
+  stroke: var(--red-tag);
 }
 
 .assistant-context-bar-label {
