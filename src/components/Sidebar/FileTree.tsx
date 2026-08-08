@@ -413,8 +413,12 @@ export function FileTree({
       </div>
 
       {external ? (
-        <div className="file-tree-external-dock">
-          {onResizeExternal ? (
+        <div
+          className={
+            "file-tree-external-dock" + (externalExpanded ? "" : " collapsed")
+          }
+        >
+          {onResizeExternal && externalExpanded ? (
             <PanelResizeHandle
               direction="vertical"
               invert
