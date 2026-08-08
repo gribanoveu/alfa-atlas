@@ -1,4 +1,5 @@
 import type { AiAccessMode } from "./aiTools";
+import type { ToolCallBlock } from "./chatBlocks";
 
 /** Central place for the assistant chat panel's tunable constants — system
  * prompt, model-picker labels, input sizing, context-bar thresholds.
@@ -119,11 +120,13 @@ export function buildAccessModeChangeNotice(mode: AiAccessMode): string {
   return `[System notice] The user just switched your access mode. Current access mode: ${modeDescription} Disregard any earlier statement you made in this conversation about your access — it may no longer be accurate.`;
 }
 
-// Human-readable status shown in place of the typing-dots indicator while
-// a `listenLlmToolCall` event is in flight (see `useLlmChat`'s
-// `toolActivity` state). `argumentsJson` is the raw JSON string off the
-// wire (`LlmToolCallEvent.arguments`) — parsed defensively since this is
-// purely cosmetic and must never throw regardless of what the model sent.
+// Header line for one tool-call block (see `AssistantToolCallBlock`) — used
+// unchanged regardless of the block's status ("is/was being done" both read
+// fine off the same phrasing; a separate icon and, once settled,
+// `describeToolResult`'s summary line carry the "it's done" signal).
+// `argumentsJson` is the raw JSON string off the wire
+// (`LlmToolCallEvent.arguments`) — parsed defensively since this is purely
+// cosmetic and must never throw regardless of what the model sent.
 export function describeToolActivity(name: string, argumentsJson: string): string {
   let args: Record<string, unknown> = {};
   try {
@@ -143,6 +146,36 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       return typeof args.query === "string" ? `Ищет: «${args.query}»…` : "Ищет в документации…";
     default:
       return "Выполняет действие…";
+  }
+}
+
+// One-line result summary shown once a tool-call block settles (see
+// `AssistantToolCallBlock`) — dimmed sub-line under the `describeToolActivity`
+// header. Terse "Label: N" phrasing sidesteps Russian noun-count agreement
+// (строка/строки/строк) entirely rather than needing a pluralization
+// helper. `errorMessage` itself stays untranslated (straight from
+// `ToolError`'s English `Display` text) — matches existing precedent, e.g.
+// the `.assistant-chat-error` banner already surfaces raw backend error
+// strings the same way.
+export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result" | "errorMessage">): string {
+  if (block.status === "error") return `Ошибка: ${block.errorMessage ?? "неизвестная ошибка"}`;
+  if (!block.result) return "Готово";
+  switch (block.result.tool) {
+    case "file": {
+      const lineCount = block.result.result === "" ? 0 : block.result.result.split("\n").length;
+      return `Строк: ${lineCount}`;
+    }
+    case "fileList": {
+      const entries = block.result.result;
+      const files = entries.filter((e) => !e.isDir).length;
+      const dirs = entries.filter((e) => e.isDir).length;
+      const parts = [...(files > 0 ? [`файлов: ${files}`] : []), ...(dirs > 0 ? [`папок: ${dirs}`] : [])];
+      return parts.length > 0 ? parts.join(", ") : "Пусто";
+    }
+    case "semanticSearchResults":
+      return `Результатов: ${block.result.result.length}`;
+    default:
+      return "Готово";
   }
 }
 

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { ToolResult } from "./aiTools";
 
 // Mirrors `domain::llm::LlmProviderConfig`. Every field but `id` is
 // nullable — for a system provider id this is an *override* (`null` means
@@ -147,22 +148,42 @@ export function listenLlmChatDelta(
 
 // Mirrors `commands::llm::ToolCallEventPayload` — fired just before the
 // backend executes one tool call inside a `streamLlmChat()` round (the
-// whole tool-calling loop is internal to that one call; this event is the
-// only thing that surfaces a round's activity mid-flight). `arguments`
-// stays a raw JSON string, same as `domain::llm::LlmToolCall` — this event
-// doesn't pre-parse it.
+// whole tool-calling loop is internal to that one call; this and
+// `LlmToolResultEvent` are what surface a round's activity mid-flight).
+// `id` is the model's own tool-call id, carried through so a later
+// `LlmToolResultEvent` can be matched back to the entry this created.
+// `arguments` stays a raw JSON string, same as `domain::llm::LlmToolCall`.
 export type LlmToolCallEvent = {
+  id: string;
   name: string;
   arguments: string;
 };
 
 /** Fires immediately before the backend executes one tool call while a
- * `streamLlmChat()` call is in flight — lets the UI show a transient status
- * (e.g. "Reading docs/x.adoc…") while the (possibly slow) tool execution is
- * actually happening. No matching "done" event: the caller clears its own
- * status once real text resumes streaming or the call settles. */
+ * `streamLlmChat()` call is in flight — lets the UI show e.g. "Reading
+ * docs/x.adoc…" while the (possibly slow) tool execution is actually
+ * happening. Always followed by exactly one matching `LlmToolResultEvent`
+ * (same `id`) once execution settles. */
 export function listenLlmToolCall(
   onToolCall: (payload: LlmToolCallEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<LlmToolCallEvent>("llm:tool-call", (event) => onToolCall(event.payload));
+}
+
+// Mirrors `commands::llm::ToolResultEventPayload` — fires once the tool
+// call started by a matching `LlmToolCallEvent` (same `id`) has settled.
+// Exactly one of `result`/`error` is ever non-null.
+export type LlmToolResultEvent = {
+  id: string;
+  result: ToolResult | null;
+  error: string | null;
+};
+
+/** Fires once a `streamLlmChat()` round's tool call (announced via
+ * `listenLlmToolCall`) has settled — lets the UI flip that call's display
+ * entry from "running" to "done"/"error" and show what actually happened. */
+export function listenLlmToolResult(
+  onToolResult: (payload: LlmToolResultEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<LlmToolResultEvent>("llm:tool-result", (event) => onToolResult(event.payload));
 }

@@ -1,44 +1,35 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AiAccessMode } from "../lib/aiTools";
+import { buildAccessModeChangeNotice, buildAssistantSystemPrompt } from "../lib/assistantConfig";
 import {
-  buildAccessModeChangeNotice,
-  buildAssistantSystemPrompt,
-  describeToolActivity,
-} from "../lib/assistantConfig";
+  appendDeltaToBlocks,
+  appendToolCallBlock,
+  chatMessageToPlainText,
+  correctTrailingText,
+  markRunningToolCallsAsInterrupted,
+  settleToolCallBlock,
+  updateLastAssistantBlocks,
+  type ChatMessage,
+} from "../lib/chatBlocks";
 import {
   listenLlmChatDelta,
   listenLlmToolCall,
+  listenLlmToolResult,
   streamLlmChat,
-  type ChatUsage,
   type LlmMessage,
 } from "../lib/llm";
 import { estimateTokenCount } from "../lib/tokens";
 
-export type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  streaming?: boolean;
-  failed?: boolean;
-  /** Real token usage for this turn, when the provider reported one on the
-   * final SSE chunk — only ever set on a completed assistant message. */
-  usage?: ChatUsage;
-};
-
-/** One `listenLlmToolCall` event turned into a display line. `id` is a
- * fresh uuid per event (not derived from anything on the wire) purely as a
- * stable React key — several tool calls can share the same `name`. */
-export type ToolActivityEntry = {
-  id: string;
-  text: string;
-};
+export type { ChatMessage, MessageBlock, TextBlock, ToolCallBlock, ToolCallStatus } from "../lib/chatBlocks";
 
 /** Owns one conversation's state for the assistant chat panel. The
  * tool-calling loop itself (ReadFile/ListFiles/SemanticSearch) runs
  * entirely inside the backend's `llm_chat_stream` — this hook still does
  * exactly one `streamLlmChat()` call per turn and gets back one resolved
- * reply, unaware of how many model↔tool round trips happened underneath;
- * `toolActivity` is the one bit of that visible here, via a status event.
+ * reply, but now reconstructs every round's activity as permanent
+ * `MessageBlock`s on the in-flight assistant message via three live event
+ * listeners (delta / tool-call / tool-result), rather than treating tool
+ * activity as transient status that's discarded once text resumes.
  *
  * `accessMode` is threaded in (rather than read internally) so the caller's
  * `useAiAccessMode` stays the single source of truth; it's read fresh on
@@ -49,14 +40,6 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Growing log of this turn's tool calls (e.g. "Читает файл: docs/x.adoc…")
-  // — an array, not just the latest one, so a multi-round tool-calling
-  // exchange visibly advances (each new call appends a line) instead of
-  // silently swapping one static line for another, which reads as frozen
-  // even while genuinely still working. Reset at the start of every
-  // `sendMessage` and cleared once real text resumes streaming or the turn
-  // ends, see the two listeners below.
-  const [toolActivity, setToolActivity] = useState<ToolActivityEntry[]>([]);
 
   // The mode the *previous* request actually went out with — `null` until
   // the first send, so the very first turn never fires a spurious "just
@@ -67,19 +50,14 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
 
   // Live token deltas — subscribed once for the hook's lifetime, matching
   // `useEmbeddingSetup`'s `listenSyncProgress` effect shape. Appends only
-  // to a message that's still `streaming` — a straggler delta arriving
-  // after that message was already finalized is a no-op, not a
-  // misattribution.
+  // to a message that's still `streaming` (via `updateLastAssistantBlocks`'s
+  // guard) — a straggler delta arriving after that message was already
+  // finalized is a no-op, not a misattribution.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenLlmChatDelta(({ delta }) => {
-      setToolActivity([]);
-      setMessages((prev) => {
-        const last = prev[prev.length - 1];
-        if (!last || last.role !== "assistant" || !last.streaming) return prev;
-        return [...prev.slice(0, -1), { ...last, content: last.content + delta }];
-      });
+      setMessages((prev) => updateLastAssistantBlocks(prev, (blocks) => appendDeltaToBlocks(blocks, delta)));
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -90,15 +68,35 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
     };
   }, []);
 
-  // Tool-round status — same effect shape as the delta listener above.
-  // Fires before the backend executes each tool call; cleared either here
-  // by the next real delta, or in `sendMessage`'s `finally` as a backstop
-  // for a turn that ends via error before any delta ever arrives.
+  // Fires just before the backend executes each tool call — pushes a new
+  // permanent "running" block onto the in-flight assistant message (closing
+  // off whatever text preceded it).
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenLlmToolCall(({ name, arguments: args }) => {
-      setToolActivity((prev) => [...prev, { id: crypto.randomUUID(), text: describeToolActivity(name, args) }]);
+    void listenLlmToolCall(({ id, name, arguments: argumentsJson }) => {
+      setMessages((prev) =>
+        updateLastAssistantBlocks(prev, (blocks) => appendToolCallBlock(blocks, { id, name, argumentsJson })),
+      );
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Fires once a tool call announced above has settled — flips that block's
+  // status and attaches its result/error. The block is never removed.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenLlmToolResult(({ id, result, error: toolError }) => {
+      setMessages((prev) =>
+        updateLastAssistantBlocks(prev, (blocks) => settleToolCallBlock(blocks, { id, result, error: toolError })),
+      );
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -120,11 +118,10 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
       setMessages((prev) => [
         ...prev,
         userMsg,
-        { id: assistantId, role: "assistant", content: "", streaming: true },
+        { id: assistantId, role: "assistant", blocks: [], streaming: true },
       ]);
       setSending(true);
       setError(null);
-      setToolActivity([]);
 
       // Placed as its own message right before the new user turn (not just
       // folded into the system prompt above) so a mode switch is impossible
@@ -136,7 +133,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
 
       const wireMessages: LlmMessage[] = [
         { role: "system", content: buildAssistantSystemPrompt(accessMode), toolCallId: null },
-        ...priorTurns.map((m): LlmMessage => ({ role: m.role, content: m.content, toolCallId: null })),
+        ...priorTurns.map((m): LlmMessage => ({ role: m.role, content: chatMessageToPlainText(m), toolCallId: null })),
         ...(modeChanged
           ? [{ role: "system" as const, content: buildAccessModeChangeNotice(accessMode), toolCallId: null }]
           : []),
@@ -144,25 +141,29 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
       ];
 
       try {
-        // Authoritative full text overwrites whatever was accumulated from
-        // deltas — a safety net in case an event was dropped in transit.
+        // Authoritative full text of the *final* round corrects only the
+        // trailing text block — see `correctTrailingText`'s doc comment for
+        // why that's always the right (and only) block it can apply to.
         const { text, usage } = await streamLlmChat(providerId, wireMessages);
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId
-              ? { ...m, content: text, streaming: false, usage: usage ?? undefined }
+            m.id === assistantId && m.role === "assistant"
+              ? { ...m, blocks: correctTrailingText(m.blocks, text), streaming: false, usage: usage ?? undefined }
               : m,
           ),
         );
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, streaming: false, failed: true } : m)),
+          prev.map((m) =>
+            m.id === assistantId && m.role === "assistant"
+              ? { ...m, blocks: markRunningToolCallsAsInterrupted(m.blocks), streaming: false, failed: true }
+              : m,
+          ),
         );
         setError(message);
       } finally {
         setSending(false);
-        setToolActivity([]);
       }
     },
     [providerId, sending, messages, accessMode],
@@ -176,23 +177,29 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
   // or the still-streaming reply) fall back to `estimateTokenCount`. Before
   // any turn has completed (a fresh conversation, or a provider that never
   // reports usage), the whole thing is the character-count estimate, same
-  // as before.
+  // as before. Expressed as a `forEach` scan (not `reduce`-then-reindex)
+  // since `usage` only exists on the assistant arm of `ChatMessage`'s
+  // discriminated union — carrying the found value along with the index in
+  // one pass avoids re-narrowing the role a second time.
   const contextTokens = useMemo(() => {
-    const lastUsageIndex = messages.reduce(
-      (found, m, i) => (m.usage ? i : found),
-      -1,
-    );
-    if (lastUsageIndex === -1) {
+    let lastUsageIndex = -1;
+    let lastUsageTotal: number | null = null;
+    messages.forEach((m, i) => {
+      if (m.role === "assistant" && m.usage) {
+        lastUsageIndex = i;
+        lastUsageTotal = m.usage.totalTokens;
+      }
+    });
+    if (lastUsageIndex === -1 || lastUsageTotal === null) {
       return (
         estimateTokenCount(buildAssistantSystemPrompt(accessMode)) +
-        messages.reduce((sum, m) => sum + estimateTokenCount(m.content), 0)
+        messages.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0)
       );
     }
-    const baseline = messages[lastUsageIndex].usage!.totalTokens;
     const tail = messages
       .slice(lastUsageIndex + 1)
-      .reduce((sum, m) => sum + estimateTokenCount(m.content), 0);
-    return baseline + tail;
+      .reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
+    return lastUsageTotal + tail;
   }, [messages, accessMode]);
 
   return {
@@ -201,7 +208,6 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode) 
     error,
     sendMessage,
     contextTokens,
-    toolActivity,
     systemPrompt: buildAssistantSystemPrompt(accessMode),
   };
 }

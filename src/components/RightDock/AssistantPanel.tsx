@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileText, FolderGit2, Loader2, Send, Settings2, Sparkles } from "lucide-react";
+import { FileText, FolderGit2, Send, Settings2, Sparkles } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
@@ -14,6 +14,7 @@ import {
 import type { AiAccessMode } from "../../lib/aiTools";
 import type { LlmModelInfo } from "../../lib/llm";
 import { AssistantMarkdown } from "./AssistantMarkdown";
+import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import "../Welcome/CloneRepoModal.css";
 import "./AssistantPanel.css";
 
@@ -36,19 +37,22 @@ type AssistantPanelProps = {
   onOpenSettings: () => void;
 };
 
-/** This panel is the assistant's actual interaction surface — plain,
- * streamed conversation with the configured LLM provider (no tool-calling/
- * search yet, see AI_HARNESS.md's "not built yet" section). Below the
+/** This panel is the assistant's actual interaction surface — a streamed
+ * conversation with the configured LLM provider, with real tool-calling
+ * (`ReadFile`/`ListFiles`/`SemanticSearch`, see `commands::llm::
+ * llm_chat_stream`'s Rust-side loop). Each assistant message renders as an
+ * ordered list of blocks (`useLlmChat`'s `MessageBlock`) — streamed text
+ * interleaved with permanent tool-call entries, in the order they actually
+ * happened, never disappearing once the turn completes. Below the
  * access-mode toggle (the one control that's genuinely specific to talking
  * to the assistant, not to indexing) this renders exactly one of two
  * states: a compact setup prompt (only when no LLM provider is ready — an
  * active/first provider with a saved API key), or the chat surface.
  *
  * The **embedding** provider/index being incomplete is deliberately *not*
- * a gate here: plain chat doesn't touch embeddings at all yet, and once
- * tool-calling exists `ReadFile`/`ListFiles`/the lexical/symbol tiers of
- * `services::ai_tools::semantic_search` already work with zero embeddings
- * — so its readiness is surfaced only as a non-blocking info note.
+ * a gate here: the lexical/symbol tiers of `services::ai_tools::
+ * semantic_search` already work with zero embeddings — so its readiness is
+ * surfaced only as a non-blocking info note.
  */
 export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
   const {
@@ -69,7 +73,7 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
   // resolves; "docsOnly" is the same safe default the backend itself falls
   // back to (`AiAccessMode::default()`), so the very first system prompt
   // built before that resolves is never wrong about being unrestricted.
-  const { messages, sending, error, sendMessage, contextTokens, toolActivity } = useLlmChat(
+  const { messages, sending, error, sendMessage, contextTokens } = useLlmChat(
     activeProviderId,
     accessMode ?? "docsOnly",
   );
@@ -276,38 +280,38 @@ export function AssistantPanel({ onOpenSettings }: AssistantPanelProps) {
                   <p className="assistant-chat-placeholder-desc">Задайте вопрос о документации проекта.</p>
                 </div>
               ) : (
-                messages.map((m) => (
-                  <div key={m.id} className={`assistant-chat-message ${m.role}${m.failed ? " failed" : ""}`}>
-                    {m.role === "assistant" && m.streaming && m.content === "" && toolActivity.length > 0 ? (
-                      <div className="assistant-chat-tool-activity-list">
-                        {toolActivity.map((entry, i) => {
-                          const isActive = i === toolActivity.length - 1;
-                          return (
-                            <span
-                              key={entry.id}
-                              className={`assistant-chat-tool-activity${isActive ? " active" : " done"}`}
-                            >
-                              {isActive ? (
-                                <Loader2 className="assistant-chat-tool-spinner" size={12} aria-hidden />
-                              ) : null}
-                              {entry.text}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    ) : m.role === "assistant" && m.streaming && m.content === "" ? (
-                      <span className="assistant-chat-typing" aria-label="Ассистент печатает…">
-                        <span />
-                        <span />
-                        <span />
-                      </span>
-                    ) : m.role === "assistant" ? (
-                      <AssistantMarkdown content={m.content} streaming={Boolean(m.streaming)} />
-                    ) : (
-                      m.content
-                    )}
-                  </div>
-                ))
+                messages.map((m) => {
+                  const failed = m.role === "assistant" && Boolean(m.failed);
+                  return (
+                    <div key={m.id} className={`assistant-chat-message ${m.role}${failed ? " failed" : ""}`}>
+                      {m.role === "assistant" ? (
+                        m.blocks.length === 0 && m.streaming ? (
+                          <span className="assistant-chat-typing" aria-label="Ассистент печатает…">
+                            <span />
+                            <span />
+                            <span />
+                          </span>
+                        ) : (
+                          <div className="assistant-chat-blocks">
+                            {m.blocks.map((block, i) =>
+                              block.type === "text" ? (
+                                <AssistantMarkdown
+                                  key={block.id}
+                                  content={block.content}
+                                  streaming={Boolean(m.streaming) && i === m.blocks.length - 1}
+                                />
+                              ) : (
+                                <AssistantToolCallBlock key={block.id} block={block} />
+                              ),
+                            )}
+                          </div>
+                        )
+                      ) : (
+                        m.content
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
             {contextLimit !== null ? (

@@ -214,30 +214,57 @@
   }
 }
 
-/* Growing log of this turn's tool calls (see useLlmChat's `toolActivity`)
-   — replaces the typing dots in the same slot. A list, not one line, so a
-   multi-round tool-calling exchange visibly advances (each call appends a
-   row) instead of one line silently swapping for another, which reads as
-   frozen even while genuinely still working. */
-.assistant-chat-tool-activity-list {
+/* Container for one assistant message's ordered blocks — a run of streamed
+   prose (rendered via AssistantMarkdown) interleaved with tool-call chips,
+   in the exact chronological order they arrived. Every block here is
+   permanent once appended — see useLlmChat's `MessageBlock` model. */
+.assistant-chat-blocks {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
 }
 
-.assistant-chat-tool-activity {
-  display: inline-flex;
+/* One tool invocation entry — status icon, "what is/was being done" line,
+   and (once settled) a dimmed one-line result/error summary. A slightly
+   sunken chip (--bg-0 against the message bubble's own --bg-1) so it reads
+   as system activity, not part of the answer's own prose — mirrors
+   Cursor/Claude Code's collapsed-by-default tool-call display. */
+.assistant-tool-call {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+}
+
+.assistant-tool-call-header {
+  display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--text-2);
   font-size: var(--font-ui-sm);
-  font-style: italic;
+  color: var(--text-2);
 }
 
-/* An already-finished call in this turn's log — dimmed so the active one
-   (below) reads as the current step, not just another line in a list. */
-.assistant-chat-tool-activity.done {
-  opacity: 0.55;
+.assistant-tool-call-icon {
+  flex: none;
+}
+
+.assistant-tool-call-done .assistant-tool-call-icon {
+  color: var(--accent);
+}
+
+.assistant-tool-call-error .assistant-tool-call-icon,
+.assistant-tool-call-error .assistant-tool-call-summary {
+  color: var(--red-tag);
+}
+
+.assistant-tool-call-summary {
+  padding-left: 19px; /* aligns under the label, past the icon + gap */
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  opacity: 0.75;
 }
 
 .assistant-chat-tool-spinner {

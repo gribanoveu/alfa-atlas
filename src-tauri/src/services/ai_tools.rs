@@ -133,16 +133,43 @@ pub fn current_scope() -> Result<ToolScope, ProjectError> {
 /// is normal, expected tool-calling behavior.
 pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
     match call.name.as_str() {
-        "readFile" => serde_json::from_str::<ReadFileArgs>(&call.arguments)
+        "readFile" => lenient_json_object::<ReadFileArgs>(&call.arguments)
             .map(ToolCall::ReadFile)
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
-        "listFiles" => serde_json::from_str::<ListFilesArgs>(&call.arguments)
+        "listFiles" => lenient_json_object::<ListFilesArgs>(&call.arguments)
             .map(ToolCall::ListFiles)
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
-        "semanticSearch" => serde_json::from_str::<SemanticSearchArgs>(&call.arguments)
+        "semanticSearch" => lenient_json_object::<SemanticSearchArgs>(&call.arguments)
             .map(ToolCall::SemanticSearch)
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         other => Err(ToolError::UnknownTool(other.to_string())),
+    }
+}
+
+/// Parses `arguments` tolerating trailing garbage *after* an otherwise
+/// complete, valid JSON object — a real, observed failure mode: some
+/// providers stream a tool call's `arguments` as multiple fragments that
+/// get concatenated (see `infra::llm_providers::openai_compatible::
+/// ToolCallAccumulator`), and at least one has been seen appending a
+/// spurious extra fragment after the object already closed (e.g. `{}` then
+/// a stray `""`, producing `{}""` — plain `serde_json::from_str` rejects
+/// this as "trailing characters" even though the object itself is fine).
+///
+/// `serde_json::from_str` calls the deserializer's `end()`, which fails on
+/// any leftover non-whitespace input; deserializing directly from a
+/// `Deserializer` without calling `end()` stops as soon as one complete
+/// value has been read and simply ignores whatever follows. This only
+/// rescues "valid value + garbage" — a genuinely malformed object (missing
+/// braces, invalid syntax partway through) still fails exactly as before,
+/// so a model that sends truly broken JSON still gets an honest error to
+/// learn from.
+fn lenient_json_object<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, serde_json::Error> {
+    match serde_json::from_str::<T>(input) {
+        Ok(value) => Ok(value),
+        Err(strict_err) => {
+            let mut de = serde_json::Deserializer::from_str(input);
+            T::deserialize(&mut de).map_err(|_| strict_err)
+        }
     }
 }
 
@@ -996,6 +1023,49 @@ mod tests {
             id: "call_1".to_string(),
             name: "readFile".to_string(),
             arguments: "{not json}".to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "readFile"));
+    }
+
+    #[test]
+    fn parse_tool_call_tolerates_trailing_garbage_after_a_complete_object() {
+        // Real observed case: a provider streamed `listFiles` arguments as
+        // fragments that concatenated into `{}""` — a complete, valid empty
+        // object followed by a stray extra fragment. Strict `serde_json`
+        // rejects this ("trailing characters"); the lenient fallback should
+        // still recover the real (empty) arguments rather than surfacing an
+        // error the user can do nothing about.
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: "{}\"\"".to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None }));
+    }
+
+    #[test]
+    fn parse_tool_call_tolerates_trailing_garbage_after_a_populated_object() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: r#"{"path":"intro.adoc"}garbage"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string() }));
+    }
+
+    #[test]
+    fn parse_tool_call_still_rejects_arguments_that_are_invalid_from_the_start() {
+        // The lenient fallback only rescues "valid value + trailing junk" —
+        // JSON that's broken from the very first token must still error,
+        // so the model still gets an honest, actionable error to learn
+        // from rather than silently defaulting to empty arguments.
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: "{not json at all".to_string(),
         };
         let err = parse_tool_call(&call).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "readFile"));

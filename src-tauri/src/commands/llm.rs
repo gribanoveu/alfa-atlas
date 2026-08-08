@@ -15,7 +15,9 @@
 //! prompt claims. The loop is entirely internal to this command: the
 //! frontend still sends one plain message list and gets back one resolved
 //! `ChatStreamResult`, unaware tool rounds happened at all except via the
-//! `TOOL_CALL_EVENT` status event.
+//! `TOOL_CALL_EVENT`/`TOOL_RESULT_EVENT` pair, which the frontend renders as
+//! permanent, chronological entries in the message transcript (not
+//! transient status — see `src/lib/chatBlocks.ts` on the frontend side).
 //!
 //! Every round's request/response (or error) is optionally recorded via
 //! `infra::llm_debug_log`, gated by `LlmSettings.debug_logging` — off by
@@ -31,6 +33,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::commands::embeddings::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
+use crate::domain::ai_tools::ToolResult;
 use crate::domain::llm::{
     sanitize_tool_call_arguments, ChatRequest, ChatStreamResult, LlmMessage, LlmModelInfo,
     LlmProvider, LlmProviderConfig, LlmRole, LlmSettings, ResolvedLlmProvider,
@@ -51,10 +54,16 @@ pub const CHAT_STREAM_DELTA_EVENT: &str = "llm:chat-stream-delta";
 /// Fires immediately before executing one tool call in a `llm_chat_stream`
 /// round — before, not after, so the UI can show e.g. "reading
 /// docs/x.adoc…" while the (possibly slow — `SemanticSearch` can hit an
-/// embedding provider) execution is actually in flight. No matching "done"
-/// event exists: the frontend clears its status either when a real text
-/// delta resumes streaming or when the turn ends.
+/// embedding provider) execution is actually in flight. Always followed by
+/// exactly one `TOOL_RESULT_EVENT` carrying the same `id`, once execution
+/// settles.
 pub const TOOL_CALL_EVENT: &str = "llm:tool-call";
+
+/// Fires once a tool call started via `TOOL_CALL_EVENT` has settled —
+/// carries the same `id` so the frontend can find and close out the
+/// matching entry in its transcript. Exactly one of `result`/`error` is
+/// ever `Some`.
+pub const TOOL_RESULT_EVENT: &str = "llm:tool-result";
 
 /// A misbehaving/looping model shouldn't be able to hold the UI in a
 /// "thinking" state indefinitely — this caps how many model↔tool round
@@ -70,11 +79,34 @@ struct ChatStreamDeltaPayload {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ToolCallEventPayload {
+    /// The model's own `LlmToolCall::id` — lets the frontend correlate this
+    /// call with its later `ToolResultEventPayload` regardless of how many
+    /// other calls/rounds happen in between.
+    id: String,
     name: String,
     /// Raw JSON-encoded string, same as `LlmToolCall::arguments` — the
     /// frontend parses it if it wants structured display, this event
     /// doesn't pre-parse it.
     arguments: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolResultEventPayload {
+    /// Matches the `id` on the `ToolCallEventPayload` this settles.
+    id: String,
+    /// `Some` on success — the same typed `ToolResult` that gets
+    /// JSON-serialized into the wire `content` sent back to the model, just
+    /// cloned rather than reserialized into a display string here.
+    /// Formatting it into a human-readable summary is the frontend's job
+    /// (`describeToolResult` in `src/lib/assistantConfig.ts`), matching how
+    /// `describeToolActivity` already handles the "what is being done" line
+    /// client-side rather than this command inventing display text.
+    result: Option<ToolResult>,
+    /// `Some` on failure — `ToolError`'s `Display` text (the same string
+    /// that already goes into the `Tool` message's `content` as
+    /// `"Error: {e}"`).
+    error: Option<String>,
 }
 
 /// Caches the constructed `LlmProvider` across calls, same reasoning as
@@ -291,7 +323,11 @@ pub async fn llm_chat_stream(
             for call in &result.tool_calls {
                 let _ = app.emit(
                     TOOL_CALL_EVENT,
-                    ToolCallEventPayload { name: call.name.clone(), arguments: call.arguments.clone() },
+                    ToolCallEventPayload {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                    },
                 );
                 // A bad tool call (unknown name, malformed arguments, a
                 // NotAllowed hit against the allowlist, a missing file,
@@ -299,10 +335,21 @@ pub async fn llm_chat_stream(
                 // failure of the whole turn — the model discovering an
                 // access-mode boundary mid-conversation is legitimate,
                 // expected behavior, not a bug.
-                let content = match ai_tools::parse_tool_call(call)
+                let outcome: Result<ToolResult, String> = ai_tools::parse_tool_call(call)
                     .and_then(|parsed| ai_tools::execute_tool(&scope, parsed, &deps))
-                {
-                    Ok(tool_result) => serde_json::to_string(&tool_result)
+                    .map_err(|e| e.to_string());
+
+                let _ = app.emit(
+                    TOOL_RESULT_EVENT,
+                    ToolResultEventPayload {
+                        id: call.id.clone(),
+                        result: outcome.as_ref().ok().cloned(),
+                        error: outcome.as_ref().err().cloned(),
+                    },
+                );
+
+                let content = match &outcome {
+                    Ok(tool_result) => serde_json::to_string(tool_result)
                         .unwrap_or_else(|_| "Error: failed to serialize tool result".to_string()),
                     Err(e) => format!("Error: {e}"),
                 };
