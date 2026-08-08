@@ -6,6 +6,11 @@
   background: var(--bg-0);
 }
 
+
+/* =========================================================
+   Access
+   ========================================================= */
+
 .assistant-panel-access {
   flex: none;
   padding: 10px;
@@ -56,10 +61,11 @@
   line-height: 1.4;
 }
 
-/* Chat surface — fills the rest of the panel below the access toggle,
-   regardless of which of the two states (setup prompt / chat shell) below
-   is showing, so the panel's overall layout doesn't jump when readiness
-   changes. */
+
+/* =========================================================
+   Chat surface
+   ========================================================= */
+
 .assistant-chat {
   flex: 1;
   min-height: 0;
@@ -67,10 +73,11 @@
   flex-direction: column;
 }
 
-/* Holds both the model picker and the context-usage indicator side by
-   side — `.assistant-model-select` flexes to fill whatever the
-   fixed-width context bar (see below) doesn't need, so both fit
-   comfortably on one row regardless of how long the model name is. */
+
+/* =========================================================
+   Model selector + context usage
+   ========================================================= */
+
 .assistant-model-bar {
   flex: none;
   display: flex;
@@ -96,12 +103,6 @@
   font-size: var(--font-ui-sm);
 }
 
-/* The trigger itself now shares its row with the context-usage bar (see
-   `.assistant-model-bar`), so its value stays single-line + ellipsis (the
-   base `.clone-select-path` behavior) rather than wrapping — a wrapped
-   model name would grow the row tall and crowd the context bar next to
-   it. The open *menu*'s own options still get full room below, so those
-   wrap instead of clipping a long model id. */
 .assistant-model-select .clone-select-menu .clone-select-path {
   white-space: normal;
   overflow: visible;
@@ -109,10 +110,11 @@
   word-break: break-word;
 }
 
-/* Non-blocking notice while the index is still building — the assistant
-   itself isn't gated on this (see AssistantPanel.tsx's doc comment), so
-   this is informational, not a replacement for the old blocking "sync
-   first" screen. */
+
+/* =========================================================
+   Index status
+   ========================================================= */
+
 .assistant-chat-index-note {
   flex: none;
   padding: 6px 10px;
@@ -123,14 +125,20 @@
   line-height: 1.4;
 }
 
+
+/* =========================================================
+   Message list
+   ========================================================= */
+
 .assistant-chat-messages {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 2px;
   overflow-y: auto;
-  padding: 6px;
+  padding: 8px 10px 16px;
+  scrollbar-gutter: stable;
 }
 
 .assistant-chat-placeholder {
@@ -155,42 +163,420 @@
   line-height: 1.4;
 }
 
+
+/* =========================================================
+   Base message
+   ========================================================= */
+
 .assistant-chat-message {
   max-width: 90%;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: calc(var(--font-ui-sm) * 1.15);
-  line-height: 1.6;
-  white-space: pre-wrap;
+  line-height: 1.65;
   word-break: break-word;
 }
 
+
+/* =========================================================
+   User message
+   ========================================================= */
+
 .assistant-chat-message.user {
   align-self: flex-end;
+  max-width: 85%;
+  margin: 4px 0 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
   background: var(--accent);
   color: #fff;
 }
 
-/* Model replies use the panel's full width rather than the 85% bubble cap
-   above — they're usually the longest text in the conversation, and a
-   narrow right-dock column wraps a capped bubble into an unnecessarily
-   tall, cramped shape. */
+
+/* =========================================================
+   Assistant message
+   ========================================================= */
+
 .assistant-chat-message.assistant {
   align-self: stretch;
   max-width: 100%;
-  background: var(--bg-1);
+  padding: 12px 14px 16px;
+  background: transparent;
   color: var(--text-1);
-  border: 1px solid var(--border);
-  /* Content is real rendered Markdown (AssistantMarkdown/Streamdown), not
-     preserved raw text — the base rule's `pre-wrap` would otherwise double
-     up whitespace text nodes between block elements. */
+  border: none;
   white-space: normal;
 }
+
+.assistant-chat-message.assistant > * {
+  max-width: 900px;
+}
+
+
+/* =========================================================
+   Paragraphs
+   ========================================================= */
+
+.assistant-chat-message p {
+  margin: 0 0 12px;
+  line-height: 1.65;
+}
+
+.assistant-chat-message p:last-child {
+  margin-bottom: 0;
+}
+
+
+/* =========================================================
+   Headings
+   ========================================================= */
+
+.assistant-chat-message h1,
+.assistant-chat-message h2,
+.assistant-chat-message h3,
+.assistant-chat-message h4 {
+  margin: 18px 0 8px;
+  color: var(--text-0);
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.assistant-chat-message h1:first-child,
+.assistant-chat-message h2:first-child,
+.assistant-chat-message h3:first-child,
+.assistant-chat-message h4:first-child {
+  margin-top: 0;
+}
+
+.assistant-chat-message h1 {
+  font-size: 1.35em;
+}
+
+.assistant-chat-message h2 {
+  font-size: 1.2em;
+}
+
+.assistant-chat-message h3 {
+  font-size: 1.08em;
+}
+
+.assistant-chat-message h4 {
+  font-size: 1em;
+}
+
+
+/* =========================================================
+   Lists
+   ========================================================= */
+
+.assistant-chat-message ul,
+.assistant-chat-message ol {
+  margin: 8px 0 12px;
+  padding-left: 22px;
+}
+
+.assistant-chat-message li {
+  margin: 4px 0;
+  line-height: 1.6;
+}
+
+.assistant-chat-message li > p {
+  margin-bottom: 4px;
+}
+
+
+/* =========================================================
+   Links
+   ========================================================= */
+
+.assistant-chat-message a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.assistant-chat-message a:hover {
+  text-decoration: underline;
+}
+
+
+/* =========================================================
+   Inline code
+   ========================================================= */
+
+.assistant-chat-message code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text-0);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+
+/* =========================================================
+   Code blocks
+   ========================================================= */
+
+.assistant-chat-message pre {
+  margin: 12px 0;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+.assistant-chat-message pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+}
+
+
+/* =========================================================
+   Blockquote
+   ========================================================= */
+
+.assistant-chat-message blockquote {
+  margin: 12px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text-2);
+}
+
+.assistant-chat-message blockquote p {
+  margin-bottom: 6px;
+}
+
+
+/* =========================================================
+   Horizontal separator
+   ========================================================= */
+
+.assistant-chat-message hr {
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+
+/* =========================================================
+   Tables
+   ========================================================= */
+
+   .assistant-chat-message table {
+    width: 100%;
+    max-width: 100%;
+    margin: 14px 0;
+  
+    border-collapse: separate;
+    border-spacing: 0;
+  
+    table-layout: fixed;
+  
+    font-size: 0.9em;
+    line-height: 1.45;
+  
+    overflow: hidden;
+  
+    border: 1px solid var(--border);
+    border-radius: 7px;
+  
+    background: var(--bg-1);
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Cells
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message th,
+  .assistant-chat-message td {
+    min-width: 0;
+  
+    padding: 6px 8px;
+  
+    border: 0;
+    border-bottom: 1px solid var(--border);
+  
+    text-align: left;
+    vertical-align: top;
+  
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Header
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message th {
+    background: var(--bg-2);
+  
+    color: var(--text-0);
+  
+    font-weight: 600;
+    white-space: normal;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Body
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message td {
+    background: var(--bg-1);
+    color: var(--text-1);
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Row separators
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message tbody tr:not(:last-child) td {
+    border-bottom: 1px solid var(--border);
+  }
+  
+  .assistant-chat-message tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Hover
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message tbody tr:hover td {
+    background: var(--bg-2);
+  }
+  
+  
+  /* ---------------------------------------------------------
+     First / last column
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message th:first-child,
+  .assistant-chat-message td:first-child {
+    padding-left: 9px;
+  }
+  
+  .assistant-chat-message th:last-child,
+  .assistant-chat-message td:last-child {
+    padding-right: 9px;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Code inside tables
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message td code,
+  .assistant-chat-message th code {
+    padding: 1px 4px;
+  
+    border-radius: 3px;
+  
+    background: var(--bg-2);
+  
+    font-family:
+      "JetBrains Mono",
+      ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      monospace;
+  
+    font-size: 0.86em;
+  
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Links inside tables
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message td a,
+  .assistant-chat-message th a {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Long content
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message td pre,
+  .assistant-chat-message th pre {
+    max-width: 100%;
+    margin: 4px 0;
+  
+    overflow-x: auto;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Narrow assistant panel
+     --------------------------------------------------------- */
+  
+  @media (max-width: 700px) {
+    .assistant-chat-message table {
+      font-size: 0.85em;
+    }
+  
+    .assistant-chat-message th,
+    .assistant-chat-message td {
+      padding: 5px 6px;
+    }
+  
+    .assistant-chat-message th:first-child,
+    .assistant-chat-message td:first-child {
+      padding-left: 7px;
+    }
+  
+    .assistant-chat-message th:last-child,
+    .assistant-chat-message td:last-child {
+      padding-right: 7px;
+    }
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Very narrow panel
+     --------------------------------------------------------- */
+  
+  @media (max-width: 480px) {
+    .assistant-chat-message table {
+      font-size: 0.82em;
+    }
+  
+    .assistant-chat-message th,
+    .assistant-chat-message td {
+      padding: 4px 5px;
+    }
+  }
+
+
+/* =========================================================
+   Failed message
+   ========================================================= */
 
 .assistant-chat-message.failed {
   border-color: var(--red-tag);
   color: var(--red-tag);
 }
+
+
+/* =========================================================
+   Streaming indicator
+   ========================================================= */
 
 .assistant-chat-typing {
   display: inline-flex;
@@ -220,80 +606,202 @@
   100% {
     opacity: 0.3;
   }
+
   40% {
     opacity: 1;
   }
 }
 
-/* Container for one assistant message's ordered blocks — a run of streamed
-   prose (rendered via AssistantMarkdown) interleaved with tool-call chips,
-   in the exact chronological order they arrived. Every block here is
-   permanent once appended — see useLlmChat's `MessageBlock` model. */
-.assistant-chat-blocks {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
 
-/* One tool invocation entry — status icon, "what is/was being done" line,
-   and (once settled) a dimmed one-line result/error summary. A slightly
-   sunken chip (--bg-0 against the message bubble's own --bg-1) so it reads
-   as system activity, not part of the answer's own prose — mirrors
-   Cursor/Claude Code's collapsed-by-default tool-call display. */
+/* =========================================================
+   Container for assistant message blocks
+   ========================================================= */
+
+   .assistant-chat-blocks {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  
+  .assistant-tool-call {
+    margin: 1px 0;
+  }
+
+
+/* =========================================================
+   Tool call
+   ========================================================= */
+
 .assistant-tool-call {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-0);
+  margin: 2px 0;
+  padding: 0;
+
+  border: 1px solid transparent;
+  border-radius: 7px;
+
+  background: transparent;
+  color: var(--text-2);
+
+  overflow: hidden;
+
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
 }
 
-/* A <button>, not a <div> — clicking it expands/collapses
-   .assistant-tool-call-detail below (see AssistantToolCallBlock). Reset to
-   read as plain text with a pointer cursor, not a native button. */
+
+/*
+ * Expanded tool call becomes a subtle container.
+ * Collapsed calls remain visually lightweight.
+ */
+.assistant-tool-call:has(.assistant-tool-call-detail) {
+  border-color: var(--border);
+  background: var(--bg-1);
+}
+
+
+/* =========================================================
+   Tool call header
+   ========================================================= */
+
 .assistant-tool-call-header {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+
   width: 100%;
-  padding: 0;
+  min-width: 0;
+  min-height: 30px;
+
+  padding: 5px 7px;
+
   border: none;
-  background: none;
+  border-radius: 6px;
+
+  background: transparent;
+
   font: inherit;
   font-size: var(--font-ui-sm);
-  color: var(--text-2);
+  font-weight: 500;
+
+  color: var(--text-1);
   text-align: left;
+
   cursor: pointer;
+
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
+
+.assistant-tool-call-header:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+
+/* =========================================================
+   Chevron / status icon
+   ========================================================= */
 
 .assistant-tool-call-chevron,
 .assistant-tool-call-icon {
   flex: none;
+  width: 15px;
+  height: 15px;
+}
+
+.assistant-tool-call-chevron {
+  color: var(--text-2);
+  opacity: 0.75;
 }
 
 .assistant-tool-call-done .assistant-tool-call-icon {
   color: var(--accent);
 }
 
-.assistant-tool-call-error .assistant-tool-call-icon,
-.assistant-tool-call-error .assistant-tool-call-summary {
+.assistant-tool-call-error .assistant-tool-call-icon {
   color: var(--red-tag);
 }
 
-/* 31px aligns under the label, past the chevron + status icon + their
-   gaps (12px + 6px + 13px, rounded). */
-.assistant-tool-call-summary {
-  padding-left: 31px;
-  font-size: var(--font-ui-sm);
-  color: var(--text-2);
-  opacity: 0.75;
+
+/* =========================================================
+   Tool activity text
+   ========================================================= */
+
+.assistant-tool-call-header > * {
+  min-width: 0;
 }
+
+
+/* =========================================================
+   Result summary
+   ========================================================= */
+
+   .assistant-tool-call-summary {
+    min-width: 0;
+  
+    margin-left: 4px;
+    padding-left: 0;
+  
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  
+    font-size: calc(var(--font-ui-sm) * 0.9);
+    font-weight: 400;
+  
+    color: var(--text-2);
+    opacity: 0.7;
+  }
+  
+  .assistant-tool-call-error .assistant-tool-call-summary {
+    color: var(--red-tag);
+    opacity: 0.9;
+  }
+
+  .assistant-tool-call-detail-summary {
+    margin: 0 0 2px;
+    padding: 0 0 8px;
+  
+    border-bottom: 1px solid var(--border);
+  
+    color: var(--text-2);
+    font-size: var(--font-ui-sm);
+    line-height: 1.4;
+  }
+
+/* =========================================================
+   Running state
+   ========================================================= */
+
+.assistant-tool-call-running {
+  background: color-mix(
+    in srgb,
+    var(--accent) 5%,
+    transparent
+  );
+}
+
+.assistant-tool-call-running .assistant-tool-call-header {
+  color: var(--text-1);
+}
+
+
+/* =========================================================
+   Spinner
+   ========================================================= */
 
 .assistant-chat-tool-spinner {
   flex: none;
+
+  width: 15px;
+  height: 15px;
+
   color: var(--accent);
+
   animation: assistant-chat-spin 0.8s linear infinite;
 }
 
@@ -303,127 +811,377 @@
   }
 }
 
-/* Expanded detail view (see AssistantToolCallBlock) — raw arguments plus,
-   once settled, the full result or error, beyond the one-line summary. */
+
+/* =========================================================
+   Expanded tool detail
+   ========================================================= */
+
 .assistant-tool-call-detail {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-left: 31px;
-  margin-top: 2px;
+
+  margin: 0;
+  padding: 10px 10px 5px 10px;
+
+  border-top: 1px solid var(--border);
 }
+
+
+/* =========================================================
+   Detail sections
+   ========================================================= */
 
 .assistant-tool-call-detail-section {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
+  min-width: 0;
 }
 
 .assistant-tool-call-detail-label {
-  font-size: calc(var(--font-ui-sm) * 0.92);
+  display: flex;
+  align-items: center;
+
+  font-size: calc(var(--font-ui-sm) * 0.82);
+  font-weight: 600;
+  line-height: 1.3;
+
   color: var(--text-2);
-  opacity: 0.75;
+  opacity: 0.7;
+
   text-transform: uppercase;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
 }
 
-.assistant-tool-call-detail-code {
-  margin: 0;
-  padding: 6px 8px;
-  max-height: 220px;
-  overflow: auto;
-  border-radius: 5px;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.85em;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--text-1);
-}
+
+ /* =========================================================
+    Tool detail — code / arguments / file content
+    ========================================================= */
+
+    .assistant-tool-call-detail-code {
+      position: relative;
+    
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+    
+      margin: 0;
+      padding: 9px 11px;
+    
+      max-height: 280px;
+    
+      overflow-x: auto;
+      overflow-y: auto;
+    
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    
+      background: var(--bg-0);
+      color: var(--text-1);
+    
+      font-family:
+        "JetBrains Mono",
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Monaco,
+        Consolas,
+        monospace;
+    
+      font-size: 0.8em;
+      line-height: 1.55;
+    
+      /* Сохраняем структуру кода */
+      white-space: pre;
+    
+      /* Не даём длинным строкам ломать layout */
+      word-break: normal;
+      overflow-wrap: normal;
+    
+      /* Убираем лишний браузерный margin */
+      tab-size: 2;
+    
+      scrollbar-gutter: stable;
+    }
+    
+    
+    /* =========================================================
+       Code scrollbar
+       ========================================================= */
+    
+    .assistant-tool-call-detail-code::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
+    
+    .assistant-tool-call-detail-code::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    
+    .assistant-tool-call-detail-code::-webkit-scrollbar-thumb {
+      background: var(--bg-2);
+      border-radius: 999px;
+    }
+    
+    .assistant-tool-call-detail-code::-webkit-scrollbar-thumb:hover {
+      background: var(--text-2);
+    }
+    
+    
+    /* =========================================================
+       Firefox
+       ========================================================= */
+    
+    .assistant-tool-call-detail-code {
+      scrollbar-width: thin;
+      scrollbar-color: var(--bg-2) transparent;
+    }
+    
+    
+    /* =========================================================
+       Narrow panel
+       ========================================================= */
+    
+    @media (max-width: 600px) {
+      .assistant-tool-call-detail-code {
+        padding: 8px 9px;
+        font-size: 0.78em;
+        line-height: 1.5;
+      }
+    }
+
+/* =========================================================
+   Error detail
+   ========================================================= */
 
 .assistant-tool-call-detail-error {
+  margin: 0;
+
+  padding: 8px 10px;
+
+  border-left: 2px solid var(--red-tag);
+  border-radius: 3px;
+
+  background: color-mix(
+    in srgb,
+    var(--red-tag) 7%,
+    var(--bg-0)
+  );
+
   color: var(--red-tag);
+
+  font-family:
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+
+  font-size: 0.82em;
+  line-height: 1.5;
+
+  white-space: pre-wrap;
+  word-break: break-word;
 }
+
+
+/* =========================================================
+   Empty result
+   ========================================================= */
 
 .assistant-tool-call-detail-empty {
   margin: 0;
+  padding: 3px 0;
+
   font-size: var(--font-ui-sm);
   color: var(--text-2);
-  opacity: 0.75;
+  opacity: 0.7;
 }
+
+
+/* =========================================================
+   File list
+   ========================================================= */
 
 .assistant-tool-call-detail-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1px;
+
   margin: 0;
-  padding: 0;
-  list-style: none;
-  max-height: 220px;
+  padding: 4px;
+
+  max-height: 240px;
   overflow: auto;
-  font-size: var(--font-ui-sm);
+
+  border: 1px solid var(--border);
+  border-radius: 5px;
+
+  background: var(--bg-0);
+
+  list-style: none;
+
+  scrollbar-gutter: stable;
 }
 
 .assistant-tool-call-detail-list li {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
+
+  min-width: 0;
+
+  padding: 4px 6px;
+
+  border-radius: 3px;
+
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-tool-call-detail-list li:hover {
+  background: var(--bg-1);
 }
 
 .assistant-tool-call-detail-icon {
   flex: none;
+
+  width: 14px;
+  height: 14px;
+
   color: var(--text-2);
 }
 
+.assistant-tool-call-detail-list li > span:last-child {
+  min-width: 0;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  font-family:
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+
+  font-size: 0.85em;
+
+  color: var(--text-1);
+}
+
+
+/* =========================================================
+   Search results
+   ========================================================= */
+
+.assistant-tool-call-detail-matches {
+  gap: 0;
+  padding: 4px;
+}
+
 .assistant-tool-call-detail-matches li {
+  display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 1px;
-  padding: 4px 0;
+  gap: 4px;
+
+  padding: 7px 8px;
+
+  border-radius: 4px;
+}
+
+.assistant-tool-call-detail-matches li:hover {
+  background: var(--bg-1);
 }
 
 .assistant-tool-call-detail-matches li:not(:last-child) {
   border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
+
+
+/* =========================================================
+   Search result header
+   ========================================================= */
 
 .assistant-tool-call-detail-match-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+
+  min-width: 0;
+
   gap: 8px;
 }
 
 .assistant-tool-call-detail-match-path {
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.85em;
-  color: var(--text-1);
+  min-width: 0;
+
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+
+  font-family:
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+
+  font-size: 0.82em;
+
+  color: var(--text-1);
 }
 
+
+/* =========================================================
+   Search snippet
+   ========================================================= */
+
 .assistant-tool-call-detail-match-snippet {
+  margin: 0;
+  padding: 5px 7px;
+
+  border-left: 2px solid var(--border);
+
   color: var(--text-2);
   opacity: 0.85;
-  font-size: calc(var(--font-ui-sm) * 0.95);
+
+  font-family:
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+
+  font-size: 0.8em;
+  line-height: 1.5;
+
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-/* Which tier of the symbol → semantic → lexical degradation cascade
-   (services::ai_tools::semantic_search) answered this match — the direct
-   answer to "are embeddings actually being used": `semantic` means yes,
-   `lexical` means it fell back to plain text search (embeddings not
-   configured/synced), `symbol` means an exact name match, no search
-   needed. See `describeMatchSource`'s doc comment. */
+
+/* =========================================================
+   Search source badge
+   ========================================================= */
+
 .assistant-tool-call-source-badge {
   flex: none;
-  font-size: calc(var(--font-ui-sm) * 0.85);
-  padding: 0px 6px;
-  border-radius: 999px;
+
+  padding: 1px 6px;
+
   border: 1px solid var(--border);
+  border-radius: 999px;
+
+  font-size: calc(var(--font-ui-sm) * 0.78);
+  line-height: 1.35;
+
   color: var(--text-2);
+
   white-space: nowrap;
   cursor: default;
 }
@@ -438,21 +1196,28 @@
   border-color: var(--green);
 }
 
+
+/* =========================================================
+   Chat error
+   ========================================================= */
+
 .assistant-chat-error {
   flex: none;
+
   padding: 6px 10px;
+
   border-top: 1px solid var(--border);
+
   color: var(--red-tag);
+
   font-size: var(--font-ui-sm);
 }
 
-/* Estimated context-window usage — see `estimateTokenCount`'s doc comment
-   for why this is a rough character-based approximation, not an exact
-   count. Only rendered when the active provider's `limit.context` is
-   known, since there's no denominator to show a percentage against
-   otherwise. Lives in `.assistant-model-bar`, next to the model picker —
-   a fixed width (not `flex: 1`) so it stays compact and leaves the model
-   select the rest of the row. */
+
+/* =========================================================
+   Context usage
+   ========================================================= */
+
 .assistant-context-bar {
   flex: none;
   display: flex;
@@ -462,16 +1227,22 @@
 
 .assistant-context-bar-track {
   flex: none;
+
   width: 56px;
   height: 4px;
+
   border-radius: 999px;
+
   background: var(--bg-2);
+
   overflow: hidden;
 }
 
 .assistant-context-bar-fill {
   height: 100%;
+
   background: var(--accent);
+
   transition: width 0.2s ease;
 }
 
@@ -481,38 +1252,61 @@
 
 .assistant-context-bar-label {
   flex: none;
+
   font-size: var(--font-ui-sm);
+
   color: var(--text-2);
+
   white-space: nowrap;
 }
 
+
+/* =========================================================
+   Input area
+   ========================================================= */
+
 .assistant-chat-input-row {
   flex: none;
+
   padding: 10px;
+
   border-top: 1px solid var(--border);
+
+  background: var(--bg-0);
 }
 
-/* Positioning context for the send button, which sits inside the textarea
-   rather than beside it. */
 .assistant-chat-input-wrap {
   position: relative;
 }
 
-/* Fixed at 4 visible lines via the `rows={4}` attribute (not grown/shrunk
-   dynamically) — `resize: none` keeps the user from dragging it away from
-   that. Right padding leaves room for the send button so typed text never
-   runs under it. */
 .assistant-chat-input {
   width: 100%;
+
   resize: none;
-  padding: 8px 40px 8px 10px;
+
+  padding: 10px 42px 10px 12px;
+
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
+
   background: var(--bg-1);
   color: var(--text-1);
+
   font-size: var(--font-ui-ui);
   font-family: inherit;
-  line-height: 1.4;
+  line-height: 1.5;
+
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.assistant-chat-input:focus {
+  outline: none;
+
+  border-color: var(--accent);
+
+  background: var(--bg-1);
 }
 
 .assistant-chat-input:disabled {
@@ -522,17 +1316,31 @@
 
 .assistant-chat-send {
   position: absolute;
+
   right: 6px;
-  bottom: 12px;
-  width: 28px;
-  height: 28px;
+  bottom: 6px;
+
+  width: 30px;
+  height: 30px;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
+  border: none;
   border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-2);
+
+  background: transparent;
   color: var(--text-2);
+
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.assistant-chat-send:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--text-0);
 }
 
 .assistant-chat-send:disabled {
@@ -540,18 +1348,25 @@
   cursor: default;
 }
 
-/* Setup prompt — the single compact "here's what's missing" state,
-   replacing the old multi-card checklist (that setup flow now lives fully
-   in Settings → Эмбеддинги; this is just a pointer at it). */
+
+/* =========================================================
+   Setup prompt
+   ========================================================= */
+
 .assistant-setup-prompt {
   margin: auto;
+
   display: flex;
   flex-direction: column;
   align-items: center;
+
   gap: 8px;
+
   max-width: 240px;
   padding: 16px;
+
   text-align: center;
+
   color: var(--text-2);
 }
 
@@ -566,14 +1381,26 @@
   line-height: 1.4;
 }
 
+
+/* =========================================================
+   Buttons
+   ========================================================= */
+
 .assistant-btn {
   font-size: var(--font-ui-sm);
+
   padding: 5px 12px;
+
   border-radius: 4px;
   border: 1px solid var(--border);
+
   background: var(--bg-2);
   color: var(--text-1);
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .assistant-btn:hover:not(:disabled) {
@@ -594,4 +1421,27 @@
 
 .assistant-btn.primary:hover:not(:disabled) {
   filter: brightness(1.08);
+}
+
+
+/* =========================================================
+   Responsive
+   ========================================================= */
+
+@media (max-width: 600px) {
+  .assistant-tool-call-summary {
+    display: none;
+  }
+
+  .assistant-tool-call-detail {
+    padding-left: 10px;
+  }
+
+  .assistant-tool-call-detail-code {
+    max-height: 180px;
+  }
+
+  .assistant-tool-call-detail-list {
+    max-height: 180px;
+  }
 }

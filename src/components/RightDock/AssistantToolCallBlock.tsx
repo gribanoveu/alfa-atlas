@@ -58,26 +58,42 @@ export function AssistantToolCallBlock({ block }: AssistantToolCallBlockProps) {
         )}
         <span className="assistant-tool-call-label">{describeToolActivity(block.name, block.argumentsJson)}</span>
       </button>
-      {block.status !== "running" ? (
-        <div className="assistant-tool-call-summary">{describeToolResult(block)}</div>
-      ) : null}
+    
       {expanded ? (
-        <div className="assistant-tool-call-detail">
-          <div className="assistant-tool-call-detail-section">
-            <div className="assistant-tool-call-detail-label">Аргументы</div>
-            <pre className="assistant-tool-call-detail-code">{formatToolArguments(block.argumentsJson)}</pre>
-          </div>
-          {block.status === "done" && block.result ? <ToolResultDetail result={block.result} /> : null}
-          {block.status === "error" ? (
-            <div className="assistant-tool-call-detail-section">
-              <div className="assistant-tool-call-detail-label">Ошибка</div>
-              <pre className="assistant-tool-call-detail-code assistant-tool-call-detail-error">
-                {block.errorMessage ?? "неизвестная ошибка"}
-              </pre>
-            </div>
-          ) : null}
+  <div className="assistant-tool-call-detail">
+    {block.status !== "running" ? (
+      <div className="assistant-tool-call-detail-summary">
+        {describeToolResult(block)}
+      </div>
+    ) : null}
+
+    <div className="assistant-tool-call-detail-section">
+      <div className="assistant-tool-call-detail-label">
+        Аргументы
+      </div>
+
+      <pre className="assistant-tool-call-detail-code">
+        {formatToolArguments(block.argumentsJson)}
+      </pre>
+    </div>
+
+    {block.status === "done" && block.result ? (
+      <ToolResultDetail result={block.result} />
+    ) : null}
+
+    {block.status === "error" ? (
+      <div className="assistant-tool-call-detail-section">
+        <div className="assistant-tool-call-detail-label">
+          Ошибка
         </div>
-      ) : null}
+
+        <pre className="assistant-tool-call-detail-error">
+          {block.errorMessage ?? "неизвестная ошибка"}
+        </pre>
+      </div>
+    ) : null}
+  </div>
+) : null}
     </div>
   );
 }
