@@ -1,4 +1,4 @@
-import type { AiAccessMode } from "./aiTools";
+import type { AiAccessMode, MatchSource } from "./aiTools";
 import type { ToolCallBlock } from "./chatBlocks";
 
 /** Central place for the assistant chat panel's tunable constants — system
@@ -172,10 +172,70 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
       const parts = [...(files > 0 ? [`файлов: ${files}`] : []), ...(dirs > 0 ? [`папок: ${dirs}`] : [])];
       return parts.length > 0 ? parts.join(", ") : "Пусто";
     }
-    case "semanticSearchResults":
-      return `Результатов: ${block.result.result.length}`;
+    case "semanticSearchResults": {
+      const matches = block.result.result;
+      if (matches.length === 0) return "Результатов: 0";
+      const counts = new Map<MatchSource, number>();
+      for (const m of matches) counts.set(m.source, (counts.get(m.source) ?? 0) + 1);
+      // Tag which tier of `services::ai_tools::semantic_search`'s
+      // degradation cascade actually produced these results — this is the
+      // whole reason a mixed-source query exists: without it, "embeddings
+      // aren't configured/synced yet so this silently fell back to a plain
+      // text search" is invisible in the UI.
+      const breakdown = [...counts.entries()]
+        .map(([source, count]) => `${describeMatchSourceShort(source)}: ${count}`)
+        .join(", ");
+      return `Результатов: ${matches.length} (${breakdown})`;
+    }
     default:
       return "Готово";
+  }
+}
+
+// Short, inline-breakdown label for `describeToolResult`'s
+// `semanticSearchResults` summary (e.g. "семантика: 3, текст: 2").
+function describeMatchSourceShort(source: MatchSource): string {
+  switch (source) {
+    case "semantic":
+      return "семантика";
+    case "lexical":
+      return "текст";
+    case "symbol":
+      return "имя";
+  }
+}
+
+// Full label + explanation for one match's source badge in the expanded
+// detail view (see `AssistantToolCallBlock`) — mirrors
+// `services::ai_tools::semantic_search`'s three-tier cascade
+// (symbol → semantic → lexical, see AI_HARNESS.md): `"symbol"` is an exact
+// name match (cheapest, always tried first), `"semantic"` means the
+// embedding index actually answered this one, `"lexical"` means it fell
+// back to a plain substring scan — the tell that embeddings aren't
+// configured or the index isn't synced yet.
+export function describeMatchSource(source: MatchSource): { label: string; title: string } {
+  switch (source) {
+    case "semantic":
+      return { label: "семантика", title: "Найдено через векторный поиск (эмбеддинги)" };
+    case "lexical":
+      return { label: "текст", title: "Найдено обычным текстовым поиском — эмбеддинги не использовались (провайдер не настроен или индекс ещё не синхронизирован)" };
+    case "symbol":
+      return { label: "имя", title: "Точное совпадение по имени символа" };
+  }
+}
+
+// Pretty-printed arguments shown in a tool-call block's expanded detail
+// view (see `AssistantToolCallBlock`) — unlike `describeToolActivity`,
+// which only reads one or two known fields, this shows the raw payload
+// verbatim so a malformed/unexpected `arguments` string (e.g. the "trailing
+// characters" case `parse_tool_call`'s lenient fallback on the Rust side
+// now tolerates) is still visible for inspection rather than hidden behind
+// a parse failure.
+export function formatToolArguments(argumentsJson: string): string {
+  try {
+    return JSON.stringify(JSON.parse(argumentsJson), null, 2);
+  } catch {
+    return argumentsJson;
   }
 }
 

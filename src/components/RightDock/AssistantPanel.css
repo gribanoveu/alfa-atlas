@@ -239,14 +239,25 @@
   background: var(--bg-0);
 }
 
+/* A <button>, not a <div> — clicking it expands/collapses
+   .assistant-tool-call-detail below (see AssistantToolCallBlock). Reset to
+   read as plain text with a pointer cursor, not a native button. */
 .assistant-tool-call-header {
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
   font-size: var(--font-ui-sm);
   color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
 }
 
+.assistant-tool-call-chevron,
 .assistant-tool-call-icon {
   flex: none;
 }
@@ -260,8 +271,10 @@
   color: var(--red-tag);
 }
 
+/* 31px aligns under the label, past the chevron + status icon + their
+   gaps (12px + 6px + 13px, rounded). */
 .assistant-tool-call-summary {
-  padding-left: 19px; /* aligns under the label, past the icon + gap */
+  padding-left: 31px;
   font-size: var(--font-ui-sm);
   color: var(--text-2);
   opacity: 0.75;
@@ -277,6 +290,141 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/* Expanded detail view (see AssistantToolCallBlock) — raw arguments plus,
+   once settled, the full result or error, beyond the one-line summary. */
+.assistant-tool-call-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 31px;
+  margin-top: 2px;
+}
+
+.assistant-tool-call-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.assistant-tool-call-detail-label {
+  font-size: calc(var(--font-ui-sm) * 0.92);
+  color: var(--text-2);
+  opacity: 0.75;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.assistant-tool-call-detail-code {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 5px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-1);
+}
+
+.assistant-tool-call-detail-error {
+  color: var(--red-tag);
+}
+
+.assistant-tool-call-detail-empty {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  opacity: 0.75;
+}
+
+.assistant-tool-call-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow: auto;
+  font-size: var(--font-ui-sm);
+}
+
+.assistant-tool-call-detail-list li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.assistant-tool-call-detail-icon {
+  flex: none;
+  color: var(--text-2);
+}
+
+.assistant-tool-call-detail-matches li {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  padding: 4px 0;
+}
+
+.assistant-tool-call-detail-matches li:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+}
+
+.assistant-tool-call-detail-match-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assistant-tool-call-detail-match-path {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.85em;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-tool-call-detail-match-snippet {
+  color: var(--text-2);
+  opacity: 0.85;
+  font-size: calc(var(--font-ui-sm) * 0.95);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Which tier of the symbol → semantic → lexical degradation cascade
+   (services::ai_tools::semantic_search) answered this match — the direct
+   answer to "are embeddings actually being used": `semantic` means yes,
+   `lexical` means it fell back to plain text search (embeddings not
+   configured/synced), `symbol` means an exact name match, no search
+   needed. See `describeMatchSource`'s doc comment. */
+.assistant-tool-call-source-badge {
+  flex: none;
+  font-size: calc(var(--font-ui-sm) * 0.85);
+  padding: 0px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.assistant-tool-call-source-semantic {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.assistant-tool-call-source-symbol {
+  color: var(--green);
+  border-color: var(--green);
 }
 
 .assistant-chat-error {
