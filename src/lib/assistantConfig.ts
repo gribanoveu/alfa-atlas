@@ -677,10 +677,11 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
 // strings the same way.
 export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result" | "errorMessage">): string {
   if (block.status === "error") {
-    // The one error string this UI itself can produce (via a "Отклонить"
-    // decision in `ToolApprovalModal`, see `commands::llm`'s tool loop) —
-    // worth its own Russian phrasing rather than falling through to the
-    // generic "Ошибка: {raw backend text}" line below.
+    // The one error string this UI itself can produce (a "Отклонить" click
+    // or an expired countdown on the inline approval card, see
+    // `commands::llm`'s tool loop) — worth its own Russian phrasing rather
+    // than falling through to the generic "Ошибка: {raw backend text}" line
+    // below.
     if (block.errorMessage === "denied by user") return "Отклонено пользователем";
     return `Ошибка: ${block.errorMessage ?? "неизвестная ошибка"}`;
   }
@@ -782,3 +783,10 @@ export const CHAT_INPUT_ROWS = 4;
 // The context-usage bar switches to its warning color once estimated usage
 // crosses this fraction of the active model's `limit.context`.
 export const CONTEXT_NEAR_LIMIT_RATIO = 0.9;
+
+// How long a `"pendingApproval"` tool-call card (see `AssistantToolCallBlock`)
+// waits for a manual Approve/Deny before `useLlmChat` treats it as denied
+// automatically — the card's countdown strip animates toward this same
+// duration, so what the user sees running out is exactly the deadline that
+// actually fires.
+export const TOOL_APPROVAL_TIMEOUT_MS = 30_000;

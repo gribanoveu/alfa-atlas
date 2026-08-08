@@ -17,7 +17,6 @@ import type { LlmModelInfo } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
-import { ToolApprovalModal } from "./ToolApprovalModal";
 import "../Welcome/CloneRepoModal.css";
 import "./AssistantPanel.css";
 
@@ -51,9 +50,9 @@ type AssistantPanelProps = {
    * already runs it once per `repoRoot`) — forwarded into the system
    * prompt's "Current project type" line, see `buildAssistantSystemPrompt`. */
   specsRepoInfo: SpecsRepoInfo | null;
-  /** The open project's docs root — needed by `ToolApprovalModal`'s
-   * `writeFile` diff review to fetch a file's current content for the
-   * original/proposed comparison. */
+  /** The open project's docs root — needed by a `"pendingApproval"` card's
+   * `writeFile` diff preview (`AssistantToolCallBlock`) to fetch a file's
+   * current content for the original/proposed comparison. */
   docsRoot: string;
 };
 
@@ -99,8 +98,12 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot }: Assi
   // resolves; "docsOnly" is the same safe default the backend itself falls
   // back to (`AiAccessMode::default()`), so the very first system prompt
   // built before that resolves is never wrong about being unrestricted.
-  const { messages, sending, error, sendMessage, contextTokens, pendingReview, submitApprovalDecisions } =
-    useLlmChat(activeProviderId, accessMode ?? "docsOnly", specsRepoInfo, toolDefinitions);
+  const { messages, sending, error, sendMessage, contextTokens, decideToolCall } = useLlmChat(
+    activeProviderId,
+    accessMode ?? "docsOnly",
+    specsRepoInfo,
+    toolDefinitions,
+  );
 
   // A granted `requestFullRepoAccess` call is only known once its block
   // settles to "done" (the real `TOOL_RESULT_EVENT`, after the backend has
@@ -288,7 +291,12 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot }: Assi
                                   streaming={Boolean(m.streaming) && i === m.blocks.length - 1}
                                 />
                               ) : (
-                                <AssistantToolCallBlock key={block.id} block={block} />
+                                <AssistantToolCallBlock
+                                  key={block.id}
+                                  block={block}
+                                  docsRoot={docsRoot}
+                                  onDecide={decideToolCall}
+                                />
                               ),
                             )}
                           </div>
@@ -424,14 +432,6 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot }: Assi
           </div>
         )}
       </div>
-
-      {pendingReview ? (
-        <ToolApprovalModal
-          review={pendingReview}
-          docsRoot={docsRoot}
-          onSubmit={submitApprovalDecisions}
-        />
-      ) : null}
     </div>
   );
 }

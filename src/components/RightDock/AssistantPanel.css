@@ -726,6 +726,10 @@
   color: var(--red-tag);
 }
 
+.assistant-tool-call-pendingApproval .assistant-tool-call-icon {
+  color: var(--accent);
+}
+
 
 /* =========================================================
    Tool activity text
@@ -787,6 +791,79 @@
 
 .assistant-tool-call-running .assistant-tool-call-header {
   color: var(--text-1);
+}
+
+
+/* =========================================================
+   Pending-approval state (inline card, see AssistantToolCallBlock)
+   — deliberately styled as just another "expanded tool call", the same
+   quiet container `.assistant-tool-call:has(.assistant-tool-call-detail)`
+   already uses, not a distinct callout — this app's tool-call rows stay
+   visually lightweight (see that rule's own comment), and a bright/colored
+   card here would read as a foreign widget dropped into the transcript.
+   ========================================================= */
+
+.assistant-tool-call-pendingApproval {
+  border-color: var(--border);
+  background: var(--bg-1);
+}
+
+.assistant-tool-approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 10px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-tool-approval-path {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+}
+
+.assistant-tool-approval-reason {
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.assistant-tool-approval-timer {
+  height: 2px;
+  border-radius: 1px;
+  overflow: hidden;
+  background: var(--bg-2);
+}
+
+.assistant-tool-approval-timer-fill {
+  height: 100%;
+  background: var(--text-2);
+  transition-property: width;
+  transition-timing-function: linear;
+}
+
+.assistant-tool-approval-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.assistant-tool-approval-trust {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: calc(var(--font-ui-sm) * 0.92);
+  color: var(--text-2);
+}
+
+.assistant-tool-approval-buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
 }
 
 
@@ -1429,109 +1506,18 @@
 
 
 /* =========================================================
-   Tool approval
+   Tool approval — writeFile diff preview (WriteFileDiffReview),
+   embedded inline in a pendingApproval card, see
+   ".assistant-tool-approval-*" above for the card/timer/actions.
    ========================================================= */
 
-.tool-approval-modal {
-  width: 640px;
-  max-width: 92vw;
-  max-height: 86vh;
-  display: flex;
-  flex-direction: column;
-}
-
-.tool-approval-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 10px 0;
-  overflow-y: auto;
-}
-
-.tool-approval-card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--bg-1);
-}
-
-.tool-approval-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.tool-approval-card-title {
-  font-size: var(--font-ui-sm);
-  font-weight: 600;
-  color: var(--text-0);
-}
-
-.tool-approval-card-buttons {
-  display: flex;
-  gap: 6px;
-}
-
-.tool-approval-decision-btn {
-  padding: 4px 10px;
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  font-size: var(--font-ui-sm);
-  color: var(--text-2);
-  background: transparent;
-}
-
-.tool-approval-decision-btn:hover {
-  color: var(--text-0);
-  background: var(--bg-2);
-}
-
-.tool-approval-decision-btn.approve.active {
-  border-color: var(--green);
-  color: var(--green);
-  background: color-mix(in srgb, var(--green) 12%, transparent);
-}
-
-.tool-approval-decision-btn.deny.active {
-  border-color: var(--red-tag);
-  color: var(--red-tag);
-  background: color-mix(in srgb, var(--red-tag) 12%, transparent);
-}
-
-.tool-approval-card-path {
-  margin-top: 6px;
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: var(--font-ui-sm);
-  color: var(--text-2);
-}
-
-.tool-approval-card-reason {
-  margin-top: 6px;
-  font-size: var(--font-ui-sm);
-  color: var(--text-1);
-  white-space: pre-wrap;
-}
-
-.tool-approval-card-raw {
-  margin-top: 6px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: var(--bg-0);
-  font-size: var(--font-ui-sm);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .tool-approval-diff {
-  margin-top: 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
 }
 
 .tool-approval-diff-placeholder {
-  margin-top: 8px;
   padding: 10px;
   border: 1px dashed var(--border);
   border-radius: 6px;
@@ -1552,15 +1538,6 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.02em;
-}
-
-.tool-approval-trust {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  font-size: var(--font-ui-sm);
-  color: var(--text-2);
 }
 
 

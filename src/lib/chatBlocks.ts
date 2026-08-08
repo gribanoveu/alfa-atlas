@@ -19,7 +19,7 @@ export type TextBlock = {
   content: string;
 };
 
-export type ToolCallStatus = "running" | "done" | "error";
+export type ToolCallStatus = "pendingApproval" | "running" | "done" | "error";
 
 /** `id` is the model's own `LlmToolCall.id` off the wire (see
  * `LlmToolCallEvent.id`/`LlmToolResultEvent.id`), not a freshly generated
@@ -34,12 +34,17 @@ export type ToolCallBlock = {
   status: ToolCallStatus;
   result?: ToolResult;
   errorMessage?: string;
-  /** Set when this call skipped the approval modal because the user had
+  /** Set when this call skipped the approval card because the user had
    * already ticked "don't ask again this conversation" for this tool —
    * purely a display hint (the backend event stream is identical either
    * way), so the transcript can still show it was auto-approved rather than
    * looking like it silently ran with no review at all. */
   autoApproved?: boolean;
+  /** `Date.now()`-comparable deadline for a `"pendingApproval"` block — the
+   * card's countdown strip animates toward it, and `useLlmChat` auto-denies
+   * the call once it passes without a manual decision. Only ever set while
+   * `status === "pendingApproval"`. */
+  deadlineAt?: number;
 };
 
 export type MessageBlock = TextBlock | ToolCallBlock;
@@ -77,13 +82,27 @@ export function appendDeltaToBlocks(blocks: MessageBlock[], delta: string): Mess
   return [...blocks, { type: "text", id: crypto.randomUUID(), content: delta }];
 }
 
-/** A `TOOL_CALL_EVENT` always pushes a brand-new `toolCall` block — this is
- * what closes off any open text block (the next delta, if any, sees a
- * trailing `toolCall` block and starts fresh per `appendDeltaToBlocks`). */
+/** A `TOOL_CALL_EVENT` normally pushes a brand-new `toolCall` block — this
+ * is what closes off any open text block (the next delta, if any, sees a
+ * trailing `toolCall` block and starts fresh per `appendDeltaToBlocks`).
+ * The one exception: a call that was shown inline as a `"pendingApproval"`
+ * card (`appendPendingApprovalBlock`) already has a block with this exact
+ * `id` — the round paused to show it before executing anything, and this
+ * event is that same call now actually starting, not a second one, so the
+ * existing block transitions in place (dropping `deadlineAt`, the timer is
+ * moot once execution has begun) instead of duplicating. */
 export function appendToolCallBlock(
   blocks: MessageBlock[],
   call: { id: string; name: string; argumentsJson: string; autoApproved?: boolean },
 ): MessageBlock[] {
+  const existingIndex = blocks.findIndex((b) => b.type === "toolCall" && b.id === call.id);
+  if (existingIndex !== -1) {
+    return blocks.map((b, i) =>
+      i === existingIndex && b.type === "toolCall"
+        ? { ...b, status: "running", autoApproved: call.autoApproved, deadlineAt: undefined }
+        : b,
+    );
+  }
   return [
     ...blocks,
     {
@@ -93,6 +112,30 @@ export function appendToolCallBlock(
       argumentsJson: call.argumentsJson,
       status: "running",
       autoApproved: call.autoApproved,
+    },
+  ];
+}
+
+/** Shows a call awaiting user approval inline in the transcript, right
+ * where it happened — a card with Approve/Deny actions and a countdown
+ * strip toward `deadlineAt`, after which `useLlmChat` treats it as denied.
+ * Always the trailing block for its call `id` until the real
+ * `TOOL_CALL_EVENT` (via `appendToolCallBlock`) confirms execution
+ * actually starting, whether the user decided manually or the timer ran
+ * out. */
+export function appendPendingApprovalBlock(
+  blocks: MessageBlock[],
+  call: { id: string; name: string; argumentsJson: string; deadlineAt: number },
+): MessageBlock[] {
+  return [
+    ...blocks,
+    {
+      type: "toolCall",
+      id: call.id,
+      name: call.name,
+      argumentsJson: call.argumentsJson,
+      status: "pendingApproval",
+      deadlineAt: call.deadlineAt,
     },
   ];
 }
@@ -140,11 +183,13 @@ export function correctTrailingText(blocks: MessageBlock[], text: string): Messa
  * entirely). Any block still `"running"` at that point will never receive
  * its settling event, so it's swept to `"error"` here — otherwise its
  * spinner (driven by the block's own `status`, not the message's `streaming`
- * flag) would spin forever on an already-dead message. */
+ * flag) would spin forever on an already-dead message. A `"pendingApproval"`
+ * block is swept the same way — the request that would have resumed it
+ * (whether decided by the user or by its own timeout) never went out. */
 export function markRunningToolCallsAsInterrupted(blocks: MessageBlock[]): MessageBlock[] {
   return blocks.map((b): MessageBlock =>
-    b.type === "toolCall" && b.status === "running"
-      ? { ...b, status: "error", errorMessage: "Запрос прерван до получения результата" }
+    b.type === "toolCall" && (b.status === "running" || b.status === "pendingApproval")
+      ? { ...b, status: "error", errorMessage: "Запрос прерван до получения результата", deadlineAt: undefined }
       : b,
   );
 }
