@@ -66,27 +66,24 @@ function indexLabel(
   switch (status) {
     case "building":
       if (progress && progress.total > 0) {
-        return `Building workspace index... (${progress.done} / ${progress.total})`;
+        return `Индексация файлов: ${progress.done} / ${progress.total}`;
       }
       if (progress && progress.current) {
-        return `Updating index... (${progress.current})`;
+        return `Обновление индекса: ${progress.current}`;
       }
-      return "Building workspace index...";
+      return "Индексация файлов…";
     case "ready":
-      if (stats) {
-        return `Indexed ${stats.documents} documents • ${stats.anchors} anchors • ${stats.references} xref • ${stats.includes} include • ${stats.warnings} warnings`;
-      }
-      return "Index ready";
+      return stats ? `Проиндексировано документов: ${stats.documents}` : "Индекс готов";
     case "warning":
       if (stats && stats.errors > 0) {
-        return `Index ready with ${stats.errors} error(s)`;
+        return `Индекс готов, ошибок: ${stats.errors}`;
       }
       if (stats && stats.warnings > 0) {
-        return `Index ready with ${stats.warnings} warning(s)`;
+        return `Индекс готов, предупреждений: ${stats.warnings}`;
       }
-      return "Index completed with warnings";
+      return "Индекс готов с предупреждениями";
     case "error":
-      return "Index failed";
+      return "Ошибка индексации";
     case "idle":
     default:
       return "—";
@@ -99,22 +96,22 @@ function indexTitle(
 ): string {
   switch (status) {
     case "building":
-      return "Building workspace index";
+      return "Построение индекса документации";
     case "ready":
       return stats
-        ? `${stats.documents} docs, ${stats.anchors} anchors, ${stats.includes} includes, ${stats.references} xrefs, ${stats.images} images`
-        : "Index ready";
+        ? `Документов: ${stats.documents} • якорей: ${stats.anchors} • включений: ${stats.includes} • перекрёстных ссылок: ${stats.references} • изображений: ${stats.images}`
+        : "Индекс готов";
     case "warning":
       if (stats && stats.errors > 0) {
-        return `Index ready with ${stats.errors} error(s), ${stats.warnings} warning(s) — see Problems`;
+        return `Индекс готов, ошибок: ${stats.errors}, предупреждений: ${stats.warnings} — см. панель Проблемы`;
       }
       return stats
-        ? `Index ready with ${stats.warnings} warning(s)`
-        : "Index ready with warnings";
+        ? `Индекс готов, предупреждений: ${stats.warnings}`
+        : "Индекс готов с предупреждениями";
     case "error":
-      return "Index build failed — see Problems panel";
+      return "Ошибка построения индекса — см. панель Проблемы";
     default:
-      return "Workspace index idle";
+      return "Индекс документации не построен";
   }
 }
 
