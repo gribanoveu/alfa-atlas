@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, ChevronDown, ChevronRight, RefreshCw, Save, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
 import { AUTO_MODEL_LABEL, AUTO_MODEL_VALUE } from "../../lib/assistantConfig";
@@ -55,6 +55,7 @@ export function LlmTab() {
 
   const [baseUrlDraft, setBaseUrlDraft] = useState("");
   const [certDraft, setCertDraft] = useState("");
+  const [certOpen, setCertOpen] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [models, setModels] = useState<LlmModelInfo[]>([]);
@@ -85,6 +86,7 @@ export function LlmTab() {
     setModelsError(null);
     setTestResult(null);
     setModelSelectOpen(false);
+    setCertOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded?.id]);
 
@@ -269,133 +271,156 @@ export function LlmTab() {
                     <span className="clone-modal-label" id="llm-model-label">
                       Модель
                     </span>
-                    <div className="clone-select" ref={modelSelectRef}>
+                    <div className="llm-model-row">
+                      <div className="clone-select" ref={modelSelectRef}>
+                        <button
+                          type="button"
+                          className={`clone-select-trigger${modelSelectOpen ? " is-open" : ""}`}
+                          aria-haspopup="listbox"
+                          aria-expanded={modelSelectOpen}
+                          aria-labelledby="llm-model-label"
+                          disabled={busy}
+                          onClick={() => setModelSelectOpen((open) => !open)}
+                        >
+                          <span className="clone-select-value">
+                            <span className="clone-select-path">{provider.model ?? AUTO_MODEL_LABEL}</span>
+                          </span>
+                          <span className="clone-select-chevron" aria-hidden>
+                            ▾
+                          </span>
+                        </button>
+                        {modelSelectOpen ? (
+                          <div className="clone-select-menu" role="listbox">
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={!provider.model}
+                              className={`clone-select-option${!provider.model ? " is-active" : ""}`}
+                              onClick={() => handleSelectModel(AUTO_MODEL_VALUE)}
+                            >
+                              <span className="clone-select-path">{AUTO_MODEL_LABEL}</span>
+                            </button>
+                            {provider.model && !models.some((m) => m.id === provider.model) ? (
+                              <button
+                                type="button"
+                                role="option"
+                                aria-selected
+                                className="clone-select-option is-active"
+                                onClick={() => handleSelectModel(provider.model as string)}
+                              >
+                                <span className="clone-select-path">{provider.model}</span>
+                              </button>
+                            ) : null}
+                            {models.map((m) => (
+                              <button
+                                key={m.id}
+                                type="button"
+                                role="option"
+                                aria-selected={m.id === provider.model}
+                                className={`clone-select-option${m.id === provider.model ? " is-active" : ""}`}
+                                onClick={() => handleSelectModel(m.id)}
+                              >
+                                <span className="clone-select-path">{m.id}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
                       <button
                         type="button"
-                        className={`clone-select-trigger${modelSelectOpen ? " is-open" : ""}`}
-                        aria-haspopup="listbox"
-                        aria-expanded={modelSelectOpen}
-                        aria-labelledby="llm-model-label"
-                        disabled={busy}
-                        onClick={() => setModelSelectOpen((open) => !open)}
+                        className="llm-model-refresh"
+                        disabled={modelsLoading}
+                        title={modelsLoading ? "Загрузка списка моделей…" : "Обновить список моделей"}
+                        aria-label={modelsLoading ? "Загрузка списка моделей…" : "Обновить список моделей"}
+                        onClick={() => void handleLoadModels()}
                       >
-                        <span className="clone-select-value">
-                          <span className="clone-select-path">{provider.model ?? AUTO_MODEL_LABEL}</span>
-                        </span>
-                        <span className="clone-select-chevron" aria-hidden>
-                          ▾
-                        </span>
+                        <RefreshCw size={15} className={modelsLoading ? "spin" : ""} aria-hidden />
                       </button>
-                      {modelSelectOpen ? (
-                        <div className="clone-select-menu" role="listbox">
-                          <button
-                            type="button"
-                            role="option"
-                            aria-selected={!provider.model}
-                            className={`clone-select-option${!provider.model ? " is-active" : ""}`}
-                            onClick={() => handleSelectModel(AUTO_MODEL_VALUE)}
-                          >
-                            <span className="clone-select-path">{AUTO_MODEL_LABEL}</span>
-                          </button>
-                          {provider.model && !models.some((m) => m.id === provider.model) ? (
-                            <button
-                              type="button"
-                              role="option"
-                              aria-selected
-                              className="clone-select-option is-active"
-                              onClick={() => handleSelectModel(provider.model as string)}
-                            >
-                              <span className="clone-select-path">{provider.model}</span>
-                            </button>
-                          ) : null}
-                          {models.map((m) => (
-                            <button
-                              key={m.id}
-                              type="button"
-                              role="option"
-                              aria-selected={m.id === provider.model}
-                              className={`clone-select-option${m.id === provider.model ? " is-active" : ""}`}
-                              onClick={() => handleSelectModel(m.id)}
-                            >
-                              <span className="clone-select-path">{m.id}</span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
                     </div>
-                  </div>
-                  <div className="settings-actions">
-                    <button
-                      type="button"
-                      className="settings-btn"
-                      disabled={modelsLoading}
-                      onClick={() => void handleLoadModels()}
-                    >
-                      {modelsLoading ? "Загрузка списка моделей…" : "Обновить список моделей"}
-                    </button>
                   </div>
                   {modelsError ? <p className="settings-hint llm-inline-error">{modelsError}</p> : null}
 
-                  <label className="clone-modal-field">
-                    <span className="clone-modal-label">
-                      Доверенный сертификат{provider.isSystem ? " (переопределение)" : ""}
-                    </span>
-                    <textarea
-                      className="llm-cert-textarea"
-                      placeholder={
-                        provider.isSystem
-                          ? "Встроенный сертификат: " +
-                            (provider.trustedCertPem ? "задан" : "не задан") +
-                            ". Вставьте свой, чтобы переопределить."
-                          : "Вставьте сертификат в формате PEM, если эндпоинту требуется доверие к своему CA."
-                      }
-                      value={certDraft}
-                      disabled={busy}
-                      onChange={(event) => setCertDraft(event.target.value)}
-                    />
-                  </label>
-                  <div className="settings-actions">
+                  <div className="llm-cert-section">
                     <button
                       type="button"
-                      className="settings-btn primary"
-                      disabled={busy || !certDraft.trim()}
-                      onClick={() => void updateProviderConfig(provider.id, { trustedCertPem: certDraft.trim() || null })}
+                      className="llm-cert-toggle"
+                      aria-expanded={certOpen}
+                      onClick={() => setCertOpen((v) => !v)}
                     >
-                      Сохранить сертификат
+                      {certOpen ? (
+                        <ChevronDown className="llm-provider-chevron" size={14} aria-hidden />
+                      ) : (
+                        <ChevronRight className="llm-provider-chevron" size={14} aria-hidden />
+                      )}
+                      <span>Доверенный сертификат{provider.isSystem ? " (переопределение)" : ""}</span>
                     </button>
-                    {provider.isSystem ? (
-                      <button
-                        type="button"
-                        className="settings-btn"
-                        disabled={busy}
-                        onClick={() => void updateProviderConfig(provider.id, { trustedCertPem: null })}
-                      >
-                        Сбросить к встроенному
-                      </button>
+
+                    {certOpen ? (
+                      <>
+                        <label className="clone-modal-field">
+                          <textarea
+                            className="llm-cert-textarea"
+                            placeholder={
+                              provider.isSystem
+                                ? "Встроенный сертификат: " +
+                                  (provider.trustedCertPem ? "задан" : "не задан") +
+                                  ". Вставьте свой, чтобы переопределить."
+                                : "Вставьте сертификат в формате PEM, если эндпоинту требуется доверие к своему CA."
+                            }
+                            value={certDraft}
+                            disabled={busy}
+                            onChange={(event) => setCertDraft(event.target.value)}
+                          />
+                        </label>
+                        <div className="settings-actions">
+                          <button
+                            type="button"
+                            className="settings-btn primary"
+                            disabled={busy || !certDraft.trim()}
+                            onClick={() =>
+                              void updateProviderConfig(provider.id, { trustedCertPem: certDraft.trim() || null })
+                            }
+                          >
+                            Сохранить сертификат
+                          </button>
+                          {provider.isSystem ? (
+                            <button
+                              type="button"
+                              className="settings-btn"
+                              disabled={busy}
+                              onClick={() => void updateProviderConfig(provider.id, { trustedCertPem: null })}
+                            >
+                              Сбросить к встроенному
+                            </button>
+                          ) : null}
+                        </div>
+                      </>
                     ) : null}
                   </div>
 
                   <label className="clone-modal-field">
                     <span className="clone-modal-label">API ключ</span>
-                    <input
-                      className="clone-modal-input"
-                      type="password"
-                      placeholder={hasApiKeyMap[provider.id] ? "Ключ сохранён — введите новый, чтобы заменить" : "sk-..."}
-                      value={apiKeyInput}
-                      disabled={busy}
-                      onChange={(event) => setApiKeyInput(event.target.value)}
-                    />
+                    <div className="llm-api-key-row">
+                      <input
+                        className="clone-modal-input"
+                        type="password"
+                        placeholder={hasApiKeyMap[provider.id] ? "Ключ сохранён — введите новый, чтобы заменить" : "sk-..."}
+                        value={apiKeyInput}
+                        disabled={busy}
+                        onChange={(event) => setApiKeyInput(event.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="llm-api-key-save"
+                        disabled={busy || !apiKeyInput.trim()}
+                        title={apiKeySaved ? "Сохранено!" : "Сохранить ключ"}
+                        aria-label={apiKeySaved ? "Сохранено!" : "Сохранить ключ"}
+                        onClick={() => void handleSaveApiKey()}
+                      >
+                        {apiKeySaved ? <Check size={15} aria-hidden /> : <Save size={15} aria-hidden />}
+                      </button>
+                    </div>
                   </label>
-                  <div className="settings-actions">
-                    <button
-                      type="button"
-                      className="settings-btn primary"
-                      disabled={busy || !apiKeyInput.trim()}
-                      onClick={() => void handleSaveApiKey()}
-                    >
-                      {apiKeySaved ? "Сохранено!" : "Сохранить ключ"}
-                    </button>
-                  </div>
 
                   <div className="settings-actions">
                     <button
@@ -406,6 +431,15 @@ export function LlmTab() {
                     >
                       {testing ? "Проверка…" : "Проверить соединение"}
                     </button>
+                    {!testing && testResult ? (
+                      <span className="llm-test-result-icon" title={testResult.message}>
+                        {testResult.ok ? (
+                          <CheckCircle2 className="ok" size={18} aria-label={testResult.message} />
+                        ) : (
+                          <XCircle className="error" size={18} aria-label={testResult.message} />
+                        )}
+                      </span>
+                    ) : null}
                     {!provider.isSystem ? (
                       <button
                         type="button"
@@ -419,11 +453,6 @@ export function LlmTab() {
                       </button>
                     ) : null}
                   </div>
-                  {testResult ? (
-                    <p className={`settings-hint llm-inline-${testResult.ok ? "success" : "error"}`}>
-                      {testResult.message}
-                    </p>
-                  ) : null}
                 </div>
               ) : null}
             </div>

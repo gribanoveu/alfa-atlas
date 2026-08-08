@@ -1,0 +1,9 @@
+.spellcheck-add-word {
+  display: flex;
+  gap: 8px;
+}
+
+.spellcheck-add-word .clone-modal-input {
+  flex: 1;
+  min-width: 0;
+}

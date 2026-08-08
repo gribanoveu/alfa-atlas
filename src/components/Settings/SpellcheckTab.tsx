@@ -10,6 +10,7 @@ import {
   type SpellcheckConfig,
 } from "../../lib/spellcheck";
 import "../Welcome/CloneRepoModal.css";
+import "./SpellcheckTab.css";
 import "./StandardsRulesTab.css";
 
 type SpellcheckTabProps = {
@@ -205,9 +206,10 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
       </p>
 
       <div className="settings-row">
-        <div className="settings-actions">
+        <div className="spellcheck-add-word">
           <input
             type="text"
+            className="clone-modal-input"
             value={newWord}
             placeholder="Добавить слово…"
             disabled={busy}

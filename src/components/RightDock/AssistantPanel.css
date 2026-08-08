@@ -1373,7 +1373,7 @@
 
   resize: none;
 
-  padding: 10px 42px 10px 12px;
+  padding: 10px 42px 34px 12px;
 
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1403,11 +1403,21 @@
   cursor: default;
 }
 
-.assistant-chat-send {
+.assistant-chat-input-tools {
   position: absolute;
 
+  left: 6px;
   right: 6px;
   bottom: 6px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assistant-chat-send {
+  flex: none;
 
   width: 30px;
   height: 30px;
@@ -1435,6 +1445,102 @@
 .assistant-chat-send:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* Chat mode picker (Агент / План / Вопрос) — visual only for now, see
+   `ChatModeSelect` in AssistantPanel.tsx. */
+.assistant-mode-select {
+  position: relative;
+  flex: none;
+}
+
+.assistant-mode-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+
+  height: 26px;
+  padding: 0 8px;
+
+  border: 1px solid transparent;
+  border-radius: 6px;
+
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.assistant-mode-trigger:hover {
+  color: var(--text-0);
+}
+
+.assistant-mode-trigger.is-open {
+  border-color: var(--border);
+  color: var(--text-0);
+  background: var(--bg-0);
+}
+
+.assistant-mode-chevron {
+  transform: rotate(180deg);
+  transition: transform 0.15s ease;
+}
+
+.assistant-mode-trigger.is-open .assistant-mode-chevron {
+  transform: rotate(0deg);
+}
+
+.assistant-mode-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+
+  min-width: 140px;
+  padding: 4px;
+
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.assistant-mode-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+
+  padding: 6px 8px;
+
+  border: none;
+  border-radius: 5px;
+
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--font-ui-sm);
+  text-align: left;
+}
+
+.assistant-mode-option:hover {
+  background: var(--bg-2);
+}
+
+.assistant-mode-option.is-active {
+  color: var(--text-0);
+  background: var(--accent-dim);
+}
+
+.assistant-mode-option-soon {
+  flex: none;
+  font-size: calc(var(--font-ui-sm) * 0.85);
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 

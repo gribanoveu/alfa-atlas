@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FileText, FolderGit2, Send, Settings2, Sparkles } from "lucide-react";
+import { ChevronUp, FileText, FolderGit2, Send, Settings2, Sparkles } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
@@ -24,6 +24,78 @@ const ACCESS_MODE_OPTIONS: { value: AiAccessMode; label: string; Icon: LucideIco
   { value: "docsOnly", label: "Документация", Icon: FileText },
   { value: "fullRepo", label: "Весь репозиторий", Icon: FolderGit2 },
 ];
+
+type ChatMode = "agent" | "plan" | "question";
+
+const CHAT_MODE_OPTIONS: { value: ChatMode; label: string }[] = [
+  { value: "agent", label: "Агент" },
+  { value: "plan", label: "План" },
+  { value: "question", label: "Вопрос" },
+];
+
+/** Purely visual mode picker for the chat composer — selecting an option
+ * doesn't change how a message is sent yet, nothing downstream reads
+ * `mode`. Placeholder for future agent/plan/question behaviors; the
+ * "скоро" badge in the menu makes that explicit to the user. */
+function ChatModeSelect() {
+  const [mode, setMode] = useState<ChatMode>("agent");
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const activeLabel = CHAT_MODE_OPTIONS.find((o) => o.value === mode)?.label ?? "";
+
+  return (
+    <div className="assistant-mode-select" ref={ref}>
+      <button
+        type="button"
+        className={`assistant-mode-trigger${open ? " is-open" : ""}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="Режим ассистента (пока не влияет на поведение)"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span>{activeLabel}</span>
+        <ChevronUp className="assistant-mode-chevron" size={12} aria-hidden />
+      </button>
+      {open ? (
+        <div className="assistant-mode-menu" role="listbox">
+          {CHAT_MODE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={mode === option.value}
+              className={`assistant-mode-option${mode === option.value ? " is-active" : ""}`}
+              onClick={() => {
+                setMode(option.value);
+                setOpen(false);
+              }}
+            >
+              <span>{option.label}</span>
+              <span className="assistant-mode-option-soon">скоро</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function trimTrailingZero(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
@@ -424,15 +496,18 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot, onFile
                     }
                   }}
                 />
-                <button
-                  type="button"
-                  className="assistant-chat-send"
-                  disabled={!llmReady || sending || !draft.trim()}
-                  aria-label="Отправить"
-                  onClick={handleSend}
-                >
-                  <Send size={15} strokeWidth={1.75} aria-hidden />
-                </button>
+                <div className="assistant-chat-input-tools">
+                  <ChatModeSelect />
+                  <button
+                    type="button"
+                    className="assistant-chat-send"
+                    disabled={!llmReady || sending || !draft.trim()}
+                    aria-label="Отправить"
+                    onClick={handleSend}
+                  >
+                    <Send size={15} strokeWidth={1.75} aria-hidden />
+                  </button>
+                </div>
               </div>
             </div>
           </>

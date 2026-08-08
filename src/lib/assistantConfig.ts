@@ -724,7 +724,7 @@ export const AUTO_MODEL_LABEL = "Авто (первая доступная)";
 
 // Visible text lines in the chat compose box (fixed, not auto-growing —
 // see `AssistantPanel.css`'s `.assistant-chat-input` comment).
-export const CHAT_INPUT_ROWS = 4;
+export const CHAT_INPUT_ROWS = 3;
 
 // The context-usage bar switches to its warning color once estimated usage
 // crosses this fraction of the active model's `limit.context`.
