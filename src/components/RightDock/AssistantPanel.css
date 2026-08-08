@@ -8,6 +8,155 @@
 
 
 /* =========================================================
+   Chat switcher (history dropdown + new/archive buttons)
+   ========================================================= */
+
+.assistant-chat-switcher {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 0;
+}
+
+.assistant-chat-history-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-chat-icon-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.assistant-chat-history-item {
+  display: flex;
+  align-items: stretch;
+}
+
+.assistant-chat-history-option {
+  flex: 1;
+  min-width: 0;
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assistant-chat-history-option .clone-select-path {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-chat-history-time {
+  flex: none;
+  font-size: calc(var(--font-ui-sm) * 0.85);
+  color: var(--text-2);
+}
+
+.assistant-chat-history-archive {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+}
+
+.assistant-chat-history-archive:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+
+/* =========================================================
+   Archived chats — inline view within the panel (replaces
+   the conversation area, not an overlay)
+   ========================================================= */
+
+.assistant-archive-inline {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.assistant-archive-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-archive-back {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-1);
+}
+
+.assistant-archive-back:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.assistant-archive-header-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.assistant-archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.assistant-archive-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+}
+
+.assistant-archive-item-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-ui-sm);
+  color: var(--text-0);
+}
+
+.assistant-archive-empty {
+  padding: 10px 2px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+
+/* =========================================================
    Access
    ========================================================= */
 

@@ -76,7 +76,7 @@ pub const TOOL_RESULT_EVENT: &str = "llm:tool-result";
 /// A misbehaving/looping model shouldn't be able to hold the UI in a
 /// "thinking" state indefinitely — this caps how many model↔tool round
 /// trips one `llm_chat_stream` call will run before hard-failing.
-const MAX_TOOL_ITERATIONS: usize = 6;
+const MAX_TOOL_ITERATIONS: usize = 20;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]

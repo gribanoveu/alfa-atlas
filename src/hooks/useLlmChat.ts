@@ -46,14 +46,25 @@ export type { ChatMessage, MessageBlock, TextBlock, ToolCallBlock, ToolCallStatu
  * into the system prompt's "Current project type" line. `toolDefinitions`
  * is likewise threaded in from the caller's own `useToolDefinitions`,
  * so the system prompt's "## Tool usage" section is generated from the
- * same live registry the backend uses for real function-calling. */
+ * same live registry the backend uses for real function-calling.
+ *
+ * `initialMessages` seeds this hook's conversation — the caller
+ * (`AssistantConversation`) is expected to remount this hook (via a
+ * `key={chatId}` on its own component) whenever the active chat changes,
+ * so a plain initial value is enough; this never needs to react to
+ * `initialMessages` changing in place. `onTurnSettled` fires once per
+ * `sendMessage` call, on both the success and error paths, with the
+ * turn's final `messages` snapshot — the caller's `useChatHistory` uses it
+ * to persist the conversation. */
 export function useLlmChat(
   providerId: string | null,
   accessMode: AiAccessMode,
   specsRepoInfo: SpecsRepoInfo | null,
   toolDefinitions: LlmToolDefinition[],
+  initialMessages: ChatMessage[],
+  onTurnSettled: (messages: ChatMessage[]) => void,
 ) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -299,9 +310,19 @@ export function useLlmChat(
         setError(message);
       } finally {
         setSending(false);
+        // Reads the true final state for this turn via a functional-update
+        // "peek" — the `try`/`catch` block's own `setMessages` call and
+        // this one happen synchronously in the same tick (no `await`
+        // between them), so React's batching applies them to the update
+        // queue in order; this updater sees exactly what the turn ended
+        // with, covering both the success and error paths in one place.
+        setMessages((prev) => {
+          onTurnSettled(prev);
+          return prev;
+        });
       }
     },
-    [providerId, sending, messages, accessMode, specsRepoInfo, toolDefinitions, collectDecisions],
+    [providerId, sending, messages, accessMode, specsRepoInfo, toolDefinitions, collectDecisions, onTurnSettled],
   );
 
   // Context-window usage so far. Every request resends the *entire* message

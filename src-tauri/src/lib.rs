@@ -259,6 +259,10 @@ pub fn run() {
             commands::llm::llm_test_connection,
             commands::llm::llm_chat_stream,
             commands::llm::llm_chat_stream_resume,
+            commands::chat_history::chat_list,
+            commands::chat_history::chat_load_messages,
+            commands::chat_history::chat_save,
+            commands::chat_history::chat_set_archived,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

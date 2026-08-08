@@ -1351,6 +1351,7 @@ function App() {
               specsRepoInfo: specsRepo.info,
               docsRoot: project.docsRoot ?? "",
               onFileWritten: () => void tree.refresh(),
+              repoRoot: project.repoRoot,
             }}
           />
         </div>

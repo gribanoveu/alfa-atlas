@@ -114,6 +114,7 @@ type RightDockProps = {
     specsRepoInfo: SpecsRepoInfo | null;
     docsRoot: string;
     onFileWritten: () => void;
+    repoRoot: string | null;
   } | null;
 };
 
@@ -208,6 +209,7 @@ export function RightDock({
                 specsRepoInfo={assistant.specsRepoInfo}
                 docsRoot={assistant.docsRoot}
                 onFileWritten={assistant.onFileWritten}
+                repoRoot={assistant.repoRoot}
               />
             ) : (
               <div className="panel-empty">{active.empty}</div>

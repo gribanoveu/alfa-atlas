@@ -1,0 +1,61 @@
+import { invoke } from "@tauri-apps/api/core";
+import type { ChatMessage } from "./chatBlocks";
+
+// Mirrors `domain::chat::ChatSummary` in `src-tauri/src/domain/chat.rs`
+// (`#[serde(rename_all = "camelCase")]`). `createdAt`/`updatedAt` are unix
+// milliseconds.
+export type ChatSummary = {
+  id: string;
+  repoRoot: string;
+  title: string;
+  archived: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** Active or archived chats for one repository, most recently updated
+ * first (`services::chat_store::list_chats`'s `ORDER BY updated_at DESC`). */
+export function listChats(repoRoot: string, archived: boolean): Promise<ChatSummary[]> {
+  return invoke<ChatSummary[]>("chat_list", { repoRoot, archived });
+}
+
+/** One chat's messages, in save order. Trusts the stored blob's shape at
+ * runtime — same trust boundary every other `invoke<T>()` call in this
+ * codebase already has; the backend never inspects a message's internals
+ * (see `infra::chat_store`'s module doc), it only stores/returns whatever
+ * JSON `saveChat` last wrote. */
+export function loadChatMessages(chatId: string): Promise<ChatMessage[]> {
+  return invoke<ChatMessage[]>("chat_load_messages", { chatId });
+}
+
+/** Upserts the chat row (title/recency) and replaces its messages wholesale
+ * — call with the conversation's full current `ChatMessage[]` any time it
+ * should be persisted, not incremental deltas. */
+export function saveChat(
+  repoRoot: string,
+  chatId: string,
+  title: string,
+  messages: ChatMessage[],
+): Promise<ChatSummary> {
+  return invoke<ChatSummary>("chat_save", { repoRoot, chatId, title, messages });
+}
+
+export function setChatArchived(chatId: string, archived: boolean): Promise<void> {
+  return invoke("chat_set_archived", { chatId, archived });
+}
+
+const TITLE_MAX_CHARS = 50;
+
+/** Derives a chat's display title from its first user message — no shared
+ * text-truncation utility exists in this codebase (see `truncateForDisplay`
+ * in `AssistantToolCallBlock.tsx`, a module-private one-off doing the same
+ * small thing), so this follows that convention rather than inventing a
+ * shared `lib` helper. Recomputed on every save — idempotent, cheap, always
+ * derives from the same first message once one exists. */
+export function deriveChatTitle(messages: ChatMessage[]): string {
+  const first = messages.find((m) => m.role === "user");
+  if (!first || first.role !== "user") return "Новый чат";
+  const trimmed = first.content.trim().replace(/\s+/g, " ");
+  if (trimmed === "") return "Новый чат";
+  return trimmed.length > TITLE_MAX_CHARS ? `${trimmed.slice(0, TITLE_MAX_CHARS)}…` : trimmed;
+}
