@@ -57,6 +57,11 @@ export function AssistantToolCallBlock({ block }: AssistantToolCallBlockProps) {
           <AlertCircle className="assistant-tool-call-icon" size={13} aria-hidden />
         )}
         <span className="assistant-tool-call-label">{describeToolActivity(block.name, block.argumentsJson)}</span>
+        {block.autoApproved ? (
+          <span className="assistant-tool-call-auto-approved" title="Одобрено автоматически — вы отключили запрос подтверждения для этого действия в этом диалоге">
+            авто-одобрено
+          </span>
+        ) : null}
       </button>
     
       {expanded ? (
@@ -132,6 +137,22 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
               ))}
             </ul>
           )}
+        </div>
+      );
+    case "fileWritten":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Файл записан</div>
+          <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
+        </div>
+      );
+    case "accessModeChanged":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Новый режим доступа</div>
+          <pre className="assistant-tool-call-detail-code">
+            {result.result.mode === "fullRepo" ? "Весь репозиторий" : "Только документация"}
+          </pre>
         </div>
       );
     case "semanticSearchResults":

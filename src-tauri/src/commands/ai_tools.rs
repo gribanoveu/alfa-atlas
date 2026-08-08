@@ -79,17 +79,12 @@ pub fn ai_get_tool_definitions() -> Result<Vec<LlmToolDefinition>, String> {
     Ok(ai_tools::llm_tool_definitions(&scope))
 }
 
-/// Persists a new `AiAccessMode` for the currently open project —
-/// preserves any existing `ai_allowed_tools` override rather than
-/// resetting it, since only the root boundary is what this changes.
+/// Persists a new `AiAccessMode` for the currently open project — thin
+/// wrapper over `services::ai_tools::set_access_mode`, shared with the
+/// `RequestFullRepoAccess` tool so a mode change behaves identically
+/// regardless of which path triggered it (preserves any existing
+/// `ai_allowed_tools` override rather than resetting it).
 #[tauri::command]
 pub fn ai_set_access_mode(mode: AiAccessMode) -> Result<(), String> {
-    let project = project_open::get_project()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "no project is open".to_string())?;
-    let mut config = project_store::load(&project.root)
-        .map_err(|e| e.to_string())?
-        .unwrap_or_else(|| ProjectConfig::new(project.docs_root.clone()));
-    config.ai_access_mode = mode;
-    project_store::save(&project.root, &config).map_err(|e| e.to_string())
+    ai_tools::set_access_mode(mode).map_err(|e| e.to_string())
 }

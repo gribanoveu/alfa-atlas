@@ -179,6 +179,7 @@ pub fn run() {
             commands::git::git_clone,
             commands::project::list_docs_tree,
             commands::project::read_project_file,
+            commands::project::read_project_file_or_none,
             commands::project::resolve_asset_path,
             commands::project::write_project_file,
             commands::project::create_project_file,
@@ -257,6 +258,7 @@ pub fn run() {
             commands::llm::llm_list_models,
             commands::llm::llm_test_connection,
             commands::llm::llm_chat_stream,
+            commands::llm::llm_chat_stream_resume,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

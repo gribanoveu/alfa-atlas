@@ -112,6 +112,7 @@ type RightDockProps = {
   assistant?: {
     onOpenSettings: () => void;
     specsRepoInfo: SpecsRepoInfo | null;
+    docsRoot: string;
   } | null;
 };
 
@@ -201,7 +202,11 @@ export function RightDock({
             ) : activeTool === "suggestions" ? (
               <NotificationsPanel />
             ) : activeTool === "assistant" && assistant ? (
-              <AssistantPanel onOpenSettings={assistant.onOpenSettings} specsRepoInfo={assistant.specsRepoInfo} />
+              <AssistantPanel
+                onOpenSettings={assistant.onOpenSettings}
+                specsRepoInfo={assistant.specsRepoInfo}
+                docsRoot={assistant.docsRoot}
+              />
             ) : (
               <div className="panel-empty">{active.empty}</div>
             )}

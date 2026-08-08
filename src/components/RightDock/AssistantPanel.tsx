@@ -17,6 +17,7 @@ import type { LlmModelInfo } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
+import { ToolApprovalModal } from "./ToolApprovalModal";
 import "../Welcome/CloneRepoModal.css";
 import "./AssistantPanel.css";
 
@@ -50,6 +51,10 @@ type AssistantPanelProps = {
    * already runs it once per `repoRoot`) — forwarded into the system
    * prompt's "Current project type" line, see `buildAssistantSystemPrompt`. */
   specsRepoInfo: SpecsRepoInfo | null;
+  /** The open project's docs root — needed by `ToolApprovalModal`'s
+   * `writeFile` diff review to fetch a file's current content for the
+   * original/proposed comparison. */
+  docsRoot: string;
 };
 
 /** This panel is the assistant's actual interaction surface — a streamed
@@ -69,7 +74,7 @@ type AssistantPanelProps = {
  * semantic_search` already work with zero embeddings — so its readiness is
  * surfaced only as a non-blocking info note.
  */
-export function AssistantPanel({ onOpenSettings, specsRepoInfo }: AssistantPanelProps) {
+export function AssistantPanel({ onOpenSettings, specsRepoInfo, docsRoot }: AssistantPanelProps) {
   const {
     providerConfigured: embeddingConfigured,
     indexStatus,
@@ -78,7 +83,12 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo }: AssistantPanel
     busy,
     sync,
   } = useEmbeddingSetup();
-  const { mode: accessMode, busy: accessModeBusy, setMode: setAccessMode } = useAiAccessMode();
+  const {
+    mode: accessMode,
+    busy: accessModeBusy,
+    setMode: setAccessMode,
+    refresh: refreshAccessMode,
+  } = useAiAccessMode();
   const { settings, providers, hasApiKeyMap, updateProviderConfig, loadModels } = useLlmSetup();
   const { definitions: toolDefinitions } = useToolDefinitions(accessMode ?? "docsOnly");
 
@@ -89,12 +99,32 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo }: AssistantPanel
   // resolves; "docsOnly" is the same safe default the backend itself falls
   // back to (`AiAccessMode::default()`), so the very first system prompt
   // built before that resolves is never wrong about being unrestricted.
-  const { messages, sending, error, sendMessage, contextTokens } = useLlmChat(
-    activeProviderId,
-    accessMode ?? "docsOnly",
-    specsRepoInfo,
-    toolDefinitions,
-  );
+  const { messages, sending, error, sendMessage, contextTokens, pendingReview, submitApprovalDecisions } =
+    useLlmChat(activeProviderId, accessMode ?? "docsOnly", specsRepoInfo, toolDefinitions);
+
+  // A granted `requestFullRepoAccess` call is only known once its block
+  // settles to "done" (the real `TOOL_RESULT_EVENT`, after the backend has
+  // actually persisted the mode) — reacting to the transcript here, rather
+  // than to the approval submission itself, avoids racing the resume call
+  // that does the actual persisting. `handledIdsRef` keeps this idempotent
+  // across re-renders, since the block stays in `messages` forever once
+  // settled.
+  const handledAccessGrantIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant") return;
+    for (const block of last.blocks) {
+      if (
+        block.type === "toolCall" &&
+        block.name === "requestFullRepoAccess" &&
+        block.status === "done" &&
+        !handledAccessGrantIdsRef.current.has(block.id)
+      ) {
+        handledAccessGrantIdsRef.current.add(block.id);
+        void refreshAccessMode();
+      }
+    }
+  }, [messages, refreshAccessMode]);
   const contextLimit = activeProvider?.limit?.context ?? null;
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;
   const [draft, setDraft] = useState("");
@@ -394,6 +424,14 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo }: AssistantPanel
           </div>
         )}
       </div>
+
+      {pendingReview ? (
+        <ToolApprovalModal
+          review={pendingReview}
+          docsRoot={docsRoot}
+          onSubmit={submitApprovalDecisions}
+        />
+      ) : null}
     </div>
   );
 }

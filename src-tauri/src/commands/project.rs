@@ -6,7 +6,8 @@ use tauri::State;
 use crate::domain::asciidoc_templates::AsciidocFileTemplate;
 use crate::domain::paths;
 use crate::domain::project_config::{
-    OpenedProject, ProbeResult, RecentProject, RenameReport, TreeNode, UpdatedReference,
+    OpenedProject, ProbeResult, ProjectError, RecentProject, RenameReport, TreeNode,
+    UpdatedReference,
 };
 use crate::services::reference_rewrite::{self, RenamedPath};
 use crate::services::workspace_index::WorkspaceIndex;
@@ -70,6 +71,23 @@ pub fn list_docs_tree(docs_root: String) -> Result<Vec<TreeNode>, String> {
 #[tauri::command]
 pub fn read_project_file(docs_root: String, relative_path: String) -> Result<String, String> {
     docs_fs::read_project_file(&docs_root, &relative_path).map_err(|e| e.to_string())
+}
+
+/// Same boundary as `read_project_file`, but a missing file resolves to
+/// `Ok(None)` instead of an `Err` string — lets a caller like the assistant's
+/// `writeFile` approval diff distinguish "doesn't exist yet, show an empty
+/// original" from a real failure (path escape, unsupported extension) without
+/// pattern-matching `ProjectError`'s `Display` text on the frontend.
+#[tauri::command]
+pub fn read_project_file_or_none(
+    docs_root: String,
+    relative_path: String,
+) -> Result<Option<String>, String> {
+    match docs_fs::read_project_file(&docs_root, &relative_path) {
+        Ok(content) => Ok(Some(content)),
+        Err(ProjectError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]

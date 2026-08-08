@@ -81,6 +81,43 @@ export type ChatStreamResult = {
   usage: ChatUsage | null;
 };
 
+// Mirrors `domain::llm::PendingToolCall` — one call from a paused round,
+// including non-risky calls bundled into the same round (their
+// `requiresConfirmation` is `false`; they need no decision and execute
+// automatically on resume).
+export type PendingToolCall = {
+  id: string;
+  name: string;
+  arguments: string;
+  requiresConfirmation: boolean;
+};
+
+// Mirrors `domain::llm::PendingApproval`. `history`/`round` are opaque to
+// the frontend — never rendered, just round-tripped verbatim into
+// `streamLlmChatResume` alongside the user's decisions, since the backend
+// keeps no server-side session state between calls.
+export type PendingApproval = {
+  history: LlmMessage[];
+  round: number;
+  calls: PendingToolCall[];
+};
+
+// Mirrors `domain::llm::ChatStreamOutcome` — what one `streamLlmChat`/
+// `streamLlmChatResume` call resolves with: either a final answer, or a
+// round that hit at least one call needing user approval, with nothing in
+// that round executed yet.
+export type ChatStreamOutcome =
+  | { status: "done"; value: ChatStreamResult }
+  | { status: "pendingApproval"; value: PendingApproval };
+
+// Mirrors `domain::llm::ToolCallDecision` — one decision on one pending
+// call, required for every `PendingToolCall` whose `requiresConfirmation`
+// was `true` (validated server-side).
+export type ToolCallDecision = {
+  id: string;
+  approved: boolean;
+};
+
 export function getLlmSettings(): Promise<LlmSettings> {
   return invoke<LlmSettings>("llm_get_settings");
 }
@@ -130,12 +167,29 @@ export function testLlmConnection(providerId: string): Promise<string> {
 }
 
 /** A plain conversation turn, streamed. The caller owns building the full
- * message list (including any system prompt). Resolves with the
- * authoritative full reply text (and real token usage, if the provider
- * reported one) once the stream ends — subscribe via `listenLlmChatDelta`
- * for the live text meanwhile. */
-export function streamLlmChat(providerId: string, messages: LlmMessage[]): Promise<ChatStreamResult> {
-  return invoke<ChatStreamResult>("llm_chat_stream", { providerId, messages });
+ * message list (including any system prompt). Resolves with either the
+ * final answer (authoritative full reply text, and real token usage if the
+ * provider reported one) or a paused round awaiting approval — see
+ * `ChatStreamOutcome`. Subscribe via `listenLlmChatDelta` for live text
+ * meanwhile. */
+export function streamLlmChat(providerId: string, messages: LlmMessage[]): Promise<ChatStreamOutcome> {
+  return invoke<ChatStreamOutcome>("llm_chat_stream", { providerId, messages });
+}
+
+/** Continues a conversation paused by a `{status: "pendingApproval"}`
+ * outcome from `streamLlmChat` (or a previous `streamLlmChatResume` — a
+ * resumed turn can itself pause again on a later round). `history`/`round`
+ * must be exactly what that outcome carried, sent back unmodified — the
+ * backend keeps no server-side session state between calls. `decisions`
+ * must cover exactly the ids of that round's calls whose
+ * `requiresConfirmation` was `true`. */
+export function streamLlmChatResume(
+  providerId: string,
+  history: LlmMessage[],
+  round: number,
+  decisions: ToolCallDecision[],
+): Promise<ChatStreamOutcome> {
+  return invoke<ChatStreamOutcome>("llm_chat_stream_resume", { providerId, history, round, decisions });
 }
 
 /** Fires once per non-empty text chunk while a `streamLlmChat()` call is in

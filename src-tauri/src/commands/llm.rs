@@ -5,19 +5,24 @@
 //! these are thin delegations to
 //! `services::llm_config`/`infra::llm_credentials_store`.
 //!
-//! `llm_chat_stream` now runs a real multi-turn tool-calling loop: it
-//! advertises the current project's allowed `ReadFile`/`ListFiles`/
-//! `SemanticSearch` tools (`services::ai_tools::llm_tool_definitions`) on
+//! `llm_chat_stream` runs a real multi-turn tool-calling loop (`run_tool_loop`,
+//! shared with `llm_chat_stream_resume`): it advertises the current
+//! project's allowed tools (`services::ai_tools::llm_tool_definitions`) on
 //! every round, and whenever the model requests one or more, executes them
 //! via the same `services::ai_tools::execute_tool` boundary
-//! `ai_execute_tool` uses — so `AiAccessMode`/a customized allowlist now
-//! gates what the assistant can actually read, not just what its system
-//! prompt claims. The loop is entirely internal to this command: the
-//! frontend still sends one plain message list and gets back one resolved
-//! `ChatStreamResult`, unaware tool rounds happened at all except via the
-//! `TOOL_CALL_EVENT`/`TOOL_RESULT_EVENT` pair, which the frontend renders as
-//! permanent, chronological entries in the message transcript (not
-//! transient status — see `src/lib/chatBlocks.ts` on the frontend side).
+//! `ai_execute_tool` uses — so `AiAccessMode`/a customized allowlist gates
+//! what the assistant can actually do, not just what its system prompt
+//! claims. Most of the loop is internal to one command call: the frontend
+//! sends one message list and gets back one resolved `ChatStreamOutcome`,
+//! unaware tool rounds happened at all except via the `TOOL_CALL_EVENT`/
+//! `TOOL_RESULT_EVENT` pair, which the frontend renders as permanent,
+//! chronological entries in the message transcript (not transient status —
+//! see `src/lib/chatBlocks.ts` on the frontend side). The one case where a
+//! single turn spans more than one command call: a round containing a call
+//! whose `domain::ai_access::ToolName::requires_confirmation` is `true`
+//! resolves as `ChatStreamOutcome::PendingApproval` instead, with nothing in
+//! that round executed — the frontend collects a user decision and calls
+//! `llm_chat_stream_resume` to continue.
 //!
 //! Every round's request/response (or error) is optionally recorded via
 //! `infra::llm_debug_log`, gated by `LlmSettings.debug_logging` — off by
@@ -26,6 +31,7 @@
 //! diagnosable after the fact: the exact `ChatRequest` that produced it is
 //! sitting in `~/.atlas/logs/llm.jsonl`.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, State};
@@ -33,10 +39,12 @@ use tauri::{AppHandle, Emitter, State};
 use crate::commands::embeddings::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
-use crate::domain::ai_tools::ToolResult;
+use crate::domain::ai_access::ToolName;
+use crate::domain::ai_tools::{ToolResult, ToolScope};
 use crate::domain::llm::{
-    sanitize_tool_call_arguments, ChatRequest, ChatStreamResult, LlmMessage, LlmModelInfo,
-    LlmProvider, LlmProviderConfig, LlmRole, LlmSettings, ResolvedLlmProvider,
+    sanitize_tool_call_arguments, ChatRequest, ChatStreamOutcome, LlmMessage, LlmModelInfo,
+    LlmProvider, LlmProviderConfig, LlmRole, LlmSettings, LlmToolCall, LlmToolDefinition,
+    PendingApproval, PendingToolCall, ResolvedLlmProvider, ToolCallDecision,
 };
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
 use crate::services::ai_tools::{self, EmbeddingDeps};
@@ -231,22 +239,186 @@ pub async fn llm_test_connection(
     .map_err(|e| e.to_string())?
 }
 
-/// A conversation turn, streamed — now a real multi-turn tool-calling loop,
-/// not a single call. The frontend owns building the initial message list
+/// Bundles the read-only pieces `run_tool_loop` needs so its own signature
+/// doesn't grow a long, drifting parameter list — everything here is fixed
+/// for the lifetime of one `llm_chat_stream`/`llm_chat_stream_resume` call.
+struct LoopCtx<'a> {
+    app: &'a AppHandle,
+    provider: &'a dyn LlmProvider,
+    provider_id: &'a str,
+    model: &'a str,
+    settings: &'a LlmSettings,
+    deps: &'a EmbeddingDeps,
+}
+
+/// The shared tool-calling loop both `llm_chat_stream` (fresh start,
+/// `resume: None`) and `llm_chat_stream_resume` (continuing a paused round,
+/// `resume: Some((calls, decisions))`) run. `scope`/`tools` are `mut`
+/// because a successful `RequestFullRepoAccess` widens them mid-loop — the
+/// escalation must take effect within the same turn, not just the next one,
+/// or the assistant would report success while its very next tool call
+/// stays walled off at the old boundary.
+///
+/// Pauses (returns `ChatStreamOutcome::PendingApproval`) the instant a
+/// *fresh* round (never a resumed one — a resumed round's decisions are
+/// already known) contains any call whose `ToolName::requires_confirmation`
+/// is `true`. Nothing in that round executes — not even other, non-risky
+/// calls bundled into the same round — so there's no partial-round state to
+/// track across the stateless hop back to the frontend.
+fn run_tool_loop(
+    ctx: &LoopCtx,
+    mut scope: ToolScope,
+    mut tools: Vec<LlmToolDefinition>,
+    mut history: Vec<LlmMessage>,
+    mut round: u32,
+    mut resume: Option<(Vec<LlmToolCall>, Vec<ToolCallDecision>)>,
+) -> Result<ChatStreamOutcome, String> {
+    loop {
+        if round >= MAX_TOOL_ITERATIONS as u32 {
+            return Err(format!(
+                "assistant did not produce a final answer within {MAX_TOOL_ITERATIONS} tool-call rounds"
+            ));
+        }
+        round += 1;
+
+        let (tool_calls, decisions): (Vec<LlmToolCall>, Vec<ToolCallDecision>) =
+            if let Some((calls, decisions)) = resume.take() {
+                // Resuming: this round's calls and the caller's decisions on
+                // them are already known — skip calling the model, skip
+                // re-pushing the assistant turn (it's already the tail of
+                // `history`, since `PendingApproval.history` included it).
+                (calls, decisions)
+            } else {
+                let request = ChatRequest {
+                    messages: history.clone(),
+                    tools: tools.clone(),
+                    model: ctx.model.to_string(),
+                };
+                llm_debug_log::log_request(ctx.settings.debug_logging, ctx.provider_id, round, &request);
+                let on_delta = |delta: &str| {
+                    let _ = ctx.app.emit(
+                        CHAT_STREAM_DELTA_EVENT,
+                        ChatStreamDeltaPayload { delta: delta.to_string() },
+                    );
+                };
+                let raw_result = ctx.provider.chat_stream(request, &on_delta);
+                llm_debug_log::log_response(ctx.settings.debug_logging, ctx.provider_id, round, &raw_result);
+                let result = raw_result.map_err(|e| e.to_string())?;
+
+                if result.tool_calls.is_empty() {
+                    return Ok(ChatStreamOutcome::Done(result));
+                }
+
+                // Round-trip the assistant's tool-call turn back into history
+                // so the next request shows the provider its own prior
+                // request. `None` content for a tool-only turn matches the
+                // wire reality (`LlmMessage::content`'s own doc comment).
+                history.push(LlmMessage {
+                    role: LlmRole::Assistant,
+                    content: if result.text.is_empty() { None } else { Some(result.text.clone()) },
+                    tool_call_id: None,
+                    tool_calls: sanitize_tool_call_arguments(&result.tool_calls),
+                });
+
+                let pending: Vec<PendingToolCall> = result
+                    .tool_calls
+                    .iter()
+                    .map(|call| PendingToolCall {
+                        id: call.id.clone(),
+                        name: call.name.clone(),
+                        arguments: call.arguments.clone(),
+                        requires_confirmation: ToolName::from_wire_name(&call.name)
+                            .is_some_and(ToolName::requires_confirmation),
+                    })
+                    .collect();
+                if pending.iter().any(|c| c.requires_confirmation) {
+                    return Ok(ChatStreamOutcome::PendingApproval(PendingApproval {
+                        history,
+                        round,
+                        calls: pending,
+                    }));
+                }
+
+                (result.tool_calls, Vec::new())
+            };
+
+        for call in &tool_calls {
+            let _ = ctx.app.emit(
+                TOOL_CALL_EVENT,
+                ToolCallEventPayload {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                },
+            );
+
+            // A bad tool call (unknown name, malformed arguments, a
+            // NotAllowed hit against the allowlist, a missing file, ...) is
+            // always recoverable-by-the-model, never a hard failure of the
+            // whole turn — same for a user-denied call, which is just
+            // another kind of "this didn't happen, react accordingly."
+            let denied = decisions.iter().any(|d| d.id == call.id && !d.approved);
+            let outcome: Result<ToolResult, String> = if denied {
+                Err("denied by user".to_string())
+            } else {
+                ai_tools::parse_tool_call(call)
+                    .and_then(|parsed| ai_tools::execute_tool(&scope, parsed, ctx.deps))
+                    .map_err(|e| e.to_string())
+            };
+
+            let _ = ctx.app.emit(
+                TOOL_RESULT_EVENT,
+                ToolResultEventPayload {
+                    id: call.id.clone(),
+                    result: outcome.as_ref().ok().cloned(),
+                    error: outcome.as_ref().err().cloned(),
+                },
+            );
+
+            // A successful RequestFullRepoAccess must take effect for the
+            // rest of THIS turn, not just the next `llm_chat_stream` call —
+            // see this function's doc comment.
+            if let Ok(ToolResult::AccessModeChanged { .. }) = &outcome {
+                if let Ok(new_scope) = ai_tools::current_scope() {
+                    tools = ai_tools::llm_tool_definitions(&new_scope);
+                    scope = new_scope;
+                }
+            }
+
+            let content = match &outcome {
+                Ok(tool_result) => serde_json::to_string(tool_result)
+                    .unwrap_or_else(|_| "Error: failed to serialize tool result".to_string()),
+                Err(e) => format!("Error: {e}"),
+            };
+            history.push(LlmMessage {
+                role: LlmRole::Tool,
+                content: Some(content),
+                tool_call_id: Some(call.id.clone()),
+                tool_calls: vec![],
+            });
+        }
+    }
+}
+
+/// A conversation turn, streamed — a real multi-turn tool-calling loop, not
+/// a single call. The frontend owns building the initial message list
 /// (including any system prompt); this command resolves the provider/model
 /// exactly like `llm_test_connection`, then advertises the current
-/// project's allowed tools and loops: call the model, and if it requests
-/// tool calls, execute each via `services::ai_tools::execute_tool` (the
-/// same boundary `ai_execute_tool` uses — so `AiAccessMode`/a customized
-/// allowlist gates this exactly like it gates the standalone tool
-/// endpoint), feed the results back, and call the model again — until a
-/// round produces no more tool calls, which is the final answer returned
-/// here. Text still streams live as `CHAT_STREAM_DELTA_EVENT` deltas
-/// throughout every round; `TOOL_CALL_EVENT` fires before each tool
-/// execution so the UI can show transient status. The authoritative full
-/// text (and real token usage, if the provider reported one) is returned
-/// once the loop ends — a safety net against a dropped delta event, and the
-/// only place usage arrives since it's a one-shot value, not a stream.
+/// project's allowed tools and runs `run_tool_loop`: call the model, and if
+/// it requests tool calls, execute each via `services::ai_tools::
+/// execute_tool` (the same boundary `ai_execute_tool` uses — so
+/// `AiAccessMode`/a customized allowlist gates this exactly like it gates
+/// the standalone tool endpoint), feed the results back, and call the model
+/// again — until a round produces no more tool calls (the final answer), or
+/// a round requests a call that needs user confirmation, in which case this
+/// resolves with `ChatStreamOutcome::PendingApproval` instead and the
+/// frontend must call `llm_chat_stream_resume` to continue. Text still
+/// streams live as `CHAT_STREAM_DELTA_EVENT` deltas throughout every round;
+/// `TOOL_CALL_EVENT` fires before each tool execution so the UI can show
+/// transient status. The authoritative full text (and real token usage, if
+/// the provider reported one) is returned once the loop ends — a safety net
+/// against a dropped delta event, and the only place usage arrives since
+/// it's a one-shot value, not a stream.
 #[tauri::command]
 pub async fn llm_chat_stream(
     app: AppHandle,
@@ -259,7 +431,7 @@ pub async fn llm_chat_stream(
     index_store: State<'_, Arc<IndexStoreSlot>>,
     embedding_provider: State<'_, Arc<EmbeddingProviderSlot>>,
     sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
-) -> Result<ChatStreamResult, String> {
+) -> Result<ChatStreamOutcome, String> {
     let llm_provider = llm_provider.inner().clone();
     let deps = EmbeddingDeps {
         repo_index: repo_index.inner().clone(),
@@ -269,7 +441,7 @@ pub async fn llm_chat_stream(
         embedding_provider: embedding_provider.inner().clone(),
         sync_guard: sync_guard.inner().clone(),
     };
-    tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamResult, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
         let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
         let resolved =
             llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
@@ -284,86 +456,96 @@ pub async fn llm_chat_stream(
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
         let tools = ai_tools::llm_tool_definitions(&scope);
 
-        let on_delta = |delta: &str| {
-            let _ = app.emit(CHAT_STREAM_DELTA_EVENT, ChatStreamDeltaPayload { delta: delta.to_string() });
+        let ctx = LoopCtx {
+            app: &app,
+            provider: provider.as_ref(),
+            provider_id: &provider_id,
+            model: &model,
+            settings: &settings,
+            deps: &deps,
         };
+        run_tool_loop(&ctx, scope, tools, messages, 0, None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 
-        let mut history = messages;
-        let mut round: u32 = 0;
-        for _ in 0..MAX_TOOL_ITERATIONS {
-            round += 1;
-            let request = ChatRequest { messages: history.clone(), tools: tools.clone(), model: model.clone() };
-            llm_debug_log::log_request(settings.debug_logging, &provider_id, round, &request);
-            let raw_result = provider.chat_stream(request, &on_delta);
-            llm_debug_log::log_response(settings.debug_logging, &provider_id, round, &raw_result);
-            let result = raw_result.map_err(|e| e.to_string())?;
+/// Continues a conversation paused by a `ChatStreamOutcome::PendingApproval`
+/// from `llm_chat_stream` (or a previous `llm_chat_stream_resume` — a
+/// resumed turn can itself pause again on a later round). `history`/`round`
+/// must be exactly what that `PendingApproval` carried, sent back
+/// unmodified — the backend keeps no server-side session state between
+/// calls, so this is the entire resumable checkpoint. `decisions` must
+/// cover exactly the ids of that round's calls whose
+/// `requires_confirmation` was `true`; anything else is rejected up front
+/// rather than silently executing calls the user never actually saw.
+#[tauri::command]
+pub async fn llm_chat_stream_resume(
+    app: AppHandle,
+    provider_id: String,
+    history: Vec<LlmMessage>,
+    round: u32,
+    decisions: Vec<ToolCallDecision>,
+    llm_provider: State<'_, Arc<LlmProviderSlot>>,
+    repo_index: State<'_, Arc<RepositoryIndex>>,
+    chunk_index: State<'_, Arc<ChunkIndex>>,
+    embedding_index: State<'_, Arc<EmbeddingIndexSlot>>,
+    index_store: State<'_, Arc<IndexStoreSlot>>,
+    embedding_provider: State<'_, Arc<EmbeddingProviderSlot>>,
+    sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
+) -> Result<ChatStreamOutcome, String> {
+    let llm_provider = llm_provider.inner().clone();
+    let deps = EmbeddingDeps {
+        repo_index: repo_index.inner().clone(),
+        chunk_index: chunk_index.inner().clone(),
+        embedding_index: embedding_index.inner().clone(),
+        index_store: index_store.inner().clone(),
+        embedding_provider: embedding_provider.inner().clone(),
+        sync_guard: sync_guard.inner().clone(),
+    };
+    tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
+        let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
+        let resolved =
+            llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
+        let api_key = llm_credentials_store::get_api_key(&provider_id);
+        let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
+        let model = llm_config::effective_model(&resolved, provider.as_ref())
+            .map_err(|e| e.to_string())?;
 
-            if result.tool_calls.is_empty() {
-                return Ok(result);
-            }
+        let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
+        let tools = ai_tools::llm_tool_definitions(&scope);
 
-            // Round-trip the assistant's tool-call turn back into history
-            // so the next request shows the provider its own prior
-            // request. `None` content for a tool-only turn matches the
-            // wire reality (`LlmMessage::content`'s own doc comment).
-            // `sanitize_tool_call_arguments` — not the raw `result.
-            // tool_calls` — is what gets echoed: a model occasionally
-            // streams malformed `arguments` JSON, and at least one
-            // real-world gateway 500s server-side when it's later echoed
-            // back verbatim (the loop below still uses the *unsanitized*
-            // `result.tool_calls` for `parse_tool_call`, so the model still
-            // gets an honest error about what it actually sent).
-            history.push(LlmMessage {
-                role: LlmRole::Assistant,
-                content: if result.text.is_empty() { None } else { Some(result.text.clone()) },
-                tool_call_id: None,
-                tool_calls: sanitize_tool_call_arguments(&result.tool_calls),
-            });
-
-            for call in &result.tool_calls {
-                let _ = app.emit(
-                    TOOL_CALL_EVENT,
-                    ToolCallEventPayload {
-                        id: call.id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                    },
-                );
-                // A bad tool call (unknown name, malformed arguments, a
-                // NotAllowed hit against the allowlist, a missing file,
-                // ...) is always recoverable-by-the-model, never a hard
-                // failure of the whole turn — the model discovering an
-                // access-mode boundary mid-conversation is legitimate,
-                // expected behavior, not a bug.
-                let outcome: Result<ToolResult, String> = ai_tools::parse_tool_call(call)
-                    .and_then(|parsed| ai_tools::execute_tool(&scope, parsed, &deps))
-                    .map_err(|e| e.to_string());
-
-                let _ = app.emit(
-                    TOOL_RESULT_EVENT,
-                    ToolResultEventPayload {
-                        id: call.id.clone(),
-                        result: outcome.as_ref().ok().cloned(),
-                        error: outcome.as_ref().err().cloned(),
-                    },
-                );
-
-                let content = match &outcome {
-                    Ok(tool_result) => serde_json::to_string(tool_result)
-                        .unwrap_or_else(|_| "Error: failed to serialize tool result".to_string()),
-                    Err(e) => format!("Error: {e}"),
-                };
-                history.push(LlmMessage {
-                    role: LlmRole::Tool,
-                    content: Some(content),
-                    tool_call_id: Some(call.id.clone()),
-                    tool_calls: vec![],
-                });
-            }
+        let last = history
+            .last()
+            .ok_or_else(|| "resume: history must not be empty".to_string())?;
+        if last.role != LlmRole::Assistant || last.tool_calls.is_empty() {
+            return Err(
+                "resume: history must end with the assistant's tool-call turn".to_string()
+            );
         }
-        Err(format!(
-            "assistant did not produce a final answer within {MAX_TOOL_ITERATIONS} tool-call rounds"
-        ))
+        let calls = last.tool_calls.clone();
+
+        let expected: HashSet<&str> = calls
+            .iter()
+            .filter(|c| ToolName::from_wire_name(&c.name).is_some_and(ToolName::requires_confirmation))
+            .map(|c| c.id.as_str())
+            .collect();
+        let provided: HashSet<&str> = decisions.iter().map(|d| d.id.as_str()).collect();
+        if expected != provided {
+            return Err(
+                "resume: decisions do not match this round's pending calls".to_string()
+            );
+        }
+
+        let ctx = LoopCtx {
+            app: &app,
+            provider: provider.as_ref(),
+            provider_id: &provider_id,
+            model: &model,
+            settings: &settings,
+            deps: &deps,
+        };
+        run_tool_loop(&ctx, scope, tools, history, round, Some((calls, decisions)))
     })
     .await
     .map_err(|e| e.to_string())?

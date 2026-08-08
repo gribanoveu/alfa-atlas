@@ -42,6 +42,24 @@ pub struct SemanticSearchArgs {
     pub top_k: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteFileArgs {
+    /// File path relative to the docs root — always the docs subtree,
+    /// regardless of `AiAccessMode`, and always restricted to recognized
+    /// document file types (see `services::ai_tools::write_file`).
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestFullRepoAccessArgs {
+    /// Required, not optional — forces the model to self-justify the
+    /// request; shown verbatim in the user-facing approval prompt.
+    pub reason: String,
+}
+
 /// Which cascade tier produced a `ToolMatch` — scores are only comparable
 /// within the same source, never across tiers (see `ToolMatch::score`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +102,8 @@ pub enum ToolCall {
     ReadFile(ReadFileArgs),
     ListFiles(ListFilesArgs),
     SemanticSearch(SemanticSearchArgs),
+    WriteFile(WriteFileArgs),
+    RequestFullRepoAccess(RequestFullRepoAccessArgs),
 }
 
 impl ToolCall {
@@ -92,6 +112,8 @@ impl ToolCall {
             ToolCall::ReadFile(_) => ToolName::ReadFile,
             ToolCall::ListFiles(_) => ToolName::ListFiles,
             ToolCall::SemanticSearch(_) => ToolName::SemanticSearch,
+            ToolCall::WriteFile(_) => ToolName::WriteFile,
+            ToolCall::RequestFullRepoAccess(_) => ToolName::RequestFullRepoAccess,
         }
     }
 }
@@ -106,6 +128,8 @@ pub enum ToolResult {
     File(String),
     FileList(Vec<ToolFileEntry>),
     SemanticSearchResults(Vec<ToolMatch>),
+    FileWritten { path: String },
+    AccessModeChanged { mode: AiAccessMode },
 }
 
 #[derive(Debug, Error)]
@@ -184,6 +208,13 @@ pub struct ToolScope {
     /// root to resolve a `FileId`'s on-disk text against, instead of
     /// (incorrectly) reusing `root`.
     pub repo_root: PathBuf,
+    /// Always the real docs subtree, independent of `mode` — unlike `root`,
+    /// which is `repo_root` in `FullRepo` mode. `WriteFile` always resolves
+    /// against this (never `root`): `FullRepo` grants broader *read*
+    /// context so the assistant can write better docs, not license to
+    /// mutate arbitrary repo files, so writes stay confined to the docs
+    /// subtree regardless of which read boundary is currently active.
+    pub docs_root: PathBuf,
     /// `None` when a search result needs no filtering (`FullRepo` mode, or
     /// a `DocsOnly` project whose `docs_root` *is* the repo root) — `Some`
     /// carries `docs_root`'s path relative to `repo_root` (`/`-separated,
@@ -228,6 +259,7 @@ impl ToolScope {
             mode,
             root: root.to_path_buf(),
             repo_root: repo_root.to_path_buf(),
+            docs_root: docs_root.to_path_buf(),
             docs_filter_prefix,
             allowed_tools,
         }

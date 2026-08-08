@@ -95,6 +95,17 @@ export function readProjectFile(
   return invoke<string>("read_project_file", { docsRoot, relativePath });
 }
 
+/** Same boundary as `readProjectFile`, but a missing file resolves to
+ * `null` instead of a rejected promise — used by the assistant's `writeFile`
+ * approval diff to distinguish "doesn't exist yet, show an empty original"
+ * from a real failure. */
+export function readProjectFileOrNone(
+  docsRoot: string,
+  relativePath: string,
+): Promise<string | null> {
+  return invoke<string | null>("read_project_file_or_none", { docsRoot, relativePath });
+}
+
 /**
  * Validate an asset path (e.g. image) against docsRoot on the backend and
  * return a canonical absolute filesystem path. The frontend turns it into

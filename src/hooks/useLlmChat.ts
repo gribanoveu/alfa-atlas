@@ -17,11 +17,33 @@ import {
   listenLlmToolCall,
   listenLlmToolResult,
   streamLlmChat,
+  streamLlmChatResume,
   type LlmMessage,
+  type PendingToolCall,
+  type ToolCallDecision,
 } from "../lib/llm";
 import { estimateTokenCount } from "../lib/tokens";
 
 export type { ChatMessage, MessageBlock, TextBlock, ToolCallBlock, ToolCallStatus } from "../lib/chatBlocks";
+
+/** One paused round awaiting a user decision, trimmed to just the calls
+ * that still need one — a call whose tool the user already marked "don't
+ * ask again this conversation" never reaches this (see `useLlmChat`'s
+ * `trustedToolsRef`), so the review UI only ever shows what genuinely needs
+ * a fresh look. */
+export type PendingReview = {
+  round: number;
+  calls: PendingToolCall[];
+};
+
+/** What the review UI hands back once the user has decided every call in a
+ * `PendingReview` — `trustToolNames` lists which of those calls' tool
+ * names (e.g. `"writeFile"`) should stop prompting for the rest of this
+ * conversation. */
+export type ApprovalSubmission = {
+  decisions: ToolCallDecision[];
+  trustToolNames: string[];
+};
 
 /** Owns one conversation's state for the assistant chat panel. The
  * tool-calling loop itself (ReadFile/ListFiles/SemanticSearch) runs
@@ -52,6 +74,7 @@ export function useLlmChat(
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingReview, setPendingReview] = useState<PendingReview | null>(null);
 
   // The mode the *previous* request actually went out with — `null` until
   // the first send, so the very first turn never fires a spurious "just
@@ -59,6 +82,42 @@ export function useLlmChat(
   // correctly for a fresh conversation; the notice exists only for a
   // mid-conversation switch, see `buildAccessModeChangeNotice`).
   const lastSentModeRef = useRef<AiAccessMode | null>(null);
+
+  // Tool names (e.g. `"writeFile"`) the user has ticked "don't ask again
+  // this conversation" for — checked before ever showing the review modal
+  // for a later round. Scoped per tool, not blanket: trusting `writeFile`
+  // doesn't silently pre-approve a later `requestFullRepoAccess`. Lives for
+  // the panel's mounted lifetime, same as `messages` itself — there's no
+  // separate "clear conversation" action yet to reset it on, so it can't
+  // outlive what the user perceives as a fresh chat any more than the
+  // transcript already does.
+  const trustedToolsRef = useRef<Set<string>>(new Set());
+
+  // Resolves the promise `awaitApproval` handed to `sendMessage`'s resume
+  // loop, once the review UI calls `submitApprovalDecisions`. `null`
+  // whenever `pendingReview` is `null`.
+  const approvalResolverRef = useRef<((result: ApprovalSubmission) => void) | null>(null);
+
+  // Which call ids the resume about to run auto-approved via
+  // `trustedToolsRef` (as opposed to the user just having clicked Approve)
+  // — read by the `listenLlmToolCall` effect below so the resulting block
+  // can carry `autoApproved: true` for display. Reassigned right before
+  // each `streamLlmChatResume`, since `TOOL_CALL_EVENT`s for that call only
+  // start arriving once it's in flight.
+  const autoApprovedIdsRef = useRef<Set<string>>(new Set());
+
+  const awaitApproval = useCallback((round: number, calls: PendingToolCall[]): Promise<ApprovalSubmission> => {
+    return new Promise((resolve) => {
+      approvalResolverRef.current = resolve;
+      setPendingReview({ round, calls });
+    });
+  }, []);
+
+  const submitApprovalDecisions = useCallback((submission: ApprovalSubmission) => {
+    approvalResolverRef.current?.(submission);
+    approvalResolverRef.current = null;
+    setPendingReview(null);
+  }, []);
 
   // Live token deltas — subscribed once for the hook's lifetime, matching
   // `useEmbeddingSetup`'s `listenSyncProgress` effect shape. Appends only
@@ -87,8 +146,11 @@ export function useLlmChat(
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenLlmToolCall(({ id, name, arguments: argumentsJson }) => {
+      const autoApproved = autoApprovedIdsRef.current.has(id);
       setMessages((prev) =>
-        updateLastAssistantBlocks(prev, (blocks) => appendToolCallBlock(blocks, { id, name, argumentsJson })),
+        updateLastAssistantBlocks(prev, (blocks) =>
+          appendToolCallBlock(blocks, { id, name, argumentsJson, autoApproved }),
+        ),
       );
     }).then((fn) => {
       if (cancelled) fn();
@@ -153,10 +215,46 @@ export function useLlmChat(
       ];
 
       try {
+        // Most turns resolve in one round trip. A round that hits a call
+        // needing confirmation (`writeFile`/`requestFullRepoAccess`) comes
+        // back as `pendingApproval` instead — nothing in it executed yet —
+        // and this loop collects a decision for each call (skipping the
+        // modal entirely for tool names already trusted this conversation)
+        // before resuming, potentially several times if later rounds pause
+        // again.
+        let outcome = await streamLlmChat(providerId, wireMessages);
+        while (outcome.status === "pendingApproval") {
+          const { history, round, calls } = outcome.value;
+          const risky = calls.filter((c) => c.requiresConfirmation);
+          const autoApprovedIds = new Set<string>();
+          const needsPrompt = risky.filter((c) => {
+            if (trustedToolsRef.current.has(c.name)) {
+              autoApprovedIds.add(c.id);
+              return false;
+            }
+            return true;
+          });
+
+          let decisions: ToolCallDecision[];
+          if (needsPrompt.length === 0) {
+            decisions = risky.map((c) => ({ id: c.id, approved: true }));
+          } else {
+            const submission = await awaitApproval(round, needsPrompt);
+            submission.trustToolNames.forEach((name) => trustedToolsRef.current.add(name));
+            decisions = [
+              ...submission.decisions,
+              ...risky.filter((c) => autoApprovedIds.has(c.id)).map((c) => ({ id: c.id, approved: true })),
+            ];
+          }
+
+          autoApprovedIdsRef.current = autoApprovedIds;
+          outcome = await streamLlmChatResume(providerId, history, round, decisions);
+        }
+
         // Authoritative full text of the *final* round corrects only the
         // trailing text block — see `correctTrailingText`'s doc comment for
         // why that's always the right (and only) block it can apply to.
-        const { text, usage } = await streamLlmChat(providerId, wireMessages);
+        const { text, usage } = outcome.value;
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId && m.role === "assistant"
@@ -178,7 +276,7 @@ export function useLlmChat(
         setSending(false);
       }
     },
-    [providerId, sending, messages, accessMode, specsRepoInfo, toolDefinitions],
+    [providerId, sending, messages, accessMode, specsRepoInfo, toolDefinitions, awaitApproval],
   );
 
   // Context-window usage so far. Every request resends the *entire* message
@@ -221,5 +319,7 @@ export function useLlmChat(
     sendMessage,
     contextTokens,
     systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions),
+    pendingReview,
+    submitApprovalDecisions,
   };
 }

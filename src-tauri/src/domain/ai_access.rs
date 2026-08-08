@@ -16,15 +16,45 @@ pub enum AiAccessMode {
     FullRepo,
 }
 
-/// Read-only operations a future AI harness may invoke. New variants must
-/// also be added to `default_allowed_tools` — nothing is reachable just by
-/// existing in this enum, see that function's doc comment.
+/// Operations a future AI harness may invoke — no longer read-only now that
+/// `WriteFile`/`RequestFullRepoAccess` exist. New variants must also be
+/// added to `default_allowed_tools` — nothing is reachable just by existing
+/// in this enum, see that function's doc comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToolName {
     ListFiles,
     ReadFile,
     SemanticSearch,
+    WriteFile,
+    RequestFullRepoAccess,
+}
+
+impl ToolName {
+    /// Whether any call to this tool must pause the round for user approval
+    /// before executing — see `commands::llm`'s tool-calling loop. Static
+    /// per tool identity, not per-call: every `WriteFile` call needs
+    /// confirmation, regardless of which file it targets.
+    pub fn requires_confirmation(self) -> bool {
+        matches!(self, ToolName::WriteFile | ToolName::RequestFullRepoAccess)
+    }
+
+    /// Maps the wire `LlmToolCall::name` string to a `ToolName`, independent
+    /// of whether `arguments` parses — the tool-calling loop needs to
+    /// classify a call as risky/safe before it's known whether the model's
+    /// JSON is even well-formed. Shared with
+    /// `services::ai_tools::parse_tool_call`, which is the other place this
+    /// exact mapping must hold.
+    pub fn from_wire_name(name: &str) -> Option<ToolName> {
+        match name {
+            "listFiles" => Some(ToolName::ListFiles),
+            "readFile" => Some(ToolName::ReadFile),
+            "semanticSearch" => Some(ToolName::SemanticSearch),
+            "writeFile" => Some(ToolName::WriteFile),
+            "requestFullRepoAccess" => Some(ToolName::RequestFullRepoAccess),
+            _ => None,
+        }
+    }
 }
 
 /// Tools available when a project hasn't customized its allowlist
@@ -35,8 +65,56 @@ pub enum ToolName {
 /// narrowed their allowlist has to opt a new tool in explicitly, the same
 /// way `AiAccessMode::default()` chooses the safer `DocsOnly` rather than
 /// silently granting repo-wide access.
+///
+/// `WriteFile`/`RequestFullRepoAccess` are included here too, despite being
+/// the two tools with real side effects — the per-call confirmation gate
+/// (`requires_confirmation`) is the actual safety control for them, not the
+/// allowlist. There's no frontend UI to customize this allowlist today, so
+/// requiring opt-in here would ship the confirmation feature with no way to
+/// ever turn it on.
 pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
-    [ToolName::ListFiles, ToolName::ReadFile, ToolName::SemanticSearch]
-        .into_iter()
-        .collect()
+    [
+        ToolName::ListFiles,
+        ToolName::ReadFile,
+        ToolName::SemanticSearch,
+        ToolName::WriteFile,
+        ToolName::RequestFullRepoAccess,
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn requires_confirmation_is_true_only_for_write_file_and_request_full_repo_access() {
+        assert!(!ToolName::ListFiles.requires_confirmation());
+        assert!(!ToolName::ReadFile.requires_confirmation());
+        assert!(!ToolName::SemanticSearch.requires_confirmation());
+        assert!(ToolName::WriteFile.requires_confirmation());
+        assert!(ToolName::RequestFullRepoAccess.requires_confirmation());
+    }
+
+    #[test]
+    fn from_wire_name_round_trips_every_known_tool() {
+        assert_eq!(ToolName::from_wire_name("listFiles"), Some(ToolName::ListFiles));
+        assert_eq!(ToolName::from_wire_name("readFile"), Some(ToolName::ReadFile));
+        assert_eq!(ToolName::from_wire_name("semanticSearch"), Some(ToolName::SemanticSearch));
+        assert_eq!(ToolName::from_wire_name("writeFile"), Some(ToolName::WriteFile));
+        assert_eq!(
+            ToolName::from_wire_name("requestFullRepoAccess"),
+            Some(ToolName::RequestFullRepoAccess)
+        );
+        assert_eq!(ToolName::from_wire_name("somethingElse"), None);
+    }
+
+    #[test]
+    fn default_allowed_tools_includes_all_five() {
+        let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
+        assert_eq!(allowed.len(), 5);
+        assert!(allowed.contains(&ToolName::WriteFile));
+        assert!(allowed.contains(&ToolName::RequestFullRepoAccess));
+    }
 }

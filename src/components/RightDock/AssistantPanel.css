@@ -1429,6 +1429,142 @@
 
 
 /* =========================================================
+   Tool approval
+   ========================================================= */
+
+.tool-approval-modal {
+  width: 640px;
+  max-width: 92vw;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.tool-approval-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0;
+  overflow-y: auto;
+}
+
+.tool-approval-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+}
+
+.tool-approval-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-approval-card-title {
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.tool-approval-card-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.tool-approval-decision-btn {
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  background: transparent;
+}
+
+.tool-approval-decision-btn:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.tool-approval-decision-btn.approve.active {
+  border-color: var(--green);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.tool-approval-decision-btn.deny.active {
+  border-color: var(--red-tag);
+  color: var(--red-tag);
+  background: color-mix(in srgb, var(--red-tag) 12%, transparent);
+}
+
+.tool-approval-card-path {
+  margin-top: 6px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.tool-approval-card-reason {
+  margin-top: 6px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  white-space: pre-wrap;
+}
+
+.tool-approval-card-raw {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-0);
+  font-size: var(--font-ui-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-approval-diff {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tool-approval-diff-placeholder {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.tool-approval-diff-error {
+  color: var(--red-tag);
+}
+
+.assistant-tool-call-auto-approved {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.tool-approval-trust {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+
+/* =========================================================
    Responsive
    ========================================================= */
 

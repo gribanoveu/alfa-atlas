@@ -33,12 +33,16 @@ export type ToolMatch = {
 export type ToolCall =
   | { tool: "readFile"; args: { path: string } }
   | { tool: "listFiles"; args: { path: string | null } }
-  | { tool: "semanticSearch"; args: { query: string; topK: number | null } };
+  | { tool: "semanticSearch"; args: { query: string; topK: number | null } }
+  | { tool: "writeFile"; args: { path: string; content: string } }
+  | { tool: "requestFullRepoAccess"; args: { reason: string } };
 
 export type ToolResult =
   | { tool: "file"; result: string }
   | { tool: "fileList"; result: ToolFileEntry[] }
-  | { tool: "semanticSearchResults"; result: ToolMatch[] };
+  | { tool: "semanticSearchResults"; result: ToolMatch[] }
+  | { tool: "fileWritten"; result: { path: string } }
+  | { tool: "accessModeChanged"; result: { mode: AiAccessMode } };
 
 /**
  * Runs one AI-harness tool call against whichever project is currently

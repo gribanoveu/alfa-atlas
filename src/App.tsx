@@ -1349,6 +1349,7 @@ function App() {
             assistant={{
               onOpenSettings: () => setLlmSettingsSignal((n) => n + 1),
               specsRepoInfo: specsRepo.info,
+              docsRoot: project.docsRoot ?? "",
             }}
           />
         </div>

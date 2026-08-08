@@ -296,6 +296,58 @@ pub struct ChatStreamResult {
     pub tool_calls: Vec<LlmToolCall>,
 }
 
+/// What one call to `commands::llm::llm_chat_stream`/`llm_chat_stream_resume`
+/// resolves with: either a final answer, or a round that hit at least one
+/// tool call whose `domain::ai_access::ToolName::requires_confirmation` is
+/// true — nothing in that round has executed yet, and the caller must
+/// resolve `PendingApproval` (via `llm_chat_stream_resume`) before the
+/// conversation can continue.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", content = "value", rename_all = "camelCase")]
+pub enum ChatStreamOutcome {
+    Done(ChatStreamResult),
+    PendingApproval(PendingApproval),
+}
+
+/// A whole round paused, unexecuted. `history`/`round` must be sent back
+/// verbatim to `llm_chat_stream_resume` (along with the caller's
+/// decisions) — the backend keeps no server-side session state, so this is
+/// the entire resumable checkpoint.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingApproval {
+    /// History up to and including this round's `Assistant` tool-calls
+    /// message. Nothing from this round has executed.
+    pub history: Vec<LlmMessage>,
+    /// Rounds consumed so far (this round included) — threaded through so
+    /// resuming can't bypass `MAX_TOOL_ITERATIONS` by pausing repeatedly.
+    pub round: u32,
+    /// Every call this round requested, in original order — including
+    /// non-risky calls bundled into the same round (their
+    /// `requires_confirmation` is `false`; they need no decision and
+    /// execute automatically on resume).
+    pub calls: Vec<PendingToolCall>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+    pub requires_confirmation: bool,
+}
+
+/// One decision on one pending call, supplied by the caller of
+/// `llm_chat_stream_resume` — required for every `PendingToolCall` whose
+/// `requires_confirmation` was `true` (validated server-side).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallDecision {
+    pub id: String,
+    pub approved: bool,
+}
+
 #[derive(Debug, Error)]
 pub enum LlmError {
     #[error("provider error: {0}")]

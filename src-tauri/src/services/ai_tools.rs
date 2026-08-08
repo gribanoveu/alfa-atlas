@@ -16,8 +16,8 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    ListFilesArgs, MatchSource, ReadFileArgs, SemanticSearchArgs, ToolCall, ToolError,
-    ToolFileEntry, ToolMatch, ToolResult, ToolScope,
+    ListFilesArgs, MatchSource, ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs,
+    ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::llm::{LlmToolCall, LlmToolDefinition};
@@ -87,7 +87,27 @@ pub fn execute_tool(
         ToolCall::SemanticSearch(args) => {
             semantic_search(scope, args, deps).map(ToolResult::SemanticSearchResults)
         }
+        ToolCall::WriteFile(args) => {
+            write_file(scope, args).map(|path| ToolResult::FileWritten { path })
+        }
+        ToolCall::RequestFullRepoAccess(_args) => set_access_mode(AiAccessMode::FullRepo)
+            .map(|()| ToolResult::AccessModeChanged { mode: AiAccessMode::FullRepo })
+            .map_err(ToolError::from),
     }
+}
+
+/// Persists a new `AiAccessMode` for the currently open project — shared by
+/// the manual `commands::ai_tools::ai_set_access_mode` toggle and the
+/// `RequestFullRepoAccess` tool, so a mode change behaves identically
+/// regardless of which path triggered it. Preserves any existing
+/// `ai_allowed_tools` override rather than resetting it.
+pub fn set_access_mode(mode: AiAccessMode) -> Result<(), ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let mut config = project_store::load(&opened.root)?
+        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    config.ai_access_mode = mode;
+    project_store::save(&opened.root, &config)
 }
 
 /// Resolves a `ToolScope` from a project's persisted config — the one place
@@ -142,6 +162,12 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "semanticSearch" => lenient_json_object::<SemanticSearchArgs>(&call.arguments)
             .map(ToolCall::SemanticSearch)
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        "writeFile" => lenient_json_object::<WriteFileArgs>(&call.arguments)
+            .map(ToolCall::WriteFile)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        "requestFullRepoAccess" => lenient_json_object::<RequestFullRepoAccessArgs>(&call.arguments)
+            .map(ToolCall::RequestFullRepoAccess)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
 }
@@ -186,9 +212,8 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ListFiles) {
         defs.push(LlmToolDefinition {
             name: "listFiles".to_string(),
-            description:
-                "List files and directories under a path in the project. Omit `path` (or pass null) to list the root. Use primarily to discover repository structure, locate a file when its exact path is unknown, inspect a directory, or understand where documentation or implementation is organized."
-                    .to_string(),
+            description: "List files and directories under a path in the current workspace. The workspace root is already configured by the application; `path` is relative to that workspace root. Omit `path` or pass null to list the workspace root. Use this tool to discover files, locate files, or inspect directories."
+    .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -241,6 +266,46 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
+    if scope.allows(ToolName::WriteFile) {
+        defs.push(LlmToolDefinition {
+            name: "writeFile".to_string(),
+            description:
+                "Create or overwrite one documentation file's full content, given its path relative to the project root. Always requires explicit user approval before the write actually happens — the user may deny it, in which case the file is left unchanged. Do not retry automatically after a denial; ask the user how they'd like to proceed instead. Only recognized documentation file types can be written."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the project root. Must be a recognized documentation file type."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The full new content of the file, replacing any existing content."
+                    }
+                },
+                "required": ["path", "content"]
+            }),
+        });
+    }
+    if scope.allows(ToolName::RequestFullRepoAccess) {
+        defs.push(LlmToolDefinition {
+            name: "requestFullRepoAccess".to_string(),
+            description:
+                "Request escalating from docs-only to full-repo access when repository access beyond documentation is genuinely needed to answer the user's request. Requires a stated reason, and always requires explicit user approval — the user may deny it. Do not call this speculatively or repeatedly; only when docs-only access is clearly insufficient."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Why full-repo access is needed for the current request."
+                    }
+                },
+                "required": ["reason"]
+            }),
+        });
+    }
     defs
 }
 
@@ -269,6 +334,18 @@ fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<String, ToolError>
         return Err(ToolError::NotAFile(args.path));
     }
     fs::read_to_string(&canonical).map_err(ToolError::Io)
+}
+
+/// Always targets `scope.docs_root`, never `scope.root` — unlike
+/// `read_file`, this is deliberately mode-independent: `FullRepo` widens
+/// what the assistant can *read* for context, not what it may write.
+/// Reuses `docs_fs::write_project_file` as-is: create-or-overwrite, creates
+/// parent directories, and rejects anything outside the recognized
+/// document-format allowlist (`domain::supported_files::is_supported_file`)
+/// regardless of `AiAccessMode`.
+fn write_file(scope: &ToolScope, args: WriteFileArgs) -> Result<String, ToolError> {
+    docs_fs::write_project_file(&scope.docs_root.to_string_lossy(), &args.path, &args.content)?;
+    Ok(args.path)
 }
 
 /// Validates an optional subdirectory argument once, shared by both mode
@@ -684,6 +761,20 @@ mod tests {
         }
     }
 
+    fn write(scope: &ToolScope, path: &str, content: &str) -> Result<String, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::WriteFile(WriteFileArgs {
+                path: path.to_string(),
+                content: content.to_string(),
+            }),
+            &EmbeddingDeps::empty(),
+        )? {
+            ToolResult::FileWritten { path } => Ok(path),
+            other => panic!("expected ToolResult::FileWritten, got {other:?}"),
+        }
+    }
+
     #[test]
     fn read_file_inside_docs_root_succeeds_in_docs_only() {
         let (repo, docs) = fixture_repo();
@@ -735,6 +826,61 @@ mod tests {
         let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
         let content = read(&full_repo, "src/main.rs").unwrap();
         assert_eq!(content, "fn main() {}\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn write_file_creates_and_overwrites_under_docs_root() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        write(&scope, "new.adoc", "= New\n").unwrap();
+        assert_eq!(fs::read_to_string(docs.join("new.adoc")).unwrap(), "= New\n");
+
+        write(&scope, "new.adoc", "= Replaced\n").unwrap();
+        assert_eq!(fs::read_to_string(docs.join("new.adoc")).unwrap(), "= Replaced\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    /// The load-bearing containment guarantee for `WriteFile`: even in
+    /// `FullRepo` mode (where `ReadFile`/`ListFiles` resolve against
+    /// `repo_root`), a write must land under `docs_root` — `FullRepo` widens
+    /// read context, not write license.
+    #[test]
+    fn write_file_full_repo_mode_still_targets_docs_root_not_repo_root() {
+        let (repo, docs) = fixture_repo();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        write(&full_repo, "guide.adoc", "= Guide\n").unwrap();
+
+        assert_eq!(fs::read_to_string(docs.join("guide.adoc")).unwrap(), "= Guide\n");
+        assert!(!repo.join("guide.adoc").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn write_file_rejects_unsupported_extension() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = write(&scope, "notes.py", "print('nope')\n").unwrap_err();
+        assert!(matches!(err, ToolError::Io(_)));
+        assert!(!docs.join("notes.py").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn write_file_rejects_path_escape() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = write(&scope, "../outside.adoc", "= Leak\n").unwrap_err();
+        assert!(matches!(err, ToolError::PathEscape(_)));
+        assert!(!repo.join("outside.adoc").exists());
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -1007,6 +1153,39 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_write_file_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "writeFile".to_string(),
+            arguments: r#"{"path":"guide.adoc","content":"= Guide\n"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::WriteFile(WriteFileArgs {
+                path: "guide.adoc".to_string(),
+                content: "= Guide\n".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_request_full_repo_access_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "requestFullRepoAccess".to_string(),
+            arguments: r#"{"reason":"need to check the config schema"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::RequestFullRepoAccess(RequestFullRepoAccessArgs {
+                reason: "need to check the config schema".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn parse_tool_call_rejects_unknown_tool_name() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -1072,13 +1251,16 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_three_by_default() {
+    fn llm_tool_definitions_includes_all_five_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
         let defs = llm_tool_definitions(&scope);
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
-        assert_eq!(names, vec!["listFiles", "readFile", "semanticSearch"]);
+        assert_eq!(
+            names,
+            vec!["listFiles", "readFile", "semanticSearch", "writeFile", "requestFullRepoAccess"]
+        );
 
         fs::remove_dir_all(&repo).ok();
     }

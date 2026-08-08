@@ -34,6 +34,12 @@ export type ToolCallBlock = {
   status: ToolCallStatus;
   result?: ToolResult;
   errorMessage?: string;
+  /** Set when this call skipped the approval modal because the user had
+   * already ticked "don't ask again this conversation" for this tool —
+   * purely a display hint (the backend event stream is identical either
+   * way), so the transcript can still show it was auto-approved rather than
+   * looking like it silently ran with no review at all. */
+  autoApproved?: boolean;
 };
 
 export type MessageBlock = TextBlock | ToolCallBlock;
@@ -76,11 +82,18 @@ export function appendDeltaToBlocks(blocks: MessageBlock[], delta: string): Mess
  * trailing `toolCall` block and starts fresh per `appendDeltaToBlocks`). */
 export function appendToolCallBlock(
   blocks: MessageBlock[],
-  call: { id: string; name: string; argumentsJson: string },
+  call: { id: string; name: string; argumentsJson: string; autoApproved?: boolean },
 ): MessageBlock[] {
   return [
     ...blocks,
-    { type: "toolCall", id: call.id, name: call.name, argumentsJson: call.argumentsJson, status: "running" },
+    {
+      type: "toolCall",
+      id: call.id,
+      name: call.name,
+      argumentsJson: call.argumentsJson,
+      status: "running",
+      autoApproved: call.autoApproved,
+    },
   ];
 }
 
