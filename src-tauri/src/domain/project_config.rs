@@ -21,6 +21,14 @@ pub struct ProjectConfig {
     /// tool isn't silently added to an already-customized list.
     #[serde(default)]
     pub ai_allowed_tools: Option<Vec<ToolName>>,
+    /// Stable fallback identity for the global embeddings cache
+    /// (`~/.atlas/embeddings/{repository_id}`, see `commands::embeddings::
+    /// resolve_index_paths`), used only when the repo has no resolvable
+    /// canonical remote URL (no git repo, or a git repo with no remotes).
+    /// Generated once (a random UUID) and persisted here so the same
+    /// project keeps resolving to the same cache folder across sessions.
+    #[serde(default)]
+    pub local_repository_id: Option<String>,
 }
 
 impl ProjectConfig {
@@ -29,6 +37,7 @@ impl ProjectConfig {
             docs_root: docs_root_relative.into(),
             ai_access_mode: AiAccessMode::default(),
             ai_allowed_tools: None,
+            local_repository_id: None,
         }
     }
 }

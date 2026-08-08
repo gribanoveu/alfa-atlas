@@ -1298,8 +1298,11 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError
 }
 
 /// Pick the remote to push a newly-tracked branch to: `origin` if present,
-/// the sole remote if there's exactly one, otherwise ambiguous.
-fn default_remote_name(repo: &Repository) -> Result<String, GitError> {
+/// the sole remote if there's exactly one, otherwise ambiguous. Also reused
+/// by `infra::repository_identity::resolve` to pick which remote's URL
+/// identifies the repository — same "which remote is *the* remote"
+/// question, so the same preference order applies.
+pub(crate) fn default_remote_name(repo: &Repository) -> Result<String, GitError> {
     let remotes = repo.remotes().map_err(GitError::Operation)?;
     let names: Vec<&str> = remotes.iter().filter_map(|r| r.ok().flatten()).collect();
     if names.contains(&"origin") {

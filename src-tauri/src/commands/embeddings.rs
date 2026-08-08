@@ -14,7 +14,10 @@ use crate::domain::project_config::OpenedProject;
 use crate::domain::repo_index::{detect_language, FileId, RepoIndexError};
 use crate::domain::workspace_index::DocumentId;
 use crate::infra::index_store::IndexStore;
-use crate::infra::{embedding_credentials_store, embedding_providers};
+use crate::infra::{
+    embedding_credentials_store, embedding_providers, project_store, repository_identity,
+    settings_store,
+};
 use crate::services::chunk_builder::{ChunkBuilder, ChunkIndex};
 use crate::services::embedding_config;
 use crate::services::embedding_index::{EmbeddingBuilder, EmbeddingIndex};
@@ -245,23 +248,55 @@ pub fn embedding_cancel_model_download(state: State<'_, Arc<DownloadState>>) {
 /// `chunk_text::resolve_text` resolve relative `FileId`s against, and what
 /// keys the `ChunkIndex`/`EmbeddingIndexSlot` attach state.
 ///
-/// `storage_dir` is always `{project.root}/.atlas/index/full-repo/` —
-/// **never** under `docs_root` (`.atlas` is the one place this app keeps
-/// per-project state). The literal `full-repo` name is kept from the old
-/// per-mode layout on purpose: a project that ever ran a `FullRepo` sync
-/// before this change already has a compatible store here (same
-/// `index_root`, `index_store_ensure::open_for` sees it as current, not
-/// stale) — reusing the name gives every such user a free migration with
-/// zero recompute. A project that only ever ran `DocsOnly` has no
-/// `full-repo/` store yet; `open_for` reports it stale (no meta rows), and
-/// `embedding_sync`'s existing repair-and-rebuild path takes it from there
-/// like any other fresh index. Either way, no dedicated migration code is
-/// needed. Stale `.atlas/index/docs-only/` directories from before this
-/// change are left on disk as harmless orphans.
+/// `storage_dir` is a **global**, per-repository location —
+/// `~/.atlas/embeddings/{repository_id}/` — not inside the repo at all.
+/// `repository_id` is `repository_identity::repository_id` of the repo's
+/// canonical remote URL (`infra::repository_identity::resolve`), or, for a
+/// repo with no resolvable remote (not a git repo, or a git repo with no
+/// remotes), a per-project UUID persisted in `{project.root}/.atlas/
+/// project.json` the first time it's needed (`local_identity`). Keying by
+/// repository identity rather than by `index_root` means the same repo
+/// resolves to the same cache regardless of which local path it's cloned
+/// or worktree-checked-out to — `index_store_ensure::open_for` no longer
+/// treats a different `index_root` as staleness for exactly this reason.
+/// The revision (`RepositoryIdentity::revision`) is deliberately *not*
+/// part of `repository_id`: baking it in would turn every commit into a
+/// brand-new, empty cache folder. It's instead recorded as informational
+/// metadata by `index_store_ensure::repair_stale`.
 pub(crate) fn resolve_index_paths(project: &OpenedProject) -> Result<(PathBuf, PathBuf), String> {
     let index_root = PathBuf::from(&project.root);
-    let storage_dir = index_root.join(".atlas").join("index").join("full-repo");
+    let identity = repository_identity::resolve(&index_root);
+    let source = match identity.canonical_url {
+        Some(url) => url,
+        None => local_identity(&project.root)?,
+    };
+    let repository_id = repository_identity::repository_id(&source);
+    let storage_dir = settings_store::settings_dir()
+        .map_err(|e| e.to_string())?
+        .join("embeddings")
+        .join(repository_id);
     Ok((index_root, storage_dir))
+}
+
+/// Fallback identity for a repo with no resolvable canonical remote URL —
+/// a random UUID, generated once and persisted to `{repo_root}/.atlas/
+/// project.json` so the same project keeps resolving to the same global
+/// embeddings folder across sessions. `project.json` is assumed to already
+/// exist: every caller of `resolve_index_paths` runs only after
+/// `project_open::open_project`, which always creates it first.
+fn local_identity(repo_root: &str) -> Result<String, String> {
+    let mut config = project_store::load(repo_root)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no project.json found for {repo_root}"))?;
+
+    if let Some(id) = config.local_repository_id.clone() {
+        return Ok(id);
+    }
+
+    let id = uuid::Uuid::new_v4().to_string();
+    config.local_repository_id = Some(id.clone());
+    project_store::save(repo_root, &config).map_err(|e| e.to_string())?;
+    Ok(id)
 }
 
 /// One open file's direct (one-hop, non-transitive) AsciiDoc dependencies —
@@ -303,9 +338,9 @@ fn direct_dependencies(workspace_index: &WorkspaceIndex, file_id: &FileId) -> Ve
 ///
 /// If the store is stale (see `index_store_ensure`), `chunk_index` is
 /// deliberately left empty rather than loaded from metadata that might
-/// describe an incompatible chunking algorithm or a different
-/// `index_root` — the caller decides what to do with a stale attach
-/// (`embedding_sync` repairs it; `embedding_index_status` just reports it).
+/// describe an incompatible chunking algorithm — the caller decides what
+/// to do with a stale attach (`embedding_sync` repairs it;
+/// `embedding_index_status` just reports it).
 pub(crate) fn attach_index_store(
     chunk_index: &ChunkIndex,
     index_store: &IndexStoreSlot,
@@ -317,7 +352,7 @@ pub(crate) fn attach_index_store(
         .map_err(|_| "index store lock poisoned".to_string())?;
     let is_new_attach = !matches!(store_slot.as_ref(), Some((root, _, _)) if root == index_root);
     if is_new_attach {
-        let attachment = index_store_ensure::open_for(storage_dir, index_root)?;
+        let attachment = index_store_ensure::open_for(storage_dir)?;
         if !attachment.stale {
             chunk_index.load_metadata(attachment.store.load_all_chunks().map_err(|e| e.to_string())?);
         }
@@ -1404,13 +1439,52 @@ mod tests {
 
     #[test]
     fn resolve_index_paths_always_indexes_the_whole_repo() {
-        let project = OpenedProject {
-            root: "/repo".to_string(),
-            docs_root: "/repo/docs".to_string(),
-        };
-        let (index_root, storage_dir) = resolve_index_paths(&project).unwrap();
-        assert_eq!(index_root, PathBuf::from("/repo"));
-        assert_eq!(storage_dir, PathBuf::from("/repo/.atlas/index/full-repo"));
+        use crate::domain::project_config::ProjectConfig;
+        use crate::infra::settings_store::test_support::with_temp_home;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        // `resolve_index_paths` now resolves through `settings_store::
+        // settings_dir()` (global storage), which reads the process-global
+        // `$HOME` — isolate this test's view of it, same as `chat_store`'s
+        // tests, so it can't race other tests that do the same.
+        with_temp_home(|| {
+            static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+            let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+            let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let root =
+                std::env::temp_dir().join(format!("alfa-atlas-resolve-index-paths-{nanos}-{n}"));
+            std::fs::create_dir_all(&root).unwrap();
+            // `resolve_index_paths` only ever runs after `open_project`, which
+            // always creates `project.json` first — set that up so the
+            // no-git-remote fallback path (`local_identity`) has something to
+            // read/persist into, same as in the real flow.
+            project_store::save(&root.to_string_lossy(), &ProjectConfig::new(".")).unwrap();
+
+            let project = OpenedProject {
+                root: root.to_string_lossy().into_owned(),
+                docs_root: root.to_string_lossy().into_owned(),
+            };
+            let (index_root, storage_dir) = resolve_index_paths(&project).unwrap();
+            assert_eq!(index_root, root);
+
+            // `root` isn't a git repo, so this exercises the fallback UUID
+            // identity — the storage dir must be global (`~/.atlas/embeddings/
+            // {64-hex-char sha256}`), never under the project root anymore.
+            let embeddings_root = settings_store::settings_dir().unwrap().join("embeddings");
+            assert!(storage_dir.starts_with(&embeddings_root));
+            let repository_id = storage_dir.strip_prefix(&embeddings_root).unwrap();
+            let repository_id = repository_id.to_string_lossy();
+            assert_eq!(repository_id.len(), 64);
+            assert!(repository_id.chars().all(|c| c.is_ascii_hexdigit()));
+
+            // Resolving again must yield the same folder — the fallback UUID
+            // just got persisted into `project.json`, so it's stable now.
+            let (_, storage_dir_again) = resolve_index_paths(&project).unwrap();
+            assert_eq!(storage_dir, storage_dir_again);
+
+            std::fs::remove_dir_all(&root).ok();
+        });
     }
 
     // --- `direct_dependencies` ---

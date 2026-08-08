@@ -180,42 +180,7 @@ pub fn set_archived(chat_id: &str, archived: bool) -> Result<(), ChatStoreError>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Mutex;
-
-    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    /// `$HOME` is process-global — Rust runs tests in this module on
-    /// multiple threads by default, so without this lock two tests could
-    /// each set `$HOME` to their own temp dir mid-run and corrupt each
-    /// other's `settings_dir()` resolution. Holding this for the whole
-    /// swap-run-restore round trip serializes every test that touches
-    /// `$HOME` against every other one, while leaving unrelated test
-    /// modules elsewhere in the crate free to run concurrently as normal.
-    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Redirects `settings_dir()`'s effect for the duration of one test by
-    /// pointing `$HOME` at a fresh temp dir — mirrors how other global
-    /// stores in this codebase have no test isolation of their own
-    /// (`settings_store`/`onboarding_store` have no tests at all); this is
-    /// the minimal seam needed since `db_path()` always resolves through
-    /// `settings_store::settings_dir()`, which reads `$HOME` via `dirs::home_dir()`.
-    fn with_temp_home<T>(f: impl FnOnce() -> T) -> T {
-        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let home = std::env::temp_dir().join(format!("alfa-atlas-chat-store-{nanos}-{n}"));
-        std::fs::create_dir_all(&home).unwrap();
-        let previous = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
-        let result = f();
-        match previous {
-            Some(p) => std::env::set_var("HOME", p),
-            None => std::env::remove_var("HOME"),
-        }
-        std::fs::remove_dir_all(&home).ok();
-        result
-    }
+    use crate::infra::settings_store::test_support::with_temp_home;
 
     fn sample_message(text: &str) -> serde_json::Value {
         serde_json::json!({ "id": text, "role": "user", "content": text })

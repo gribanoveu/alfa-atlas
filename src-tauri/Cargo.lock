@@ -90,6 +90,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "spellbook",
  "ssh-key",
  "tauri",
@@ -106,6 +107,7 @@ dependencies = [
  "tree-sitter-java",
  "ureq",
  "usearch",
+ "uuid",
 ]
 
 [[package]]
