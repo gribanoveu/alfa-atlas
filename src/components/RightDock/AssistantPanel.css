@@ -119,7 +119,7 @@
   flex-direction: column;
   gap: 10px;
   overflow-y: auto;
-  padding: 12px;
+  padding: 3px;
 }
 
 .assistant-chat-placeholder {
@@ -145,11 +145,11 @@
 }
 
 .assistant-chat-message {
-  max-width: 85%;
-  padding: 8px 10px;
+  max-width: 90%;
+  padding: 8px 12px;
   border-radius: 8px;
   font-size: calc(var(--font-ui-sm) * 1.15);
-  line-height: 1.5;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
