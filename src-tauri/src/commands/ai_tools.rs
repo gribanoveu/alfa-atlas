@@ -7,6 +7,7 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::AiAccessMode;
 use crate::domain::ai_tools::{ToolCall, ToolResult};
+use crate::domain::llm::LlmToolDefinition;
 use crate::domain::project_config::ProjectConfig;
 use crate::infra::project_store;
 use crate::services::ai_tools;
@@ -65,6 +66,17 @@ pub fn ai_get_access_mode() -> Result<AiAccessMode, String> {
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| ProjectConfig::new(project.docs_root.clone()));
     Ok(config.ai_access_mode)
+}
+
+/// The same tool definitions (`name`/`description`/JSON-Schema `parameters`)
+/// actually advertised to the model for function-calling in
+/// `commands::llm::llm_chat_stream` — exposed here so the frontend can
+/// render its "available tools" prompt text from the same source instead of
+/// hand-duplicating it.
+#[tauri::command]
+pub fn ai_get_tool_definitions() -> Result<Vec<LlmToolDefinition>, String> {
+    let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
+    Ok(ai_tools::llm_tool_definitions(&scope))
 }
 
 /// Persists a new `AiAccessMode` for the currently open project —

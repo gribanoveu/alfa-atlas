@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AiAccessMode } from "../lib/aiTools";
+import type { AiAccessMode, LlmToolDefinition } from "../lib/aiTools";
 import { buildAccessModeChangeNotice, buildAssistantSystemPrompt } from "../lib/assistantConfig";
 import type { SpecsRepoInfo } from "../lib/openapi";
 import {
@@ -39,8 +39,16 @@ export type { ChatMessage, MessageBlock, TextBlock, ToolCallBlock, ToolCallStatu
  * the very next turn. `specsRepoInfo` is likewise threaded in rather than
  * detected here — the caller's own `useSpecsRepo` (App.tsx) already runs
  * it once per `repoRoot`, so this hook just forwards whatever it found
- * into the system prompt's "Current project type" line. */
-export function useLlmChat(providerId: string | null, accessMode: AiAccessMode, specsRepoInfo: SpecsRepoInfo | null) {
+ * into the system prompt's "Current project type" line. `toolDefinitions`
+ * is likewise threaded in from the caller's own `useToolDefinitions`,
+ * so the system prompt's "## Tool usage" section is generated from the
+ * same live registry the backend uses for real function-calling. */
+export function useLlmChat(
+  providerId: string | null,
+  accessMode: AiAccessMode,
+  specsRepoInfo: SpecsRepoInfo | null,
+  toolDefinitions: LlmToolDefinition[],
+) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,7 +144,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode, 
       lastSentModeRef.current = accessMode;
 
       const wireMessages: LlmMessage[] = [
-        { role: "system", content: buildAssistantSystemPrompt(accessMode, specsRepoInfo), toolCallId: null },
+        { role: "system", content: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions), toolCallId: null },
         ...priorTurns.map((m): LlmMessage => ({ role: m.role, content: chatMessageToPlainText(m), toolCallId: null })),
         ...(modeChanged
           ? [{ role: "system" as const, content: buildAccessModeChangeNotice(accessMode), toolCallId: null }]
@@ -170,7 +178,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode, 
         setSending(false);
       }
     },
-    [providerId, sending, messages, accessMode, specsRepoInfo],
+    [providerId, sending, messages, accessMode, specsRepoInfo, toolDefinitions],
   );
 
   // Context-window usage so far. Every request resends the *entire* message
@@ -196,7 +204,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode, 
     });
     if (lastUsageIndex === -1 || lastUsageTotal === null) {
       return (
-        estimateTokenCount(buildAssistantSystemPrompt(accessMode, specsRepoInfo)) +
+        estimateTokenCount(buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions)) +
         messages.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0)
       );
     }
@@ -204,7 +212,7 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode, 
       .slice(lastUsageIndex + 1)
       .reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
     return lastUsageTotal + tail;
-  }, [messages, accessMode, specsRepoInfo]);
+  }, [messages, accessMode, specsRepoInfo, toolDefinitions]);
 
   return {
     messages,
@@ -212,6 +220,6 @@ export function useLlmChat(providerId: string | null, accessMode: AiAccessMode, 
     error,
     sendMessage,
     contextTokens,
-    systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo),
+    systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions),
   };
 }

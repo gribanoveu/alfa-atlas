@@ -235,6 +235,7 @@ pub fn run() {
             commands::ai_tools::ai_execute_tool,
             commands::ai_tools::ai_get_access_mode,
             commands::ai_tools::ai_set_access_mode,
+            commands::ai_tools::ai_get_tool_definitions,
             commands::embeddings::embedding_get_config,
             commands::embeddings::embedding_set_config,
             commands::embeddings::embedding_set_remote_api_key,

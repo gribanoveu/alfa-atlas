@@ -59,3 +59,19 @@ export function getAiAccessMode(): Promise<AiAccessMode> {
 export function setAiAccessMode(mode: AiAccessMode): Promise<void> {
   return invoke("ai_set_access_mode", { mode });
 }
+
+// Mirrors `domain::llm::LlmToolDefinition` in `src-tauri/src/domain/llm.rs`
+// (`#[serde(rename_all = "camelCase")]`) — the same definitions actually
+// advertised to the model for function-calling.
+export type LlmToolDefinition = {
+  name: string;
+  description: string;
+  parameters: unknown;
+};
+
+/** The tools currently allowed for the open project's persisted access
+ * mode/allowlist — the same source `llm_chat_stream` uses for real
+ * function-calling (`services::ai_tools::llm_tool_definitions`). */
+export function getToolDefinitions(): Promise<LlmToolDefinition[]> {
+  return invoke<LlmToolDefinition[]>("ai_get_tool_definitions");
+}

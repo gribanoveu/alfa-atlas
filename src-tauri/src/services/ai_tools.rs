@@ -187,7 +187,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "listFiles".to_string(),
             description:
-                "List files and directories under a path in the project. Omit `path` (or pass null) to list the root."
+                "List files and directories under a path in the project. Omit `path` (or pass null) to list the root. Use primarily to discover repository structure, locate a file when its exact path is unknown, inspect a directory, or understand where documentation or implementation is organized."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -204,7 +204,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ReadFile) {
         defs.push(LlmToolDefinition {
             name: "readFile".to_string(),
-            description: "Read the full text content of one file by its path relative to the project root."
+            description: "Read the full text content of one file by its path relative to the project root. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -222,7 +222,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "semanticSearch".to_string(),
             description:
-                "Search the project's documentation/code for content relevant to a natural-language query."
+                "Search the project's documentation/code for content relevant to a natural-language query. Use for semantic discovery: finding documents related to a concept, locating terminology, finding related implementations, or discovering potentially relevant files when the exact location is unknown. Results are useful for discovery but may not be sufficient evidence for precise claims — verify with readFile when precise details matter."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",

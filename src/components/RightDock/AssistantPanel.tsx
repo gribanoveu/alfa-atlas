@@ -5,6 +5,7 @@ import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
+import { useToolDefinitions } from "../../hooks/useToolDefinitions";
 import {
   AUTO_MODEL_LABEL,
   AUTO_MODEL_VALUE,
@@ -79,6 +80,7 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo }: AssistantPanel
   } = useEmbeddingSetup();
   const { mode: accessMode, busy: accessModeBusy, setMode: setAccessMode } = useAiAccessMode();
   const { settings, providers, hasApiKeyMap, updateProviderConfig, loadModels } = useLlmSetup();
+  const { definitions: toolDefinitions } = useToolDefinitions(accessMode ?? "docsOnly");
 
   const activeProviderId = settings?.activeProviderId ?? providers[0]?.id ?? null;
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;
@@ -91,6 +93,7 @@ export function AssistantPanel({ onOpenSettings, specsRepoInfo }: AssistantPanel
     activeProviderId,
     accessMode ?? "docsOnly",
     specsRepoInfo,
+    toolDefinitions,
   );
   const contextLimit = activeProvider?.limit?.context ?? null;
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;
