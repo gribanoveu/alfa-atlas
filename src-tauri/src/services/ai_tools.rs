@@ -287,14 +287,14 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ListFiles) {
         defs.push(LlmToolDefinition {
             name: "listFiles".to_string(),
-            description: "List files and directories under a path in the current workspace. The workspace root is already configured by the application; `path` is relative to that workspace root. Omit `path` or pass null to list the workspace root. Use this tool to discover files, locate files, or inspect directories."
+            description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use this tool to discover files, locate files, or inspect directories."
     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": ["string", "null"],
-                        "description": "Subdirectory relative to the project root, or omitted/null for the root."
+                        "description": "Subdirectory relative to the current access-mode root (see tool description), or omitted/null for that root."
                     },
                     "depth": {
                         "type": ["integer", "null"],
@@ -313,14 +313,14 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ReadFile) {
         defs.push(LlmToolDefinition {
             name: "readFile".to_string(),
-            description: "Read the text content of one file by its path relative to the project root, optionally restricted to a line range. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details. Prefer a line range for a large file when only part of it is relevant."
+            description: "Read the text content of one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details. Prefer a line range for a large file when only part of it is relevant."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "File path relative to the project root."
+                        "description": "File path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode)."
                     },
                     "startLine": {
                         "type": ["integer", "null"],
@@ -364,14 +364,14 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "writeFile".to_string(),
             description:
-                "Create or overwrite one documentation file's full content, given its path relative to the project root. Any missing parent directories in the path are created automatically — there is no need to call createDirectory first. Always requires explicit user approval before the write actually happens — the user may deny it, in which case the file is left unchanged. Do not retry automatically after a denial; ask the user how they'd like to proceed instead. Only recognized documentation file types can be written."
+                "Create or overwrite one documentation file's full content, given its path relative to the documentation root — not the repository root, even in Full-repo mode. Any missing parent directories in the path are created automatically — there is no need to call createDirectory first. Always requires explicit user approval before the write actually happens — the user may deny it, in which case the file is left unchanged. Do not retry automatically after a denial; ask the user how they'd like to proceed instead. Only recognized documentation file types can be written."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "File path relative to the project root. Must be a recognized documentation file type."
+                        "description": "File path relative to the documentation root (not the repository root, even in Full-repo mode). Must be a recognized documentation file type."
                     },
                     "content": {
                         "type": "string",
@@ -386,14 +386,14 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "editFile".to_string(),
             description:
-                "Make one or more precise, targeted edits to an existing documentation file by replacing exact snippets of its current content, given its path relative to the project root. Each edit's `old` text should match the file's CURRENT content exactly once, and all edits in one call are validated against the file's original content and applied together, or none are — they are independent of each other and of their order. If an edit's `old` doesn't match exactly (whitespace/formatting drift, or you're recalling the content from memory rather than a fresh read), an automatic reconciliation step tries to locate and apply the intended change anyway before giving up — but still add a few more surrounding lines to `old` to make it unique whenever you can, rather than relying on that. Prefer this over writeFile for small, localized changes: it's cheaper and safer than resending the whole file. Always requires explicit user approval before anything is written."
+                "Make one or more precise, targeted edits to an existing documentation file by replacing exact snippets of its current content, given its path relative to the documentation root — not the repository root, even in Full-repo mode. Each edit's `old` text should match the file's CURRENT content exactly once, and all edits in one call are validated against the file's original content and applied together, or none are — they are independent of each other and of their order. If an edit's `old` doesn't match exactly (whitespace/formatting drift, or you're recalling the content from memory rather than a fresh read), an automatic reconciliation step tries to locate and apply the intended change anyway before giving up — but still add a few more surrounding lines to `old` to make it unique whenever you can, rather than relying on that. Prefer this over writeFile for small, localized changes: it's cheaper and safer than resending the whole file. Always requires explicit user approval before anything is written."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "File path relative to the project root. Must be a recognized documentation file type and must already exist."
+                        "description": "File path relative to the documentation root (not the repository root, even in Full-repo mode). Must be a recognized documentation file type and must already exist."
                     },
                     "edits": {
                         "type": "array",
@@ -423,14 +423,14 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "deleteFile".to_string(),
             description:
-                "Delete one file, given its path relative to the project root. This is irreversible — do not call it speculatively. Always requires explicit user approval before the deletion actually happens — the user may deny it, in which case the file is left unchanged."
+                "Delete one file, given its path relative to the documentation root — not the repository root, even in Full-repo mode. This is irreversible — do not call it speculatively. Always requires explicit user approval before the deletion actually happens — the user may deny it, in which case the file is left unchanged."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "File path relative to the project root."
+                        "description": "File path relative to the documentation root (not the repository root, even in Full-repo mode)."
                     }
                 },
                 "required": ["path"]
@@ -441,14 +441,14 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "createDirectory".to_string(),
             description:
-                "Create a directory (including any missing parent directories) given its path relative to the project root. Use this before writing a file into a folder that doesn't exist yet. Always requires explicit user approval before it actually happens — the user may deny it, in which case nothing is created. Fails if the path already exists as a file or directory."
+                "Create a directory (including any missing parent directories) given its path relative to the documentation root — not the repository root, even in Full-repo mode. Use this before writing a file into a folder that doesn't exist yet. Always requires explicit user approval before it actually happens — the user may deny it, in which case nothing is created. Fails if the path already exists as a file or directory."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Directory path relative to the project root."
+                        "description": "Directory path relative to the documentation root (not the repository root, even in Full-repo mode)."
                     }
                 },
                 "required": ["path"]
@@ -459,14 +459,14 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "deleteDirectory".to_string(),
             description:
-                "Delete a directory, given its path relative to the project root. By default (recursive omitted or false), the call is rejected if the directory is not empty — delete its contents first, or pass recursive: true to delete the directory and everything inside it in one call. This is irreversible, especially with recursive: true — do not call it speculatively. Always requires explicit user approval before the deletion actually happens — the user may deny it."
+                "Delete a directory, given its path relative to the documentation root — not the repository root, even in Full-repo mode. By default (recursive omitted or false), the call is rejected if the directory is not empty — delete its contents first, or pass recursive: true to delete the directory and everything inside it in one call. This is irreversible, especially with recursive: true — do not call it speculatively. Always requires explicit user approval before the deletion actually happens — the user may deny it."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Directory path relative to the project root."
+                        "description": "Directory path relative to the documentation root (not the repository root, even in Full-repo mode)."
                     },
                     "recursive": {
                         "type": ["boolean", "null"],
@@ -481,18 +481,18 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "move".to_string(),
             description:
-                "Move or rename a file or directory, given its current path and a new path, both relative to the project root. This is one operation covering both cases: a newPath in the same directory with a different name is a rename, a newPath elsewhere is a move (optionally with a new name too). Works for both files and directories — there is no separate rename tool or directory-specific variant. References to the old path elsewhere in the documentation (include::, xref:, and JSON/YAML $ref) are updated automatically so they keep pointing at the right file. Fails if something already exists at newPath — nothing is overwritten. newPath's parent directory must already exist — use createDirectory first if it doesn't. Always requires explicit user approval before anything changes — the user may deny it."
+                "Move or rename a file or directory, given its current path and a new path, both relative to the documentation root — not the repository root, even in Full-repo mode. This is one operation covering both cases: a newPath in the same directory with a different name is a rename, a newPath elsewhere is a move (optionally with a new name too). Works for both files and directories — there is no separate rename tool or directory-specific variant. References to the old path elsewhere in the documentation (include::, xref:, and JSON/YAML $ref) are updated automatically so they keep pointing at the right file. Fails if something already exists at newPath — nothing is overwritten. newPath's parent directory must already exist — use createDirectory first if it doesn't. Always requires explicit user approval before anything changes — the user may deny it."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Current path of the file or directory, relative to the project root."
+                        "description": "Current path of the file or directory, relative to the documentation root (not the repository root, even in Full-repo mode)."
                     },
                     "newPath": {
                         "type": "string",
-                        "description": "New path, relative to the project root. Fails if something already exists there."
+                        "description": "New path, relative to the documentation root (not the repository root, even in Full-repo mode). Fails if something already exists there."
                     }
                 },
                 "required": ["path", "newPath"]

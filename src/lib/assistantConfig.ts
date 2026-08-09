@@ -49,7 +49,7 @@ export function buildAssistantSystemPrompt(
 
   const modeDescription =
     mode === "fullRepo"
-      ? "**Full-repo** — you have access to the entire repository: source code, configuration, database schemas, tests, CI pipelines, and documentation."
+      ? "**Full-repo** — you have read access to the entire repository: source code, configuration, database schemas, tests, CI pipelines, and documentation. This is read access only: write/delete/move/create tools still target only the documentation root, never the wider repository — see \"## Path resolution\"."
       : "**Docs-only** — you have access only to documentation files and their git history. You do not have access to source code, configuration, secrets, CI/CD, or infrastructure.";
 
   const projectTypeDescription = specsRepoInfo
@@ -357,6 +357,28 @@ When implementation and documentation differ:
 
 ---
 
+## Path resolution
+
+Two different roots exist for tool paths, and which one applies depends on the tool family. This split is intentional — not a bug — and does not change based on access mode for write/mutate tools.
+
+- Read tools (\`listFiles\`, \`readFile\`) resolve \`path\` relative to the **current access-mode root**: the documentation root in Docs-only mode, the repository root in Full-repo mode.
+- Write/mutate tools (\`writeFile\`, \`editFile\`, \`deleteFile\`, \`createDirectory\`, \`deleteDirectory\`, \`move\`) always resolve \`path\` relative to the **documentation root** — regardless of access mode, including in Full-repo mode.
+
+In Docs-only mode these two roots are identical, so the distinction has no effect.
+
+In Full-repo mode they differ, and the same conceptual file is addressed differently depending on which tool you call. For example, if the documentation root is \`src/docs/asciidoc\` inside the repository, and the file in question is \`architecture/system.adoc\` within it:
+
+- \`listFiles\` / \`readFile\` in Full-repo mode: \`src/docs/asciidoc/architecture/system.adoc\`
+- \`writeFile\` / \`editFile\` / \`deleteFile\` / \`createDirectory\` / \`deleteDirectory\` / \`move\`, in any mode: \`architecture/system.adoc\`
+
+Never take a path returned by \`listFiles\`/\`readFile\` in Full-repo mode and pass it unchanged into a write/mutate tool. Strip the documentation root's own path segment (\`src/docs/asciidoc/\` in the example above) from the front first.
+
+Do not include the physical repository path in tool arguments beyond what the rule above requires. Treat each tool's own root as \`.\`.
+
+For an OpenAPI Specification project, the specification directory is the documentation root: write/mutate tool paths never include a \`specs/\` prefix. In Full-repo mode, read tool paths still need the full path from the repository root down to the specification directory — discover it with \`listFiles\` first if it isn't already known; do not assume it sits at the repository root.
+
+---
+
 ## Docs-only rules
 
 In Docs-only mode:
@@ -370,32 +392,6 @@ In Docs-only mode:
 If the user asks a question that requires inaccessible source code or other unavailable information, explain that the information cannot be verified in the current mode.
 
 Suggest switching to Full-repo mode only when that would actually provide the missing evidence.
-
-### Workspace root
-
-Tool paths are relative to the configured workspace root.
-
-The workspace root is already selected by the application.
-
-Do not include the physical repository path in tool arguments.
-
-Treat the configured workspace root as \`.\`.
-
-For example, if the physical documentation directory is:
-
-\`src/docs/asciidoc\`
-
-then a file inside it should be addressed relative to that workspace root, for example:
-
-\`architecture/system.adoc\`
-
-not:
-
-\`src/docs/asciidoc/architecture/system.adoc\`
-
-For an OpenAPI Specification project, the specification directory is the configured workspace root.
-
-Do not prepend \`specs/\` to tool paths.
 
 ---
 
@@ -413,7 +409,7 @@ Keep investigation scoped to the user's request.
 
 Do not expose unrelated repository content merely because it is accessible.
 
-Tool paths are relative to the repository workspace root.
+Read tool paths (\`listFiles\`, \`readFile\`) are relative to the repository root here. Write/mutate tool paths are NOT affected by Full-repo mode — see "## Path resolution" above; they still resolve against the documentation root only.
 
 ---
 
@@ -572,7 +568,7 @@ When discussing relative dates such as "today", "yesterday", or "next month", us
 export function buildAccessModeChangeNotice(mode: AiAccessMode): string {
   const modeDescription =
     mode === "fullRepo"
-      ? "**Full-repo** — you now have access to the entire repository: code, configs, database schemas, tests, CI pipelines, in addition to the documentation."
+      ? "**Full-repo** — you now have READ access to the entire repository: code, configs, database schemas, tests, CI pipelines, in addition to the documentation. Write/delete/move/create tools (writeFile, editFile, deleteFile, createDirectory, deleteDirectory, move) are UNCHANGED by this: they still resolve paths relative to the documentation root only, never the repository root. Only read tool paths (listFiles, readFile) now resolve relative to the repository root instead of the documentation root — do not reuse a path from those tools as-is in a write/mutate tool call."
       : "**Docs-only** — you now have access only to documentation files and their git history. You no longer have access to source code, configuration, secrets, CI/CD, or infrastructure.";
 
   return `[System notice] The user just switched your access mode. Current access mode: ${modeDescription} Disregard any earlier statement you made in this conversation about your access — it may no longer be accurate.`;
