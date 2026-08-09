@@ -488,6 +488,26 @@ mod tests {
         dir
     }
 
+    /// Regression test for `paths::ensure_under`'s old behavior of
+    /// canonicalizing only the immediate parent: `writeFile`'s tool
+    /// description promises missing parent directories are created
+    /// automatically, but before that fix this failed as soon as *more*
+    /// than one level of the path was missing (e.g. writing into a brand
+    /// new subtree in one call), rather than only when a single directory
+    /// needed creating.
+    #[test]
+    fn write_project_file_creates_several_missing_nested_directories_at_once() {
+        let root = temp_dir();
+
+        write_project_file(root.to_str().unwrap(), "brand/new/dir/note.adoc", "hello").unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("brand/new/dir/note.adoc")).unwrap(),
+            "hello"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn create_file_and_empty_dir_appear_in_tree() {
         let root = temp_dir();

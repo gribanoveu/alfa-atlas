@@ -10,17 +10,40 @@ pub fn ensure_under(root: &Path, path: &Path) -> Result<PathBuf, ProjectError> {
     let canonical = if path.exists() {
         path.canonicalize().map_err(ProjectError::Canonicalize)?
     } else {
-        // For not-yet-existing write targets: canonicalize parent + join name.
-        let parent = path
-            .parent()
-            .ok_or_else(|| ProjectError::Message(format!("invalid path: {}", path.display())))?;
-        let name = path.file_name().ok_or_else(|| {
-            ProjectError::Message(format!("invalid path: {}", path.display()))
-        })?;
-        let parent = parent
-            .canonicalize()
-            .map_err(ProjectError::Canonicalize)?;
-        parent.join(name)
+        // For a not-yet-existing target (a write/create destination, or
+        // simply a `readFile`/`listFiles` path the caller got wrong): walk
+        // up to the nearest ancestor that *does* exist — not just the
+        // immediate parent — and rejoin the missing tail onto its
+        // canonical form. A target two or more directories deep in a tree
+        // that doesn't exist yet is the normal case for `writeFile`'s
+        // documented "missing parent directories are created
+        // automatically" behavior (the actual `fs::create_dir_all` for
+        // those directories happens later, in `docs_fs::write_project_file`
+        // — this function only resolves and validates the path); it must
+        // resolve exactly like a one-level-missing target does, not fail
+        // here before that creation ever gets a chance to run. `path` is
+        // always a descendant of `root` (built by `join_relative`), so this
+        // loop is guaranteed to terminate at `root` at the latest, which
+        // was just confirmed to exist above.
+        let mut existing = path.to_path_buf();
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        while !existing.exists() {
+            let name = existing.file_name().ok_or_else(|| {
+                ProjectError::Message(format!("invalid path: {}", path.display()))
+            })?;
+            tail.push(name.to_os_string());
+            existing = existing
+                .parent()
+                .ok_or_else(|| {
+                    ProjectError::Message(format!("invalid path: {}", path.display()))
+                })?
+                .to_path_buf();
+        }
+        let mut canonical = existing.canonicalize().map_err(ProjectError::Canonicalize)?;
+        for part in tail.into_iter().rev() {
+            canonical.push(part);
+        }
+        canonical
     };
 
     if !canonical.starts_with(&root) {
@@ -141,14 +164,23 @@ pub fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, ProjectErro
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    // A nanosecond timestamp alone can collide between parallel test threads
+    // on a coarser system clock — see the same fix already applied in
+    // `services::docs_fs`/`services::ai_tools`'s own `temp_dir` helpers. A
+    // per-process counter guarantees uniqueness regardless of clock
+    // resolution.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temp_dir() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("alfa-atlas-paths-{nanos}"));
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-paths-{nanos}-{n}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -171,6 +203,37 @@ mod tests {
     fn rejects_parent_escape() {
         let root = temp_dir();
         assert!(join_relative(&root, "../outside").is_err());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Regression test: a target several directories deep in a tree that
+    /// doesn't exist yet at all (not just its immediate parent) must still
+    /// resolve to a clean, contained canonical path — not fail with a raw
+    /// `io::Error` from trying to canonicalize a nonexistent parent. This is
+    /// what `writeFile`'s "missing parent directories are created
+    /// automatically" behavior (and a plain `readFile`/`listFiles` on a
+    /// wrong multi-segment path returning a clean `NotFound` instead of an
+    /// opaque OS error) both depend on.
+    #[test]
+    fn ensure_under_resolves_a_target_several_missing_directories_deep() {
+        let root = temp_dir();
+
+        let target = root.join("brand").join("new").join("dir").join("file.adoc");
+        let resolved = ensure_under(&root, &target).unwrap();
+        assert_eq!(resolved, root.canonicalize().unwrap().join("brand/new/dir/file.adoc"));
+        assert!(!resolved.exists());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_under_still_rejects_a_deep_missing_target_that_escapes_root() {
+        let root = temp_dir();
+        let outside = root.parent().unwrap().join("escaped-brand-new-dir-outside-root").join("file.adoc");
+
+        let err = ensure_under(&root, &outside).unwrap_err();
+        assert!(matches!(err, ProjectError::PathEscape(_)));
+
         fs::remove_dir_all(&root).ok();
     }
 

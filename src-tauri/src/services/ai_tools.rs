@@ -1327,6 +1327,36 @@ mod tests {
         fs::remove_dir_all(&repo).ok();
     }
 
+    /// Regression test: a model guessing at a plausible-but-wrong nested
+    /// path (e.g. `components/schemas/all.yaml` in a repo whose schemas
+    /// actually live directly at `schemas/all.yaml`) must see a clean
+    /// `NotFound` it can react to — not `ToolError::Io` wrapping a raw
+    /// `"No such file or directory (os error 2)"` with no path in it, which
+    /// is what `paths::ensure_under` used to surface whenever *more* than
+    /// the immediate parent directory of a `readFile`/`listFiles` path was
+    /// missing.
+    #[test]
+    fn read_file_missing_several_directories_deep_returns_clean_not_found() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = read(&scope, "components/schemas/all.yaml").unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)), "expected NotFound, got {err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn list_files_missing_several_directories_deep_returns_clean_not_found() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = list(&scope, Some("components/schemas")).unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)), "expected NotFound, got {err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
     #[test]
     fn read_file_same_relative_path_resolves_against_different_roots_by_mode() {
         let (repo, docs) = fixture_repo();
