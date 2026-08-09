@@ -436,6 +436,20 @@ fn run_tool_loop(
             // doesn't hand the model a chunk of English prose to continue
             // from mid-turn.
             let content = match &outcome {
+                // Rendered as an ASCII tree rather than the raw JSON array
+                // every other `ToolResult` gets below — a flat list of
+                // `{path, isDir}` objects forces the model to reconstruct
+                // the directory structure itself from N separate paths; a
+                // tree hands it the whole shape (and where each entry sits)
+                // at a glance, same as a human skimming `tree(1)` output.
+                Ok(ToolResult::FileList(entries)) => {
+                    let root_label = scope
+                        .root
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(".");
+                    ai_tools::render_file_tree(entries, root_label)
+                }
                 Ok(tool_result) => serde_json::to_string(tool_result)
                     .unwrap_or_else(|_| "Ошибка: не удалось сериализовать результат инструмента".to_string()),
                 Err(e) if e == "denied by user" => "Отклонено пользователем".to_string(),

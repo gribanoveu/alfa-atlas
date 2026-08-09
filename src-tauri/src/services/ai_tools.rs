@@ -287,7 +287,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ListFiles) {
         defs.push(LlmToolDefinition {
             name: "listFiles".to_string(),
-            description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use this tool to discover files, locate files, or inspect directories."
+            description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use this tool to discover files, locate files, or inspect directories. Returns an indented ASCII tree (directories end with `/`), not a flat list."
     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -552,6 +552,62 @@ fn compile_glob(pattern: &str) -> Result<globset::GlobMatcher, ToolError> {
     globset::Glob::new(pattern)
         .map(|g| g.compile_matcher())
         .map_err(|e| ToolError::InvalidPattern(e.to_string()))
+}
+
+/// One directory level of the tree `render_file_tree` builds out of a flat
+/// `ToolFileEntry` list — children sorted by name (`BTreeMap`) so the
+/// rendered tree is deterministic regardless of the scan order the entries
+/// arrived in. `is_file` is only meaningful on a leaf with no children of
+/// its own; an intermediate path segment (inferred from some deeper entry's
+/// path, never listed directly) is always rendered as a directory.
+#[derive(Default)]
+struct TreeBuildNode {
+    children: std::collections::BTreeMap<String, TreeBuildNode>,
+    is_file: bool,
+}
+
+/// Renders a flat `listFiles` result as an indented ASCII tree (à la `tree(1)`)
+/// instead of a JSON array — so the model can see the whole directory
+/// structure and where each file sits at a glance, rather than reconstructing
+/// it from N separate `path` strings. `root_label` is the name shown on the
+/// first line (typically the scope root's own directory name).
+pub fn render_file_tree(entries: &[ToolFileEntry], root_label: &str) -> String {
+    let mut root = TreeBuildNode::default();
+    for entry in entries {
+        let mut node = &mut root;
+        let parts: Vec<&str> = entry.path.split('/').filter(|p| !p.is_empty()).collect();
+        let Some((last, dirs)) = parts.split_last() else {
+            continue;
+        };
+        for part in dirs {
+            node = node.children.entry((*part).to_string()).or_default();
+        }
+        let leaf = node.children.entry((*last).to_string()).or_default();
+        leaf.is_file = !entry.is_dir;
+    }
+
+    let mut out = format!("{root_label}/\n");
+    render_tree_children(&root, "", &mut out);
+    out
+}
+
+fn render_tree_children(node: &TreeBuildNode, prefix: &str, out: &mut String) {
+    let count = node.children.len();
+    for (i, (name, child)) in node.children.iter().enumerate() {
+        let is_last = i + 1 == count;
+        let is_dir = !child.children.is_empty() || !child.is_file;
+        out.push_str(prefix);
+        out.push_str(if is_last { "└── " } else { "├── " });
+        out.push_str(name);
+        if is_dir {
+            out.push('/');
+        }
+        out.push('\n');
+        if is_dir {
+            let child_prefix = format!("{prefix}{}", if is_last { "    " } else { "│   " });
+            render_tree_children(child, &child_prefix, out);
+        }
+    }
 }
 
 /// One `readFile` result: a possibly-partial slice of a file's lines,
@@ -1366,6 +1422,45 @@ mod tests {
         let repo = repo.canonicalize().unwrap();
         let docs = docs.canonicalize().unwrap();
         (repo, docs)
+    }
+
+    #[test]
+    fn render_file_tree_nests_by_path_and_sorts_children() {
+        let entries = vec![
+            ToolFileEntry { path: "build.gradle".to_string(), is_dir: false },
+            ToolFileEntry { path: "src/main/java/com/example/Application.java".to_string(), is_dir: false },
+            ToolFileEntry { path: "src/main/java/com/example/UserService.java".to_string(), is_dir: false },
+            ToolFileEntry { path: "src/main/resources/application.yml".to_string(), is_dir: false },
+            ToolFileEntry { path: "src/test/java/com/example/UserServiceTest.java".to_string(), is_dir: false },
+        ];
+
+        let tree = render_file_tree(&entries, "repository");
+
+        assert_eq!(
+            tree,
+            "repository/\n\
+             ├── build.gradle\n\
+             └── src/\n    \
+             ├── main/\n    │   \
+             ├── java/\n    │   │   \
+             └── com/\n    │   │       \
+             └── example/\n    │   │           \
+             ├── Application.java\n    │   │           \
+             └── UserService.java\n    │   \
+             └── resources/\n    │       \
+             └── application.yml\n    \
+             └── test/\n        \
+             └── java/\n            \
+             └── com/\n                \
+             └── example/\n                    \
+             └── UserServiceTest.java\n"
+        );
+    }
+
+    #[test]
+    fn render_file_tree_marks_explicit_empty_directory() {
+        let entries = vec![ToolFileEntry { path: "empty".to_string(), is_dir: true }];
+        assert_eq!(render_file_tree(&entries, "repository"), "repository/\n└── empty/\n");
     }
 
     /// Calls `execute_tool` for `ReadFile` and unwraps the expected
@@ -2812,6 +2907,32 @@ mod tests {
             id: "call_1".to_string(),
             name: "listFiles".to_string(),
             arguments: r#"{"path":null}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None, depth: None, pattern: None }));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_list_files_args_with_empty_object() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: "{}".to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None, depth: None, pattern: None }));
+    }
+
+    /// The exact malformed shape documented on `lenient_json_object`: a
+    /// provider's streamed tool-call fragments concatenate into `{}` plus a
+    /// stray trailing `""`. Must parse the same as a plain `{}` — root path,
+    /// unlimited depth — not error out on the trailing garbage.
+    #[test]
+    fn parse_tool_call_tolerates_trailing_garbage_after_empty_object() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: r#"{}"""#.to_string(),
         };
         let parsed = parse_tool_call(&call).unwrap();
         assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None, depth: None, pattern: None }));

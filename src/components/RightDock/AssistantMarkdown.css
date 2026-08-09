@@ -38,6 +38,9 @@
 
 .markdown-p {
   margin: 6px 0;
+  /* Preserves line breaks in unfenced text (e.g. ASCII tree diagrams the
+     model sends as plain paragraphs) without breaking normal word wrap. */
+  white-space: pre-line;
 }
 
 .markdown-strong {
