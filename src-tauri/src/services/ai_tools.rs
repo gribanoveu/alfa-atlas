@@ -225,6 +225,40 @@ pub fn set_access_mode(mode: AiAccessMode) -> Result<(), ProjectError> {
     project_store::save(&opened.root, &config)
 }
 
+/// Tool names the currently open project has persisted as "don't ask for
+/// confirmation again" (`ProjectConfig::ai_auto_approved_tools`) — read by
+/// the frontend once per chat panel mount to seed its in-memory trusted-tool
+/// set, so a choice made in one chat carries into every later chat on the
+/// same repo. Empty when the project has never customized this (matches the
+/// `None` default), not an error.
+pub fn auto_approved_tools() -> Result<HashSet<ToolName>, ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let config = project_store::load(&opened.root)?
+        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    Ok(config.ai_auto_approved_tools.unwrap_or_default().into_iter().collect())
+}
+
+/// Persists (or revokes) one tool's "always allow" status for the currently
+/// open project — the backend counterpart to the approval card's "Разрешать
+/// всегда" button. Only ever changes whether a *future* call still pauses
+/// for confirmation; it never widens `ai_allowed_tools`, so a tool the
+/// project has otherwise disallowed stays disallowed regardless.
+pub fn set_tool_auto_approved(tool: ToolName, auto_approved: bool) -> Result<(), ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let mut config = project_store::load(&opened.root)?
+        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    let mut set: HashSet<ToolName> = config.ai_auto_approved_tools.unwrap_or_default().into_iter().collect();
+    if auto_approved {
+        set.insert(tool);
+    } else {
+        set.remove(&tool);
+    }
+    config.ai_auto_approved_tools = Some(set.into_iter().collect());
+    project_store::save(&opened.root, &config)
+}
+
 /// Resolves a `ToolScope` from a project's persisted config — the one place
 /// that turns "user hasn't customized anything" into `mode`'s default
 /// allowlist, and a customized list into the authoritative one.

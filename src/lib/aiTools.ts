@@ -115,6 +115,20 @@ export function setAiAccessMode(mode: AiAccessMode): Promise<void> {
   return invoke("ai_set_access_mode", { mode });
 }
 
+/** Tool names (e.g. `"writeFile"`) the currently open project has persisted
+ * as "always allow" via an approval card's "Разрешать всегда" button —
+ * loaded once when an assistant chat panel mounts so a choice made in one
+ * chat carries into every later chat on this repo. */
+export function getAutoApprovedTools(): Promise<string[]> {
+  return invoke<string[]>("ai_get_auto_approved_tools");
+}
+
+/** Persists (or revokes) one tool's "always allow" status for the currently
+ * open project. */
+export function setToolAutoApproved(tool: string, autoApproved: boolean): Promise<void> {
+  return invoke("ai_set_tool_auto_approved", { tool, autoApproved });
+}
+
 // Mirrors `domain::llm::LlmToolDefinition` in `src-tauri/src/domain/llm.rs`
 // (`#[serde(rename_all = "camelCase")]`) — the same definitions actually
 // advertised to the model for function-calling.

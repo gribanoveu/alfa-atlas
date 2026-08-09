@@ -21,6 +21,17 @@ pub struct ProjectConfig {
     /// tool isn't silently added to an already-customized list.
     #[serde(default)]
     pub ai_allowed_tools: Option<Vec<ToolName>>,
+    /// Tool names the user has told the assistant to stop asking
+    /// confirmation for on this project, via the approval card's "Разрешать
+    /// всегда" button (see `services::ai_tools::set_tool_auto_approved`).
+    /// `None`/missing (old `project.json` files) behaves like an empty set —
+    /// every `ToolName::requires_confirmation` tool still pauses for
+    /// approval. Unlike `ai_allowed_tools`, this never widens what a tool
+    /// can *do* — it only skips the per-call confirmation prompt for a tool
+    /// the user has already vetted on this repo, in this and every future
+    /// chat.
+    #[serde(default)]
+    pub ai_auto_approved_tools: Option<Vec<ToolName>>,
     /// Stable fallback identity for the global embeddings cache
     /// (`~/.atlas/embeddings/{repository_id}`, see `commands::embeddings::
     /// resolve_index_paths`), used only when the repo has no resolvable
@@ -37,6 +48,7 @@ impl ProjectConfig {
             docs_root: docs_root_relative.into(),
             ai_access_mode: AiAccessMode::default(),
             ai_allowed_tools: None,
+            ai_auto_approved_tools: None,
             local_repository_id: None,
         }
     }
@@ -153,6 +165,7 @@ mod tests {
         assert_eq!(config.docs_root, "docs");
         assert_eq!(config.ai_access_mode, AiAccessMode::DocsOnly);
         assert_eq!(config.ai_allowed_tools, None);
+        assert_eq!(config.ai_auto_approved_tools, None);
     }
 
     #[test]
@@ -160,5 +173,6 @@ mod tests {
         let config = ProjectConfig::new("docs");
         assert_eq!(config.ai_access_mode, AiAccessMode::DocsOnly);
         assert_eq!(config.ai_allowed_tools, None);
+        assert_eq!(config.ai_auto_approved_tools, None);
     }
 }

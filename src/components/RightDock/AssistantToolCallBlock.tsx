@@ -199,11 +199,12 @@ export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantT
 
 /** Body of a `"pendingApproval"` card: whatever context helps the user
  * judge the action (a diff for `writeFile`, the stated reason for
- * `requestFullRepoAccess`), the countdown strip, an optional "don't ask
- * again this conversation" checkbox, and Approve/Deny. Disables itself the
- * instant either button is clicked — `useLlmChat`'s own timeout can still
- * beat a slow click to the punch, but this at least prevents a double
- * decision from this card itself. */
+ * `requestFullRepoAccess`), the countdown strip, a "don't ask again" button
+ * that persists per-tool, per-project (`useLlmChat`'s `getAutoApprovedTools`/
+ * `setToolAutoApproved`), and Approve/Deny. Disables itself the instant
+ * either button is clicked — `useLlmChat`'s own timeout can still beat a
+ * slow click to the punch, but this at least prevents a double decision
+ * from this card itself. */
 function ToolApprovalCard({
   block,
   docsRoot,
@@ -264,7 +265,7 @@ function ToolApprovalCard({
             type="button"
             className="assistant-btn"
             disabled={decided}
-            title="Больше не спрашивать в этом диалоге"
+            title="Больше не спрашивать для этого инструмента в этом проекте"
             onClick={() => handleDecide(true, true)}
           >
             Разрешать всегда

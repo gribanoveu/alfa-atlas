@@ -5,7 +5,7 @@ use tauri::State;
 use crate::commands::embeddings::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
-use crate::domain::ai_access::AiAccessMode;
+use crate::domain::ai_access::{AiAccessMode, ToolName};
 use crate::domain::ai_tools::{Task, ToolCall, ToolResult};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::project_config::ProjectConfig;
@@ -101,4 +101,24 @@ pub fn ai_get_tool_definitions() -> Result<Vec<LlmToolDefinition>, String> {
 #[tauri::command]
 pub fn ai_set_access_mode(mode: AiAccessMode) -> Result<(), String> {
     ai_tools::set_access_mode(mode).map_err(|e| e.to_string())
+}
+
+/// Tool names the currently open project has persisted as "always allow" —
+/// loaded once by the frontend when an assistant chat panel mounts, to seed
+/// its in-memory trusted-tool set so a choice made in one chat carries into
+/// every later chat on this repo.
+#[tauri::command]
+pub fn ai_get_auto_approved_tools() -> Result<Vec<ToolName>, String> {
+    Ok(ai_tools::auto_approved_tools()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect())
+}
+
+/// Persists (or revokes) one tool's "always allow" status for the currently
+/// open project — called when the user clicks "Разрешать всегда" (or, in
+/// the future, revokes it) on an approval card.
+#[tauri::command]
+pub fn ai_set_tool_auto_approved(tool: ToolName, auto_approved: bool) -> Result<(), String> {
+    ai_tools::set_tool_auto_approved(tool, auto_approved).map_err(|e| e.to_string())
 }

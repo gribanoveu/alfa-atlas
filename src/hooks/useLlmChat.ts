@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AiAccessMode, LlmToolDefinition, Task } from "../lib/aiTools";
+import { getAutoApprovedTools, setToolAutoApproved, type AiAccessMode, type LlmToolDefinition, type Task } from "../lib/aiTools";
 import {
   buildAccessModeChangeNotice,
   buildAssistantSystemPrompt,
@@ -81,15 +81,33 @@ export function useLlmChat(
   // mid-conversation switch, see `buildAccessModeChangeNotice`).
   const lastSentModeRef = useRef<AiAccessMode | null>(null);
 
-  // Tool names (e.g. `"writeFile"`) the user has ticked "don't ask again
-  // this conversation" for — checked before ever showing an approval card
-  // for a later round. Scoped per tool, not blanket: trusting `writeFile`
-  // doesn't silently pre-approve a later `requestFullRepoAccess`. Lives for
-  // the panel's mounted lifetime, same as `messages` itself — there's no
-  // separate "clear conversation" action yet to reset it on, so it can't
-  // outlive what the user perceives as a fresh chat any more than the
-  // transcript already does.
+  // Tool names (e.g. `"writeFile"`) the user has ticked "don't ask again"
+  // for — checked before ever showing an approval card for a later round.
+  // Scoped per tool, not blanket: trusting `writeFile` doesn't silently
+  // pre-approve a later `requestFullRepoAccess`. Seeded on mount from the
+  // project's persisted `ai_auto_approved_tools` (see the effect below), so
+  // a choice made in one chat carries into every later chat on this repo
+  // rather than living only for this panel's mounted lifetime.
   const trustedToolsRef = useRef<Set<string>>(new Set());
+
+  // Loads whichever tools this project already has persisted as "always
+  // allow" (from a previous chat, or a previous session) and merges them
+  // into `trustedToolsRef` before the user sends anything — so a round that
+  // would otherwise pause for confirmation is silently auto-approved from
+  // the very first turn, not just after the user re-clicks "Разрешать
+  // всегда" in this chat. Runs once per mount, matching `trustedToolsRef`'s
+  // own per-chat-mount lifetime; a project switch remounts this hook (new
+  // `providerId`/chat) so there's no stale cross-project leak to guard.
+  useEffect(() => {
+    let cancelled = false;
+    void getAutoApprovedTools().then((tools) => {
+      if (cancelled) return;
+      for (const tool of tools) trustedToolsRef.current.add(tool);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // This turn's task checklist, owned by the frontend exactly like
   // `messages` itself — the backend keeps no server-side session state
@@ -152,7 +170,10 @@ export function useLlmChat(
         if (timer !== undefined) clearTimeout(timer);
         if (trust && approved) {
           const call = calls.find((c) => c.id === id);
-          if (call) trustedToolsRef.current.add(call.name);
+          if (call) {
+            trustedToolsRef.current.add(call.name);
+            void setToolAutoApproved(call.name, true);
+          }
         }
         if (decided.size === calls.length) {
           activeApprovalRef.current = null;
@@ -303,9 +324,9 @@ export function useLlmChat(
         // needing confirmation (`writeFile`/`requestFullRepoAccess`) comes
         // back as `pendingApproval` instead — nothing in it executed yet —
         // and this loop collects a decision for each call (skipping the
-        // card entirely for tool names already trusted this conversation)
-        // before resuming, potentially several times if later rounds pause
-        // again.
+        // card entirely for tool names already trusted, whether from this
+        // chat or persisted from an earlier one on this project) before
+        // resuming, potentially several times if later rounds pause again.
         let outcome = await streamLlmChat(providerId, wireMessages, todoListRef.current);
         while (outcome.status === "pendingApproval") {
           const { history, round, budgetUsed, calls, todos: updatedTodos } = outcome.value;
