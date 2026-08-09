@@ -89,7 +89,7 @@ export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantT
             className="assistant-tool-call-auto-approved"
             title="Одобрено автоматически — вы отключили запрос подтверждения для этого действия в этом диалоге"
           >
-            авто-одобрено
+            авто
           </span>
         ) : null}
       </button>

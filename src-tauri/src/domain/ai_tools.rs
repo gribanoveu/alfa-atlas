@@ -290,6 +290,17 @@ pub enum ToolError {
     /// or corrupt one of them, so the whole call is rejected.
     #[error("edits overlap in the same region of the file")]
     EditsOverlap,
+    /// An `editFile` edit's `old` text didn't match exactly (the
+    /// `EditTextNotFound`/`EditTextAmbiguous` case), and the fast-apply
+    /// reconciliation fallback (`services::ai_tools::run_fast_apply`) — which
+    /// hands the whole file plus the edit's intent to the configured LLM
+    /// provider and asks it to locate and make the change itself — either
+    /// wasn't available (no provider resolved for this call), errored, or
+    /// produced output that failed the byte-identical-outside-the-edited-
+    /// region safety check (`services::ai_tools::validate_fast_apply_output`).
+    /// `.0` is the edit's (possibly truncated) `old` text, `.1` explains why.
+    #[error("could not automatically apply edit for \"{0}\": {1}")]
+    EditApplyFailed(String, String),
     /// A `deleteDirectory` call with `recursive` omitted or `false` against
     /// a directory that has contents — see
     /// `services::ai_tools::delete_directory`.
@@ -307,12 +318,16 @@ pub enum ToolError {
     /// A model-supplied `LlmToolCall::arguments` that doesn't deserialize
     /// into the args struct its `name` maps to (missing/extra/wrong-typed
     /// field, or plain non-JSON) — see `services::ai_tools::parse_tool_call`.
-    #[error("invalid arguments for {tool}: {source}")]
-    InvalidArguments {
-        tool: String,
-        #[source]
-        source: serde_json::Error,
-    },
+    /// `reason` is a JSON-path-annotated message (via `serde_path_to_error`,
+    /// e.g. `edits[1]: missing field \`old\`` rather than a bare
+    /// `serde_json::Error`'s `"... at line 1 column 7275"`) — a real
+    /// observed failure is a model getting a field name wrong on one
+    /// element deep inside an array argument (e.g. `editFile`'s `edits`);
+    /// a byte offset into the raw JSON string doesn't tell it which element
+    /// or field to fix, a path does. Plain `String` rather than a `#[source]`
+    /// error type — nothing inspects this beyond its rendered text.
+    #[error("invalid arguments for {tool}: {reason}")]
+    InvalidArguments { tool: String, reason: String },
 }
 
 impl From<EmbeddingError> for ToolError {

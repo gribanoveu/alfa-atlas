@@ -47,6 +47,11 @@ pub async fn ai_execute_tool(
         embedding_provider: embedding_provider.inner().clone(),
         sync_guard: sync_guard.inner().clone(),
         workspace_index: workspace_index.inner().clone(),
+        // No chat turn here to reuse a resolved provider/model from — this
+        // standalone endpoint has no fast-apply fallback for `EditFile`, so
+        // a non-exact edit surfaces the plain deterministic error. See
+        // `EmbeddingDeps::fast_apply`'s doc comment.
+        fast_apply: None,
     };
     tauri::async_runtime::spawn_blocking(move || {
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;

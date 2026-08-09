@@ -91,7 +91,7 @@ const MAX_TOOL_ITERATIONS: usize = 20;
 /// `MAX_TOOL_ITERATIONS` (no regression there), while a
 /// `SemanticSearch`-heavy sequence now cuts off around 10 calls instead of
 /// 20.
-const MAX_TOOL_BUDGET: u32 = 40;
+const MAX_TOOL_BUDGET: u32 = 100;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -476,7 +476,7 @@ pub async fn llm_chat_stream(
     workspace_index: State<'_, Arc<WorkspaceIndex>>,
 ) -> Result<ChatStreamOutcome, String> {
     let llm_provider = llm_provider.inner().clone();
-    let deps = EmbeddingDeps {
+    let mut deps = EmbeddingDeps {
         repo_index: repo_index.inner().clone(),
         chunk_index: chunk_index.inner().clone(),
         embedding_index: embedding_index.inner().clone(),
@@ -484,6 +484,11 @@ pub async fn llm_chat_stream(
         embedding_provider: embedding_provider.inner().clone(),
         sync_guard: sync_guard.inner().clone(),
         workspace_index: workspace_index.inner().clone(),
+        // Set below, once `provider`/`model` are resolved — `EditFile`'s
+        // fast-apply fallback reuses the exact same provider/model this
+        // turn is already using for chat, rather than resolving a second
+        // one just for this.
+        fast_apply: None,
     };
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
         let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
@@ -493,6 +498,7 @@ pub async fn llm_chat_stream(
         let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
         let model = llm_config::effective_model(&resolved, provider.as_ref())
             .map_err(|e| e.to_string())?;
+        deps.fast_apply = Some((provider.clone(), model.clone()));
 
         // No project open is not something the model can recover from by
         // trying again — hard-fail the whole command, same as
@@ -542,7 +548,7 @@ pub async fn llm_chat_stream_resume(
     workspace_index: State<'_, Arc<WorkspaceIndex>>,
 ) -> Result<ChatStreamOutcome, String> {
     let llm_provider = llm_provider.inner().clone();
-    let deps = EmbeddingDeps {
+    let mut deps = EmbeddingDeps {
         repo_index: repo_index.inner().clone(),
         chunk_index: chunk_index.inner().clone(),
         embedding_index: embedding_index.inner().clone(),
@@ -550,6 +556,11 @@ pub async fn llm_chat_stream_resume(
         embedding_provider: embedding_provider.inner().clone(),
         sync_guard: sync_guard.inner().clone(),
         workspace_index: workspace_index.inner().clone(),
+        // Set below, once `provider`/`model` are resolved — `EditFile`'s
+        // fast-apply fallback reuses the exact same provider/model this
+        // turn is already using for chat, rather than resolving a second
+        // one just for this.
+        fast_apply: None,
     };
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
         let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
@@ -559,6 +570,7 @@ pub async fn llm_chat_stream_resume(
         let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
         let model = llm_config::effective_model(&resolved, provider.as_ref())
             .map_err(|e| e.to_string())?;
+        deps.fast_apply = Some((provider.clone(), model.clone()));
 
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
         let tools = ai_tools::llm_tool_definitions(&scope);
