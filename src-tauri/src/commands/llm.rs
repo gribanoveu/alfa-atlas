@@ -427,10 +427,19 @@ fn run_tool_loop(
                 }
             }
 
+            // Text the *model* reads for this call, as opposed to `outcome`
+            // itself (also emitted verbatim as `TOOL_RESULT_EVENT.error` for
+            // the UI, which pattern-matches the literal `"denied by user"`
+            // string from above — see `describeToolResult` in
+            // `assistantConfig.ts`). Kept in Russian here, independently of
+            // that English marker, so a tool failure or a denied call
+            // doesn't hand the model a chunk of English prose to continue
+            // from mid-turn.
             let content = match &outcome {
                 Ok(tool_result) => serde_json::to_string(tool_result)
-                    .unwrap_or_else(|_| "Error: failed to serialize tool result".to_string()),
-                Err(e) => format!("Error: {e}"),
+                    .unwrap_or_else(|_| "Ошибка: не удалось сериализовать результат инструмента".to_string()),
+                Err(e) if e == "denied by user" => "Отклонено пользователем".to_string(),
+                Err(e) => format!("Ошибка: {e}"),
             };
             history.push(LlmMessage {
                 role: LlmRole::Tool,

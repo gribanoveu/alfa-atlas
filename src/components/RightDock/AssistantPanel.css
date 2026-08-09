@@ -216,6 +216,7 @@
    ========================================================= */
 
 .assistant-chat {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -280,6 +281,7 @@
    ========================================================= */
 
 .assistant-chat-messages {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -288,6 +290,61 @@
   overflow-y: auto;
   padding: 8px 10px 16px;
   scrollbar-gutter: stable;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-chat-messages {
+    scroll-behavior: auto;
+  }
+}
+
+/* Floating "jump to newest message" pill — shown once the user scrolls up
+   away from the live bottom edge while a conversation keeps growing (see
+   `AssistantConversation`'s `pinnedToBottom`/`showJumpToBottom` state), so
+   auto-follow doesn't fight someone who scrolled up to re-read something. */
+.assistant-scroll-to-bottom {
+  position: sticky;
+  align-self: center;
+  bottom: 4px;
+  margin-top: auto;
+  z-index: 5;
+
+  display: flex;
+  align-items: center;
+  gap: 4px;
+
+  height: 30px;
+  padding: 8px 10px 8px 8px;
+
+  border: 1px solid var(--border);
+  border-radius: 999px;
+
+  background: var(--bg-1);
+  color: var(--text-2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+ 
+  line-height: 1;
+  cursor: pointer;
+
+  animation: assistant-scroll-to-bottom-in 0.12s ease;
+}
+
+.assistant-scroll-to-bottom:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+@keyframes assistant-scroll-to-bottom-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .assistant-chat-placeholder {
@@ -322,7 +379,7 @@
   padding: 8px 12px;
   border-radius: 10px;
   font-size: calc(var(--font-ui-sm) * 1.15);
-  line-height: 1.65;
+  line-height: 2;
   word-break: break-word;
 }
 
@@ -367,7 +424,7 @@
 
 .assistant-chat-message p {
   margin: 0 0 12px;
-  line-height: 1.65;
+  line-height: 1.8;
 }
 
 .assistant-chat-message p:last-child {

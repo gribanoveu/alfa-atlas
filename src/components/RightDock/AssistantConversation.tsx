@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronUp, Send, Sparkles } from "lucide-react";
+import { ArrowDown, ChevronUp, Send, Sparkles } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import {
   AUTO_MODEL_LABEL,
@@ -245,6 +245,14 @@ export function AssistantConversation({
   const [draft, setDraft] = useState("");
 
   const messagesRef = useRef<HTMLDivElement>(null);
+  // Auto-follow state for the transcript scroll — separate from React state
+  // where possible (`pinnedToBottomRef`) since it's read inside the
+  // high-frequency `messages` effect below and mustn't itself trigger a
+  // re-render; `showJumpToBottom` is the one bit that does need to be state,
+  // since it drives the floating button's visibility.
+  const pinnedToBottomRef = useRef(true);
+  const didMountScrollRef = useRef(false);
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
 
   // Model picker — reuses the same `.clone-select*` trigger/menu pattern as
   // `LlmTab.tsx`'s own model dropdown (and writes to the same underlying
@@ -255,10 +263,47 @@ export function AssistantConversation({
   const [modelSelectOpen, setModelSelectOpen] = useState(false);
   const modelSelectRef = useRef<HTMLDivElement>(null);
 
+  // Sticks the transcript to its bottom edge as new messages/deltas arrive,
+  // the way Cursor/ChatGPT do — but only while the user hasn't scrolled up
+  // to read something earlier (`pinnedToBottomRef`, kept current by
+  // `handleMessagesScroll` below). The very first paint for this
+  // conversation (mount, or a chat switch — this component remounts via
+  // `key={chatId}`) jumps instantly instead of animating from the top of a
+  // potentially long restored history; every following-along update after
+  // that animates, since deltas arrive many times a second and repeatedly
+  // retargeting a `behavior: "smooth"` scroll is what gives the streaming
+  // text its continuous "catching up" motion instead of a jittery snap per
+  // token.
   useEffect(() => {
     const el = messagesRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (!didMountScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
+      didMountScrollRef.current = true;
+      return;
+    }
+    if (pinnedToBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
   }, [messages]);
+
+  const SCROLL_BOTTOM_THRESHOLD_PX = 48;
+
+  const handleMessagesScroll = () => {
+    const el = messagesRef.current;
+    if (!el) return;
+    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX;
+    pinnedToBottomRef.current = pinned;
+    setShowJumpToBottom(!pinned);
+  };
+
+  const handleJumpToBottom = () => {
+    const el = messagesRef.current;
+    if (!el) return;
+    pinnedToBottomRef.current = true;
+    setShowJumpToBottom(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
 
   // Reset the fetched model list (and close the menu) whenever the active
   // provider itself changes, so a stale list from a different provider
@@ -308,12 +353,16 @@ export function AssistantConversation({
     const text = draft.trim();
     if (!text || sending) return;
     setDraft("");
+    // Sending a message always means "follow the reply", even if the user
+    // had scrolled up to reread something earlier in the transcript.
+    pinnedToBottomRef.current = true;
+    setShowJumpToBottom(false);
     void sendMessage(text);
   };
 
   return (
     <>
-      <div className="assistant-chat-messages" ref={messagesRef}>
+      <div className="assistant-chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 ? (
           <div className="assistant-chat-placeholder">
             <Sparkles size={22} strokeWidth={1.5} aria-hidden />
@@ -359,6 +408,16 @@ export function AssistantConversation({
             );
           })
         )}
+        {showJumpToBottom ? (
+          <button
+            type="button"
+            className="assistant-scroll-to-bottom"
+            onClick={handleJumpToBottom}
+          >
+            <ArrowDown size={12} strokeWidth={2} aria-hidden />
+            <span>Вниз</span>
+          </button>
+        ) : null}
       </div>
       {error ? <div className="assistant-chat-error">{error}</div> : null}
       <div className="assistant-model-bar">
