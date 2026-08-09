@@ -1,4 +1,4 @@
-import type { AiAccessMode, LlmToolDefinition, MatchSource } from "./aiTools";
+import type { AiAccessMode, LlmToolDefinition, MatchSource, Task } from "./aiTools";
 import type { ToolCallBlock } from "./chatBlocks";
 import type { SpecsRepoInfo } from "./openapi";
 
@@ -292,6 +292,22 @@ If a tool result contradicts an earlier assumption, discard the assumption and u
 
 ---
 
+## Task checklist (todo)
+
+You have a \`todo\` tool for tracking progress on complex, multi-step tasks (3 or more distinct steps).
+
+At the start of such a task, call \`todo\` with \`op: "write"\` and the list of steps as short, imperative titles (3-7 words each). Do not use it for a task with only 1-2 steps — that is a wasted call.
+
+Your current checklist, with the active task marked \`●\` and labeled "← текущая", is always shown to you at the top of your context on every turn. Do not call \`todo\` to read the list — there is no read operation, and none is needed.
+
+When you finish the task currently marked \`●\`, call \`todo\` with \`op: "update"\`, the task's \`id\`, and \`status: "completed"\` (optionally a short \`note\` with the result). The next task activates automatically — you never choose or set which task becomes active yourself; the runtime does that. You may only ever set \`status\` to \`"completed"\` or \`"cancelled"\` — never \`"pending"\` or \`"in_progress"\`.
+
+If you realize mid-task that more steps are needed, call \`todo\` again with \`op: "write"\` — the new titles are appended to the end of the existing checklist, never replacing it.
+
+If a step turns out to be unnecessary or impossible, call \`todo\` with \`op: "update"\`, \`status: "cancelled"\`, and a \`note\` explaining why, rather than leaving it stuck as the active task or silently skipping it.
+
+---
+
 ## Documentation editing
 
 When editing existing documentation, preserve the following priorities:
@@ -574,6 +590,38 @@ export function buildAccessModeChangeNotice(mode: AiAccessMode): string {
   return `[System notice] The user just switched your access mode. Current access mode: ${modeDescription} Disregard any earlier statement you made in this conversation about your access — it may no longer be accurate.`;
 }
 
+/** Builds the "TODO:" context block `useLlmChat` splices into every request
+ * as its own fresh `system` message, right before the user's new turn —
+ * same treatment as `buildAccessModeChangeNotice`: computed on every
+ * `sendMessage` call from `todoListRef.current`, never stored in the
+ * persisted `ChatMessage[]`/`messages` state, so a later turn always shows
+ * the model the true current list rather than a stale copy baked into chat
+ * history. Returns `null` when `tasks` is empty, so a plain 1-2-step turn
+ * that never called `todo write` sends no extra message at all.
+ *
+ * Glyphs: `✓` completed, `●` in_progress (the one task marked "← текущая"
+ * — there is at most one, enforced server-side), `○` pending, `✗`
+ * cancelled. Cancelled tasks are shown, not omitted — hiding one risks the
+ * model re-proposing a step it already decided against earlier in the same
+ * conversation; its `note` (the cancellation reason) is appended inline so
+ * the model doesn't have to guess why it was dropped. */
+export function buildTodoContextBlock(tasks: Task[]): string | null {
+  if (tasks.length === 0) return null;
+  const lines = tasks.map((t) => {
+    switch (t.status) {
+      case "completed":
+        return `✓ ${t.title}`;
+      case "inProgress":
+        return `● ${t.title}   ← текущая`;
+      case "cancelled":
+        return `✗ ${t.title}${t.note ? ` (${t.note})` : ""}`;
+      case "pending":
+        return `○ ${t.title}`;
+    }
+  });
+  return `TODO:\n${lines.join("\n")}`;
+}
+
 // Header line for one tool-call block (see `AssistantToolCallBlock`) — used
 // unchanged regardless of the block's status ("is/was being done" both read
 // fine off the same phrasing; a separate icon and, once settled,
@@ -614,6 +662,10 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
         : "Перемещает…";
     case "requestFullRepoAccess":
       return "Запрашивает доступ к репозиторию…";
+    case "todo":
+      if (args.op === "write") return "Обновляет список задач…";
+      if (args.op === "update") return "Отмечает задачу в списке…";
+      return "Работает со списком задач…";
     default:
       return "Выполняет действие…";
   }
@@ -686,6 +738,17 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
     }
     case "accessModeChanged":
       return block.result.result.mode === "fullRepo" ? "Доступ изменён: весь репозиторий" : "Доступ изменён: только документация";
+    case "todoWritten": {
+      const tasks = block.result.result;
+      return `Задач в списке: ${tasks.length}`;
+    }
+    case "todoUpdated": {
+      const tasks = block.result.result;
+      const completed = tasks.filter((t) => t.status === "completed").length;
+      const cancelled = tasks.filter((t) => t.status === "cancelled").length;
+      const remaining = tasks.length - completed - cancelled;
+      return `Выполнено: ${completed}, отменено: ${cancelled}, осталось: ${remaining}`;
+    }
     default:
       return "Готово";
   }

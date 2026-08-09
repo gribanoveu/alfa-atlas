@@ -144,6 +144,78 @@ pub struct RequestFullRepoAccessArgs {
     pub reason: String,
 }
 
+/// A task's lifecycle state. Deliberately only these four — no `failed`,
+/// no `blocked`, no `dependsOn`: a failed step is either `Cancelled` with a
+/// `note` explaining why, or the agent keeps retrying within the same
+/// `InProgress` task. `Pending`/`InProgress` are runtime-only transitions —
+/// the model can never set them directly, see `TodoUpdateStatus`, which is
+/// the only status shape a `todo update` call can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Cancelled,
+}
+
+/// One entry in the model's working task checklist for the current
+/// conversation. Never persisted server-side — this backend keeps no
+/// session state between calls (see `commands::llm`'s tool-loop doc
+/// comment) — round-tripped through `ChatStreamOutcome`/`PendingApproval`
+/// and owned by the frontend (`useLlmChat`'s `todoListRef`) between turns,
+/// the same way `LlmMessage` history already is. `id` is runtime-generated
+/// (`"t1"`, `"t2"`, ... sequential) — the model never invents or chooses
+/// one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Task {
+    pub id: String,
+    pub title: String,
+    pub status: TodoStatus,
+    /// A short result (`Completed`) or the reason (`Cancelled`) — never
+    /// required.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+/// `op: "write"` — one or more new task titles, appended to the end of the
+/// current list (never a replace).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoWriteArgs {
+    pub titles: Vec<String>,
+}
+
+/// `op: "update"`'s allowed `status` values — deliberately excludes
+/// `Pending`/`InProgress` at the type level, which is what makes "the
+/// model can never pick the next task itself" a schema-enforced fact
+/// rather than a prompt request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TodoUpdateStatus {
+    Completed,
+    Cancelled,
+}
+
+impl From<TodoUpdateStatus> for TodoStatus {
+    fn from(s: TodoUpdateStatus) -> Self {
+        match s {
+            TodoUpdateStatus::Completed => TodoStatus::Completed,
+            TodoUpdateStatus::Cancelled => TodoStatus::Cancelled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TodoUpdateArgs {
+    pub id: String,
+    pub status: TodoUpdateStatus,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// Which cascade tier produced a `ToolMatch` — scores are only comparable
 /// within the same source, never across tiers (see `ToolMatch::score`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,6 +265,8 @@ pub enum ToolCall {
     DeleteDirectory(DeleteDirectoryArgs),
     Move(MoveArgs),
     RequestFullRepoAccess(RequestFullRepoAccessArgs),
+    TodoWrite(TodoWriteArgs),
+    TodoUpdate(TodoUpdateArgs),
 }
 
 impl ToolCall {
@@ -208,6 +282,8 @@ impl ToolCall {
             ToolCall::DeleteDirectory(_) => ToolName::DeleteDirectory,
             ToolCall::Move(_) => ToolName::Move,
             ToolCall::RequestFullRepoAccess(_) => ToolName::RequestFullRepoAccess,
+            ToolCall::TodoWrite(_) => ToolName::Todo,
+            ToolCall::TodoUpdate(_) => ToolName::Todo,
         }
     }
 }
@@ -256,6 +332,13 @@ pub enum ToolResult {
         updated_files: Vec<crate::domain::project_config::UpdatedReference>,
     },
     AccessModeChanged { mode: AiAccessMode },
+    /// Full updated list after a `todo write` — both this call's own
+    /// result (fed back to the model as a `Tool`-role message) and, via
+    /// `commands::llm::run_tool_loop`, what becomes the turn's `todos`
+    /// state going forward.
+    TodoWritten(Vec<Task>),
+    /// Same shape/role as `TodoWritten`, after a `todo update`.
+    TodoUpdated(Vec<Task>),
 }
 
 #[derive(Debug, Error)]
@@ -328,6 +411,21 @@ pub enum ToolError {
     /// error type — nothing inspects this beyond its rendered text.
     #[error("invalid arguments for {tool}: {reason}")]
     InvalidArguments { tool: String, reason: String },
+    /// A `todo write` whose new titles would push the list past
+    /// `services::ai_tools::MAX_TODO_TASKS` — rejected outright rather than
+    /// silently truncated, so the model sees the failure and can decide
+    /// what to drop or split.
+    #[error("todo list already has {current} task(s); adding {adding} more would exceed the {max} maximum")]
+    TooManyTasks {
+        current: usize,
+        adding: usize,
+        max: usize,
+    },
+    /// A `todo update` naming an `id` that doesn't exist in the current
+    /// list — most likely a stale/hallucinated id from earlier in the
+    /// conversation.
+    #[error("no task with id: {0}")]
+    TaskNotFound(String),
 }
 
 impl From<EmbeddingError> for ToolError {

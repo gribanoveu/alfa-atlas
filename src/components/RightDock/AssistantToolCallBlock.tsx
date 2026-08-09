@@ -7,7 +7,7 @@ import {
   formatToolArguments,
   TOOL_APPROVAL_TIMEOUT_MS,
 } from "../../lib/assistantConfig";
-import type { ToolResult } from "../../lib/aiTools";
+import type { Task, ToolResult, TodoStatus } from "../../lib/aiTools";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
 import { WriteFileDiffReview } from "./WriteFileDiffReview";
 
@@ -383,7 +383,48 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
           )}
         </div>
       );
+    case "todoWritten":
+    case "todoUpdated":
+      return <TodoChecklistDetail tasks={result.result} />;
     default:
       return null;
   }
+}
+
+function todoGlyph(status: TodoStatus): string {
+  switch (status) {
+    case "completed":
+      return "✓";
+    case "inProgress":
+      return "●";
+    case "cancelled":
+      return "✗";
+    case "pending":
+      return "○";
+  }
+}
+
+/** Compact checklist rendering shared by `todoWritten`/`todoUpdated`'s
+ * expanded detail view — both results carry the full, current `Task[]`, so
+ * there's nothing op-specific to distinguish in the display itself. */
+function TodoChecklistDetail({ tasks }: { tasks: Task[] }) {
+  return (
+    <div className="assistant-tool-call-detail-section">
+      <div className="assistant-tool-call-detail-label">Список задач</div>
+      {tasks.length === 0 ? (
+        <p className="assistant-tool-call-detail-empty">Пусто</p>
+      ) : (
+        <ul className="assistant-tool-call-detail-list">
+          {tasks.map((t) => (
+            <li key={t.id}>
+              <span>
+                {todoGlyph(t.status)} {t.title}
+                {t.note ? ` — ${t.note}` : ""}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }

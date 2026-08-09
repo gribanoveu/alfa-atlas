@@ -19,6 +19,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::ai_tools::Task;
+
 /// Token limits for a provider's (currently configured) model — informational
 /// only, not enforced anywhere in this client; surfaced to the frontend so
 /// the chat UI can show the user what they're working with. Not fetched
@@ -296,6 +298,22 @@ pub struct ChatStreamResult {
     pub tool_calls: Vec<LlmToolCall>,
 }
 
+/// The `Done` payload: the same round result the frontend has always
+/// received (`ChatStreamResult`, flattened — `text`/`usage`/`toolCalls`
+/// land at the same top-level keys as before this type existed), plus the
+/// turn's final `todos` state. A separate wrapper (not a field bolted onto
+/// `ChatStreamResult` itself) so the provider layer
+/// (`infra::llm_providers::openai_compatible`) and `infra::llm_debug_log`,
+/// which both construct/consume `ChatStreamResult` with no notion of
+/// todos, are untouched by this change.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatDone {
+    #[serde(flatten)]
+    pub result: ChatStreamResult,
+    pub todos: Vec<Task>,
+}
+
 /// What one call to `commands::llm::llm_chat_stream`/`llm_chat_stream_resume`
 /// resolves with: either a final answer, or a round that hit at least one
 /// tool call whose `domain::ai_access::ToolName::requires_confirmation` is
@@ -305,7 +323,7 @@ pub struct ChatStreamResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", content = "value", rename_all = "camelCase")]
 pub enum ChatStreamOutcome {
-    Done(ChatStreamResult),
+    Done(ChatDone),
     PendingApproval(PendingApproval),
 }
 
@@ -332,6 +350,13 @@ pub struct PendingApproval {
     /// `requires_confirmation` is `false`; they need no decision and
     /// execute automatically on resume).
     pub calls: Vec<PendingToolCall>,
+    /// The turn's `todos` state as of this pause. A round pausing means
+    /// nothing in *that* round executed — but an earlier, already-completed
+    /// round of the same multi-round turn may have already called `todo`,
+    /// so this must carry the loop's accumulated state, not just "unchanged
+    /// since turn start". Sent back unmodified to `llm_chat_stream_resume`,
+    /// same as `history`.
+    pub todos: Vec<Task>,
 }
 
 #[derive(Debug, Clone, Serialize)]

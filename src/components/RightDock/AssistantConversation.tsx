@@ -14,6 +14,7 @@ import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
+import { TodoProgressWidget } from "./TodoProgressWidget";
 
 type ChatMode = "agent" | "plan" | "question";
 
@@ -167,7 +168,7 @@ export function AssistantConversation({
   updateProviderConfig,
   loadModels,
 }: AssistantConversationProps) {
-  const { messages, sending, error, sendMessage, contextTokens, decideToolCall } = useLlmChat(
+  const { messages, sending, error, sendMessage, contextTokens, decideToolCall, todos } = useLlmChat(
     providerId,
     accessMode,
     specsRepoInfo,
@@ -362,6 +363,7 @@ export function AssistantConversation({
 
   return (
     <>
+      <TodoProgressWidget tasks={todos} />
       <div className="assistant-chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 ? (
           <div className="assistant-chat-placeholder">

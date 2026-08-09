@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ToolResult } from "./aiTools";
+import type { Task, ToolResult } from "./aiTools";
 
 // Mirrors `domain::llm::LlmProviderConfig`. Every field but `id` is
 // nullable — for a system provider id this is an *override* (`null` means
@@ -75,10 +75,13 @@ export type ChatUsage = {
   totalTokens: number;
 };
 
-// Mirrors `domain::llm::ChatStreamResult`.
+// Mirrors `domain::llm::ChatDone` (flattened onto `ChatStreamResult`'s own
+// fields on the wire — `text`/`usage` land at the same top-level keys as
+// before `todos` existed).
 export type ChatStreamResult = {
   text: string;
   usage: ChatUsage | null;
+  todos: Task[];
 };
 
 // Mirrors `domain::llm::PendingToolCall` — one call from a paused round,
@@ -101,6 +104,7 @@ export type PendingApproval = {
   round: number;
   budgetUsed: number;
   calls: PendingToolCall[];
+  todos: Task[];
 };
 
 // Mirrors `domain::llm::ChatStreamOutcome` — what one `streamLlmChat`/
@@ -173,8 +177,12 @@ export function testLlmConnection(providerId: string): Promise<string> {
  * provider reported one) or a paused round awaiting approval — see
  * `ChatStreamOutcome`. Subscribe via `listenLlmChatDelta` for live text
  * meanwhile. */
-export function streamLlmChat(providerId: string, messages: LlmMessage[]): Promise<ChatStreamOutcome> {
-  return invoke<ChatStreamOutcome>("llm_chat_stream", { providerId, messages });
+export function streamLlmChat(
+  providerId: string,
+  messages: LlmMessage[],
+  todos: Task[],
+): Promise<ChatStreamOutcome> {
+  return invoke<ChatStreamOutcome>("llm_chat_stream", { providerId, messages, todos });
 }
 
 /** Continues a conversation paused by a `{status: "pendingApproval"}`
@@ -190,6 +198,7 @@ export function streamLlmChatResume(
   round: number,
   budgetUsed: number,
   decisions: ToolCallDecision[],
+  todos: Task[],
 ): Promise<ChatStreamOutcome> {
   return invoke<ChatStreamOutcome>("llm_chat_stream_resume", {
     providerId,
@@ -197,6 +206,7 @@ export function streamLlmChatResume(
     round,
     budgetUsed,
     decisions,
+    todos,
   });
 }
 

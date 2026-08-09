@@ -18,8 +18,8 @@ use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
     CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit,
     ListFilesArgs, MatchSource, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs,
-    SemanticSearchArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope,
-    WriteFileArgs,
+    SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs,
+    ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::llm::{
@@ -42,6 +42,10 @@ const MAX_TOP_K: usize = 50;
 /// — keeps a large chunk's (up to 16KB) full text from blowing up the
 /// response payload.
 const SNIPPET_MAX_CHARS: usize = 500;
+/// Hard cap on total tasks in a todo list, enforced by `todo_write` — a
+/// `write` that would exceed this fails outright (see
+/// `ToolError::TooManyTasks`) rather than silently truncating.
+const MAX_TODO_TASKS: usize = 20;
 
 /// The embedding/chunk/repo-index/workspace-index state `SemanticSearch`/
 /// `Move` need to reach — `execute_tool` is otherwise a pure function with
@@ -106,6 +110,7 @@ pub fn execute_tool(
     scope: &ToolScope,
     call: ToolCall,
     deps: &EmbeddingDeps,
+    todos: &[Task],
 ) -> Result<ToolResult, ToolError> {
     if !scope.allows(call.name()) {
         return Err(ToolError::NotAllowed(call.name()));
@@ -146,7 +151,65 @@ pub fn execute_tool(
         ToolCall::RequestFullRepoAccess(_args) => set_access_mode(AiAccessMode::FullRepo)
             .map(|()| ToolResult::AccessModeChanged { mode: AiAccessMode::FullRepo })
             .map_err(ToolError::from),
+        ToolCall::TodoWrite(args) => todo_write(todos, args).map(ToolResult::TodoWritten),
+        ToolCall::TodoUpdate(args) => todo_update(todos, args).map(ToolResult::TodoUpdated),
     }
+}
+
+fn todo_write(todos: &[Task], args: TodoWriteArgs) -> Result<Vec<Task>, ToolError> {
+    let adding = args.titles.len();
+    if todos.len() + adding > MAX_TODO_TASKS {
+        return Err(ToolError::TooManyTasks {
+            current: todos.len(),
+            adding,
+            max: MAX_TODO_TASKS,
+        });
+    }
+    let mut next_id = todos.len();
+    let mut updated = todos.to_vec();
+    for title in args.titles {
+        next_id += 1;
+        updated.push(Task {
+            id: format!("t{next_id}"),
+            title,
+            status: TodoStatus::Pending,
+            note: None,
+        });
+    }
+    Ok(enforce_todo_invariant(updated))
+}
+
+fn todo_update(todos: &[Task], args: TodoUpdateArgs) -> Result<Vec<Task>, ToolError> {
+    let mut updated = todos.to_vec();
+    let task = updated
+        .iter_mut()
+        .find(|t| t.id == args.id)
+        .ok_or_else(|| ToolError::TaskNotFound(args.id.clone()))?;
+    task.status = args.status.into();
+    if let Some(note) = args.note {
+        task.note = Some(note);
+    }
+    Ok(enforce_todo_invariant(updated))
+}
+
+/// The one shared invariant-enforcement function, run at the end of both
+/// `todo_write` (a fresh append may leave the whole list without an
+/// `InProgress` task — e.g. the very first write ever) and `todo_update`
+/// (completing/cancelling the current task always does). At most one
+/// `InProgress` task ever exists; when none does and at least one
+/// `Pending` task remains, the first one (lowest id / earliest in list
+/// order, since ids are assigned sequentially and the list is
+/// append-only) is promoted. A no-op when an `InProgress` task already
+/// exists (e.g. `todo_write` appending onto an already-active list) or
+/// when no `Pending` task remains (list fully completed/cancelled).
+fn enforce_todo_invariant(mut tasks: Vec<Task>) -> Vec<Task> {
+    let has_in_progress = tasks.iter().any(|t| t.status == TodoStatus::InProgress);
+    if !has_in_progress {
+        if let Some(next) = tasks.iter_mut().find(|t| t.status == TodoStatus::Pending) {
+            next.status = TodoStatus::InProgress;
+        }
+    }
+    tasks
 }
 
 /// Persists a new `AiAccessMode` for the currently open project — shared by
@@ -236,7 +299,55 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "requestFullRepoAccess" => lenient_json_object::<RequestFullRepoAccessArgs>(&call.arguments)
             .map(ToolCall::RequestFullRepoAccess)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "todo" => parse_todo_call(&call.arguments)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         other => Err(ToolError::UnknownTool(other.to_string())),
+    }
+}
+
+/// `todo` is the first tool whose wire name doesn't map 1:1 to a single
+/// `ToolCall` variant — it covers two very different argument shapes
+/// (`write`'s `tasks: string[]` vs. `update`'s `id`/`status`/`note`) behind
+/// one name, deliberately, so the model only ever has to remember one tool
+/// (see `llm_tool_definitions`'s `todo` schema). This first deserializes a
+/// permissive raw shape (every field but `op` optional), then dispatches
+/// and validates the op-specific required fields by hand — the same
+/// "recoverable, informative error" contract `lenient_json_object` already
+/// gives every other tool, just with one extra branch before it.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawTodoArgs {
+    op: String,
+    #[serde(default)]
+    tasks: Option<Vec<String>>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    status: Option<TodoUpdateStatus>,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+fn parse_todo_call(input: &str) -> Result<ToolCall, String> {
+    let raw: RawTodoArgs = lenient_json_object(input)?;
+    match raw.op.as_str() {
+        "write" => {
+            let tasks = raw
+                .tasks
+                .ok_or_else(|| "op \"write\" requires a non-null `tasks` array".to_string())?;
+            if tasks.is_empty() {
+                return Err("op \"write\" requires at least one task title in `tasks`".to_string());
+            }
+            Ok(ToolCall::TodoWrite(TodoWriteArgs { titles: tasks }))
+        }
+        "update" => {
+            let id = raw.id.ok_or_else(|| "op \"update\" requires `id`".to_string())?;
+            let status = raw.status.ok_or_else(|| {
+                "op \"update\" requires `status` (\"completed\" or \"cancelled\")".to_string()
+            })?;
+            Ok(ToolCall::TodoUpdate(TodoUpdateArgs { id, status, note: raw.note }))
+        }
+        other => Err(format!("unknown todo op: \"{other}\" (expected \"write\" or \"update\")")),
     }
 }
 
@@ -514,6 +625,42 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
                     }
                 },
                 "required": ["reason"]
+            }),
+        });
+    }
+    if scope.allows(ToolName::Todo) {
+        defs.push(LlmToolDefinition {
+            name: "todo".to_string(),
+            description: "Manage your working task checklist for a multi-step request (3+ steps). One tool, two operations selected via `op`. `op: \"write\"` adds new task titles (`tasks`, an array of short imperative strings, 3-7 words each) to the end of the checklist; the runtime assigns each an id and, if the checklist was empty before this call, marks the first of the new tasks in_progress automatically (the rest start pending) — calling `write` again later appends more titles to the end, it never replaces or clears the existing list. `op: \"update\"` changes one existing task, named by `id` exactly as shown in your current checklist, to `status: \"completed\"` or `status: \"cancelled\"` (optionally with a short `note`: a brief result for a completed task, or the reason for a cancelled one) — these are the ONLY two status values you may set; you can never set `pending` or `in_progress` yourself, the runtime handles those transitions automatically, including auto-activating the next pending task the instant the current one is completed or cancelled. There is no `read` operation: your current checklist, with the active task marked, is always shown to you at the top of your context — never call this tool just to see the list. Do not use this tool for a task with only 1-2 steps, that is a wasted call. At most 20 tasks total in one checklist."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "op": {
+                        "type": "string",
+                        "enum": ["write", "update"],
+                        "description": "\"write\" to add new tasks (uses `tasks`). \"update\" to change one existing task's status/note (uses `id`, `status`, optionally `note`)."
+                    },
+                    "tasks": {
+                        "type": ["array", "null"],
+                        "items": { "type": "string" },
+                        "description": "Only for op: \"write\". New task titles to append to the end of the checklist, each 3-7 words, imperative. Ignored for op: \"update\"."
+                    },
+                    "id": {
+                        "type": ["string", "null"],
+                        "description": "Only for op: \"update\". The id of the task to change (e.g. \"t2\"), exactly as shown in your current checklist. Ignored for op: \"write\"."
+                    },
+                    "status": {
+                        "type": ["string", "null"],
+                        "enum": ["completed", "cancelled", null],
+                        "description": "Only for op: \"update\". The task's new status. Only \"completed\" or \"cancelled\" are valid — pending/in_progress are runtime-managed and cannot be set here. Use \"cancelled\" when a task turns out unnecessary or impossible, with `note` explaining why. Ignored for op: \"write\"."
+                    },
+                    "note": {
+                        "type": ["string", "null"],
+                        "description": "Only for op: \"update\". Optional short note: a brief result for a completed task, or the reason for a cancelled one. Ignored for op: \"write\"."
+                    }
+                },
+                "required": ["op"]
             }),
         });
     }
@@ -1476,6 +1623,7 @@ mod tests {
                 end_line: None,
             }),
             &EmbeddingDeps::empty(),
+            &[],
         )? {
             ToolResult::File { content, .. } => Ok(content),
             other => panic!("expected ToolResult::File, got {other:?}"),
@@ -1498,6 +1646,7 @@ mod tests {
                 end_line,
             }),
             &EmbeddingDeps::empty(),
+            &[],
         )
     }
 
@@ -1519,6 +1668,7 @@ mod tests {
                 pattern: pattern.map(str::to_string),
             }),
             &EmbeddingDeps::empty(),
+            &[],
         )? {
             ToolResult::FileList(entries) => Ok(entries),
             other => panic!("expected ToolResult::FileList, got {other:?}"),
@@ -1533,6 +1683,7 @@ mod tests {
                 content: content.to_string(),
             }),
             &EmbeddingDeps::empty(),
+            &[],
         )? {
             ToolResult::FileWritten { path } => Ok(path),
             other => panic!("expected ToolResult::FileWritten, got {other:?}"),
@@ -1550,6 +1701,7 @@ mod tests {
                     .collect(),
             }),
             &EmbeddingDeps::empty(),
+            &[],
         )? {
             ToolResult::FileEdited { path } => Ok(path),
             other => panic!("expected ToolResult::FileEdited, got {other:?}"),
@@ -1561,6 +1713,7 @@ mod tests {
             scope,
             ToolCall::CreateDirectory(CreateDirectoryArgs { path: path.to_string() }),
             &EmbeddingDeps::empty(),
+            &[],
         )? {
             ToolResult::DirectoryCreated { path } => Ok(path),
             other => panic!("expected ToolResult::DirectoryCreated, got {other:?}"),
@@ -1572,6 +1725,7 @@ mod tests {
             scope,
             ToolCall::DeleteFile(DeleteFileArgs { path: path.to_string() }),
             &EmbeddingDeps::empty(),
+            &[],
         )? {
             ToolResult::FileDeleted { path } => Ok(path),
             other => panic!("expected ToolResult::FileDeleted, got {other:?}"),
@@ -1583,6 +1737,7 @@ mod tests {
             scope,
             ToolCall::DeleteDirectory(DeleteDirectoryArgs { path: path.to_string(), recursive }),
             &EmbeddingDeps::empty(),
+            &[],
         )? {
             ToolResult::DirectoryDeleted { path } => Ok(path),
             other => panic!("expected ToolResult::DirectoryDeleted, got {other:?}"),
@@ -1607,6 +1762,7 @@ mod tests {
             scope,
             ToolCall::Move(MoveArgs { path: path.to_string(), new_path: new_path.to_string() }),
             deps,
+            &[],
         )? {
             ToolResult::Moved { from, to, updated_files } => Ok((from, to, updated_files)),
             other => panic!("expected ToolResult::Moved, got {other:?}"),
@@ -1964,6 +2120,7 @@ mod tests {
                     .collect(),
             }),
             &deps,
+            &[],
         )? {
             ToolResult::FileEdited { path } => Ok(path),
             other => panic!("expected ToolResult::FileEdited, got {other:?}"),
@@ -2721,6 +2878,7 @@ mod tests {
                 top_k: None,
             }),
             &EmbeddingDeps::empty(),
+            &[],
         )
         .unwrap_err();
         assert!(matches!(err, ToolError::NotAllowed(ToolName::SemanticSearch)));
@@ -3189,7 +3347,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_ten_by_default() {
+    fn llm_tool_definitions_includes_all_eleven_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -3207,7 +3365,8 @@ mod tests {
                 "createDirectory",
                 "deleteDirectory",
                 "move",
-                "requestFullRepoAccess"
+                "requestFullRepoAccess",
+                "todo"
             ]
         );
 
@@ -3268,5 +3427,176 @@ mod tests {
         assert_eq!(args.top_k, Some(3));
 
         fs::remove_dir_all(&repo).ok();
+    }
+
+    fn todo_write(scope: &ToolScope, todos: &[Task], titles: &[&str]) -> Result<Vec<Task>, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::TodoWrite(TodoWriteArgs {
+                titles: titles.iter().map(|s| s.to_string()).collect(),
+            }),
+            &EmbeddingDeps::empty(),
+            todos,
+        )? {
+            ToolResult::TodoWritten(list) => Ok(list),
+            other => panic!("expected ToolResult::TodoWritten, got {other:?}"),
+        }
+    }
+
+    fn todo_update(
+        scope: &ToolScope,
+        todos: &[Task],
+        id: &str,
+        status: TodoUpdateStatus,
+        note: Option<&str>,
+    ) -> Result<Vec<Task>, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::TodoUpdate(TodoUpdateArgs {
+                id: id.to_string(),
+                status,
+                note: note.map(str::to_string),
+            }),
+            &EmbeddingDeps::empty(),
+            todos,
+        )? {
+            ToolResult::TodoUpdated(list) => Ok(list),
+            other => panic!("expected ToolResult::TodoUpdated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn todo_write_on_empty_list_marks_first_task_in_progress_rest_pending() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let list = todo_write(&scope, &[], &["Найти контроллер", "Найти сервис", "Реализовать endpoint"]).unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].status, TodoStatus::InProgress);
+        assert_eq!(list[1].status, TodoStatus::Pending);
+        assert_eq!(list[2].status, TodoStatus::Pending);
+        assert_eq!(list[0].id, "t1");
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn todo_write_appends_to_an_existing_list_without_disturbing_in_progress() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let list = todo_write(&scope, &[], &["A", "B"]).unwrap();
+        let list = todo_write(&scope, &list, &["C"]).unwrap();
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].status, TodoStatus::InProgress);
+        assert_eq!(list[2].id, "t3");
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn todo_write_beyond_max_tasks_fails_without_mutating() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let titles: Vec<&str> = (0..20).map(|_| "Задача").collect();
+        let list = todo_write(&scope, &[], &titles).unwrap();
+        assert_eq!(list.len(), 20);
+        let err = todo_write(&scope, &list, &["Ещё одна"]).unwrap_err();
+        assert!(matches!(
+            err,
+            ToolError::TooManyTasks { current: 20, adding: 1, max: 20 }
+        ));
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn todo_update_completing_current_task_auto_promotes_next_pending() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let list = todo_write(&scope, &[], &["A", "B"]).unwrap();
+        let list = todo_update(&scope, &list, "t1", TodoUpdateStatus::Completed, Some("done")).unwrap();
+        assert_eq!(list[0].status, TodoStatus::Completed);
+        assert_eq!(list[0].note.as_deref(), Some("done"));
+        assert_eq!(list[1].status, TodoStatus::InProgress);
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn todo_update_cancelling_current_task_auto_promotes_next_pending() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let list = todo_write(&scope, &[], &["A", "B"]).unwrap();
+        let list = todo_update(&scope, &list, "t1", TodoUpdateStatus::Cancelled, Some("not needed")).unwrap();
+        assert_eq!(list[0].status, TodoStatus::Cancelled);
+        assert_eq!(list[1].status, TodoStatus::InProgress);
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn todo_update_on_last_remaining_task_leaves_nothing_in_progress() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let list = todo_write(&scope, &[], &["A"]).unwrap();
+        let list = todo_update(&scope, &list, "t1", TodoUpdateStatus::Completed, None).unwrap();
+        assert!(list.iter().all(|t| t.status != TodoStatus::InProgress));
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn todo_update_unknown_id_fails() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let list = todo_write(&scope, &[], &["A"]).unwrap();
+        let err = todo_update(&scope, &list, "t99", TodoUpdateStatus::Completed, None).unwrap_err();
+        assert!(matches!(err, ToolError::TaskNotFound(id) if id == "t99"));
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn parse_tool_call_dispatches_todo_write_and_todo_update() {
+        let write_call = LlmToolCall {
+            id: "1".to_string(),
+            name: "todo".to_string(),
+            arguments: r#"{"op":"write","tasks":["Найти контроллер","Найти сервис"]}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&write_call).unwrap(),
+            ToolCall::TodoWrite(TodoWriteArgs {
+                titles: vec!["Найти контроллер".to_string(), "Найти сервис".to_string()]
+            }),
+        );
+
+        let update_call = LlmToolCall {
+            id: "2".to_string(),
+            name: "todo".to_string(),
+            arguments: r#"{"op":"update","id":"t2","status":"completed","note":"endpoint в UserController.java:45"}"#
+                .to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&update_call).unwrap(),
+            ToolCall::TodoUpdate(TodoUpdateArgs {
+                id: "t2".to_string(),
+                status: TodoUpdateStatus::Completed,
+                note: Some("endpoint в UserController.java:45".to_string()),
+            }),
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_todo_with_an_out_of_enum_status() {
+        let call = LlmToolCall {
+            id: "1".to_string(),
+            name: "todo".to_string(),
+            arguments: r#"{"op":"update","id":"t1","status":"in_progress"}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "todo"));
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_unknown_todo_op() {
+        let call = LlmToolCall {
+            id: "1".to_string(),
+            name: "todo".to_string(),
+            arguments: r#"{"op":"read"}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "todo"));
     }
 }

@@ -33,6 +33,7 @@ pub enum ToolName {
     DeleteDirectory,
     Move,
     RequestFullRepoAccess,
+    Todo,
 }
 
 impl ToolName {
@@ -56,6 +57,9 @@ impl ToolName {
                 | ToolName::Move
                 | ToolName::RequestFullRepoAccess
         )
+        // `Todo` is deliberately NOT in this list — it's in-memory,
+        // non-destructive, no real-world side effect, same bucket as
+        // `ListFiles`/`ReadFile`/`SemanticSearch`.
     }
 
     /// Maps the wire `LlmToolCall::name` string to a `ToolName`, independent
@@ -76,6 +80,7 @@ impl ToolName {
             "deleteDirectory" => Some(ToolName::DeleteDirectory),
             "move" => Some(ToolName::Move),
             "requestFullRepoAccess" => Some(ToolName::RequestFullRepoAccess),
+            "todo" => Some(ToolName::Todo),
             _ => None,
         }
     }
@@ -102,6 +107,7 @@ impl ToolName {
             ToolName::DeleteDirectory => 1,
             ToolName::Move => 2,
             ToolName::RequestFullRepoAccess => 1,
+            ToolName::Todo => 1,
         }
     }
 }
@@ -133,6 +139,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::DeleteDirectory,
         ToolName::Move,
         ToolName::RequestFullRepoAccess,
+        ToolName::Todo,
     ]
     .into_iter()
     .collect()
@@ -154,6 +161,7 @@ mod tests {
         assert!(ToolName::DeleteDirectory.requires_confirmation());
         assert!(ToolName::Move.requires_confirmation());
         assert!(ToolName::RequestFullRepoAccess.requires_confirmation());
+        assert!(!ToolName::Todo.requires_confirmation());
     }
 
     #[test]
@@ -171,6 +179,7 @@ mod tests {
             ToolName::from_wire_name("requestFullRepoAccess"),
             Some(ToolName::RequestFullRepoAccess)
         );
+        assert_eq!(ToolName::from_wire_name("todo"), Some(ToolName::Todo));
         assert_eq!(ToolName::from_wire_name("somethingElse"), None);
     }
 
@@ -186,12 +195,13 @@ mod tests {
         assert_eq!(ToolName::EditFile.loop_weight(), 2);
         assert_eq!(ToolName::Move.loop_weight(), 2);
         assert_eq!(ToolName::SemanticSearch.loop_weight(), 4);
+        assert_eq!(ToolName::Todo.loop_weight(), 1);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_ten() {
+    fn default_allowed_tools_includes_all_eleven() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 10);
+        assert_eq!(allowed.len(), 11);
         assert!(allowed.contains(&ToolName::WriteFile));
         assert!(allowed.contains(&ToolName::EditFile));
         assert!(allowed.contains(&ToolName::DeleteFile));
@@ -199,5 +209,6 @@ mod tests {
         assert!(allowed.contains(&ToolName::DeleteDirectory));
         assert!(allowed.contains(&ToolName::Move));
         assert!(allowed.contains(&ToolName::RequestFullRepoAccess));
+        assert!(allowed.contains(&ToolName::Todo));
     }
 }

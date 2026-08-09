@@ -40,11 +40,11 @@ use crate::commands::embeddings::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
 use crate::domain::ai_access::ToolName;
-use crate::domain::ai_tools::{ToolResult, ToolScope};
+use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
 use crate::domain::llm::{
-    sanitize_tool_call_arguments, ChatRequest, ChatStreamOutcome, LlmMessage, LlmModelInfo,
-    LlmProvider, LlmProviderConfig, LlmRole, LlmSettings, LlmToolCall, LlmToolDefinition,
-    PendingApproval, PendingToolCall, ResolvedLlmProvider, ToolCallDecision,
+    sanitize_tool_call_arguments, ChatDone, ChatRequest, ChatStreamOutcome, LlmMessage,
+    LlmModelInfo, LlmProvider, LlmProviderConfig, LlmRole, LlmSettings, LlmToolCall,
+    LlmToolDefinition, PendingApproval, PendingToolCall, ResolvedLlmProvider, ToolCallDecision,
 };
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
 use crate::services::ai_tools::{self, EmbeddingDeps};
@@ -302,6 +302,7 @@ fn run_tool_loop(
     mut round: u32,
     mut budget_used: u32,
     mut resume: Option<(Vec<LlmToolCall>, Vec<ToolCallDecision>)>,
+    mut todos: Vec<Task>,
 ) -> Result<ChatStreamOutcome, String> {
     loop {
         if round >= MAX_TOOL_ITERATIONS as u32 || budget_used >= MAX_TOOL_BUDGET {
@@ -342,7 +343,7 @@ fn run_tool_loop(
                 let result = raw_result.map_err(|e| e.to_string())?;
 
                 if result.tool_calls.is_empty() {
-                    return Ok(ChatStreamOutcome::Done(result));
+                    return Ok(ChatStreamOutcome::Done(ChatDone { result, todos }));
                 }
 
                 // Round-trip the assistant's tool-call turn back into history
@@ -378,6 +379,7 @@ fn run_tool_loop(
                         round,
                         budget_used,
                         calls: pending,
+                        todos,
                     }));
                 }
 
@@ -404,7 +406,7 @@ fn run_tool_loop(
                 Err("denied by user".to_string())
             } else {
                 ai_tools::parse_tool_call(call)
-                    .and_then(|parsed| ai_tools::execute_tool(&scope, parsed, ctx.deps))
+                    .and_then(|parsed| ai_tools::execute_tool(&scope, parsed, ctx.deps, &todos))
                     .map_err(|e| e.to_string())
             };
 
@@ -425,6 +427,19 @@ fn run_tool_loop(
                     tools = ai_tools::llm_tool_definitions(&new_scope);
                     scope = new_scope;
                 }
+            }
+
+            // A successful `todo` call's result carries the *complete* new
+            // list — overwrite this loop's own `todos` so subsequent calls
+            // in this round (or a later round) see it, and so it's what
+            // ultimately lands in `ChatStreamOutcome`. Same pattern as the
+            // `AccessModeChanged` handling above: read the outcome once it
+            // settles, update loop-scoped state that outlives this one call.
+            match &outcome {
+                Ok(ToolResult::TodoWritten(list)) | Ok(ToolResult::TodoUpdated(list)) => {
+                    todos = list.clone();
+                }
+                _ => {}
             }
 
             // Text the *model* reads for this call, as opposed to `outcome`
@@ -483,12 +498,16 @@ fn run_tool_loop(
 /// transient status. The authoritative full text (and real token usage, if
 /// the provider reported one) is returned once the loop ends — a safety net
 /// against a dropped delta event, and the only place usage arrives since
-/// it's a one-shot value, not a stream.
+/// it's a one-shot value, not a stream. `todos` is the frontend's current
+/// task checklist — this backend keeps no session state of its own, so it
+/// round-trips through the loop and back out via `ChatStreamOutcome`
+/// exactly like `history` already does.
 #[tauri::command]
 pub async fn llm_chat_stream(
     app: AppHandle,
     provider_id: String,
     messages: Vec<LlmMessage>,
+    todos: Vec<Task>,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
     chunk_index: State<'_, Arc<ChunkIndex>>,
@@ -537,7 +556,7 @@ pub async fn llm_chat_stream(
             settings: &settings,
             deps: &deps,
         };
-        run_tool_loop(&ctx, scope, tools, messages, 0, 0, None)
+        run_tool_loop(&ctx, scope, tools, messages, 0, 0, None, todos)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -552,7 +571,8 @@ pub async fn llm_chat_stream(
 /// checkpoint. `decisions` must cover exactly the ids of that round's
 /// calls whose `requires_confirmation` was `true`; anything else is
 /// rejected up front rather than silently executing calls the user never
-/// actually saw.
+/// actually saw. `todos` must likewise be exactly what that
+/// `PendingApproval` carried, sent back unmodified.
 #[tauri::command]
 pub async fn llm_chat_stream_resume(
     app: AppHandle,
@@ -561,6 +581,7 @@ pub async fn llm_chat_stream_resume(
     round: u32,
     budget_used: u32,
     decisions: Vec<ToolCallDecision>,
+    todos: Vec<Task>,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
     chunk_index: State<'_, Arc<ChunkIndex>>,
@@ -628,7 +649,7 @@ pub async fn llm_chat_stream_resume(
             settings: &settings,
             deps: &deps,
         };
-        run_tool_loop(&ctx, scope, tools, history, round, budget_used, Some((calls, decisions)))
+        run_tool_loop(&ctx, scope, tools, history, round, budget_used, Some((calls, decisions)), todos)
     })
     .await
     .map_err(|e| e.to_string())?

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AiAccessMode, LlmToolDefinition } from "../lib/aiTools";
-import { buildAccessModeChangeNotice, buildAssistantSystemPrompt, TOOL_APPROVAL_TIMEOUT_MS } from "../lib/assistantConfig";
+import type { AiAccessMode, LlmToolDefinition, Task } from "../lib/aiTools";
+import {
+  buildAccessModeChangeNotice,
+  buildAssistantSystemPrompt,
+  buildTodoContextBlock,
+  TOOL_APPROVAL_TIMEOUT_MS,
+} from "../lib/assistantConfig";
 import type { SpecsRepoInfo } from "../lib/openapi";
 import {
   appendDeltaToBlocks,
@@ -84,6 +89,31 @@ export function useLlmChat(
   // outlive what the user perceives as a fresh chat any more than the
   // transcript already does.
   const trustedToolsRef = useRef<Set<string>>(new Set());
+
+  // This turn's task checklist, owned by the frontend exactly like
+  // `messages` itself — the backend keeps no server-side session state
+  // between calls (see `commands::llm`'s doc comment), so this is the
+  // entire source of truth between turns. Sent to Rust on every
+  // `streamLlmChat`/`streamLlmChatResume` call, overwritten from the
+  // response after each one (both the `"done"` case and every iteration of
+  // the `"pendingApproval"` resume loop below) — same lifetime as
+  // `trustedToolsRef`: lives for the panel's mounted lifetime, reset
+  // automatically when `AssistantConversation` remounts on chat switch
+  // (`key={chatHistory.currentChatId}` in `AssistantPanel.tsx`), no manual
+  // reset needed.
+  //
+  // Two views onto the same value: `todoListRef` is read synchronously
+  // inside `sendMessage`'s async flow (a plain `useState` value can't be
+  // read "as of right now" mid-function — updates only land on the next
+  // render), while `todos` (state) exists purely so `TodoProgressWidget`
+  // re-renders when the list changes. `setTodos` below keeps both in sync
+  // on every mutation; nothing should assign to either independently.
+  const todoListRef = useRef<Task[]>([]);
+  const [todos, setTodosState] = useState<Task[]>([]);
+  const setTodos = useCallback((next: Task[]) => {
+    todoListRef.current = next;
+    setTodosState(next);
+  }, []);
 
   // The in-flight batch of pending decisions, if any — `decide` is what
   // `AssistantToolCallBlock`'s Approve/Deny buttons (via `decideToolCall`
@@ -245,12 +275,15 @@ export function useLlmChat(
       const modeChanged = lastSentModeRef.current !== null && lastSentModeRef.current !== accessMode;
       lastSentModeRef.current = accessMode;
 
+      const todoBlock = buildTodoContextBlock(todoListRef.current);
+
       const wireMessages: LlmMessage[] = [
         { role: "system", content: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions), toolCallId: null },
         ...priorTurns.map((m): LlmMessage => ({ role: m.role, content: chatMessageToPlainText(m), toolCallId: null })),
         ...(modeChanged
           ? [{ role: "system" as const, content: buildAccessModeChangeNotice(accessMode), toolCallId: null }]
           : []),
+        ...(todoBlock ? [{ role: "system" as const, content: todoBlock, toolCallId: null }] : []),
         { role: "user", content: trimmed, toolCallId: null },
       ];
 
@@ -262,9 +295,10 @@ export function useLlmChat(
         // card entirely for tool names already trusted this conversation)
         // before resuming, potentially several times if later rounds pause
         // again.
-        let outcome = await streamLlmChat(providerId, wireMessages);
+        let outcome = await streamLlmChat(providerId, wireMessages, todoListRef.current);
         while (outcome.status === "pendingApproval") {
-          const { history, round, budgetUsed, calls } = outcome.value;
+          const { history, round, budgetUsed, calls, todos: updatedTodos } = outcome.value;
+          setTodos(updatedTodos);
           const risky = calls.filter((c) => c.requiresConfirmation);
           const autoApprovedIds = new Set<string>();
           const needsDecision = risky.filter((c) => {
@@ -284,13 +318,14 @@ export function useLlmChat(
                 ];
 
           autoApprovedIdsRef.current = autoApprovedIds;
-          outcome = await streamLlmChatResume(providerId, history, round, budgetUsed, decisions);
+          outcome = await streamLlmChatResume(providerId, history, round, budgetUsed, decisions, todoListRef.current);
         }
 
         // Authoritative full text of the *final* round corrects only the
         // trailing text block — see `correctTrailingText`'s doc comment for
         // why that's always the right (and only) block it can apply to.
-        const { text, usage } = outcome.value;
+        const { text, usage, todos: finalTodos } = outcome.value;
+        setTodos(finalTodos);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId && m.role === "assistant"
@@ -322,7 +357,7 @@ export function useLlmChat(
         });
       }
     },
-    [providerId, sending, messages, accessMode, specsRepoInfo, toolDefinitions, collectDecisions, onTurnSettled],
+    [providerId, sending, messages, accessMode, specsRepoInfo, toolDefinitions, collectDecisions, onTurnSettled, setTodos],
   );
 
   // Context-window usage so far. Every request resends the *entire* message
@@ -364,6 +399,7 @@ export function useLlmChat(
     error,
     sendMessage,
     contextTokens,
+    todos,
     systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions),
     decideToolCall,
   };

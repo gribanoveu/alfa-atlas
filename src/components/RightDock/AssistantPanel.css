@@ -277,6 +277,135 @@
 
 
 /* =========================================================
+   Todo progress widget
+   ========================================================= */
+
+/* Floating card, deliberately not flush with the panel chrome (no shared
+   edge-to-edge border/background with `.assistant-chat`) — margin on every
+   side plus rounded corners and a shadow read as "hovering over the chat"
+   rather than another strip of the panel itself. Same border/shadow recipe
+   as `.assistant-scroll-to-bottom`'s floating pill elsewhere in this file,
+   for a consistent "floating over the transcript" visual language. */
+.assistant-todo-widget {
+  flex: none;
+  margin: 8px 10px 0;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+
+  background: var(--bg-1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+  overflow: hidden;
+}
+
+.assistant-todo-widget-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px 7px 10px;
+
+  border: none;
+  background: none;
+
+  font-family: inherit;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  text-align: left;
+
+  cursor: pointer;
+}
+
+.assistant-todo-widget-header:hover {
+  background: var(--bg-2);
+}
+
+/* Persistent "this is a plan/checklist" identifier, inline at the start of
+   the one summary line — enough on its own to read unambiguously as a todo
+   tracker at a glance rather than a generic status pill, without needing a
+   whole separate label row. */
+.assistant-todo-widget-icon {
+  flex: none;
+  color: var(--text-2);
+}
+
+.assistant-todo-widget-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-todo-widget.is-done .assistant-todo-widget-summary {
+  color: var(--accent);
+}
+
+.assistant-todo-widget-chevron {
+  flex: none;
+  color: var(--text-2);
+}
+
+.assistant-todo-widget-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+
+  margin: 0;
+  padding: 2px 10px 8px;
+
+  max-height: 180px;
+  overflow-y: auto;
+
+  list-style: none;
+
+  border-top: 1px solid var(--border);
+}
+
+.assistant-todo-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+
+  padding: 3px 0;
+
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-todo-row-index {
+  flex: none;
+  min-width: 1.4em;
+
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.assistant-todo-row-glyph {
+  flex: none;
+  color: var(--text-2);
+}
+
+.assistant-todo-row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-todo-row.is-cancelled {
+  color: var(--text-2);
+}
+
+.assistant-todo-row.is-cancelled .assistant-todo-row-title {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+
+/* =========================================================
    Message list
    ========================================================= */
 

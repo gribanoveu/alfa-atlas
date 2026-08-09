@@ -36,6 +36,19 @@ export type ToolMatch = {
 // whole call is rejected (see `domain::ai_tools::FileEdit`).
 export type FileEdit = { old: string; new: string };
 
+// Mirrors `domain::ai_tools::TodoStatus`.
+export type TodoStatus = "pending" | "inProgress" | "completed" | "cancelled";
+
+// Mirrors `domain::ai_tools::Task`. Never persisted server-side — owned by
+// `useLlmChat`'s `todoListRef` between turns, round-tripped through
+// `ChatStreamOutcome`/`PendingApproval` exactly like `history` already is.
+export type Task = {
+  id: string;
+  title: string;
+  status: TodoStatus;
+  note: string | null;
+};
+
 export type ToolCall =
   | { tool: "readFile"; args: { path: string; startLine: number | null; endLine: number | null } }
   | { tool: "listFiles"; args: { path: string | null; depth: number | null; pattern: string | null } }
@@ -46,7 +59,9 @@ export type ToolCall =
   | { tool: "createDirectory"; args: { path: string } }
   | { tool: "deleteDirectory"; args: { path: string; recursive: boolean | null } }
   | { tool: "move"; args: { path: string; newPath: string } }
-  | { tool: "requestFullRepoAccess"; args: { reason: string } };
+  | { tool: "requestFullRepoAccess"; args: { reason: string } }
+  | { tool: "todoWrite"; args: { titles: string[] } }
+  | { tool: "todoUpdate"; args: { id: string; status: "completed" | "cancelled"; note: string | null } };
 
 // `ToolResult`'s `"file"` case carries range/total-line metadata alongside
 // the content — 1-indexed, inclusive, the range actually returned (after
@@ -62,7 +77,9 @@ export type ToolResult =
   | { tool: "directoryCreated"; result: { path: string } }
   | { tool: "directoryDeleted"; result: { path: string } }
   | { tool: "moved"; result: { from: string; to: string; updatedFiles: UpdatedReference[] } }
-  | { tool: "accessModeChanged"; result: { mode: AiAccessMode } };
+  | { tool: "accessModeChanged"; result: { mode: AiAccessMode } }
+  | { tool: "todoWritten"; result: Task[] }
+  | { tool: "todoUpdated"; result: Task[] };
 
 /**
  * Runs one AI-harness tool call against whichever project is currently
@@ -70,8 +87,8 @@ export type ToolResult =
  * backend resolves the current project and its configured `AiAccessMode`/
  * tool allowlist itself (`services::ai_tools::current_scope` in Rust).
  */
-export function aiExecuteTool(call: ToolCall): Promise<ToolResult> {
-  return invoke<ToolResult>("ai_execute_tool", { call });
+export function aiExecuteTool(call: ToolCall, todos: Task[] = []): Promise<ToolResult> {
+  return invoke<ToolResult>("ai_execute_tool", { call, todos });
 }
 
 /** Which part of the filesystem the harness (and `embedding_sync`) may see

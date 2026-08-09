@@ -6,7 +6,7 @@ use crate::commands::embeddings::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
 use crate::domain::ai_access::AiAccessMode;
-use crate::domain::ai_tools::{ToolCall, ToolResult};
+use crate::domain::ai_tools::{Task, ToolCall, ToolResult};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::project_config::ProjectConfig;
 use crate::infra::project_store;
@@ -28,9 +28,15 @@ use crate::services::workspace_index::WorkspaceIndex;
 /// the whole repo (`infra::workspace_scanner::scan_all`), and
 /// `SemanticSearch` may run model inference — both comparable in cost to
 /// `check_standards`'s repo-wide walk.
+///
+/// `todos` has no persisted meaning here — this endpoint is stateless
+/// between calls, unlike the chat loop's `todoListRef`; callers invoking
+/// the `todo` tool through this path must track and resupply the list
+/// themselves (typically empty for any other tool call).
 #[tauri::command]
 pub async fn ai_execute_tool(
     call: ToolCall,
+    todos: Vec<Task>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
     chunk_index: State<'_, Arc<ChunkIndex>>,
     embedding_index: State<'_, Arc<EmbeddingIndexSlot>>,
@@ -55,7 +61,7 @@ pub async fn ai_execute_tool(
     };
     tauri::async_runtime::spawn_blocking(move || {
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
-        ai_tools::execute_tool(&scope, call, &deps).map_err(|e| e.to_string())
+        ai_tools::execute_tool(&scope, call, &deps, &todos).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
