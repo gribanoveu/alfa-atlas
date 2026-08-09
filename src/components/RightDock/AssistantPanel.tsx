@@ -30,14 +30,16 @@ type AssistantPanelProps = {
    * `writeFile` diff preview (`AssistantToolCallBlock`) to fetch a file's
    * current content for the original/proposed comparison. */
   docsRoot: string;
-  /** Called once a `writeFile`/`createDirectory` tool call actually lands
-   * on disk (its block settles to `"done"`) — `App.tsx`'s own `useDocsTree`
-   * instance lives outside this component, so a successful assistant-driven
-   * write needs this callback to make the new/changed file or folder show
-   * up in the sidebar tree, the same way every UI-driven file-creation flow
-   * already calls `tree.refresh()` itself after its backend command
-   * resolves. */
-  onFileWritten: () => void;
+  /** Called once a `writeFile`/`editFile`/`deleteFile`/`createDirectory`/
+   * `deleteDirectory` tool call actually lands on disk (its block settles
+   * to `"done"`) — `App.tsx`'s own `useDocsTree` and `useEditorTabs`
+   * instances live outside this component, so a successful assistant-driven
+   * change needs this callback both to make the change show up in the
+   * sidebar tree (the same way every UI-driven file operation already calls
+   * `tree.refresh()` itself after its backend command resolves) and to
+   * reconcile any open editor tab for `path` — otherwise a stale tab's
+   * autosave would silently overwrite the assistant's change right back. */
+  onFileWritten: (info: { tool: string; path: string }) => void;
   /** The open project's repo root — keys persisted chat history
    * (`useChatHistory`) per repository. */
   repoRoot: string | null;

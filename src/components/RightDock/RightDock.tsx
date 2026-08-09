@@ -113,7 +113,7 @@ type RightDockProps = {
     onOpenSettings: () => void;
     specsRepoInfo: SpecsRepoInfo | null;
     docsRoot: string;
-    onFileWritten: () => void;
+    onFileWritten: (info: { tool: string; path: string }) => void;
     repoRoot: string | null;
   } | null;
 };

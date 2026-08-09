@@ -124,7 +124,14 @@ type AssistantConversationProps = {
   specsRepoInfo: SpecsRepoInfo | null;
   toolDefinitions: LlmToolDefinition[];
   docsRoot: string;
-  onFileWritten: () => void;
+  /** Fires once a `writeFile`/`editFile`/`deleteFile`/`createDirectory`/
+   * `deleteDirectory` tool call actually lands on disk (its block settles
+   * to `"done"`) — `tool`/`path` mirror the settled call so the caller can
+   * both refresh the sidebar tree and reconcile any open editor tab for
+   * that path (a stale tab left un-reloaded after an out-of-band AI edit
+   * would otherwise autosave its old content right back over the change —
+   * see `App.tsx`'s handler). */
+  onFileWritten: (info: { tool: string; path: string }) => void;
   refreshAccessMode: () => Promise<void>;
   activeProvider: ResolvedLlmProvider | null;
   updateProviderConfig: (providerId: string, patch: Partial<Omit<LlmProviderConfig, "id">>) => Promise<void>;
@@ -200,7 +207,20 @@ export function AssistantConversation({
         !handledFileWriteIdsRef.current.has(block.id)
       ) {
         handledFileWriteIdsRef.current.add(block.id);
-        onFileWritten();
+        // Every one of these `ToolResult` variants carries `{ path }` —
+        // narrowed via the discriminant rather than a blind cast so a
+        // future shape change here fails loudly instead of silently
+        // passing `path: undefined` through.
+        const path =
+          block.result &&
+          (block.result.tool === "fileWritten" ||
+            block.result.tool === "fileEdited" ||
+            block.result.tool === "fileDeleted" ||
+            block.result.tool === "directoryCreated" ||
+            block.result.tool === "directoryDeleted")
+            ? block.result.result.path
+            : null;
+        if (path !== null) onFileWritten({ tool: block.name, path });
       }
     }
   }, [messages, refreshAccessMode, onFileWritten]);

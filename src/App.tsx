@@ -813,6 +813,36 @@ function App() {
     [editor, project.docsRoot, project.repoRoot],
   );
 
+  // Reconciles an open editor tab against a change the AI assistant just
+  // made directly on disk (`writeFile`/`editFile`/`deleteFile`/
+  // `createDirectory`/`deleteDirectory`, see `AssistantConversation`'s
+  // `onFileWritten`). Without this, a tab left open on the affected path
+  // keeps showing its now-stale in-memory content — and if it's dirty (or
+  // becomes dirty) by the time autosave/save-on-switch fires,
+  // `useEditorTabs.saveTab` would write that stale content straight back to
+  // disk, silently reverting the assistant's change (or resurrecting a file
+  // it just deleted). Mirrors `editor.discardTabsUnder` in the manual
+  // tree-delete confirm above for the delete case, and `reloadTabFromDisk`
+  // in `applyRenameReport`/`handleGitSaveContent` for the write case.
+  const handleAssistantFileWritten = useCallback(
+    ({ tool, path }: { tool: string; path: string }) => {
+      void tree.refresh();
+      switch (tool) {
+        case "writeFile":
+        case "editFile":
+          void editor.reloadTabFromDisk(path);
+          break;
+        case "deleteFile":
+        case "deleteDirectory":
+          editor.discardTabsUnder(path);
+          break;
+        default:
+          break;
+      }
+    },
+    [tree, editor],
+  );
+
   const handleGitDiscard = useCallback(
     async (repoRelativePath: string) => {
       const ok = await git.discardFileChanges(repoRelativePath);
@@ -1350,7 +1380,7 @@ function App() {
               onOpenSettings: () => setLlmSettingsSignal((n) => n + 1),
               specsRepoInfo: specsRepo.info,
               docsRoot: project.docsRoot ?? "",
-              onFileWritten: () => void tree.refresh(),
+              onFileWritten: handleAssistantFileWritten,
               repoRoot: project.repoRoot,
             }}
           />
