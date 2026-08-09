@@ -544,6 +544,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         &self,
         request: ChatRequest,
         on_delta: &dyn Fn(&str),
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError> {
         let body = self.build_body(&request, true);
 
@@ -560,6 +561,18 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let mut usage = None;
         let mut tool_calls_acc = ToolCallAccumulator::default();
         for line in std::io::BufRead::lines(reader) {
+            // Checked once per SSE line rather than only before the loop —
+            // a chatty/looping model's response can take many seconds to
+            // finish, and this is what lets a user-initiated stop
+            // (`commands::llm::llm_cancel_chat`) land within roughly one
+            // chunk of being requested instead of only once the whole
+            // response has streamed. `lines()` itself still blocks
+            // synchronously on the socket read for the *next* line, so a
+            // connection that stalls entirely between chunks isn't helped
+            // by this — see this method's doc comment on the trait.
+            if cancelled() {
+                break;
+            }
             let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
             match parse_sse_line(&line)? {
                 SseLine::Chunk { delta, usage: chunk_usage, tool_calls } => {

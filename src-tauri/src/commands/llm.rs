@@ -32,6 +32,7 @@
 //! sitting in `~/.atlas/logs/llm.jsonl`.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, State};
@@ -42,8 +43,8 @@ use crate::commands::embeddings::{
 use crate::domain::ai_access::ToolName;
 use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
 use crate::domain::llm::{
-    sanitize_tool_call_arguments, ChatDone, ChatRequest, ChatStreamOutcome, LlmMessage,
-    LlmModelInfo, LlmProvider, LlmProviderConfig, LlmRole, LlmSettings, LlmToolCall,
+    sanitize_tool_call_arguments, ChatDone, ChatRequest, ChatStreamOutcome, ChatStreamResult,
+    LlmMessage, LlmModelInfo, LlmProvider, LlmProviderConfig, LlmRole, LlmSettings, LlmToolCall,
     LlmToolDefinition, PendingApproval, PendingToolCall, ResolvedLlmProvider, ToolCallDecision,
 };
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
@@ -139,6 +140,35 @@ struct ToolResultEventPayload {
 /// `trusted_cert_pem`) invalidates the cache instead of silently reusing a
 /// stale `ureq::Agent`.
 pub type LlmProviderSlot = Mutex<Option<(ResolvedLlmProvider, Option<String>, Arc<dyn LlmProvider>)>>;
+
+/// One flag for "the user asked the in-flight turn to stop" — this app has
+/// exactly one chat panel / one in-flight conversation at a time (same
+/// assumption `CHAT_STREAM_DELTA_EVENT` already makes), so a single
+/// `Arc<AtomicBool>` needs no per-turn/per-request id to disambiguate.
+/// `llm_chat_stream` resets this to `false` at the start of every *fresh*
+/// turn (never `llm_chat_stream_resume`, which continues a turn already in
+/// progress and must not lose a cancellation that landed while a
+/// `PendingApproval` card was showing — see `llm_cancel_chat`'s doc
+/// comment); `run_tool_loop` polls it at the checkpoints documented on its
+/// own doc comment and resolves `ChatStreamOutcome::Cancelled` instead of
+/// continuing once it reads `true`.
+pub type ChatCancelFlag = AtomicBool;
+
+/// Requests that the currently in-flight `llm_chat_stream`/
+/// `llm_chat_stream_resume` call (if any) stop as soon as it next checks —
+/// mid-stream (within roughly one SSE chunk, see
+/// `LlmProvider::chat_stream`'s doc comment), between tool-calling rounds,
+/// or between individual tool calls within one round. Never executes a tool
+/// call from the round that was in flight when this landed, which is the
+/// point: a long-running or misbehaving tool-calling sequence (`WriteFile`/
+/// `DeleteFile`/... included) can be stopped before its next side effect,
+/// not just before its next sentence. A no-op if nothing is currently
+/// running (the flag is simply left `true` until the next fresh turn resets
+/// it) — safe to call speculatively, no state to check first.
+#[tauri::command]
+pub fn llm_cancel_chat(cancel_flag: State<'_, Arc<ChatCancelFlag>>) {
+    cancel_flag.store(true, Ordering::SeqCst);
+}
 
 pub(crate) fn ensure_llm_provider(
     slot: &LlmProviderSlot,
@@ -278,6 +308,7 @@ struct LoopCtx<'a> {
     model: &'a str,
     settings: &'a LlmSettings,
     deps: &'a EmbeddingDeps,
+    cancel_flag: &'a ChatCancelFlag,
 }
 
 /// The shared tool-calling loop both `llm_chat_stream` (fresh start,
@@ -294,6 +325,37 @@ struct LoopCtx<'a> {
 /// is `true`. Nothing in that round executes — not even other, non-risky
 /// calls bundled into the same round — so there's no partial-round state to
 /// track across the stateless hop back to the frontend.
+///
+/// Also resolves early, with `ChatStreamOutcome::Cancelled` instead of
+/// `Done`, if `ctx.cancel_flag` (set by `llm_cancel_chat`) reads `true` at
+/// either of two checkpoints:
+/// - The top of the outer `loop`, before deciding whether to call the model
+///   or process a resumed round's already-known calls — catches "stop
+///   between rounds," "stop between individual tool calls within one
+///   round" (the `for call in &tool_calls` loop below `break`s as soon as it
+///   sees the flag, falling through to this same checkpoint on the next
+///   iteration rather than duplicating the check), and "stop while a
+///   `PendingApproval` card was showing" (the frontend both sets the flag
+///   and auto-denies every pending call before calling
+///   `llm_chat_stream_resume`, so this checkpoint fires before any of those
+///   calls — now-moot, since the model is never asked to react to them —
+///   actually execute).
+/// - Immediately after `ctx.provider.chat_stream` returns for a fresh
+///   round, before either the "no tool calls" (`Done`) branch or the
+///   pending-approval check — covers a stop that landed mid-stream (`text`
+///   is whatever had accumulated in *this* round before it broke early) or
+///   right as a round finished. Never executes any of that round's tool
+///   calls, confirmation-gated or not — this is what lets a stop actually
+///   pre-empt a `WriteFile`/`DeleteFile`/... about to run, not just the
+///   model's next sentence.
+///
+/// At the first checkpoint, `result.text` is always `""` — by construction
+/// the frontend's trailing transcript block is a settled tool-call block at
+/// that point (a round's own streamed prose, if any, is always closed off
+/// by whatever tool-call block followed it — see `chatBlocks.ts`'s
+/// `appendDeltaToBlocks` doc comment), so an empty string correctly leaves
+/// it untouched via `correctTrailingText` on the frontend rather than
+/// clobbering it.
 fn run_tool_loop(
     ctx: &LoopCtx,
     mut scope: ToolScope,
@@ -305,6 +367,17 @@ fn run_tool_loop(
     mut todos: Vec<Task>,
 ) -> Result<ChatStreamOutcome, String> {
     loop {
+        // Checkpoint 1 — see this function's doc comment for exactly which
+        // "stop" scenarios this catches. Placed before the iteration-limit
+        // check too: a cancelled turn should report as cancelled, not as
+        // having hit `MAX_TOOL_ITERATIONS`, if both would otherwise fire on
+        // the same iteration.
+        if ctx.cancel_flag.load(Ordering::SeqCst) {
+            return Ok(ChatStreamOutcome::Cancelled(ChatDone {
+                result: ChatStreamResult { text: String::new(), usage: None, tool_calls: vec![] },
+                todos,
+            }));
+        }
         if round >= MAX_TOOL_ITERATIONS as u32 || budget_used >= MAX_TOOL_BUDGET {
             return Err(format!(
                 "assistant did not produce a final answer within {MAX_TOOL_ITERATIONS} tool-call rounds (budget {budget_used}/{MAX_TOOL_BUDGET})"
@@ -338,9 +411,19 @@ fn run_tool_loop(
                         ChatStreamDeltaPayload { delta: delta.to_string() },
                     );
                 };
-                let raw_result = ctx.provider.chat_stream(request, &on_delta);
+                let cancelled = || ctx.cancel_flag.load(Ordering::SeqCst);
+                let raw_result = ctx.provider.chat_stream(request, &on_delta, &cancelled);
                 llm_debug_log::log_response(ctx.settings.debug_logging, ctx.provider_id, round, &raw_result);
                 let result = raw_result.map_err(|e| e.to_string())?;
+
+                // Checkpoint 2 — see this function's doc comment. Checked
+                // before either branch below so a stop that landed exactly
+                // as this round finished (mid-stream, or naturally) never
+                // reaches the pending-approval check or executes any of
+                // this round's tool calls, confirmation-gated or not.
+                if cancelled() {
+                    return Ok(ChatStreamOutcome::Cancelled(ChatDone { result, todos }));
+                }
 
                 if result.tool_calls.is_empty() {
                     return Ok(ChatStreamOutcome::Done(ChatDone { result, todos }));
@@ -387,6 +470,14 @@ fn run_tool_loop(
             };
 
         for call in &tool_calls {
+            // Checkpoint 1's "between individual tool calls" case — `break`
+            // rather than returning directly so control falls through to
+            // the top of the outer `loop`, where checkpoint 1 itself
+            // resolves `Cancelled` (one place that builds that outcome,
+            // not two).
+            if ctx.cancel_flag.load(Ordering::SeqCst) {
+                break;
+            }
             let _ = ctx.app.emit(
                 TOOL_CALL_EVENT,
                 ToolCallEventPayload {
@@ -509,6 +600,7 @@ pub async fn llm_chat_stream(
     messages: Vec<LlmMessage>,
     todos: Vec<Task>,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
+    cancel_flag: State<'_, Arc<ChatCancelFlag>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
     chunk_index: State<'_, Arc<ChunkIndex>>,
     embedding_index: State<'_, Arc<EmbeddingIndexSlot>>,
@@ -518,6 +610,12 @@ pub async fn llm_chat_stream(
     workspace_index: State<'_, Arc<WorkspaceIndex>>,
 ) -> Result<ChatStreamOutcome, String> {
     let llm_provider = llm_provider.inner().clone();
+    let cancel_flag = cancel_flag.inner().clone();
+    // A *fresh* turn always starts with a clean flag — a stray cancel from
+    // an already-finished previous turn must never bleed into this one.
+    // `llm_chat_stream_resume` deliberately does not do this (see
+    // `ChatCancelFlag`'s doc comment).
+    cancel_flag.store(false, Ordering::SeqCst);
     let mut deps = EmbeddingDeps {
         repo_index: repo_index.inner().clone(),
         chunk_index: chunk_index.inner().clone(),
@@ -555,6 +653,7 @@ pub async fn llm_chat_stream(
             model: &model,
             settings: &settings,
             deps: &deps,
+            cancel_flag: &cancel_flag,
         };
         run_tool_loop(&ctx, scope, tools, messages, 0, 0, None, todos)
     })
@@ -583,6 +682,7 @@ pub async fn llm_chat_stream_resume(
     decisions: Vec<ToolCallDecision>,
     todos: Vec<Task>,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
+    cancel_flag: State<'_, Arc<ChatCancelFlag>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
     chunk_index: State<'_, Arc<ChunkIndex>>,
     embedding_index: State<'_, Arc<EmbeddingIndexSlot>>,
@@ -592,6 +692,11 @@ pub async fn llm_chat_stream_resume(
     workspace_index: State<'_, Arc<WorkspaceIndex>>,
 ) -> Result<ChatStreamOutcome, String> {
     let llm_provider = llm_provider.inner().clone();
+    // Deliberately not reset here — a cancel that landed while the
+    // `PendingApproval` card this call is resuming was still on screen must
+    // survive into this call so `run_tool_loop`'s first checkpoint can still
+    // see it. See `ChatCancelFlag`'s doc comment.
+    let cancel_flag = cancel_flag.inner().clone();
     let mut deps = EmbeddingDeps {
         repo_index: repo_index.inner().clone(),
         chunk_index: chunk_index.inner().clone(),
@@ -648,6 +753,7 @@ pub async fn llm_chat_stream_resume(
             model: &model,
             settings: &settings,
             deps: &deps,
+            cancel_flag: &cancel_flag,
         };
         run_tool_loop(&ctx, scope, tools, history, round, budget_used, Some((calls, decisions)), todos)
     })

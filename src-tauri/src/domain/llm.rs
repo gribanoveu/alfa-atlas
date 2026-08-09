@@ -315,16 +315,26 @@ pub struct ChatDone {
 }
 
 /// What one call to `commands::llm::llm_chat_stream`/`llm_chat_stream_resume`
-/// resolves with: either a final answer, or a round that hit at least one
-/// tool call whose `domain::ai_access::ToolName::requires_confirmation` is
-/// true — nothing in that round has executed yet, and the caller must
-/// resolve `PendingApproval` (via `llm_chat_stream_resume`) before the
-/// conversation can continue.
+/// resolves with: either a final answer, a round that hit at least one tool
+/// call whose `domain::ai_access::ToolName::requires_confirmation` is true
+/// (nothing in that round has executed yet, and the caller must resolve
+/// `PendingApproval` via `llm_chat_stream_resume` before the conversation
+/// can continue), or the turn being stopped mid-flight by the user (see
+/// `commands::llm::llm_cancel_chat`) — same `ChatDone` shape as `Done`
+/// (`result.text` is whatever text had streamed in the round cancellation
+/// landed in, `""` if it landed between rounds/tool calls instead), so the
+/// frontend can reuse the same "correct the trailing text block, stop
+/// showing the message as streaming" handling either way and only needs to
+/// special-case the status tag for display (e.g. an "Остановлено" label
+/// instead of nothing). Unlike `Done`, no tool call from the round that was
+/// in flight when cancellation landed ever executes — see `run_tool_loop`'s
+/// doc comment for exactly where this is checked.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", content = "value", rename_all = "camelCase")]
 pub enum ChatStreamOutcome {
     Done(ChatDone),
     PendingApproval(PendingApproval),
+    Cancelled(ChatDone),
 }
 
 /// A whole round paused, unexecuted. `history`/`round`/`budget_used` must
@@ -405,10 +415,25 @@ pub trait LlmProvider: Send + Sync {
     /// frontend) reads the return value rather than re-deriving it from the
     /// callback calls. `&dyn Fn` (not a generic parameter) because this
     /// trait is used as a trait object (`Arc<dyn LlmProvider>`).
+    ///
+    /// `cancelled` is polled between SSE chunks (see the implementation's
+    /// own doc comment for exactly where) so a user-initiated stop
+    /// (`commands::llm::llm_cancel_chat`) takes effect within roughly one
+    /// chunk of being requested rather than only once the whole response
+    /// has finished streaming — the underlying blocking socket read itself
+    /// still can't be interrupted mid-chunk without a bigger client rework,
+    /// so a stalled connection (no chunk arriving at all) isn't helped by
+    /// this. Returning early this way is not an error: whatever text/tool
+    /// calls had accumulated so far come back as a normal `Ok(..)`, same
+    /// shape as a stream that ended naturally — the caller
+    /// (`commands::llm::run_tool_loop`) is what decides, by checking the
+    /// same flag itself right after this returns, whether to treat that as
+    /// `Done` or `Cancelled`.
     fn chat_stream(
         &self,
         request: ChatRequest,
         on_delta: &dyn Fn(&str),
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError>;
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError>;
 }

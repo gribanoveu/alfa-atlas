@@ -13,7 +13,7 @@ use crate::commands::embeddings::{
     BackgroundBacklogSlot, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard,
     IndexStoreSlot, IndexWatcherSlot, PriorityFilesSlot,
 };
-use crate::commands::llm::LlmProviderSlot;
+use crate::commands::llm::{ChatCancelFlag, LlmProviderSlot};
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::embedding_model::DownloadState;
@@ -121,6 +121,7 @@ pub fn run() {
             app.manage(Arc::new(BackgroundBacklogSlot::new(None)));
             app.manage(Arc::new(DownloadState::default()));
             app.manage(Arc::new(LlmProviderSlot::new(None)));
+            app.manage(Arc::new(ChatCancelFlag::new(false)));
 
             Ok(())
         })
@@ -261,6 +262,7 @@ pub fn run() {
             commands::llm::llm_test_connection,
             commands::llm::llm_chat_stream,
             commands::llm::llm_chat_stream_resume,
+            commands::llm::llm_cancel_chat,
             commands::chat_history::chat_list,
             commands::chat_history::chat_load_messages,
             commands::chat_history::chat_save,

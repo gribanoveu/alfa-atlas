@@ -19,6 +19,7 @@ import {
   type ChatMessage,
 } from "../lib/chatBlocks";
 import {
+  cancelLlmChat,
   listenLlmChatDelta,
   listenLlmToolCall,
   listenLlmToolResult,
@@ -138,9 +139,13 @@ export function useLlmChat(
   // `AssistantToolCallBlock`'s Approve/Deny buttons (via `decideToolCall`
   // below) and each call's own `TOOL_APPROVAL_TIMEOUT_MS` timeout both
   // funnel through, so a manual click and an expired timer settle a call
-  // through the exact same path. `null` whenever no round is currently
-  // paused awaiting decisions.
-  const activeApprovalRef = useRef<{ decide: (id: string, approved: boolean, trust: boolean) => void } | null>(null);
+  // through the exact same path. `denyAll` is `stopChat`'s hook into the
+  // same mechanism — see its own doc comment below. `null` whenever no
+  // round is currently paused awaiting decisions.
+  const activeApprovalRef = useRef<{
+    decide: (id: string, approved: boolean, trust: boolean) => void;
+    denyAll: () => void;
+  } | null>(null);
 
   // Which call ids the resume about to run auto-approved via
   // `trustedToolsRef` (as opposed to the user just having clicked Approve)
@@ -181,7 +186,7 @@ export function useLlmChat(
         }
       };
 
-      activeApprovalRef.current = { decide };
+      activeApprovalRef.current = { decide, denyAll: () => calls.forEach((c) => decide(c.id, false, false)) };
 
       calls.forEach((c) => {
         timers.set(
@@ -209,6 +214,24 @@ export function useLlmChat(
    * stable callback identity the UI holds onto. */
   const decideToolCall = useCallback((id: string, approved: boolean, trust: boolean) => {
     activeApprovalRef.current?.decide(id, approved, trust);
+  }, []);
+
+  /** Stops the in-flight turn, wherever it currently is: mid-stream,
+   * between tool-calling rounds, or waiting on a `"pendingApproval"` card.
+   * `cancelLlmChat()` sets the backend's cancel flag so the next checkpoint
+   * `run_tool_loop` hits resolves `{status: "cancelled"}` instead of
+   * continuing (see `commands::llm::run_tool_loop`'s doc comment on the
+   * Rust side for exactly where those checkpoints are) — but if a
+   * `"pendingApproval"` card is showing right now, nothing on the backend
+   * is actually running to reach one; `denyAll` unblocks `collectDecisions`'s
+   * pending promise immediately (bypassing the countdown) so `sendMessage`'s
+   * `while` loop proceeds straight to `streamLlmChatResume`, which then
+   * hits the very first checkpoint before executing any of those
+   * (already-denied) calls. Safe to call when nothing is in flight — both
+   * calls are no-ops in that case. */
+  const stopChat = useCallback(() => {
+    void cancelLlmChat();
+    activeApprovalRef.current?.denyAll();
   }, []);
 
   // Live token deltas — subscribed once for the hook's lifetime, matching
@@ -356,12 +379,26 @@ export function useLlmChat(
         // Authoritative full text of the *final* round corrects only the
         // trailing text block — see `correctTrailingText`'s doc comment for
         // why that's always the right (and only) block it can apply to.
+        // Same handling for `"cancelled"` as `"done"` (both carry the same
+        // `ChatStreamResult` shape) — the only difference is the extra
+        // `cancelled` flag for display and sweeping any pending-approval
+        // card `stopChat` auto-denied but that never got its settling
+        // event, since `run_tool_loop` returned before reaching it.
+        const stoppedByUser = outcome.status === "cancelled";
         const { text, usage, todos: finalTodos } = outcome.value;
         setTodos(finalTodos);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId && m.role === "assistant"
-              ? { ...m, blocks: correctTrailingText(m.blocks, text), streaming: false, usage: usage ?? undefined }
+              ? {
+                  ...m,
+                  blocks: stoppedByUser
+                    ? markRunningToolCallsAsInterrupted(correctTrailingText(m.blocks, text), "Остановлено пользователем")
+                    : correctTrailingText(m.blocks, text),
+                  streaming: false,
+                  usage: usage ?? undefined,
+                  cancelled: stoppedByUser,
+                }
               : m,
           ),
         );
@@ -446,5 +483,6 @@ export function useLlmChat(
     todos,
     systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
     decideToolCall,
+    stopChat,
   };
 }

@@ -62,6 +62,12 @@ export type ChatMessage =
       blocks: MessageBlock[];
       streaming?: boolean;
       failed?: boolean;
+      /** Set when the turn ended via a `{status: "cancelled"}` outcome (the
+       * user clicked Stop — see `useLlmChat`'s `stopChat`) rather than the
+       * model producing a final answer on its own. Mutually exclusive with
+       * `failed`: a cancelled turn is a deliberate user action, not an
+       * error. */
+      cancelled?: boolean;
       /** Real token usage for this turn, when the provider reported one on
        * the final SSE chunk — only ever set on a completed assistant
        * message. */
@@ -180,16 +186,25 @@ export function correctTrailingText(blocks: MessageBlock[], text: string): Messa
  * `MAX_TOOL_ITERATIONS`, a later round's HTTP call failed, `current_scope`
  * failed, or — the one case that can genuinely leave a call stuck — a panic
  * inside `execute_tool` on the Rust side, which skips its `TOOL_RESULT_EVENT`
- * entirely). Any block still `"running"` at that point will never receive
- * its settling event, so it's swept to `"error"` here — otherwise its
- * spinner (driven by the block's own `status`, not the message's `streaming`
- * flag) would spin forever on an already-dead message. A `"pendingApproval"`
- * block is swept the same way — the request that would have resumed it
- * (whether decided by the user or by its own timeout) never went out. */
-export function markRunningToolCallsAsInterrupted(blocks: MessageBlock[]): MessageBlock[] {
+ * entirely) — and, with `reason` set to something more specific, when a
+ * `{status: "cancelled"}` outcome resolves instead of rejecting (see
+ * `useLlmChat`'s `stopChat`): a pending-approval card auto-denied by
+ * `stopChat` still never gets the `TOOL_CALL_EVENT`/`TOOL_RESULT_EVENT` pair
+ * that would normally settle it, since `run_tool_loop` returns `Cancelled`
+ * before ever reaching that round's calls once the flag is set. Any block
+ * still `"running"` at that point will never receive its settling event
+ * either, so it's swept to `"error"` here — otherwise its spinner (driven
+ * by the block's own `status`, not the message's `streaming` flag) would
+ * spin forever on an already-dead message. A `"pendingApproval"` block is
+ * swept the same way — the request that would have resumed it (whether
+ * decided by the user or by its own timeout) never went out. */
+export function markRunningToolCallsAsInterrupted(
+  blocks: MessageBlock[],
+  reason = "Запрос прерван до получения результата",
+): MessageBlock[] {
   return blocks.map((b): MessageBlock =>
     b.type === "toolCall" && (b.status === "running" || b.status === "pendingApproval")
-      ? { ...b, status: "error", errorMessage: "Запрос прерван до получения результата", deadlineAt: undefined }
+      ? { ...b, status: "error", errorMessage: reason, deadlineAt: undefined }
       : b,
   );
 }

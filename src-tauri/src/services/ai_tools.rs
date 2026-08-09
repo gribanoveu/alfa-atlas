@@ -2144,6 +2144,7 @@ mod tests {
             &self,
             _request: crate::domain::llm::ChatRequest,
             _on_delta: &dyn Fn(&str),
+            _cancelled: &dyn Fn() -> bool,
         ) -> Result<crate::domain::llm::ChatStreamResult, crate::domain::llm::LlmError> {
             unimplemented!("fast-apply only ever calls chat(), never chat_stream()")
         }

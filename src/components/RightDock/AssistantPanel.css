@@ -910,6 +910,18 @@
 
 
 /* =========================================================
+   Cancelled message (user clicked Stop)
+   ========================================================= */
+
+.assistant-chat-cancelled-note {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+  font-style: italic;
+}
+
+
+/* =========================================================
    Streaming indicator
    ========================================================= */
 
@@ -1782,6 +1794,33 @@
 .assistant-chat-send:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+/* Replaces `.assistant-chat-send` in the same spot while a turn is in
+   flight — see `AssistantConversation.tsx`'s `sending` branch. */
+.assistant-chat-stop {
+  flex: none;
+
+  width: 30px;
+  height: 30px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border: none;
+  border-radius: 6px;
+
+  background: transparent;
+  color: var(--red-tag);
+
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.assistant-chat-stop:hover {
+  background: var(--bg-2);
 }
 
 /* Chat mode picker (Агент / План / Вопрос) — visual only for now, see

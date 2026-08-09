@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ChevronUp, Send, Sparkles } from "lucide-react";
+import { ArrowDown, ChevronUp, Send, Sparkles, Square } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import {
   AUTO_MODEL_LABEL,
@@ -175,7 +175,7 @@ export function AssistantConversation({
   updateProviderConfig,
   loadModels,
 }: AssistantConversationProps) {
-  const { messages, sending, error, sendMessage, contextTokens, decideToolCall, todos } = useLlmChat(
+  const { messages, sending, error, sendMessage, stopChat, contextTokens, decideToolCall, todos } = useLlmChat(
     providerId,
     accessMode,
     specsRepoInfo,
@@ -382,8 +382,12 @@ export function AssistantConversation({
         ) : (
           messages.map((m) => {
             const failed = m.role === "assistant" && Boolean(m.failed);
+            const stopped = m.role === "assistant" && Boolean(m.cancelled);
             return (
-              <div key={m.id} className={`assistant-chat-message ${m.role}${failed ? " failed" : ""}`}>
+              <div
+                key={m.id}
+                className={`assistant-chat-message ${m.role}${failed ? " failed" : ""}${stopped ? " cancelled" : ""}`}
+              >
                 {m.role === "assistant" ? (
                   m.blocks.length === 0 && m.streaming ? (
                     <span className="assistant-chat-typing" aria-label="Ассистент печатает…">
@@ -409,6 +413,7 @@ export function AssistantConversation({
                           />
                         ),
                       )}
+                      {stopped ? <div className="assistant-chat-cancelled-note">Остановлено пользователем</div> : null}
                     </div>
                   )
                 ) : (
@@ -529,15 +534,27 @@ export function AssistantConversation({
             }}
           />
           <div className="assistant-chat-input-tools">
-            <button
-              type="button"
-              className="assistant-chat-send"
-              disabled={sending || !draft.trim()}
-              aria-label="Отправить"
-              onClick={handleSend}
-            >
-              <Send size={15} strokeWidth={1.75} aria-hidden />
-            </button>
+            {sending ? (
+              <button
+                type="button"
+                className="assistant-chat-stop"
+                aria-label="Остановить"
+                title="Остановить ответ ассистента"
+                onClick={stopChat}
+              >
+                <Square size={13} strokeWidth={1.75} fill="currentColor" aria-hidden />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="assistant-chat-send"
+                disabled={!draft.trim()}
+                aria-label="Отправить"
+                onClick={handleSend}
+              >
+                <Send size={15} strokeWidth={1.75} aria-hidden />
+              </button>
+            )}
           </div>
         </div>
       </div>

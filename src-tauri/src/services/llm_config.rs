@@ -159,6 +159,7 @@ mod tests {
             &self,
             _request: ChatRequest,
             _on_delta: &dyn Fn(&str),
+            _cancelled: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             unimplemented!("not exercised by these tests")
         }

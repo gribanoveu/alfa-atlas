@@ -108,12 +108,17 @@ export type PendingApproval = {
 };
 
 // Mirrors `domain::llm::ChatStreamOutcome` — what one `streamLlmChat`/
-// `streamLlmChatResume` call resolves with: either a final answer, or a
-// round that hit at least one call needing user approval, with nothing in
-// that round executed yet.
+// `streamLlmChatResume` call resolves with: either a final answer, a round
+// that hit at least one call needing user approval (nothing in that round
+// executed yet), or the turn being stopped mid-flight via `cancelLlmChat`
+// (same `ChatStreamResult` shape as `"done"` — `text` is whatever had
+// streamed in before the stop landed, `""` if it landed between rounds or
+// tool calls instead; no tool call from the round in flight at that point
+// ever executed).
 export type ChatStreamOutcome =
   | { status: "done"; value: ChatStreamResult }
-  | { status: "pendingApproval"; value: PendingApproval };
+  | { status: "pendingApproval"; value: PendingApproval }
+  | { status: "cancelled"; value: ChatStreamResult };
 
 // Mirrors `domain::llm::ToolCallDecision` — one decision on one pending
 // call, required for every `PendingToolCall` whose `requiresConfirmation`
@@ -208,6 +213,18 @@ export function streamLlmChatResume(
     decisions,
     todos,
   });
+}
+
+/** Requests that the currently in-flight `streamLlmChat`/
+ * `streamLlmChatResume` call (if any) stop as soon as it next checks —
+ * mid-stream, between tool-calling rounds, or between individual tool calls
+ * within one round; no tool call from the round that was in flight when
+ * this lands ever executes, so this also doubles as an emergency brake on a
+ * side-effecting tool (`writeFile`/`deleteFile`/...) about to run, not just
+ * a way to stop the model mid-sentence. A no-op if nothing is currently
+ * running — safe to call speculatively. */
+export function cancelLlmChat(): Promise<void> {
+  return invoke("llm_cancel_chat");
 }
 
 /** Fires once per non-empty text chunk while a `streamLlmChat()` call is in
