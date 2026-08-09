@@ -72,12 +72,13 @@ describe("settleToolCallBlock", () => {
   };
 
   test("settles the matching block to done on a non-null result", () => {
+    const fileResult = { content: "content", startLine: 1, endLine: 1, totalLines: 1 };
     const blocks = settleToolCallBlock([running], {
       id: "call_1",
-      result: { tool: "file", result: "content" },
+      result: { tool: "file", result: fileResult },
       error: null,
     });
-    expect(blocks[0]).toMatchObject({ status: "done", result: { tool: "file", result: "content" } });
+    expect(blocks[0]).toMatchObject({ status: "done", result: { tool: "file", result: fileResult } });
   });
 
   test("settles the matching block to error on a null result", () => {
@@ -89,7 +90,7 @@ describe("settleToolCallBlock", () => {
     const other: ToolCallBlock = { ...running, id: "call_2", status: "running" };
     const blocks = settleToolCallBlock([running, other], {
       id: "call_1",
-      result: { tool: "file", result: "x" },
+      result: { tool: "file", result: { content: "x", startLine: 1, endLine: 1, totalLines: 1 } },
       error: null,
     });
     expect(blocks[0]).toMatchObject({ status: "done" });
@@ -99,7 +100,7 @@ describe("settleToolCallBlock", () => {
   test("is a no-op when no block matches the id", () => {
     const blocks = settleToolCallBlock([running], {
       id: "call_unknown",
-      result: { tool: "file", result: "x" },
+      result: { tool: "file", result: { content: "x", startLine: 1, endLine: 1, totalLines: 1 } },
       error: null,
     });
     expect(blocks[0]).toEqual(running);

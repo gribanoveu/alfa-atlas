@@ -77,6 +77,7 @@ dependencies = [
  "dirs",
  "fastembed",
  "git2",
+ "globset",
  "hf-hub",
  "http",
  "ignore",

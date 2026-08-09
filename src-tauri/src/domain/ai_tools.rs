@@ -16,6 +16,17 @@ use super::workspace_index::WorkspaceIndexError;
 pub struct ListFilesArgs {
     /// Subdirectory relative to the scope root, or `None`/`"."` for the root itself.
     pub path: Option<String>,
+    /// Max recursion depth below `path` (`ignore::WalkBuilder`'s own
+    /// convention: `path` itself is depth 0, its direct children are depth
+    /// 1, so `Some(1)` means direct children only). `Some(0)` is valid —
+    /// no descendant entries at all, not an error. `None` = unlimited,
+    /// matching the behavior before this field existed.
+    pub depth: Option<u32>,
+    /// Glob matched against each entry's filename only, never its full
+    /// path (e.g. `"*.java"` matches at any depth). Directory entries are
+    /// always kept regardless — this scopes which *files* come back, not
+    /// the navigable structure.
+    pub pattern: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +34,12 @@ pub struct ListFilesArgs {
 pub struct ReadFileArgs {
     /// File path relative to the scope root.
     pub path: String,
+    /// 1-indexed, inclusive. `None` means "from the beginning of the
+    /// file". Out-of-range values are clamped, not rejected — see
+    /// `services::ai_tools::slice_lines`.
+    pub start_line: Option<u32>,
+    /// 1-indexed, inclusive. `None` means "through the end of the file".
+    pub end_line: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,7 +154,23 @@ impl ToolCall {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "tool", content = "result", rename_all = "camelCase")]
 pub enum ToolResult {
-    File(String),
+    /// `rename_all` on this variant is needed explicitly — the container
+    /// attribute above doesn't cascade to a struct variant's own field
+    /// names for this adjacently-tagged representation, unlike variant tag
+    /// spelling. Every other struct variant here (`FileWritten`,
+    /// `DirectoryCreated`, `AccessModeChanged`) has only single-word field
+    /// names, so this was never previously visible on the wire.
+    #[serde(rename_all = "camelCase")]
+    File {
+        content: String,
+        /// 1-indexed, inclusive — the range actually returned (after
+        /// clamping), not necessarily what was requested. `0` for both
+        /// `start_line`/`end_line` on an empty file (there is no line 1 to
+        /// claim).
+        start_line: u32,
+        end_line: u32,
+        total_lines: u32,
+    },
     FileList(Vec<ToolFileEntry>),
     SemanticSearchResults(Vec<ToolMatch>),
     FileWritten { path: String },
@@ -159,6 +192,10 @@ pub enum ToolError {
     Io(#[source] std::io::Error),
     #[error("semantic search failed: {0}")]
     SemanticSearch(String),
+    /// A `listFiles` `pattern` that doesn't compile as a glob — see
+    /// `services::ai_tools::compile_glob`.
+    #[error("invalid glob pattern: {0}")]
+    InvalidPattern(String),
     /// A model-supplied `LlmToolCall::name` that doesn't match any known
     /// `ToolCall` variant — see `services::ai_tools::parse_tool_call`.
     #[error("unknown tool: {0}")]

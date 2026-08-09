@@ -31,15 +31,19 @@ export type ToolMatch = {
 // `src-tauri/src/domain/ai_tools.rs` (adjacently tagged:
 // `#[serde(tag = "tool", content = "args" | "result")]`).
 export type ToolCall =
-  | { tool: "readFile"; args: { path: string } }
-  | { tool: "listFiles"; args: { path: string | null } }
+  | { tool: "readFile"; args: { path: string; startLine: number | null; endLine: number | null } }
+  | { tool: "listFiles"; args: { path: string | null; depth: number | null; pattern: string | null } }
   | { tool: "semanticSearch"; args: { query: string; topK: number | null } }
   | { tool: "writeFile"; args: { path: string; content: string } }
   | { tool: "createDirectory"; args: { path: string } }
   | { tool: "requestFullRepoAccess"; args: { reason: string } };
 
+// `ToolResult`'s `"file"` case carries range/total-line metadata alongside
+// the content — 1-indexed, inclusive, the range actually returned (after
+// clamping), not necessarily what was requested. `0`/`0`/`0` on an empty
+// file (there is no line 1 to claim).
 export type ToolResult =
-  | { tool: "file"; result: string }
+  | { tool: "file"; result: { content: string; startLine: number; endLine: number; totalLines: number } }
   | { tool: "fileList"; result: ToolFileEntry[] }
   | { tool: "semanticSearchResults"; result: ToolMatch[] }
   | { tool: "fileWritten"; result: { path: string } }

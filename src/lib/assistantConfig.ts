@@ -632,8 +632,11 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
   if (!block.result) return "Готово";
   switch (block.result.tool) {
     case "file": {
-      const lineCount = block.result.result === "" ? 0 : block.result.result.split("\n").length;
-      return `Строк: ${lineCount}`;
+      const { startLine, endLine, totalLines } = block.result.result;
+      if (totalLines === 0) return "Пустой файл";
+      return startLine === 1 && endLine === totalLines
+        ? `Строк: ${totalLines}`
+        : `Строки ${startLine}–${endLine} из ${totalLines}`;
     }
     case "fileList": {
       const entries = block.result.result;

@@ -244,10 +244,15 @@ function ApprovalCountdown({ deadlineAt }: { deadlineAt?: number }) {
 function ToolResultDetail({ result }: { result: ToolResult }) {
   switch (result.tool) {
     case "file": {
-      const { text, truncated } = truncateForDisplay(result.result);
+      const { content, startLine, endLine, totalLines } = result.result;
+      const { text, truncated } = truncateForDisplay(content);
+      const label =
+        startLine === 1 && endLine === totalLines
+          ? "Содержимое файла"
+          : `Содержимое файла (строки ${startLine}–${endLine} из ${totalLines})`;
       return (
         <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Содержимое файла</div>
+          <div className="assistant-tool-call-detail-label">{label}</div>
           <pre className="assistant-tool-call-detail-code">
             {text}
             {truncated ? "\n… (обрезано)" : ""}

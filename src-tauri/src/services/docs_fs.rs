@@ -14,10 +14,38 @@ pub fn list_docs_tree(docs_root: &str) -> Result<Vec<TreeNode>, ProjectError> {
         return Err(ProjectError::NotADirectory(docs_root.to_string()));
     }
     let root = root.canonicalize().map_err(ProjectError::Canonicalize)?;
-    build_dir_children(&root, &root)
+    build_dir_children(&root, &root, None)
 }
 
-fn build_dir_children(docs_root: &Path, dir: &Path) -> Result<Vec<TreeNode>, ProjectError> {
+/// Same walk as `list_docs_tree`, but starting at `dir` (which may be a
+/// subdirectory of `docs_root`, already validated by the caller) instead of
+/// always walking the whole `docs_root`, and capped at `max_depth` levels
+/// below `dir`. Paths in the returned tree stay relative to `docs_root`,
+/// not `dir` — used by `services::ai_tools::list_docs_only` so a scoped
+/// `listFiles` call still returns paths the caller can round-trip into
+/// `readFile`/`writeFile` unchanged.
+pub fn list_docs_tree_scoped(
+    docs_root: &Path,
+    dir: &Path,
+    max_depth: Option<u32>,
+) -> Result<Vec<TreeNode>, ProjectError> {
+    let docs_root = docs_root.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let dir = dir.canonicalize().map_err(ProjectError::Canonicalize)?;
+    if !dir.is_dir() {
+        return Err(ProjectError::NotADirectory(dir.display().to_string()));
+    }
+    build_dir_children(&docs_root, &dir, max_depth)
+}
+
+fn build_dir_children(
+    docs_root: &Path,
+    dir: &Path,
+    remaining_depth: Option<u32>,
+) -> Result<Vec<TreeNode>, ProjectError> {
+    if remaining_depth == Some(0) {
+        return Ok(Vec::new());
+    }
+
     let mut entries: Vec<_> = fs::read_dir(dir)
         .map_err(ProjectError::Read)?
         .filter_map(|e| e.ok())
@@ -46,7 +74,7 @@ fn build_dir_children(docs_root: &Path, dir: &Path) -> Result<Vec<TreeNode>, Pro
         };
 
         if file_type.is_dir() {
-            let children = build_dir_children(docs_root, &path)?;
+            let children = build_dir_children(docs_root, &path, remaining_depth.map(|d| d - 1))?;
             let rel = paths::relative_to(docs_root, &path)?;
             nodes.push(TreeNode {
                 name,
@@ -710,6 +738,55 @@ mod tests {
         let err =
             copy_project_dir(root.to_str().unwrap(), "folder", "folder/self-copy").unwrap_err();
         assert!(matches!(err, ProjectError::PathEscape(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_docs_tree_scoped_limits_recursion_to_max_depth() {
+        let root = temp_dir();
+        create_project_file(root.to_str().unwrap(), "a.adoc").unwrap();
+        create_project_dir(root.to_str().unwrap(), "sub").unwrap();
+        create_project_file(root.to_str().unwrap(), "sub/b.adoc").unwrap();
+        create_project_dir(root.to_str().unwrap(), "sub/deeper").unwrap();
+        create_project_file(root.to_str().unwrap(), "sub/deeper/c.adoc").unwrap();
+
+        // depth 1: `a.adoc` and `sub` itself, but `sub`'s children are empty.
+        let tree = list_docs_tree_scoped(&root, &root, Some(1)).unwrap();
+        let mut names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["a.adoc", "sub"]);
+        let sub = tree.iter().find(|n| n.name == "sub").unwrap();
+        assert!(sub.children.as_ref().unwrap().is_empty());
+
+        // depth 0: nothing at all.
+        let tree = list_docs_tree_scoped(&root, &root, Some(0)).unwrap();
+        assert!(tree.is_empty());
+
+        // Unlimited: everything, including the deepest file.
+        let tree = list_docs_tree_scoped(&root, &root, None).unwrap();
+        let sub = tree.iter().find(|n| n.name == "sub").unwrap();
+        let sub_children = sub.children.as_ref().unwrap();
+        let deeper = sub_children.iter().find(|n| n.name == "deeper").unwrap();
+        assert_eq!(deeper.children.as_ref().unwrap()[0].name, "c.adoc");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_docs_tree_scoped_starts_from_given_subdir_but_relativizes_to_docs_root() {
+        let root = temp_dir();
+        create_project_dir(root.to_str().unwrap(), "sub").unwrap();
+        create_project_file(root.to_str().unwrap(), "sub/x.adoc").unwrap();
+        create_project_dir(root.to_str().unwrap(), "other").unwrap();
+        create_project_file(root.to_str().unwrap(), "other/y.adoc").unwrap();
+
+        let tree = list_docs_tree_scoped(&root, &root.join("sub"), None).unwrap();
+        assert_eq!(tree.len(), 1);
+        // Relative to `docs_root`, not to the `sub` walk-start — round-trips
+        // into `readFile`/`writeFile` the same way a root-wide listing would.
+        assert_eq!(tree[0].path, "sub/x.adoc");
+        assert_eq!(tree[0].name, "x.adoc");
 
         fs::remove_dir_all(&root).ok();
     }

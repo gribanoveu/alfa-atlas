@@ -95,7 +95,7 @@ pub enum ToolCall {
 }
 
 pub enum ToolResult {
-    File(String),
+    File { content: String, start_line: u32, end_line: u32, total_lines: u32 },
     FileList(Vec<ToolFileEntry>),
     SemanticSearchResults(Vec<ToolMatch>),
     FileWritten { path: String },
@@ -107,7 +107,7 @@ pub enum ToolResult {
 Both derive `serde::Serialize`/`Deserialize` with an adjacently-tagged representation (`#[serde(tag = "tool", content = "args")]` / `content = "result"`), so the wire shape is fixed and tested:
 
 ```json
-{"tool":"readFile","args":{"path":"intro.adoc"}}
+{"tool":"readFile","args":{"path":"intro.adoc","startLine":null,"endLine":null}}
 ```
 
 `scope_for_config(repo_root, docs_root, config)` is the one place that turns a project's persisted config (or its absence) into a concrete `ToolScope`.
@@ -116,8 +116,8 @@ Both derive `serde::Serialize`/`Deserialize` with an adjacently-tagged represent
 
 Six tools exist today, not just the original three read-only ones — `WriteFile`/`CreateDirectory`/`RequestFullRepoAccess` were added later and are the harness's only side-effecting operations, gated by `ToolName::requires_confirmation` (see "Tool-calling loop" below for the per-call approval flow this triggers). This section still only fully documents the original three in depth; the newer three are covered at the level this file has verified, not with the same depth as the rest of this document — a gap worth closing in a future pass.
 
-- **`ReadFile { path }`** — reads one file's content, relative to the scope root.
-- **`ListFiles { path? }`** — lists files under the scope root (or a subdirectory of it). In `DocsOnly` mode this reuses `services::docs_fs::list_docs_tree` (filtered to documentation formats, same as the sidebar tree); in `FullRepo` mode it uses `infra::workspace_scanner::scan_all` (gitignore-aware, no format filter, since source files are not documentation formats).
+- **`ReadFile { path, startLine?, endLine? }`** — reads one file's content, relative to the scope root, optionally restricted to a 1-indexed, inclusive line range (`services::ai_tools::slice_lines`). Out-of-range values are clamped, not rejected; omitting both returns the whole file, byte-identical to before this existed. The result always carries `startLine`/`endLine`/`totalLines` alongside `content`, even for a full read, so the model always knows how much of the file it's looking at.
+- **`ListFiles { path?, depth?, pattern? }`** — lists files under the scope root (or a subdirectory of it). In `DocsOnly` mode this reuses `services::docs_fs::list_docs_tree_scoped` (a depth-aware sibling of `list_docs_tree`, filtered to documentation formats, same as the sidebar tree); in `FullRepo` mode it uses `infra::workspace_scanner::scan_all_with_depth` (gitignore-aware, no format filter, since source files are not documentation formats). `depth` caps recursion below `path` (`ignore::WalkBuilder`'s own convention: `path` itself is depth 0, direct children are depth 1; omitted = unlimited, unchanged from before). `pattern` is a glob (`globset`) matched against each entry's filename only, never its full path, applied as a post-filter after listing — directory entries are always kept regardless, since `pattern` scopes which files come back, not the navigable structure.
 - **`SemanticSearch { query, topK? }`** (`services::ai_tools::semantic_search`) — a three-tier degradation cascade, each match tagged with which tier produced it (`source: "semantic" | "lexical" | "symbol"`, since scores aren't comparable across tiers) and carrying `path`/`snippet`/`score`/`startByte`/`endByte`/`qualifiedName`:
   1. **Symbol** (always tried first, cheapest — no I/O beyond a best-effort snippet read): `RepositoryIndex::find_symbol` exact case-insensitive name match, for "where is X defined" queries. Its hit count is subtracted from the `topK` budget passed to whichever tier runs next.
   2. **Semantic** (when the embedding index is ready): embeds the query via the configured `EmbeddingProvider`, calls `EmbeddingIndex::search` (cosine distance, converted to a `1 - distance` similarity score), resolves each hit's chunk text via `chunk_text::resolve_text`.

@@ -26,7 +26,7 @@ pub struct ScannedFile {
 /// Walk `root` honoring `.gitignore` and the standard skip-list, returning
 /// supported files sorted by relative path for deterministic indexing order.
 pub fn scan(root: &Path) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
-    walk(root, true)
+    walk(root, true, None)
 }
 
 /// Same gitignore-aware walk as `scan`, but returns every file regardless of
@@ -35,10 +35,26 @@ pub fn scan(root: &Path) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
 /// harness, not just the doc-format subset the editor's own index cares
 /// about.
 pub fn scan_all(root: &Path) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
-    walk(root, false)
+    walk(root, false, None)
 }
 
-fn walk(root: &Path, filter_supported: bool) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
+/// Same as `scan_all`, capped to `max_depth` levels below `root`
+/// (`ignore::WalkBuilder`'s own convention: `root` itself is depth 0, its
+/// direct children are depth 1). `None` = unlimited, identical to
+/// `scan_all`. Used by `services::ai_tools::list_full_repo` when a
+/// `listFiles` call supplies a `depth` argument.
+pub fn scan_all_with_depth(
+    root: &Path,
+    max_depth: Option<usize>,
+) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
+    walk(root, false, max_depth)
+}
+
+fn walk(
+    root: &Path,
+    filter_supported: bool,
+    max_depth: Option<usize>,
+) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
     let canonical_root = root.canonicalize().map_err(WorkspaceIndexError::Io)?;
 
     let walker = WalkBuilder::new(&canonical_root)
@@ -47,6 +63,7 @@ fn walk(root: &Path, filter_supported: bool) -> Result<Vec<ScannedFile>, Workspa
         .git_exclude(true)
         .git_global(true)
         .parents(true)
+        .max_depth(max_depth)
         .build();
 
     let mut files = Vec::new();
@@ -130,6 +147,47 @@ mod tests {
             .collect();
         assert!(names.contains(&"a.adoc".to_string()));
         assert!(names.contains(&"c.rs".to_string()));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn scan_all_with_depth_limits_recursion() {
+        let root = temp_dir();
+        fs::write(root.join("a.txt"), "a").unwrap(); // depth 1
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/b.txt"), "b").unwrap(); // depth 2
+        fs::create_dir_all(root.join("sub/deeper")).unwrap();
+        fs::write(root.join("sub/deeper/c.txt"), "c").unwrap(); // depth 3
+
+        // `walk()` canonicalizes `root` before scanning, so results must be
+        // stripped against the same canonical form (e.g. macOS's
+        // `/var` -> `/private/var` symlink would otherwise break `strip_prefix`).
+        let canonical_root = root.canonicalize().unwrap();
+        let names = |files: Vec<ScannedFile>| -> Vec<String> {
+            files
+                .iter()
+                .map(|f| {
+                    f.path
+                        .strip_prefix(&canonical_root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect()
+        };
+
+        let mut at_1 = names(scan_all_with_depth(&root, Some(1)).unwrap());
+        at_1.sort();
+        assert_eq!(at_1, vec!["a.txt"]);
+
+        let mut at_2 = names(scan_all_with_depth(&root, Some(2)).unwrap());
+        at_2.sort();
+        assert_eq!(at_2, vec!["a.txt", "sub/b.txt"]);
+
+        let mut unlimited = names(scan_all_with_depth(&root, None).unwrap());
+        unlimited.sort();
+        assert_eq!(unlimited, vec!["a.txt", "sub/b.txt", "sub/deeper/c.txt"]);
+
         fs::remove_dir_all(&root).ok();
     }
 

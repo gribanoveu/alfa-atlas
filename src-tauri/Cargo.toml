@@ -26,6 +26,7 @@ git2 = { version = "0.21.0", default-features = false, features = ["vendored-lib
 dashmap = "6"
 notify = { version = "6", features = ["serde"] }
 ignore = "0.4"
+globset = "0.4"
 pulldown-cmark = "0.12"
 serde_yaml = "0.9"
 regex = "1"

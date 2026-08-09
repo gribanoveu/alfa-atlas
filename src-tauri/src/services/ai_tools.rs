@@ -83,7 +83,12 @@ pub fn execute_tool(
         return Err(ToolError::NotAllowed(call.name()));
     }
     match call {
-        ToolCall::ReadFile(args) => read_file(scope, args).map(ToolResult::File),
+        ToolCall::ReadFile(args) => read_file(scope, args).map(|slice| ToolResult::File {
+            content: slice.content,
+            start_line: slice.start_line,
+            end_line: slice.end_line,
+            total_lines: slice.total_lines,
+        }),
         ToolCall::ListFiles(args) => list_files(scope, args).map(ToolResult::FileList),
         ToolCall::SemanticSearch(args) => {
             semantic_search(scope, args, deps).map(ToolResult::SemanticSearchResults)
@@ -211,9 +216,10 @@ fn lenient_json_object<T: serde::de::DeserializeOwned>(input: &str) -> Result<T,
 /// actually succeed if called, rather than the model discovering
 /// `ToolError::NotAllowed` only at execution time. Wire tag values
 /// (`"readFile"`/`"listFiles"`/`"semanticSearch"`) and argument field names
-/// (`path`, `query`+`topK`) are hand-kept in sync with `ToolCall`/
-/// `ReadFileArgs`/`ListFilesArgs`/`SemanticSearchArgs` — see this module's
-/// schema round-trip test, which catches drift between the two.
+/// (`path`, `startLine`+`endLine`, `depth`+`pattern`, `query`+`topK`) are
+/// hand-kept in sync with `ToolCall`/`ReadFileArgs`/`ListFilesArgs`/
+/// `SemanticSearchArgs` — see this module's schema round-trip test, which
+/// catches drift between the two.
 pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     let mut defs = Vec::new();
     if scope.allows(ToolName::ListFiles) {
@@ -227,6 +233,15 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
                     "path": {
                         "type": ["string", "null"],
                         "description": "Subdirectory relative to the project root, or omitted/null for the root."
+                    },
+                    "depth": {
+                        "type": ["integer", "null"],
+                        "minimum": 0,
+                        "description": "Maximum recursion depth below `path` (1 = only direct children, 0 = no descendant entries at all). Omit or null for no limit."
+                    },
+                    "pattern": {
+                        "type": ["string", "null"],
+                        "description": "Glob pattern (e.g. \"*.java\") matched against each entry's filename only, not its full path. Directories are always included regardless of this filter. Omit or null for no filtering."
                     }
                 },
                 "required": []
@@ -236,7 +251,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ReadFile) {
         defs.push(LlmToolDefinition {
             name: "readFile".to_string(),
-            description: "Read the full text content of one file by its path relative to the project root. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details."
+            description: "Read the text content of one file by its path relative to the project root, optionally restricted to a line range. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details. Prefer a line range for a large file when only part of it is relevant."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -244,6 +259,16 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
                     "path": {
                         "type": "string",
                         "description": "File path relative to the project root."
+                    },
+                    "startLine": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "description": "1-indexed first line to return (inclusive). Omit or null to start from the beginning of the file."
+                    },
+                    "endLine": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "description": "1-indexed last line to return (inclusive). Omit or null to read through the end of the file. Out-of-range values are clamped, not rejected."
                     }
                 },
                 "required": ["path"]
@@ -337,15 +362,48 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
 fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<ToolFileEntry>, ToolError> {
     let subdir = resolve_subdir(scope, args.path.as_deref())?;
 
-    match scope.mode {
-        AiAccessMode::DocsOnly => {
-            list_docs_only(scope, subdir.as_ref().map(|(rel, _)| rel.as_str()))
+    let mut entries = match scope.mode {
+        AiAccessMode::DocsOnly => list_docs_only(scope, subdir.as_ref(), args.depth)?,
+        AiAccessMode::FullRepo => {
+            list_full_repo(scope, subdir.map(|(_, abs)| abs), args.depth)?
         }
-        AiAccessMode::FullRepo => list_full_repo(scope, subdir.map(|(_, abs)| abs)),
+    };
+
+    if let Some(pattern) = args.pattern.as_deref() {
+        let matcher = compile_glob(pattern)?;
+        // Directories are always kept — `pattern` scopes which *files*
+        // come back, not the navigable structure. Moot in `FullRepo` mode
+        // anyway: `list_full_repo` never returns directory entries.
+        entries.retain(|e| e.is_dir || matcher.is_match(basename(&e.path)));
     }
+
+    Ok(entries)
 }
 
-fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<String, ToolError> {
+/// `ToolFileEntry::path` is always `/`-separated by construction
+/// (`paths::relative_to`), so a plain `rsplit` avoids any
+/// `std::path::Path`/OsStr platform quirks.
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn compile_glob(pattern: &str) -> Result<globset::GlobMatcher, ToolError> {
+    globset::Glob::new(pattern)
+        .map(|g| g.compile_matcher())
+        .map_err(|e| ToolError::InvalidPattern(e.to_string()))
+}
+
+/// One `readFile` result: a possibly-partial slice of a file's lines,
+/// along with enough range/total metadata for the model to know it's
+/// looking at less than the whole file.
+struct FileSlice {
+    content: String,
+    start_line: u32,
+    end_line: u32,
+    total_lines: u32,
+}
+
+fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<FileSlice, ToolError> {
     // No extension filtering here, unlike `docs_fs::read_project_file` —
     // the tool boundary is containment under `scope.root` alone. In
     // `FullRepo` mode the harness must be able to read source files, which
@@ -358,7 +416,35 @@ fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<String, ToolError>
     if !canonical.is_file() {
         return Err(ToolError::NotAFile(args.path));
     }
-    fs::read_to_string(&canonical).map_err(ToolError::Io)
+    let content = fs::read_to_string(&canonical).map_err(ToolError::Io)?;
+    Ok(slice_lines(content, args.start_line, args.end_line))
+}
+
+/// Clamps `start_line`/`end_line` into range rather than erroring (mirrors
+/// `SemanticSearchArgs.top_k`'s `.clamp(1, MAX_TOP_K)` handling below).
+/// When neither is requested, `content` is returned byte-identical to what
+/// `fs::read_to_string` produced — no split/rejoin round trip for the
+/// common full-file case. An empty file reports `start_line: 0,
+/// end_line: 0, total_lines: 0` (there is no line 1 to claim). If
+/// `end_line` clamps below `start_line` after each is independently
+/// clamped into `[1, total_lines]`, `end_line` is raised to `start_line`
+/// (returns that one line) rather than erroring.
+fn slice_lines(content: String, start_line: Option<u32>, end_line: Option<u32>) -> FileSlice {
+    if start_line.is_none() && end_line.is_none() {
+        let total_lines = content.lines().count() as u32;
+        let start_line = if total_lines == 0 { 0 } else { 1 };
+        return FileSlice { content, start_line, end_line: total_lines, total_lines };
+    }
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len() as u32;
+    if total_lines == 0 {
+        return FileSlice { content: String::new(), start_line: 0, end_line: 0, total_lines: 0 };
+    }
+    let start = start_line.unwrap_or(1).clamp(1, total_lines);
+    let end = end_line.unwrap_or(total_lines).clamp(start, total_lines);
+    let mut sliced = lines[(start - 1) as usize..end as usize].join("\n");
+    sliced.push('\n');
+    FileSlice { content: sliced, start_line: start, end_line: end, total_lines }
 }
 
 /// Always targets `scope.docs_root`, never `scope.root` — unlike
@@ -408,17 +494,13 @@ fn resolve_subdir(
 
 fn list_docs_only(
     scope: &ToolScope,
-    subdir_rel: Option<&str>,
+    subdir: Option<&(String, PathBuf)>,
+    max_depth: Option<u32>,
 ) -> Result<Vec<ToolFileEntry>, ToolError> {
-    let tree = docs_fs::list_docs_tree(&scope.root.to_string_lossy())?;
+    let dir = subdir.map(|(_, abs)| abs.as_path()).unwrap_or(scope.root.as_path());
+    let tree = docs_fs::list_docs_tree_scoped(&scope.root, dir, max_depth)?;
     let mut entries = Vec::new();
     flatten_tree(tree, &mut entries);
-
-    let Some(prefix) = subdir_rel else {
-        return Ok(entries);
-    };
-    let with_slash = format!("{prefix}/");
-    entries.retain(|e| e.path == prefix || e.path.starts_with(&with_slash));
     Ok(entries)
 }
 
@@ -437,9 +519,10 @@ fn flatten_tree(nodes: Vec<TreeNode>, out: &mut Vec<ToolFileEntry>) {
 fn list_full_repo(
     scope: &ToolScope,
     scan_root: Option<PathBuf>,
+    max_depth: Option<u32>,
 ) -> Result<Vec<ToolFileEntry>, ToolError> {
     let scan_root = scan_root.unwrap_or_else(|| scope.root.clone());
-    let files = workspace_scanner::scan_all(&scan_root)?;
+    let files = workspace_scanner::scan_all_with_depth(&scan_root, max_depth.map(|d| d as usize))?;
     files
         .into_iter()
         .map(|f| {
@@ -775,19 +858,51 @@ mod tests {
             scope,
             ToolCall::ReadFile(ReadFileArgs {
                 path: path.to_string(),
+                start_line: None,
+                end_line: None,
             }),
             &EmbeddingDeps::empty(),
         )? {
-            ToolResult::File(content) => Ok(content),
+            ToolResult::File { content, .. } => Ok(content),
             other => panic!("expected ToolResult::File, got {other:?}"),
         }
     }
 
+    /// Like `read`, but returns the full `ToolResult` so range/total-line
+    /// metadata is inspectable, and takes an explicit line range.
+    fn read_range(
+        scope: &ToolScope,
+        path: &str,
+        start_line: Option<u32>,
+        end_line: Option<u32>,
+    ) -> Result<ToolResult, ToolError> {
+        execute_tool(
+            scope,
+            ToolCall::ReadFile(ReadFileArgs {
+                path: path.to_string(),
+                start_line,
+                end_line,
+            }),
+            &EmbeddingDeps::empty(),
+        )
+    }
+
     fn list(scope: &ToolScope, path: Option<&str>) -> Result<Vec<ToolFileEntry>, ToolError> {
+        list_scoped(scope, path, None, None)
+    }
+
+    fn list_scoped(
+        scope: &ToolScope,
+        path: Option<&str>,
+        depth: Option<u32>,
+        pattern: Option<&str>,
+    ) -> Result<Vec<ToolFileEntry>, ToolError> {
         match execute_tool(
             scope,
             ToolCall::ListFiles(ListFilesArgs {
                 path: path.map(str::to_string),
+                depth,
+                pattern: pattern.map(str::to_string),
             }),
             &EmbeddingDeps::empty(),
         )? {
@@ -1039,6 +1154,207 @@ mod tests {
     }
 
     #[test]
+    fn read_file_full_read_reports_total_lines_and_is_byte_identical() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        match read_range(&scope, "intro.adoc", None, None).unwrap() {
+            ToolResult::File { content, start_line, end_line, total_lines } => {
+                assert_eq!(content, "= Intro\n");
+                assert_eq!((start_line, end_line, total_lines), (1, 1, 1));
+            }
+            other => panic!("expected ToolResult::File, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn read_file_returns_a_requested_line_range() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("multi.adoc"), "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        match read_range(&scope, "multi.adoc", Some(2), Some(4)).unwrap() {
+            ToolResult::File { content, start_line, end_line, total_lines } => {
+                assert_eq!(content, "two\nthree\nfour\n");
+                assert_eq!((start_line, end_line, total_lines), (2, 4, 5));
+            }
+            other => panic!("expected ToolResult::File, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn read_file_clamps_out_of_range_start_and_end_line() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("multi.adoc"), "one\ntwo\nthree\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        match read_range(&scope, "multi.adoc", Some(0), Some(9999)).unwrap() {
+            ToolResult::File { content, start_line, end_line, total_lines } => {
+                assert_eq!(content, "one\ntwo\nthree\n");
+                assert_eq!((start_line, end_line, total_lines), (1, 3, 3));
+            }
+            other => panic!("expected ToolResult::File, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn read_file_clamps_end_line_below_start_line_up_to_start_line() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("multi.adoc"), "one\ntwo\nthree\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        match read_range(&scope, "multi.adoc", Some(3), Some(1)).unwrap() {
+            ToolResult::File { content, start_line, end_line, total_lines } => {
+                assert_eq!(content, "three\n");
+                assert_eq!((start_line, end_line, total_lines), (3, 3, 3));
+            }
+            other => panic!("expected ToolResult::File, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn read_file_line_range_on_empty_file_reports_zero_lines() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("empty.adoc"), "").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        match read_range(&scope, "empty.adoc", Some(1), Some(5)).unwrap() {
+            ToolResult::File { content, start_line, end_line, total_lines } => {
+                assert_eq!(content, "");
+                assert_eq!((start_line, end_line, total_lines), (0, 0, 0));
+            }
+            other => panic!("expected ToolResult::File, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    /// The key regression test for the `list_docs_only` walk-scoping fix:
+    /// without it, `depth` would be measured from `docs_root` instead of
+    /// from the requested `path`, silently producing wrong results.
+    #[test]
+    fn list_files_depth_is_relative_to_requested_subdir_not_root() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("a/b")).unwrap();
+        fs::write(docs.join("a/direct.adoc"), "= Direct\n").unwrap();
+        fs::write(docs.join("a/b/nested.adoc"), "= Nested\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let entries = list_scoped(&scope, Some("a"), Some(1), None).unwrap();
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"a/direct.adoc"));
+        assert!(paths.contains(&"a/b"));
+        // depth=1 relative to "a" excludes "a"'s grandchildren.
+        assert!(!paths.contains(&"a/b/nested.adoc"));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn list_files_depth_limits_recursion_in_docs_only() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("a/b")).unwrap();
+        fs::write(docs.join("a/one.adoc"), "= One\n").unwrap();
+        fs::write(docs.join("a/b/two.adoc"), "= Two\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let shallow = list_scoped(&scope, None, Some(2), None).unwrap();
+        let shallow_paths: Vec<&str> = shallow.iter().map(|e| e.path.as_str()).collect();
+        assert!(shallow_paths.contains(&"a/one.adoc"));
+        assert!(!shallow_paths.contains(&"a/b/two.adoc"));
+
+        let unlimited = list_scoped(&scope, None, None, None).unwrap();
+        let unlimited_paths: Vec<&str> = unlimited.iter().map(|e| e.path.as_str()).collect();
+        assert!(unlimited_paths.contains(&"a/b/two.adoc"));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn list_files_depth_limits_recursion_in_full_repo() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(repo.join("src/nested")).unwrap();
+        fs::write(repo.join("src/nested/deep.rs"), "fn deep() {}\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let shallow = list_scoped(&scope, None, Some(2), None).unwrap();
+        let shallow_paths: Vec<&str> = shallow.iter().map(|e| e.path.as_str()).collect();
+        assert!(shallow_paths.contains(&"src/main.rs"));
+        assert!(!shallow_paths.iter().any(|p| p.ends_with("deep.rs")));
+
+        let unlimited = list_scoped(&scope, None, None, None).unwrap();
+        let unlimited_paths: Vec<&str> = unlimited.iter().map(|e| e.path.as_str()).collect();
+        assert!(unlimited_paths.iter().any(|p| p.ends_with("deep.rs")));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn list_files_depth_zero_returns_no_descendant_entries() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let entries = list_scoped(&scope, None, Some(0), None).unwrap();
+        assert!(entries.is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn list_files_pattern_filters_by_basename_across_depths() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(repo.join("src/sub")).unwrap();
+        fs::write(repo.join("src/a.java"), "class A {}\n").unwrap();
+        fs::write(repo.join("src/sub/b.java"), "class B {}\n").unwrap();
+        fs::write(repo.join("src/sub/c.txt"), "not java\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let entries = list_scoped(&scope, Some("src"), None, Some("*.java")).unwrap();
+        let mut paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, vec!["src/a.java", "src/sub/b.java"]);
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn list_files_pattern_keeps_directory_entries() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("assets")).unwrap();
+        fs::write(docs.join("assets/logo.png"), "not adoc").ok();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        // `assets` itself doesn't match "*.adoc", but must still be listed
+        // — `pattern` scopes which files come back, not the directory
+        // structure.
+        let entries = list_scoped(&scope, None, None, Some("*.adoc")).unwrap();
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"assets"));
+        assert!(paths.contains(&"intro.adoc"));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn list_files_invalid_glob_pattern_returns_invalid_pattern_error() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = list_scoped(&scope, None, None, Some("[")).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidPattern(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn execute_tool_denies_a_tool_missing_from_a_customized_allowlist() {
         let (repo, docs) = fixture_repo();
         let only_list: HashSet<ToolName> = [ToolName::ListFiles].into_iter().collect();
@@ -1106,15 +1422,28 @@ mod tests {
     fn tool_call_and_result_round_trip_through_json() {
         let call = ToolCall::ReadFile(ReadFileArgs {
             path: "intro.adoc".to_string(),
+            start_line: None,
+            end_line: None,
         });
         let json = serde_json::to_string(&call).unwrap();
-        assert_eq!(json, r#"{"tool":"readFile","args":{"path":"intro.adoc"}}"#);
+        assert_eq!(
+            json,
+            r#"{"tool":"readFile","args":{"path":"intro.adoc","startLine":null,"endLine":null}}"#
+        );
         let round_tripped: ToolCall = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, call);
 
-        let result = ToolResult::File("= Intro\n".to_string());
+        let result = ToolResult::File {
+            content: "= Intro\n".to_string(),
+            start_line: 1,
+            end_line: 1,
+            total_lines: 1,
+        };
         let json = serde_json::to_string(&result).unwrap();
-        assert_eq!(json, r#"{"tool":"file","result":"= Intro\n"}"#);
+        assert_eq!(
+            json,
+            r#"{"tool":"file","result":{"content":"= Intro\n","startLine":1,"endLine":1,"totalLines":1}}"#
+        );
     }
 
     #[test]
@@ -1231,7 +1560,7 @@ mod tests {
             arguments: r#"{"path":"intro.adoc"}"#.to_string(),
         };
         let parsed = parse_tool_call(&call).unwrap();
-        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string() }));
+        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string(), start_line: None, end_line: None }));
     }
 
     #[test]
@@ -1242,7 +1571,43 @@ mod tests {
             arguments: r#"{"path":null}"#.to_string(),
         };
         let parsed = parse_tool_call(&call).unwrap();
-        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None }));
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None, depth: None, pattern: None }));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_read_file_args_with_line_range() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: r#"{"path":"intro.adoc","startLine":2,"endLine":10}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::ReadFile(ReadFileArgs {
+                path: "intro.adoc".to_string(),
+                start_line: Some(2),
+                end_line: Some(10),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_list_files_args_with_depth_and_pattern() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: r#"{"path":"src","depth":2,"pattern":"*.java"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::ListFiles(ListFilesArgs {
+                path: Some("src".to_string()),
+                depth: Some(2),
+                pattern: Some("*.java".to_string()),
+            })
+        );
     }
 
     #[test]
@@ -1342,7 +1707,7 @@ mod tests {
             arguments: "{}\"\"".to_string(),
         };
         let parsed = parse_tool_call(&call).unwrap();
-        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None }));
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None, depth: None, pattern: None }));
     }
 
     #[test]
@@ -1353,7 +1718,7 @@ mod tests {
             arguments: r#"{"path":"intro.adoc"}garbage"#.to_string(),
         };
         let parsed = parse_tool_call(&call).unwrap();
-        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string() }));
+        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string(), start_line: None, end_line: None }));
     }
 
     #[test]
@@ -1417,11 +1782,27 @@ mod tests {
         let args: ReadFileArgs =
             serde_json::from_value(serde_json::json!({"path": "intro.adoc"})).unwrap();
         assert_eq!(args.path, "intro.adoc");
+        assert_eq!(args.start_line, None);
+        assert_eq!(args.end_line, None);
+        let args: ReadFileArgs = serde_json::from_value(
+            serde_json::json!({"path": "intro.adoc", "startLine": 2, "endLine": 10}),
+        )
+        .unwrap();
+        assert_eq!(args.start_line, Some(2));
+        assert_eq!(args.end_line, Some(10));
 
         let list_files = defs.iter().find(|d| d.name == "listFiles").unwrap();
         assert_eq!(list_files.parameters["required"], serde_json::json!([]));
         let args: ListFilesArgs = serde_json::from_value(serde_json::json!({})).unwrap();
         assert_eq!(args.path, None);
+        assert_eq!(args.depth, None);
+        assert_eq!(args.pattern, None);
+        let args: ListFilesArgs = serde_json::from_value(
+            serde_json::json!({"path": "src", "depth": 2, "pattern": "*.java"}),
+        )
+        .unwrap();
+        assert_eq!(args.depth, Some(2));
+        assert_eq!(args.pattern, Some("*.java".to_string()));
 
         let semantic_search = defs.iter().find(|d| d.name == "semanticSearch").unwrap();
         assert_eq!(semantic_search.parameters["required"], serde_json::json!(["query"]));
