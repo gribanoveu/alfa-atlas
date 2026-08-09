@@ -91,7 +91,9 @@ pub enum ToolCall {
     SemanticSearch(SemanticSearchArgs),
     WriteFile(WriteFileArgs),
     EditFile(EditFileArgs),
+    DeleteFile(DeleteFileArgs),
     CreateDirectory(CreateDirectoryArgs),
+    DeleteDirectory(DeleteDirectoryArgs),
     RequestFullRepoAccess(RequestFullRepoAccessArgs),
 }
 
@@ -101,7 +103,9 @@ pub enum ToolResult {
     SemanticSearchResults(Vec<ToolMatch>),
     FileWritten { path: String },
     FileEdited { path: String },
+    FileDeleted { path: String },
     DirectoryCreated { path: String },
+    DirectoryDeleted { path: String },
     AccessModeChanged { mode: AiAccessMode },
 }
 ```
@@ -116,7 +120,7 @@ Both derive `serde::Serialize`/`Deserialize` with an adjacently-tagged represent
 
 ## Tools implemented today
 
-Seven tools exist today, not just the original three read-only ones — `WriteFile`/`EditFile`/`CreateDirectory`/`RequestFullRepoAccess` were added later and are the harness's only side-effecting operations, gated by `ToolName::requires_confirmation` (see "Tool-calling loop" below for the per-call approval flow this triggers). This section still only fully documents the original three in depth; the newer four are covered at the level this file has verified, not with the same depth as the rest of this document — a gap worth closing in a future pass.
+Nine tools exist today, not just the original three read-only ones — `WriteFile`/`EditFile`/`DeleteFile`/`CreateDirectory`/`DeleteDirectory`/`RequestFullRepoAccess` were added later and are the harness's only side-effecting operations, gated by `ToolName::requires_confirmation` (see "Tool-calling loop" below for the per-call approval flow this triggers). This section still only fully documents the original three in depth; the newer six are covered at the level this file has verified, not with the same depth as the rest of this document — a gap worth closing in a future pass.
 
 - **`ReadFile { path, startLine?, endLine? }`** — reads one file's content, relative to the scope root, optionally restricted to a 1-indexed, inclusive line range (`services::ai_tools::slice_lines`). Out-of-range values are clamped, not rejected; omitting both returns the whole file, byte-identical to before this existed. The result always carries `startLine`/`endLine`/`totalLines` alongside `content`, even for a full read, so the model always knows how much of the file it's looking at.
 - **`ListFiles { path?, depth?, pattern? }`** — lists files under the scope root (or a subdirectory of it). In `DocsOnly` mode this reuses `services::docs_fs::list_docs_tree_scoped` (a depth-aware sibling of `list_docs_tree`, filtered to documentation formats, same as the sidebar tree); in `FullRepo` mode it uses `infra::workspace_scanner::scan_all_with_depth` (gitignore-aware, no format filter, since source files are not documentation formats). `depth` caps recursion below `path` (`ignore::WalkBuilder`'s own convention: `path` itself is depth 0, direct children are depth 1; omitted = unlimited, unchanged from before). `pattern` is a glob (`globset`) matched against each entry's filename only, never its full path, applied as a post-filter after listing — directory entries are always kept regardless, since `pattern` scopes which files come back, not the navigable structure.
@@ -127,7 +131,9 @@ Seven tools exist today, not just the original three read-only ones — `WriteFi
   Readiness (semantic vs. lexical) mirrors `embedding_index_status`'s own check (`resolve_index_paths` → `attach_index_store` → stale? → `attach_embedding_index(allow_repair: false)` → `embedded_count > 0`), plus a `try_lock` peek at `EmbeddingSyncGuard` for "a sync is actively running right now" — any failure anywhere in that sequence degrades to the lexical tier rather than erroring out, since this whole tool is a graceful cascade, not a pipeline that should hard-fail on a fast-path hiccup. `execute_tool`'s signature grew a third parameter, `deps: &EmbeddingDeps` (`services::ai_tools::EmbeddingDeps`, a bundle of `Arc`-cloned `RepositoryIndex`/`ChunkIndex`/`EmbeddingIndexSlot`/`IndexStoreSlot`/`EmbeddingProviderSlot`/`EmbeddingSyncGuard`), to reach this state — previously it (and `current_scope()`) were pure functions with zero Tauri-managed-state access.
 - **`WriteFile { path, content }`** (`services::ai_tools::write_file`) — always targets `scope.docs_root` via `docs_fs::write_project_file`, regardless of `AiAccessMode`: `FullRepo` widens what the assistant can *read* for context, not where it may write. Creates or overwrites; requires confirmation (see "Tool-calling loop").
 - **`EditFile { path, edits: [{old, new}] }`** (`services::ai_tools::edit_file`/`apply_edits`) — same `docs_root`-always targeting as `WriteFile`, but a search-and-replace alternative to resending a whole file: composes `docs_fs::read_project_file` + a pure `apply_edits` + `docs_fs::write_project_file`. Every edit's `old` must match the file's *current* content exactly once, validated against the original content (not sequentially against earlier edits in the same call) — zero matches (`ToolError::EditTextNotFound`), more than one match (`EditTextAmbiguous`, carries the match count), or two edits' matched regions overlapping (`EditsOverlap`) all reject the whole call before anything is written; nothing partial is ever applied. The file must already exist (a missing file surfaces the same `NotFound` `ReadFile` would). Requires confirmation.
+- **`DeleteFile { path }`** (`services::ai_tools::delete_file`) — same `docs_root`-always targeting as `WriteFile`, via `docs_fs::delete_project_file` (fails if missing or not a file). Requires confirmation — this is the one irreversible tool with no partial-application safety net the way `EditFile` has.
 - **`CreateDirectory { path }`** (`services::ai_tools::create_directory`) — same `docs_root`-always targeting as `WriteFile`, via `docs_fs::create_project_dir` (creates missing parents, fails if the path already exists as either a file or directory). Requires confirmation.
+- **`DeleteDirectory { path, recursive? }`** (`services::ai_tools::delete_directory`) — same `docs_root`-always targeting as `WriteFile`, via `docs_fs::delete_project_dir(docs_root, path, recursive)`. `recursive` defaults to `false` when omitted: a non-empty directory is refused (`ToolError::DirectoryNotEmpty`) rather than silently deleted — pass `recursive: true` to delete a non-empty directory and everything inside it in one call. `delete_project_dir` is shared with the editor's own delete UI (`commands::project::delete_project_dir`), which always passes `true` (it already confirms client-side via `DeleteConfirmModal` before calling). Requires confirmation.
 - **`RequestFullRepoAccess { reason }`** — calls `services::ai_tools::set_access_mode(FullRepo)`, persisting the escalation to `project.json` (shared with the manual toggle in `AssistantPanel`) and returning `ToolResult::AccessModeChanged`. `reason` is required (not optional) specifically to force the model to self-justify the request, shown verbatim in the approval prompt. Requires confirmation — the user may deny it.
 
 ## How access is actually enforced

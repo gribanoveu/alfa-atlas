@@ -16,9 +16,9 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    CreateDirectoryArgs, EditFileArgs, FileEdit, ListFilesArgs, MatchSource, ReadFileArgs,
-    RequestFullRepoAccessArgs, SemanticSearchArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch,
-    ToolResult, ToolScope, WriteFileArgs,
+    CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit,
+    ListFilesArgs, MatchSource, ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs,
+    ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::llm::{LlmToolCall, LlmToolDefinition};
@@ -99,8 +99,14 @@ pub fn execute_tool(
         ToolCall::EditFile(args) => {
             edit_file(scope, args).map(|path| ToolResult::FileEdited { path })
         }
+        ToolCall::DeleteFile(args) => {
+            delete_file(scope, args).map(|path| ToolResult::FileDeleted { path })
+        }
         ToolCall::CreateDirectory(args) => {
             create_directory(scope, args).map(|path| ToolResult::DirectoryCreated { path })
+        }
+        ToolCall::DeleteDirectory(args) => {
+            delete_directory(scope, args).map(|path| ToolResult::DirectoryDeleted { path })
         }
         ToolCall::RequestFullRepoAccess(_args) => set_access_mode(AiAccessMode::FullRepo)
             .map(|()| ToolResult::AccessModeChanged { mode: AiAccessMode::FullRepo })
@@ -180,8 +186,14 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "editFile" => lenient_json_object::<EditFileArgs>(&call.arguments)
             .map(ToolCall::EditFile)
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        "deleteFile" => lenient_json_object::<DeleteFileArgs>(&call.arguments)
+            .map(ToolCall::DeleteFile)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         "createDirectory" => lenient_json_object::<CreateDirectoryArgs>(&call.arguments)
             .map(ToolCall::CreateDirectory)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        "deleteDirectory" => lenient_json_object::<DeleteDirectoryArgs>(&call.arguments)
+            .map(ToolCall::DeleteDirectory)
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         "requestFullRepoAccess" => lenient_json_object::<RequestFullRepoAccessArgs>(&call.arguments)
             .map(ToolCall::RequestFullRepoAccess)
@@ -363,6 +375,24 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
+    if scope.allows(ToolName::DeleteFile) {
+        defs.push(LlmToolDefinition {
+            name: "deleteFile".to_string(),
+            description:
+                "Delete one file, given its path relative to the project root. This is irreversible — do not call it speculatively. Always requires explicit user approval before the deletion actually happens — the user may deny it, in which case the file is left unchanged."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the project root."
+                    }
+                },
+                "required": ["path"]
+            }),
+        });
+    }
     if scope.allows(ToolName::CreateDirectory) {
         defs.push(LlmToolDefinition {
             name: "createDirectory".to_string(),
@@ -375,6 +405,28 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
                     "path": {
                         "type": "string",
                         "description": "Directory path relative to the project root."
+                    }
+                },
+                "required": ["path"]
+            }),
+        });
+    }
+    if scope.allows(ToolName::DeleteDirectory) {
+        defs.push(LlmToolDefinition {
+            name: "deleteDirectory".to_string(),
+            description:
+                "Delete a directory, given its path relative to the project root. By default (recursive omitted or false), the call is rejected if the directory is not empty — delete its contents first, or pass recursive: true to delete the directory and everything inside it in one call. This is irreversible, especially with recursive: true — do not call it speculatively. Always requires explicit user approval before the deletion actually happens — the user may deny it."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path relative to the project root."
+                    },
+                    "recursive": {
+                        "type": ["boolean", "null"],
+                        "description": "If true, deletes the directory and all its contents. If omitted or false (default), the call is rejected when the directory is not empty."
                     }
                 },
                 "required": ["path"]
@@ -562,6 +614,14 @@ fn apply_edits(content: &str, edits: &[FileEdit]) -> Result<String, ToolError> {
     Ok(result)
 }
 
+/// Always targets `scope.docs_root`, same reasoning as `write_file`.
+/// Reuses `docs_fs::delete_project_file` as-is: fails if the path is
+/// missing or not a file.
+fn delete_file(scope: &ToolScope, args: DeleteFileArgs) -> Result<String, ToolError> {
+    docs_fs::delete_project_file(&scope.docs_root.to_string_lossy(), &args.path)?;
+    Ok(args.path)
+}
+
 /// Always targets `scope.docs_root`, same reasoning as `write_file` —
 /// `FullRepo` widens what the assistant can read for context, not where it
 /// may create directories. Reuses `docs_fs::create_project_dir` as-is:
@@ -569,6 +629,21 @@ fn apply_edits(content: &str, edits: &[FileEdit]) -> Result<String, ToolError> {
 /// (as either a file or a directory).
 fn create_directory(scope: &ToolScope, args: CreateDirectoryArgs) -> Result<String, ToolError> {
     docs_fs::create_project_dir(&scope.docs_root.to_string_lossy(), &args.path)?;
+    Ok(args.path)
+}
+
+/// Always targets `scope.docs_root`, same reasoning as `write_file`.
+/// `recursive` defaults to `false` when omitted (`Option::unwrap_or`) —
+/// `docs_fs::delete_project_dir` then refuses a non-empty directory with
+/// `ToolError::DirectoryNotEmpty` rather than silently deleting its
+/// contents; pass `recursive: true` to delete a non-empty directory in one
+/// call.
+fn delete_directory(scope: &ToolScope, args: DeleteDirectoryArgs) -> Result<String, ToolError> {
+    docs_fs::delete_project_dir(
+        &scope.docs_root.to_string_lossy(),
+        &args.path,
+        args.recursive.unwrap_or(false),
+    )?;
     Ok(args.path)
 }
 
@@ -1056,6 +1131,28 @@ mod tests {
         }
     }
 
+    fn delete(scope: &ToolScope, path: &str) -> Result<String, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::DeleteFile(DeleteFileArgs { path: path.to_string() }),
+            &EmbeddingDeps::empty(),
+        )? {
+            ToolResult::FileDeleted { path } => Ok(path),
+            other => panic!("expected ToolResult::FileDeleted, got {other:?}"),
+        }
+    }
+
+    fn delete_dir(scope: &ToolScope, path: &str, recursive: Option<bool>) -> Result<String, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::DeleteDirectory(DeleteDirectoryArgs { path: path.to_string(), recursive }),
+            &EmbeddingDeps::empty(),
+        )? {
+            ToolResult::DirectoryDeleted { path } => Ok(path),
+            other => panic!("expected ToolResult::DirectoryDeleted, got {other:?}"),
+        }
+    }
+
     #[test]
     fn read_file_inside_docs_root_succeeds_in_docs_only() {
         let (repo, docs) = fixture_repo();
@@ -1352,6 +1449,120 @@ mod tests {
         let err = create_dir(&scope, "../outside-dir").unwrap_err();
         assert!(matches!(err, ToolError::Io(_)));
         assert!(!repo.join("outside-dir").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn delete_file_removes_the_file() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        delete(&scope, "intro.adoc").unwrap();
+        assert!(!docs.join("intro.adoc").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn delete_file_rejects_missing_file() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = delete(&scope, "does-not-exist.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn delete_file_full_repo_mode_still_targets_docs_root_not_repo_root() {
+        let (repo, docs) = fixture_repo();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        delete(&full_repo, "intro.adoc").unwrap();
+        assert!(!docs.join("intro.adoc").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn delete_file_rejects_path_escape() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        // Same `validate_relative_name`-first shape as `create_dir`'s own
+        // path-escape test — `..` is rejected as `InvalidName` before
+        // `join_relative` gets a chance to produce `PathEscape`.
+        let err = delete(&scope, "../outside.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::Io(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn delete_directory_removes_an_empty_directory_by_default() {
+        let (repo, docs) = fixture_repo();
+        create_dir(&ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly), "empty").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        delete_dir(&scope, "empty", None).unwrap();
+        assert!(!docs.join("empty").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn delete_directory_refuses_a_non_empty_directory_by_default() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("folder")).unwrap();
+        fs::write(docs.join("folder/note.adoc"), "= Note\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = delete_dir(&scope, "folder", None).unwrap_err();
+        assert!(matches!(err, ToolError::DirectoryNotEmpty(_)));
+        assert!(docs.join("folder/note.adoc").exists());
+
+        // Explicit `recursive: false` behaves the same as omitting it.
+        let err = delete_dir(&scope, "folder", Some(false)).unwrap_err();
+        assert!(matches!(err, ToolError::DirectoryNotEmpty(_)));
+        assert!(docs.join("folder/note.adoc").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn delete_directory_recursive_true_deletes_a_non_empty_directory() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("folder")).unwrap();
+        fs::write(docs.join("folder/note.adoc"), "= Note\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        delete_dir(&scope, "folder", Some(true)).unwrap();
+        assert!(!docs.join("folder").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn delete_directory_full_repo_mode_still_targets_docs_root_not_repo_root() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("empty")).unwrap();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        delete_dir(&full_repo, "empty", None).unwrap();
+        assert!(!docs.join("empty").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn delete_directory_rejects_missing_directory() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = delete_dir(&scope, "does-not-exist", None).unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -1905,6 +2116,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_delete_file_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "deleteFile".to_string(),
+            arguments: r#"{"path":"guide.adoc"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::DeleteFile(DeleteFileArgs { path: "guide.adoc".to_string() }));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_delete_directory_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "deleteDirectory".to_string(),
+            arguments: r#"{"path":"guides/nested","recursive":true}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::DeleteDirectory(DeleteDirectoryArgs {
+                path: "guides/nested".to_string(),
+                recursive: Some(true),
+            })
+        );
+    }
+
+    #[test]
     fn parse_tool_call_parses_edit_file_args() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -1941,11 +2180,11 @@ mod tests {
     fn parse_tool_call_rejects_unknown_tool_name() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
-            name: "deleteFile".to_string(),
+            name: "moveFile".to_string(),
             arguments: "{}".to_string(),
         };
         let err = parse_tool_call(&call).unwrap_err();
-        assert!(matches!(err, ToolError::UnknownTool(name) if name == "deleteFile"));
+        assert!(matches!(err, ToolError::UnknownTool(name) if name == "moveFile"));
     }
 
     #[test]
@@ -2003,7 +2242,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_seven_by_default() {
+    fn llm_tool_definitions_includes_all_nine_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -2017,7 +2256,9 @@ mod tests {
                 "semanticSearch",
                 "writeFile",
                 "editFile",
+                "deleteFile",
                 "createDirectory",
+                "deleteDirectory",
                 "requestFullRepoAccess"
             ]
         );

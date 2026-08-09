@@ -604,8 +604,12 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       return typeof args.path === "string" ? `Изменяет файл: ${args.path}…` : "Изменяет файл…";
     case "editFile":
       return typeof args.path === "string" ? `Редактирует файл: ${args.path}…` : "Редактирует файл…";
+    case "deleteFile":
+      return typeof args.path === "string" ? `Удаляет файл: ${args.path}…` : "Удаляет файл…";
     case "createDirectory":
       return typeof args.path === "string" ? `Создаёт папку: ${args.path}…` : "Создаёт папку…";
+    case "deleteDirectory":
+      return typeof args.path === "string" ? `Удаляет папку: ${args.path}…` : "Удаляет папку…";
     case "requestFullRepoAccess":
       return "Запрашивает доступ к репозиторию…";
     default:
@@ -666,8 +670,12 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
       return `Записано: ${block.result.result.path}`;
     case "fileEdited":
       return `Изменён: ${block.result.result.path}`;
+    case "fileDeleted":
+      return `Удалён: ${block.result.result.path}`;
     case "directoryCreated":
       return `Создана папка: ${block.result.result.path}`;
+    case "directoryDeleted":
+      return `Удалена папка: ${block.result.result.path}`;
     case "accessModeChanged":
       return block.result.result.mode === "fullRepo" ? "Доступ изменён: весь репозиторий" : "Доступ изменён: только документация";
     default:

@@ -282,8 +282,16 @@ pub fn delete_project_file(docs_root: &str, relative_path: &str) -> Result<(), P
 }
 
 /// Delete a directory under docs root. Fails if missing, not a directory,
-/// or if the target is the docs root itself.
-pub fn delete_project_dir(docs_root: &str, relative_path: &str) -> Result<(), ProjectError> {
+/// or if the target is the docs root itself. `recursive: false` additionally
+/// refuses a non-empty directory (`ProjectError::DirectoryNotEmpty`) rather
+/// than silently deleting its contents — callers that already confirm
+/// "delete everything inside" client-side (the editor's own delete UI, via
+/// `commands::project::delete_project_dir`) pass `true`.
+pub fn delete_project_dir(
+    docs_root: &str,
+    relative_path: &str,
+    recursive: bool,
+) -> Result<(), ProjectError> {
     validate_relative_name(relative_path)?;
     let root = resolve_docs_root(docs_root)?;
     let joined = paths::join_relative(&root, relative_path)?;
@@ -293,6 +301,9 @@ pub fn delete_project_dir(docs_root: &str, relative_path: &str) -> Result<(), Pr
     }
     if !canonical.is_dir() {
         return Err(ProjectError::NotFound(relative_path.to_string()));
+    }
+    if !recursive && fs::read_dir(&canonical).map_err(ProjectError::Delete)?.next().is_some() {
+        return Err(ProjectError::DirectoryNotEmpty(relative_path.to_string()));
     }
     fs::remove_dir_all(&canonical).map_err(ProjectError::Delete)
 }
@@ -555,18 +566,45 @@ mod tests {
         let err = delete_project_file(root.to_str().unwrap(), "folder").unwrap_err();
         assert!(matches!(err, ProjectError::NotFound(_)));
 
-        // Delete the directory: tree is empty.
-        delete_project_dir(root.to_str().unwrap(), "folder").unwrap();
+        // Delete the (now empty) directory: tree is empty. `recursive: false`
+        // is fine here since the folder has nothing left in it.
+        delete_project_dir(root.to_str().unwrap(), "folder", false).unwrap();
         let tree = list_docs_tree(root.to_str().unwrap()).unwrap();
         assert!(tree.is_empty());
 
         // Deleting the dir again fails: not found.
-        let err = delete_project_dir(root.to_str().unwrap(), "folder").unwrap_err();
+        let err = delete_project_dir(root.to_str().unwrap(), "folder", false).unwrap_err();
         assert!(matches!(err, ProjectError::NotFound(_)));
 
         // Deleting the docs root itself is rejected.
-        let err = delete_project_dir(root.to_str().unwrap(), ".").unwrap_err();
+        let err = delete_project_dir(root.to_str().unwrap(), ".", true).unwrap_err();
         assert!(matches!(err, ProjectError::InvalidName(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_project_dir_refuses_a_non_empty_directory_by_default() {
+        let root = temp_dir();
+        create_project_dir(root.to_str().unwrap(), "folder").unwrap();
+        create_project_file(root.to_str().unwrap(), "folder/note.adoc").unwrap();
+
+        let err = delete_project_dir(root.to_str().unwrap(), "folder", false).unwrap_err();
+        assert!(matches!(err, ProjectError::DirectoryNotEmpty(_)));
+        // Nothing was actually deleted.
+        assert!(root.join("folder/note.adoc").exists());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_project_dir_recursive_true_deletes_a_non_empty_directory() {
+        let root = temp_dir();
+        create_project_dir(root.to_str().unwrap(), "folder").unwrap();
+        create_project_file(root.to_str().unwrap(), "folder/note.adoc").unwrap();
+
+        delete_project_dir(root.to_str().unwrap(), "folder", true).unwrap();
+        assert!(!root.join("folder").exists());
 
         fs::remove_dir_all(&root).ok();
     }

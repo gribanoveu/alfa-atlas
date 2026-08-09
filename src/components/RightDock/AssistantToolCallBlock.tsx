@@ -296,10 +296,24 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
           <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
         </div>
       );
+    case "fileDeleted":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Файл удалён</div>
+          <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
+        </div>
+      );
     case "directoryCreated":
       return (
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Папка создана</div>
+          <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
+        </div>
+      );
+    case "directoryDeleted":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Папка удалена</div>
           <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
         </div>
       );

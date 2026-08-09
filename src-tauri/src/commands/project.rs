@@ -141,7 +141,7 @@ pub fn delete_project_file(docs_root: String, relative_path: String) -> Result<(
 
 #[tauri::command]
 pub fn delete_project_dir(docs_root: String, relative_path: String) -> Result<(), String> {
-    docs_fs::delete_project_dir(&docs_root, &relative_path).map_err(|e| e.to_string())
+    docs_fs::delete_project_dir(&docs_root, &relative_path, true).map_err(|e| e.to_string())
 }
 
 /// Resolves `docs_root`'s path relative to the index's own repo root (e.g.

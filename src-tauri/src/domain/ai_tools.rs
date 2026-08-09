@@ -94,12 +94,32 @@ pub struct EditFileArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DeleteFileArgs {
+    /// File path relative to the docs root — same containment/target rules
+    /// as `WriteFileArgs::path`. See `services::ai_tools::delete_file`.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateDirectoryArgs {
     /// Directory path relative to the docs root — same containment rules
     /// as `WriteFileArgs::path` (always the docs subtree, regardless of
     /// `AiAccessMode`; see `services::ai_tools::create_directory`). Parent
     /// directories are created as needed.
     pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteDirectoryArgs {
+    /// Directory path relative to the docs root — same containment rules
+    /// as `WriteFileArgs::path`.
+    pub path: String,
+    /// `None`/omitted means `false`: a non-empty directory is refused
+    /// rather than silently deleted — see
+    /// `services::ai_tools::delete_directory`.
+    pub recursive: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,7 +174,9 @@ pub enum ToolCall {
     SemanticSearch(SemanticSearchArgs),
     WriteFile(WriteFileArgs),
     EditFile(EditFileArgs),
+    DeleteFile(DeleteFileArgs),
     CreateDirectory(CreateDirectoryArgs),
+    DeleteDirectory(DeleteDirectoryArgs),
     RequestFullRepoAccess(RequestFullRepoAccessArgs),
 }
 
@@ -166,7 +188,9 @@ impl ToolCall {
             ToolCall::SemanticSearch(_) => ToolName::SemanticSearch,
             ToolCall::WriteFile(_) => ToolName::WriteFile,
             ToolCall::EditFile(_) => ToolName::EditFile,
+            ToolCall::DeleteFile(_) => ToolName::DeleteFile,
             ToolCall::CreateDirectory(_) => ToolName::CreateDirectory,
+            ToolCall::DeleteDirectory(_) => ToolName::DeleteDirectory,
             ToolCall::RequestFullRepoAccess(_) => ToolName::RequestFullRepoAccess,
         }
     }
@@ -200,7 +224,9 @@ pub enum ToolResult {
     SemanticSearchResults(Vec<ToolMatch>),
     FileWritten { path: String },
     FileEdited { path: String },
+    FileDeleted { path: String },
     DirectoryCreated { path: String },
+    DirectoryDeleted { path: String },
     AccessModeChanged { mode: AiAccessMode },
 }
 
@@ -236,6 +262,11 @@ pub enum ToolError {
     /// or corrupt one of them, so the whole call is rejected.
     #[error("edits overlap in the same region of the file")]
     EditsOverlap,
+    /// A `deleteDirectory` call with `recursive` omitted or `false` against
+    /// a directory that has contents — see
+    /// `services::ai_tools::delete_directory`.
+    #[error("directory is not empty: {0}")]
+    DirectoryNotEmpty(String),
     /// A model-supplied `LlmToolCall::name` that doesn't match any known
     /// `ToolCall` variant — see `services::ai_tools::parse_tool_call`.
     #[error("unknown tool: {0}")]
@@ -265,6 +296,7 @@ impl From<ProjectError> for ToolError {
             }
             ProjectError::NotFound(p) | ProjectError::NotADirectory(p) => ToolError::NotFound(p),
             ProjectError::Canonicalize(e) | ProjectError::Read(e) => ToolError::Io(e),
+            ProjectError::DirectoryNotEmpty(p) => ToolError::DirectoryNotEmpty(p),
             other => ToolError::Io(std::io::Error::other(other.to_string())),
         }
     }

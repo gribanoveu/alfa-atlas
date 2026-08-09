@@ -28,7 +28,9 @@ pub enum ToolName {
     SemanticSearch,
     WriteFile,
     EditFile,
+    DeleteFile,
     CreateDirectory,
+    DeleteDirectory,
     RequestFullRepoAccess,
 }
 
@@ -37,16 +39,18 @@ impl ToolName {
     /// before executing — see `commands::llm`'s tool-calling loop. Static
     /// per tool identity, not per-call: every `WriteFile` call needs
     /// confirmation, regardless of which file it targets. `EditFile`/
-    /// `CreateDirectory` are grouped with it — same filesystem-mutation
-    /// family, same "the user should see this before it happens" reasoning,
-    /// even though an empty directory itself carries less risk than
-    /// overwriting a file.
+    /// `DeleteFile`/`CreateDirectory`/`DeleteDirectory` are grouped with it
+    /// — same filesystem-mutation family, same "the user should see this
+    /// before it happens" reasoning, even though an empty directory itself
+    /// carries less risk than overwriting or deleting a file.
     pub fn requires_confirmation(self) -> bool {
         matches!(
             self,
             ToolName::WriteFile
                 | ToolName::EditFile
+                | ToolName::DeleteFile
                 | ToolName::CreateDirectory
+                | ToolName::DeleteDirectory
                 | ToolName::RequestFullRepoAccess
         )
     }
@@ -64,7 +68,9 @@ impl ToolName {
             "semanticSearch" => Some(ToolName::SemanticSearch),
             "writeFile" => Some(ToolName::WriteFile),
             "editFile" => Some(ToolName::EditFile),
+            "deleteFile" => Some(ToolName::DeleteFile),
             "createDirectory" => Some(ToolName::CreateDirectory),
+            "deleteDirectory" => Some(ToolName::DeleteDirectory),
             "requestFullRepoAccess" => Some(ToolName::RequestFullRepoAccess),
             _ => None,
         }
@@ -84,7 +90,9 @@ impl ToolName {
             ToolName::SemanticSearch => 4,
             ToolName::WriteFile => 2,
             ToolName::EditFile => 2,
+            ToolName::DeleteFile => 1,
             ToolName::CreateDirectory => 1,
+            ToolName::DeleteDirectory => 1,
             ToolName::RequestFullRepoAccess => 1,
         }
     }
@@ -112,7 +120,9 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::SemanticSearch,
         ToolName::WriteFile,
         ToolName::EditFile,
+        ToolName::DeleteFile,
         ToolName::CreateDirectory,
+        ToolName::DeleteDirectory,
         ToolName::RequestFullRepoAccess,
     ]
     .into_iter()
@@ -124,13 +134,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn requires_confirmation_is_true_only_for_write_file_edit_file_create_directory_and_request_full_repo_access() {
+    fn requires_confirmation_is_true_only_for_mutating_and_access_escalation_tools() {
         assert!(!ToolName::ListFiles.requires_confirmation());
         assert!(!ToolName::ReadFile.requires_confirmation());
         assert!(!ToolName::SemanticSearch.requires_confirmation());
         assert!(ToolName::WriteFile.requires_confirmation());
         assert!(ToolName::EditFile.requires_confirmation());
+        assert!(ToolName::DeleteFile.requires_confirmation());
         assert!(ToolName::CreateDirectory.requires_confirmation());
+        assert!(ToolName::DeleteDirectory.requires_confirmation());
         assert!(ToolName::RequestFullRepoAccess.requires_confirmation());
     }
 
@@ -141,7 +153,9 @@ mod tests {
         assert_eq!(ToolName::from_wire_name("semanticSearch"), Some(ToolName::SemanticSearch));
         assert_eq!(ToolName::from_wire_name("writeFile"), Some(ToolName::WriteFile));
         assert_eq!(ToolName::from_wire_name("editFile"), Some(ToolName::EditFile));
+        assert_eq!(ToolName::from_wire_name("deleteFile"), Some(ToolName::DeleteFile));
         assert_eq!(ToolName::from_wire_name("createDirectory"), Some(ToolName::CreateDirectory));
+        assert_eq!(ToolName::from_wire_name("deleteDirectory"), Some(ToolName::DeleteDirectory));
         assert_eq!(
             ToolName::from_wire_name("requestFullRepoAccess"),
             Some(ToolName::RequestFullRepoAccess)
@@ -154,6 +168,8 @@ mod tests {
         assert_eq!(ToolName::ListFiles.loop_weight(), 1);
         assert_eq!(ToolName::ReadFile.loop_weight(), 1);
         assert_eq!(ToolName::CreateDirectory.loop_weight(), 1);
+        assert_eq!(ToolName::DeleteFile.loop_weight(), 1);
+        assert_eq!(ToolName::DeleteDirectory.loop_weight(), 1);
         assert_eq!(ToolName::RequestFullRepoAccess.loop_weight(), 1);
         assert_eq!(ToolName::WriteFile.loop_weight(), 2);
         assert_eq!(ToolName::EditFile.loop_weight(), 2);
@@ -161,12 +177,14 @@ mod tests {
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_seven() {
+    fn default_allowed_tools_includes_all_nine() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 7);
+        assert_eq!(allowed.len(), 9);
         assert!(allowed.contains(&ToolName::WriteFile));
         assert!(allowed.contains(&ToolName::EditFile));
+        assert!(allowed.contains(&ToolName::DeleteFile));
         assert!(allowed.contains(&ToolName::CreateDirectory));
+        assert!(allowed.contains(&ToolName::DeleteDirectory));
         assert!(allowed.contains(&ToolName::RequestFullRepoAccess));
     }
 }

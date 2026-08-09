@@ -41,7 +41,9 @@ export type ToolCall =
   | { tool: "semanticSearch"; args: { query: string; topK: number | null } }
   | { tool: "writeFile"; args: { path: string; content: string } }
   | { tool: "editFile"; args: { path: string; edits: FileEdit[] } }
+  | { tool: "deleteFile"; args: { path: string } }
   | { tool: "createDirectory"; args: { path: string } }
+  | { tool: "deleteDirectory"; args: { path: string; recursive: boolean | null } }
   | { tool: "requestFullRepoAccess"; args: { reason: string } };
 
 // `ToolResult`'s `"file"` case carries range/total-line metadata alongside
@@ -54,7 +56,9 @@ export type ToolResult =
   | { tool: "semanticSearchResults"; result: ToolMatch[] }
   | { tool: "fileWritten"; result: { path: string } }
   | { tool: "fileEdited"; result: { path: string } }
+  | { tool: "fileDeleted"; result: { path: string } }
   | { tool: "directoryCreated"; result: { path: string } }
+  | { tool: "directoryDeleted"; result: { path: string } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } };
 
 /**

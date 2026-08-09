@@ -76,6 +76,8 @@ pub enum ProjectError {
     AlreadyExists(String),
     #[error("invalid name: {0}")]
     InvalidName(String),
+    #[error("directory is not empty: {0}")]
+    DirectoryNotEmpty(String),
     #[error("{0}")]
     Message(String),
 }
