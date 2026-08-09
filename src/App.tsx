@@ -834,6 +834,7 @@ function App() {
   const handleAssistantFileWritten = useCallback(
     ({ tool, path }: { tool: string; path: string }) => {
       void tree.refresh();
+      if (openApiBundle.bundle) void openApiBundle.reload();
       switch (tool) {
         case "writeFile":
         case "editFile":
@@ -847,7 +848,7 @@ function App() {
           break;
       }
     },
-    [tree, editor],
+    [tree, editor, openApiBundle],
   );
 
   // Same idea as `handleAssistantFileWritten`, but a `move` tool call has
@@ -864,10 +865,11 @@ function App() {
       session.remapExpandedUnder(from, to);
       session.ensureExpanded(dirnameOf(to));
       void tree.refresh();
+      if (openApiBundle.bundle) void openApiBundle.reload();
       git.scheduleRefresh();
       void applyRenameReport({ updatedFiles });
     },
-    [editor, session, tree, git, applyRenameReport],
+    [editor, session, tree, git, applyRenameReport, openApiBundle],
   );
 
   const handleGitDiscard = useCallback(
@@ -1217,6 +1219,7 @@ function App() {
             onRefreshTree={() => {
               void tree.refresh();
               void workspaceIndex.rebuildIndex();
+              if (openApiBundle.bundle) void openApiBundle.reload();
             }}
             onExpandAll={() => session.expandAll(collectDirPaths(tree.nodes))}
             onCollapseAll={session.collapseAll}

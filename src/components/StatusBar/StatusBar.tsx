@@ -69,11 +69,11 @@ function indexLabel(
         return `Индексация файлов: ${progress.done} / ${progress.total}`;
       }
       if (progress && progress.current) {
-        return `Обновление индекса: ${progress.current}`;
+        return `Обновление файлов: ${progress.current}`;
       }
       return "Индексация файлов…";
     case "ready":
-      return stats ? `Проиндексировано документов: ${stats.documents}` : "Индекс готов";
+      return stats ? `Проверено файлов: ${stats.documents}` : "Индекс готов";
     case "warning":
       if (stats && stats.errors > 0) {
         return `Ошибок в файлах: ${stats.errors}`;
