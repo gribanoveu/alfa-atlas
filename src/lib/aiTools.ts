@@ -30,11 +30,17 @@ export type ToolMatch = {
 // Mirrors the Rust `ToolCall`/`ToolResult` enums in
 // `src-tauri/src/domain/ai_tools.rs` (adjacently tagged:
 // `#[serde(tag = "tool", content = "args" | "result")]`).
+// One `{old, new}` search-and-replace pair within an `editFile` call —
+// `old` must match the target file's current content exactly once, or the
+// whole call is rejected (see `domain::ai_tools::FileEdit`).
+export type FileEdit = { old: string; new: string };
+
 export type ToolCall =
   | { tool: "readFile"; args: { path: string; startLine: number | null; endLine: number | null } }
   | { tool: "listFiles"; args: { path: string | null; depth: number | null; pattern: string | null } }
   | { tool: "semanticSearch"; args: { query: string; topK: number | null } }
   | { tool: "writeFile"; args: { path: string; content: string } }
+  | { tool: "editFile"; args: { path: string; edits: FileEdit[] } }
   | { tool: "createDirectory"; args: { path: string } }
   | { tool: "requestFullRepoAccess"; args: { reason: string } };
 
@@ -47,6 +53,7 @@ export type ToolResult =
   | { tool: "fileList"; result: ToolFileEntry[] }
   | { tool: "semanticSearchResults"; result: ToolMatch[] }
   | { tool: "fileWritten"; result: { path: string } }
+  | { tool: "fileEdited"; result: { path: string } }
   | { tool: "directoryCreated"; result: { path: string } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } };
 

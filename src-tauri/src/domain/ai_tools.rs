@@ -69,6 +69,29 @@ pub struct WriteFileArgs {
     pub content: String,
 }
 
+/// One search-and-replace edit within an `EditFileArgs` call. `old` must
+/// match the target file's current content exactly once — see
+/// `services::ai_tools::apply_edits` for the full validation rules
+/// (no match, ambiguous match, and overlapping edits all reject the whole
+/// `EditFile` call before anything is written).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEdit {
+    pub old: String,
+    pub new: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditFileArgs {
+    /// File path relative to the docs root — same containment/target rules
+    /// as `WriteFileArgs::path`, but the file must already exist (see
+    /// `services::ai_tools::edit_file`); creating new files stays
+    /// `WriteFile`'s job.
+    pub path: String,
+    pub edits: Vec<FileEdit>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateDirectoryArgs {
@@ -130,6 +153,7 @@ pub enum ToolCall {
     ListFiles(ListFilesArgs),
     SemanticSearch(SemanticSearchArgs),
     WriteFile(WriteFileArgs),
+    EditFile(EditFileArgs),
     CreateDirectory(CreateDirectoryArgs),
     RequestFullRepoAccess(RequestFullRepoAccessArgs),
 }
@@ -141,6 +165,7 @@ impl ToolCall {
             ToolCall::ListFiles(_) => ToolName::ListFiles,
             ToolCall::SemanticSearch(_) => ToolName::SemanticSearch,
             ToolCall::WriteFile(_) => ToolName::WriteFile,
+            ToolCall::EditFile(_) => ToolName::EditFile,
             ToolCall::CreateDirectory(_) => ToolName::CreateDirectory,
             ToolCall::RequestFullRepoAccess(_) => ToolName::RequestFullRepoAccess,
         }
@@ -174,6 +199,7 @@ pub enum ToolResult {
     FileList(Vec<ToolFileEntry>),
     SemanticSearchResults(Vec<ToolMatch>),
     FileWritten { path: String },
+    FileEdited { path: String },
     DirectoryCreated { path: String },
     AccessModeChanged { mode: AiAccessMode },
 }
@@ -196,6 +222,20 @@ pub enum ToolError {
     /// `services::ai_tools::compile_glob`.
     #[error("invalid glob pattern: {0}")]
     InvalidPattern(String),
+    /// An `editFile` edit's `old` text doesn't appear anywhere in the
+    /// file's current content — see `services::ai_tools::apply_edits`.
+    #[error("edit text not found: {0}")]
+    EditTextNotFound(String),
+    /// An `editFile` edit's `old` text appears more than once — ambiguous
+    /// which occurrence was meant, so nothing is written. `.1` is the match
+    /// count.
+    #[error("edit text is not unique — matched {1} times: {0}")]
+    EditTextAmbiguous(String, usize),
+    /// Two `editFile` edits in the same call matched overlapping regions of
+    /// the file's original content — applying both would be order-dependent
+    /// or corrupt one of them, so the whole call is rejected.
+    #[error("edits overlap in the same region of the file")]
+    EditsOverlap,
     /// A model-supplied `LlmToolCall::name` that doesn't match any known
     /// `ToolCall` variant — see `services::ai_tools::parse_tool_call`.
     #[error("unknown tool: {0}")]

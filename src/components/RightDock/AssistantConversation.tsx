@@ -192,7 +192,7 @@ export function AssistantConversation({
         void refreshAccessMode();
       }
       if (
-        (block.name === "writeFile" || block.name === "createDirectory") &&
+        (block.name === "writeFile" || block.name === "editFile" || block.name === "createDirectory") &&
         !handledFileWriteIdsRef.current.has(block.id)
       ) {
         handledFileWriteIdsRef.current.add(block.id);

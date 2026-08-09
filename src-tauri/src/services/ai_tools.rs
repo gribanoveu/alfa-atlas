@@ -16,9 +16,9 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    CreateDirectoryArgs, ListFilesArgs, MatchSource, ReadFileArgs, RequestFullRepoAccessArgs,
-    SemanticSearchArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope,
-    WriteFileArgs,
+    CreateDirectoryArgs, EditFileArgs, FileEdit, ListFilesArgs, MatchSource, ReadFileArgs,
+    RequestFullRepoAccessArgs, SemanticSearchArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch,
+    ToolResult, ToolScope, WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::llm::{LlmToolCall, LlmToolDefinition};
@@ -95,6 +95,9 @@ pub fn execute_tool(
         }
         ToolCall::WriteFile(args) => {
             write_file(scope, args).map(|path| ToolResult::FileWritten { path })
+        }
+        ToolCall::EditFile(args) => {
+            edit_file(scope, args).map(|path| ToolResult::FileEdited { path })
         }
         ToolCall::CreateDirectory(args) => {
             create_directory(scope, args).map(|path| ToolResult::DirectoryCreated { path })
@@ -173,6 +176,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         "writeFile" => lenient_json_object::<WriteFileArgs>(&call.arguments)
             .map(ToolCall::WriteFile)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        "editFile" => lenient_json_object::<EditFileArgs>(&call.arguments)
+            .map(ToolCall::EditFile)
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         "createDirectory" => lenient_json_object::<CreateDirectoryArgs>(&call.arguments)
             .map(ToolCall::CreateDirectory)
@@ -320,6 +326,43 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
+    if scope.allows(ToolName::EditFile) {
+        defs.push(LlmToolDefinition {
+            name: "editFile".to_string(),
+            description:
+                "Make one or more precise, targeted edits to an existing documentation file by replacing exact snippets of its current content, given its path relative to the project root. Each edit's `old` text must appear in the file's CURRENT content exactly once — if it's missing or appears more than once, the entire call is rejected and nothing is written; add a few more surrounding lines to `old` to make it unique rather than guessing. All edits in one call are validated against the file's original content and applied together, or none are — they are independent of each other and of their order. Prefer this over writeFile for small, localized changes: it's cheaper and safer than resending the whole file. Always requires explicit user approval before anything is written."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the project root. Must be a recognized documentation file type and must already exist."
+                    },
+                    "edits": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old": {
+                                    "type": "string",
+                                    "description": "Exact text to find — must appear exactly once in the file's current content."
+                                },
+                                "new": {
+                                    "type": "string",
+                                    "description": "Text to replace it with."
+                                }
+                            },
+                            "required": ["old", "new"]
+                        },
+                        "description": "One or more find-and-replace edits, applied together against the file's original content, not sequentially against each other's output."
+                    }
+                },
+                "required": ["path", "edits"]
+            }),
+        });
+    }
     if scope.allows(ToolName::CreateDirectory) {
         defs.push(LlmToolDefinition {
             name: "createDirectory".to_string(),
@@ -457,6 +500,66 @@ fn slice_lines(content: String, start_line: Option<u32>, end_line: Option<u32>) 
 fn write_file(scope: &ToolScope, args: WriteFileArgs) -> Result<String, ToolError> {
     docs_fs::write_project_file(&scope.docs_root.to_string_lossy(), &args.path, &args.content)?;
     Ok(args.path)
+}
+
+/// Same `scope.docs_root`-always targeting as `write_file`, but composes
+/// `docs_fs::read_project_file` + `apply_edits` + `docs_fs::
+/// write_project_file` instead of taking new content directly — the file
+/// must already exist (a missing file surfaces `read_project_file`'s own
+/// `NotFound`, converted via `ToolError`'s `From<ProjectError>`); creating
+/// new files stays `write_file`'s job.
+fn edit_file(scope: &ToolScope, args: EditFileArgs) -> Result<String, ToolError> {
+    let docs_root = scope.docs_root.to_string_lossy();
+    let content = docs_fs::read_project_file(&docs_root, &args.path)?;
+    let edited = apply_edits(&content, &args.edits)?;
+    docs_fs::write_project_file(&docs_root, &args.path, &edited)?;
+    Ok(args.path)
+}
+
+/// Applies every edit in `edits` to `content` in one all-or-nothing pass.
+/// Each edit's `old` is looked up in `content` *as given* — never against
+/// the output of an earlier edit in the same call — so edits in one
+/// `editFile` call are independent of each other and of their own order.
+/// Fails fast on the first problem found (checked per-edit in order, then
+/// across all edits together): `old` missing from `content` at all
+/// (`EditTextNotFound`), `old` appearing more than once (`EditTextAmbiguous`,
+/// ambiguous which occurrence was meant), or two edits' matched regions
+/// overlapping (`EditsOverlap`, which would make the result order-dependent
+/// or corrupt one of them). Nothing is written by this function itself —
+/// it only ever returns the would-be new content; `edit_file` is what
+/// actually persists it, and only once every edit here has validated clean.
+fn apply_edits(content: &str, edits: &[FileEdit]) -> Result<String, ToolError> {
+    let mut ranges: Vec<(usize, usize, &str)> = Vec::with_capacity(edits.len());
+    for edit in edits {
+        let mut occurrences = content.match_indices(edit.old.as_str());
+        let Some((start, _)) = occurrences.next() else {
+            return Err(ToolError::EditTextNotFound(edit.old.clone()));
+        };
+        let count = 1 + occurrences.count();
+        if count > 1 {
+            return Err(ToolError::EditTextAmbiguous(edit.old.clone(), count));
+        }
+        ranges.push((start, start + edit.old.len(), edit.new.as_str()));
+    }
+
+    ranges.sort_by_key(|&(start, _, _)| start);
+    for pair in ranges.windows(2) {
+        let (_, prev_end, _) = pair[0];
+        let (next_start, _, _) = pair[1];
+        if next_start < prev_end {
+            return Err(ToolError::EditsOverlap);
+        }
+    }
+
+    let mut result = String::with_capacity(content.len());
+    let mut cursor = 0;
+    for (start, end, new) in ranges {
+        result.push_str(&content[cursor..start]);
+        result.push_str(new);
+        cursor = end;
+    }
+    result.push_str(&content[cursor..]);
+    Ok(result)
 }
 
 /// Always targets `scope.docs_root`, same reasoning as `write_file` —
@@ -925,6 +1028,23 @@ mod tests {
         }
     }
 
+    fn edit(scope: &ToolScope, path: &str, edits: Vec<(&str, &str)>) -> Result<String, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::EditFile(EditFileArgs {
+                path: path.to_string(),
+                edits: edits
+                    .into_iter()
+                    .map(|(old, new)| FileEdit { old: old.to_string(), new: new.to_string() })
+                    .collect(),
+            }),
+            &EmbeddingDeps::empty(),
+        )? {
+            ToolResult::FileEdited { path } => Ok(path),
+            other => panic!("expected ToolResult::FileEdited, got {other:?}"),
+        }
+    }
+
     fn create_dir(scope: &ToolScope, path: &str) -> Result<String, ToolError> {
         match execute_tool(
             scope,
@@ -1042,6 +1162,135 @@ mod tests {
         let err = write(&scope, "../outside.adoc", "= Leak\n").unwrap_err();
         assert!(matches!(err, ToolError::PathEscape(_)));
         assert!(!repo.join("outside.adoc").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn edit_file_applies_a_single_replacement() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("class.adoc"), "private String name;\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        edit(
+            &scope,
+            "class.adoc",
+            vec![("private String name;", "private String name;\nprivate int age;")],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(docs.join("class.adoc")).unwrap(),
+            "private String name;\nprivate int age;\n"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn edit_file_applies_multiple_independent_edits_in_one_call() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("class.adoc"), "alpha\nbeta\ngamma\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        edit(&scope, "class.adoc", vec![("alpha", "ALPHA"), ("gamma", "GAMMA")]).unwrap();
+        assert_eq!(
+            fs::read_to_string(docs.join("class.adoc")).unwrap(),
+            "ALPHA\nbeta\nGAMMA\n"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn edit_file_rejects_missing_file() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = edit(&scope, "does-not-exist.adoc", vec![("a", "b")]).unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn edit_file_rejects_old_text_not_found_and_writes_nothing() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("class.adoc"), "alpha\nbeta\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = edit(&scope, "class.adoc", vec![("nope", "NOPE")]).unwrap_err();
+        assert!(matches!(err, ToolError::EditTextNotFound(_)));
+        assert_eq!(fs::read_to_string(docs.join("class.adoc")).unwrap(), "alpha\nbeta\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn edit_file_rejects_ambiguous_old_text_and_writes_nothing() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("class.adoc"), "dup\ndup\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = edit(&scope, "class.adoc", vec![("dup", "DUP")]).unwrap_err();
+        assert!(matches!(err, ToolError::EditTextAmbiguous(_, 2)));
+        assert_eq!(fs::read_to_string(docs.join("class.adoc")).unwrap(), "dup\ndup\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn edit_file_rejects_overlapping_edits_and_writes_nothing() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("class.adoc"), "abcdef\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        // "abcd" (0..4) and "cdef" (2..6) overlap on "cd".
+        let err = edit(&scope, "class.adoc", vec![("abcd", "X"), ("cdef", "Y")]).unwrap_err();
+        assert!(matches!(err, ToolError::EditsOverlap));
+        assert_eq!(fs::read_to_string(docs.join("class.adoc")).unwrap(), "abcdef\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    /// Edits are validated against the file's *original* content, not
+    /// sequentially against each other's output — an edit whose `new` text
+    /// happens to equal another edit's `old` text must not make that other
+    /// edit's match count look any different.
+    #[test]
+    fn edit_file_validates_edits_against_original_content_not_sequentially() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("class.adoc"), "alpha\nbeta\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        // If edits were applied sequentially, "alpha" -> "beta" would make
+        // "beta" ambiguous (two occurrences) by the time the second edit's
+        // match is checked. Validated against the original, "beta" still
+        // matches exactly once.
+        edit(&scope, "class.adoc", vec![("alpha", "beta"), ("beta", "BETA")]).unwrap();
+        assert_eq!(fs::read_to_string(docs.join("class.adoc")).unwrap(), "beta\nBETA\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn edit_file_full_repo_mode_still_targets_docs_root_not_repo_root() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("guide.adoc"), "old text\n").unwrap();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        edit(&full_repo, "guide.adoc", vec![("old text", "new text")]).unwrap();
+        assert_eq!(fs::read_to_string(docs.join("guide.adoc")).unwrap(), "new text\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn edit_file_rejects_path_escape() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = edit(&scope, "../outside.adoc", vec![("a", "b")]).unwrap_err();
+        assert!(matches!(err, ToolError::PathEscape(_)));
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -1656,6 +1905,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_edit_file_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "editFile".to_string(),
+            arguments: r#"{"path":"guide.adoc","edits":[{"old":"a","new":"b"}]}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::EditFile(EditFileArgs {
+                path: "guide.adoc".to_string(),
+                edits: vec![FileEdit { old: "a".to_string(), new: "b".to_string() }],
+            })
+        );
+    }
+
+    #[test]
     fn parse_tool_call_parses_request_full_repo_access_args() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -1737,7 +2003,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_six_by_default() {
+    fn llm_tool_definitions_includes_all_seven_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -1750,6 +2016,7 @@ mod tests {
                 "readFile",
                 "semanticSearch",
                 "writeFile",
+                "editFile",
                 "createDirectory",
                 "requestFullRepoAccess"
             ]

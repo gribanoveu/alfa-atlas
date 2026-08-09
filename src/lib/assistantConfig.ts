@@ -602,6 +602,8 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       return typeof args.query === "string" ? `Ищет: «${args.query}»…` : "Ищет в документации…";
     case "writeFile":
       return typeof args.path === "string" ? `Изменяет файл: ${args.path}…` : "Изменяет файл…";
+    case "editFile":
+      return typeof args.path === "string" ? `Редактирует файл: ${args.path}…` : "Редактирует файл…";
     case "createDirectory":
       return typeof args.path === "string" ? `Создаёт папку: ${args.path}…` : "Создаёт папку…";
     case "requestFullRepoAccess":
@@ -662,6 +664,8 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
     }
     case "fileWritten":
       return `Записано: ${block.result.result.path}`;
+    case "fileEdited":
+      return `Изменён: ${block.result.result.path}`;
     case "directoryCreated":
       return `Создана папка: ${block.result.result.path}`;
     case "accessModeChanged":
