@@ -21,6 +21,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use thiserror::Error;
 
+use crate::domain::project_config::{RenameReport, UpdatedReference};
 use crate::domain::workspace_index::{relativize, resolve_against_document, DocumentId};
 use crate::services::workspace_index::WorkspaceIndex;
 
@@ -44,6 +45,58 @@ pub struct RenamedPath {
 pub struct RewrittenFile {
     pub repo_relative_path: String,
     pub count: u32,
+}
+
+/// Resolves `docs_root`'s path relative to `repo_root` (e.g.
+/// `"src/docs/asciidoc"`), so docs-root-relative paths can be converted
+/// into the repo-root-relative keys `WorkspaceIndex`/`rewrite_references`
+/// use. Returns `None` (rather than an error) when `docs_root` can't be
+/// resolved under `repo_root` — callers treat that as "nothing to
+/// cascade," not as a reason to fail the caller's own operation.
+/// `commands::project::rename_project_file`/`rename_project_dir` and
+/// `services::ai_tools::move_path` both go through this — moved here
+/// (rather than staying private to `commands/project.rs`) specifically so
+/// `services` code can reuse it without depending on `commands`.
+pub fn docs_root_suffix(repo_root: &Path, docs_root: &str) -> Option<String> {
+    let suffix = crate::domain::paths::relative_to(repo_root, &PathBuf::from(docs_root)).ok()?;
+    Some(if suffix == "." { String::new() } else { suffix })
+}
+
+pub fn to_repo_relative(suffix: &str, docs_relative: &str) -> String {
+    if suffix.is_empty() {
+        docs_relative.to_string()
+    } else {
+        format!("{suffix}/{docs_relative}")
+    }
+}
+
+pub fn to_docs_relative(suffix: &str, repo_relative: &str) -> Option<String> {
+    if suffix.is_empty() {
+        return Some(repo_relative.to_string());
+    }
+    repo_relative.strip_prefix(&format!("{suffix}/")).map(str::to_string)
+}
+
+/// Cascades a rename/move's rewritten-reference report (repo-relative) into
+/// a docs-root-relative `RenameReport` callers can hand straight to the
+/// frontend. Files outside `docs_root` (e.g. under `_external/`, if that
+/// lives outside it) were still correctly rewritten on disk — they're just
+/// not reported as reloadable open tabs, since `editor.openFile` only knows
+/// docs-relative paths. Shared by `commands::project::rename_project_file`/
+/// `rename_project_dir` and `services::ai_tools::move_path` so both surfaces
+/// report the exact same shape.
+pub fn into_report(suffix: &str, rewritten: Vec<RewrittenFile>) -> RenameReport {
+    RenameReport {
+        updated_files: rewritten
+            .into_iter()
+            .filter_map(|f| {
+                to_docs_relative(suffix, &f.repo_relative_path).map(|docs_relative_path| UpdatedReference {
+                    docs_relative_path,
+                    count: f.count,
+                })
+            })
+            .collect(),
+    }
 }
 
 static INCLUDE_RE: LazyLock<Regex> =

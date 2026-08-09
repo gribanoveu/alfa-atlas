@@ -11,6 +11,7 @@ import type { AiAccessMode, LlmToolDefinition } from "../../lib/aiTools";
 import type { ChatMessage } from "../../lib/chatBlocks";
 import type { LlmModelInfo, LlmProviderConfig, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
+import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 
@@ -132,6 +133,11 @@ type AssistantConversationProps = {
    * would otherwise autosave its old content right back over the change —
    * see `App.tsx`'s handler). */
   onFileWritten: (info: { tool: string; path: string }) => void;
+  /** Fires once a `move` tool call actually lands on disk — carries both
+   * `from` and `to` (plus the cascaded reference-rewrite report), unlike
+   * `onFileWritten`'s single `path`, so the caller can remap an open editor
+   * tab from the old path to the new one instead of just reloading it. */
+  onFileMoved: (info: { from: string; to: string; updatedFiles: UpdatedReference[] }) => void;
   refreshAccessMode: () => Promise<void>;
   activeProvider: ResolvedLlmProvider | null;
   updateProviderConfig: (providerId: string, patch: Partial<Omit<LlmProviderConfig, "id">>) => Promise<void>;
@@ -155,6 +161,7 @@ export function AssistantConversation({
   toolDefinitions,
   docsRoot,
   onFileWritten,
+  onFileMoved,
   refreshAccessMode,
   activeProvider,
   updateProviderConfig,
@@ -189,6 +196,7 @@ export function AssistantConversation({
   // are idempotent refreshes, so that's wasted work, not a correctness bug.
   const handledAccessGrantIdsRef = useRef<Set<string>>(new Set());
   const handledFileWriteIdsRef = useRef<Set<string>>(new Set());
+  const handledMoveIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const last = messages[messages.length - 1];
     if (!last || last.role !== "assistant") return;
@@ -222,8 +230,15 @@ export function AssistantConversation({
             : null;
         if (path !== null) onFileWritten({ tool: block.name, path });
       }
+      if (block.name === "move" && !handledMoveIdsRef.current.has(block.id)) {
+        handledMoveIdsRef.current.add(block.id);
+        if (block.result && block.result.tool === "moved") {
+          const { from, to, updatedFiles } = block.result.result;
+          onFileMoved({ from, to, updatedFiles });
+        }
+      }
     }
-  }, [messages, refreshAccessMode, onFileWritten]);
+  }, [messages, refreshAccessMode, onFileWritten, onFileMoved]);
 
   const contextLimit = activeProvider?.limit?.context ?? null;
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;

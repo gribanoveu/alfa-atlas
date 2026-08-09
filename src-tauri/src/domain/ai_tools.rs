@@ -122,6 +122,20 @@ pub struct DeleteDirectoryArgs {
     pub recursive: Option<bool>,
 }
 
+/// Covers both moving and renaming, both files and directories — a new
+/// `new_path` in the same directory as `path` *is* a rename; a new
+/// `new_path` elsewhere *is* a move. Same shape either way, so there is no
+/// separate rename tool — see `services::ai_tools::move_path`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveArgs {
+    /// Current path, relative to the docs root.
+    pub path: String,
+    /// New path, relative to the docs root. Fails if something already
+    /// exists there.
+    pub new_path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestFullRepoAccessArgs {
@@ -177,6 +191,7 @@ pub enum ToolCall {
     DeleteFile(DeleteFileArgs),
     CreateDirectory(CreateDirectoryArgs),
     DeleteDirectory(DeleteDirectoryArgs),
+    Move(MoveArgs),
     RequestFullRepoAccess(RequestFullRepoAccessArgs),
 }
 
@@ -191,6 +206,7 @@ impl ToolCall {
             ToolCall::DeleteFile(_) => ToolName::DeleteFile,
             ToolCall::CreateDirectory(_) => ToolName::CreateDirectory,
             ToolCall::DeleteDirectory(_) => ToolName::DeleteDirectory,
+            ToolCall::Move(_) => ToolName::Move,
             ToolCall::RequestFullRepoAccess(_) => ToolName::RequestFullRepoAccess,
         }
     }
@@ -227,6 +243,18 @@ pub enum ToolResult {
     FileDeleted { path: String },
     DirectoryCreated { path: String },
     DirectoryDeleted { path: String },
+    /// `updated_files` lists every *other* file whose `include::`/`xref:`/
+    /// `$ref` references were rewritten as a side effect of this move
+    /// (empty when nothing referenced `from`) — the same `RenameReport`
+    /// shape the manual rename/move commands return, so the frontend can
+    /// reuse the same "reload these open tabs" handling for both. See
+    /// `services::ai_tools::move_path`.
+    #[serde(rename_all = "camelCase")]
+    Moved {
+        from: String,
+        to: String,
+        updated_files: Vec<crate::domain::project_config::UpdatedReference>,
+    },
     AccessModeChanged { mode: AiAccessMode },
 }
 
@@ -267,6 +295,11 @@ pub enum ToolError {
     /// `services::ai_tools::delete_directory`.
     #[error("directory is not empty: {0}")]
     DirectoryNotEmpty(String),
+    /// A `move` call whose `newPath` already exists — nothing is
+    /// overwritten; `rename_project_file`/`rename_project_dir` check this
+    /// before ever calling `fs::rename`. See `services::ai_tools::move_path`.
+    #[error("already exists: {0}")]
+    AlreadyExists(String),
     /// A model-supplied `LlmToolCall::name` that doesn't match any known
     /// `ToolCall` variant — see `services::ai_tools::parse_tool_call`.
     #[error("unknown tool: {0}")]
@@ -297,6 +330,7 @@ impl From<ProjectError> for ToolError {
             ProjectError::NotFound(p) | ProjectError::NotADirectory(p) => ToolError::NotFound(p),
             ProjectError::Canonicalize(e) | ProjectError::Read(e) => ToolError::Io(e),
             ProjectError::DirectoryNotEmpty(p) => ToolError::DirectoryNotEmpty(p),
+            ProjectError::AlreadyExists(p) => ToolError::AlreadyExists(p),
             other => ToolError::Io(std::io::Error::other(other.to_string())),
         }
     }

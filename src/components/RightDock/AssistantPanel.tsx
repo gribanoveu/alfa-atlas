@@ -9,6 +9,7 @@ import { useToolDefinitions } from "../../hooks/useToolDefinitions";
 import type { AiAccessMode } from "../../lib/aiTools";
 import { deriveChatTitle } from "../../lib/chatHistory";
 import type { SpecsRepoInfo } from "../../lib/openapi";
+import type { UpdatedReference } from "../../lib/project";
 import { ArchivedChatsPanel } from "./ArchivedChatsPanel";
 import { AssistantConversation } from "./AssistantConversation";
 import { ChatHistoryMenu } from "./ChatHistoryMenu";
@@ -40,6 +41,13 @@ type AssistantPanelProps = {
    * reconcile any open editor tab for `path` — otherwise a stale tab's
    * autosave would silently overwrite the assistant's change right back. */
   onFileWritten: (info: { tool: string; path: string }) => void;
+  /** Called once a `move` tool call actually lands on disk — separate from
+   * `onFileWritten` because a move carries both an old and a new path (plus
+   * a `RenameReport` of cascaded reference rewrites), not the single `path`
+   * every other mutating tool settles with. `App.tsx`'s handler remaps any
+   * open editor tab from `from` to `to` (`editor.remapTabsUnder`), the same
+   * way the manual drag-and-drop move already does. */
+  onFileMoved: (info: { from: string; to: string; updatedFiles: UpdatedReference[] }) => void;
   /** The open project's repo root — keys persisted chat history
    * (`useChatHistory`) per repository. */
   repoRoot: string | null;
@@ -73,6 +81,7 @@ export function AssistantPanel({
   specsRepoInfo,
   docsRoot,
   onFileWritten,
+  onFileMoved,
   repoRoot,
 }: AssistantPanelProps) {
   const {
@@ -226,6 +235,7 @@ export function AssistantPanel({
                 toolDefinitions={toolDefinitions}
                 docsRoot={docsRoot}
                 onFileWritten={onFileWritten}
+                onFileMoved={onFileMoved}
                 refreshAccessMode={refreshAccessMode}
                 activeProvider={activeProvider}
                 updateProviderConfig={updateProviderConfig}

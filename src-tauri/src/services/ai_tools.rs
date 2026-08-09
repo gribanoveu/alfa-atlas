@@ -17,18 +17,21 @@ use crate::commands::embeddings::{
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
     CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit,
-    ListFilesArgs, MatchSource, ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs,
-    ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
+    ListFilesArgs, MatchSource, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs,
+    SemanticSearchArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope,
+    WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::llm::{LlmToolCall, LlmToolDefinition};
 use crate::domain::paths;
-use crate::domain::project_config::{ProjectConfig, ProjectError, TreeNode};
+use crate::domain::project_config::{ProjectConfig, ProjectError, TreeNode, UpdatedReference};
 use crate::domain::repo_index::{FileId, Symbol};
 use crate::infra::{embedding_credentials_store, embedding_providers, project_store, workspace_scanner};
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::chunk_text::resolve_text;
+use crate::services::reference_rewrite;
 use crate::services::repo_index::RepositoryIndex;
+use crate::services::workspace_index::WorkspaceIndex;
 use crate::services::{docs_fs, embedding_config, project_open};
 
 const DEFAULT_TOP_K: usize = 10;
@@ -38,12 +41,18 @@ const MAX_TOP_K: usize = 50;
 /// response payload.
 const SNIPPET_MAX_CHARS: usize = 500;
 
-/// The embedding/chunk/repo-index state `SemanticSearch` needs to reach —
-/// `execute_tool` is otherwise a pure function with no access to
-/// Tauri-managed state. Mirrors exactly what
+/// The embedding/chunk/repo-index/workspace-index state `SemanticSearch`/
+/// `Move` need to reach — `execute_tool` is otherwise a pure function with
+/// no access to Tauri-managed state. Mirrors exactly what
 /// `commands::embeddings::embedding_sync` already receives as
-/// `State<'_, Arc<T>>` params; `commands::ai_tools::ai_execute_tool` clones
-/// each into this struct before calling `execute_tool`.
+/// `State<'_, Arc<T>>` params; `commands::ai_tools::ai_execute_tool`/
+/// `commands::llm::llm_chat_stream`/`llm_chat_stream_resume` each clone
+/// their own `State`s into this struct before calling `execute_tool`.
+/// `workspace_index` was added for `move_path`'s reference-rewrite step
+/// (`services::reference_rewrite::rewrite_references`) — the name predates
+/// that and is now a bit imprecise, but this is the one established
+/// extension point for a new tool needing more Tauri-managed state, not
+/// worth a second threading mechanism for one field.
 pub struct EmbeddingDeps {
     pub repo_index: Arc<RepositoryIndex>,
     pub chunk_index: Arc<ChunkIndex>,
@@ -51,13 +60,14 @@ pub struct EmbeddingDeps {
     pub index_store: Arc<IndexStoreSlot>,
     pub embedding_provider: Arc<EmbeddingProviderSlot>,
     pub sync_guard: Arc<EmbeddingSyncGuard>,
+    pub workspace_index: Arc<WorkspaceIndex>,
 }
 
 #[cfg(test)]
 impl EmbeddingDeps {
     /// Fresh, empty instances of every slot — for `ReadFile`/`ListFiles`
-    /// tests (which never touch these) and as a base for `SemanticSearch`
-    /// tests that need to populate specific state.
+    /// tests (which never touch these) and as a base for `SemanticSearch`/
+    /// `Move` tests that need to populate specific state.
     pub fn empty() -> Self {
         Self {
             repo_index: Arc::new(RepositoryIndex::new()),
@@ -66,6 +76,9 @@ impl EmbeddingDeps {
             index_store: Arc::new(IndexStoreSlot::new(None)),
             embedding_provider: Arc::new(EmbeddingProviderSlot::new(None)),
             sync_guard: Arc::new(EmbeddingSyncGuard::new(())),
+            workspace_index: Arc::new(WorkspaceIndex::new(
+                crate::infra::parsers::registry::ParserRegistry::new(),
+            )),
         }
     }
 }
@@ -107,6 +120,13 @@ pub fn execute_tool(
         }
         ToolCall::DeleteDirectory(args) => {
             delete_directory(scope, args).map(|path| ToolResult::DirectoryDeleted { path })
+        }
+        ToolCall::Move(args) => {
+            move_path(scope, args, deps).map(|(from, to, updated_files)| ToolResult::Moved {
+                from,
+                to,
+                updated_files,
+            })
         }
         ToolCall::RequestFullRepoAccess(_args) => set_access_mode(AiAccessMode::FullRepo)
             .map(|()| ToolResult::AccessModeChanged { mode: AiAccessMode::FullRepo })
@@ -194,6 +214,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         "deleteDirectory" => lenient_json_object::<DeleteDirectoryArgs>(&call.arguments)
             .map(ToolCall::DeleteDirectory)
+            .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
+        "move" => lenient_json_object::<MoveArgs>(&call.arguments)
+            .map(ToolCall::Move)
             .map_err(|source| ToolError::InvalidArguments { tool: call.name.clone(), source }),
         "requestFullRepoAccess" => lenient_json_object::<RequestFullRepoAccessArgs>(&call.arguments)
             .map(ToolCall::RequestFullRepoAccess)
@@ -433,6 +456,28 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
+    if scope.allows(ToolName::Move) {
+        defs.push(LlmToolDefinition {
+            name: "move".to_string(),
+            description:
+                "Move or rename a file or directory, given its current path and a new path, both relative to the project root. This is one operation covering both cases: a newPath in the same directory with a different name is a rename, a newPath elsewhere is a move (optionally with a new name too). Works for both files and directories — there is no separate rename tool or directory-specific variant. References to the old path elsewhere in the documentation (include::, xref:, and JSON/YAML $ref) are updated automatically so they keep pointing at the right file. Fails if something already exists at newPath — nothing is overwritten. newPath's parent directory must already exist — use createDirectory first if it doesn't. Always requires explicit user approval before anything changes — the user may deny it."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Current path of the file or directory, relative to the project root."
+                    },
+                    "newPath": {
+                        "type": "string",
+                        "description": "New path, relative to the project root. Fails if something already exists there."
+                    }
+                },
+                "required": ["path", "newPath"]
+            }),
+        });
+    }
     if scope.allows(ToolName::RequestFullRepoAccess) {
         defs.push(LlmToolDefinition {
             name: "requestFullRepoAccess".to_string(),
@@ -645,6 +690,61 @@ fn delete_directory(scope: &ToolScope, args: DeleteDirectoryArgs) -> Result<Stri
         args.recursive.unwrap_or(false),
     )?;
     Ok(args.path)
+}
+
+/// Covers both moving and renaming, both files and directories — always
+/// targets `scope.docs_root`, same reasoning as `write_file`. Picks
+/// `docs_fs::rename_project_file` vs `rename_project_dir` via a cheap,
+/// non-canonicalized `is_dir()` probe: purely advisory, since the real
+/// containment-safe validation happens inside whichever function actually
+/// runs (a wrong probe on an unsafe path just means that function's own
+/// checks reject it, same as it always would). Mirrors
+/// `commands::project::rename_project_file`/`rename_project_dir`'s
+/// reference-rewrite step so an AI-driven move/rename gives the same
+/// guarantee a manual one does: `include::`/`xref:`/`$ref` references
+/// elsewhere are updated, not left silently pointing at the old path.
+/// Returns `(from, to, updated_files)` — the last is the same
+/// docs-root-relative `RenameReport.updated_files` shape the manual
+/// rename/move commands return (`commands::project::rename_project_file`/
+/// `rename_project_dir`), empty when nothing referenced `path` (or
+/// `docs_root` doesn't resolve under `repo_root` at all, in which case the
+/// cascade is skipped entirely, same as the manual rename path does).
+fn move_path(
+    scope: &ToolScope,
+    args: MoveArgs,
+    deps: &EmbeddingDeps,
+) -> Result<(String, String, Vec<UpdatedReference>), ToolError> {
+    let docs_root = scope.docs_root.to_string_lossy();
+    let is_dir = scope.docs_root.join(&args.path).is_dir();
+
+    let updated_files =
+        match reference_rewrite::docs_root_suffix(&scope.repo_root, &docs_root) {
+            Some(suffix) => {
+                let old = reference_rewrite::to_repo_relative(&suffix, &args.path);
+                let new = reference_rewrite::to_repo_relative(&suffix, &args.new_path);
+                let renamed: Vec<reference_rewrite::RenamedPath> = if is_dir {
+                    reference_rewrite::renamed_paths_for_dir_move(&deps.workspace_index, &old, &new)
+                } else {
+                    vec![reference_rewrite::RenamedPath { old, new }]
+                };
+                let rewritten = reference_rewrite::rewrite_references(
+                    &deps.workspace_index,
+                    &scope.repo_root,
+                    &renamed,
+                )
+                .map_err(|e| ToolError::Io(std::io::Error::other(e.to_string())))?;
+                reference_rewrite::into_report(&suffix, rewritten).updated_files
+            }
+            None => Vec::new(),
+        };
+
+    if is_dir {
+        docs_fs::rename_project_dir(&docs_root, &args.path, &args.new_path)?;
+    } else {
+        docs_fs::rename_project_file(&docs_root, &args.path, &args.new_path)?;
+    }
+
+    Ok((args.path, args.new_path, updated_files))
 }
 
 /// Validates an optional subdirectory argument once, shared by both mode
@@ -1153,6 +1253,44 @@ mod tests {
         }
     }
 
+    fn move_it(
+        scope: &ToolScope,
+        path: &str,
+        new_path: &str,
+    ) -> Result<(String, String, Vec<UpdatedReference>), ToolError> {
+        move_it_with_deps(scope, path, new_path, &EmbeddingDeps::empty())
+    }
+
+    fn move_it_with_deps(
+        scope: &ToolScope,
+        path: &str,
+        new_path: &str,
+        deps: &EmbeddingDeps,
+    ) -> Result<(String, String, Vec<UpdatedReference>), ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::Move(MoveArgs { path: path.to_string(), new_path: new_path.to_string() }),
+            deps,
+        )? {
+            ToolResult::Moved { from, to, updated_files } => Ok((from, to, updated_files)),
+            other => panic!("expected ToolResult::Moved, got {other:?}"),
+        }
+    }
+
+    /// A `WorkspaceIndex` built from a real walk of `repo_root` — for the
+    /// one `move` test that needs `deps.workspace_index` to actually know
+    /// about the fixture's documents (everything else uses
+    /// `EmbeddingDeps::empty()`'s blank one, since `move`'s reference
+    /// rewrite is a no-op — empty `updated_files` — against a blank
+    /// index, exercised by the other `move_*` tests below).
+    fn build_test_workspace_index(repo_root: &Path) -> Arc<WorkspaceIndex> {
+        let idx = Arc::new(WorkspaceIndex::new(
+            crate::infra::parsers::registry::ParserRegistry::new(),
+        ));
+        idx.build(repo_root.to_path_buf()).unwrap();
+        idx
+    }
+
     #[test]
     fn read_file_inside_docs_root_succeeds_in_docs_only() {
         let (repo, docs) = fixture_repo();
@@ -1426,11 +1564,15 @@ mod tests {
 
         create_dir(&scope, "guides").unwrap();
         let err = create_dir(&scope, "guides").unwrap_err();
-        assert!(matches!(err, ToolError::Io(_)));
+        // `ProjectError::AlreadyExists` gained an explicit `ToolError`
+        // mapping once `Move` needed to distinguish it from a generic IO
+        // failure — `CreateDirectory` picks up the same precision as a
+        // side effect, no longer the generic `Io` catch-all.
+        assert!(matches!(err, ToolError::AlreadyExists(_)));
 
         // Also rejected when the path is already occupied by a file.
         let err = create_dir(&scope, "intro.adoc").unwrap_err();
-        assert!(matches!(err, ToolError::Io(_)));
+        assert!(matches!(err, ToolError::AlreadyExists(_)));
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -1563,6 +1705,163 @@ mod tests {
 
         let err = delete_dir(&scope, "does-not-exist", None).unwrap_err();
         assert!(matches!(err, ToolError::NotFound(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn move_renames_a_file_in_place() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let (from, to, updated_files) = move_it(&scope, "intro.adoc", "introduction.adoc").unwrap();
+        assert_eq!(from, "intro.adoc");
+        assert_eq!(to, "introduction.adoc");
+        assert!(updated_files.is_empty());
+        assert!(!docs.join("intro.adoc").exists());
+        assert!(docs.join("introduction.adoc").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn move_moves_a_file_to_a_different_directory() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("archive")).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        move_it(&scope, "intro.adoc", "archive/intro.adoc").unwrap();
+        assert!(!docs.join("intro.adoc").exists());
+        assert!(docs.join("archive/intro.adoc").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn move_moves_and_renames_a_directory_together() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("old/nested")).unwrap();
+        fs::write(docs.join("old/nested/page.adoc"), "= Page\n").unwrap();
+        // `rename_project_dir`/`fs::rename` need the destination's parent to
+        // already exist — unlike `write_project_file`, neither
+        // `rename_project_file` nor `rename_project_dir` auto-creates it
+        // (the manual drag-and-drop UI never hits this: a drop target is
+        // always an existing folder).
+        fs::create_dir_all(docs.join("archive")).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        move_it(&scope, "old", "archive/renamed").unwrap();
+        assert!(!docs.join("old").exists());
+        assert_eq!(
+            fs::read_to_string(docs.join("archive/renamed/nested/page.adoc")).unwrap(),
+            "= Page\n"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn move_rejects_when_destination_already_exists() {
+        let (repo, docs) = fixture_repo();
+        // `script.py` (fixture_repo's other file) is an unsupported
+        // extension, which would fail with `UnsupportedFile` before ever
+        // reaching the exists check — use another `.adoc` so this test
+        // actually exercises `AlreadyExists`.
+        fs::write(docs.join("other.adoc"), "= Other\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = move_it(&scope, "intro.adoc", "other.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::AlreadyExists(_)));
+        // Nothing moved.
+        assert!(docs.join("intro.adoc").exists());
+        assert_eq!(fs::read_to_string(docs.join("other.adoc")).unwrap(), "= Other\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn move_rejects_missing_source() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = move_it(&scope, "does-not-exist.adoc", "new-name.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn move_full_repo_mode_still_targets_docs_root_not_repo_root() {
+        let (repo, docs) = fixture_repo();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        move_it(&full_repo, "intro.adoc", "renamed.adoc").unwrap();
+        assert!(docs.join("renamed.adoc").exists());
+        assert!(!repo.join("renamed.adoc").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn move_rejects_path_escape() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        // Same `validate_relative_name`-first shape as the other mutating
+        // tools' path-escape tests — `..` is rejected as `InvalidName`
+        // before `join_relative` ever gets a chance to produce `PathEscape`.
+        let err = move_it(&scope, "../outside.adoc", "new-name.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::Io(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    /// The one test that wires up a real, built `WorkspaceIndex` instead of
+    /// `EmbeddingDeps::empty()`'s blank one — proves `move_path` actually
+    /// calls through to `reference_rewrite::rewrite_references` and reports
+    /// the result, not just performs a bare `fs::rename`.
+    #[test]
+    fn move_rewrites_references_in_other_files() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("sub")).unwrap();
+        fs::write(docs.join("sub/detail.adoc"), "= Detail\n").unwrap();
+        fs::write(docs.join("guide.adoc"), "= Guide\n\ninclude::sub/detail.adoc[]\n").unwrap();
+        // Same as `move_moves_and_renames_a_directory_together`: the
+        // destination's parent must already exist.
+        fs::create_dir_all(docs.join("sub2")).unwrap();
+
+        let mut deps = EmbeddingDeps::empty();
+        deps.workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let (from, to, updated_files) =
+            move_it_with_deps(&scope, "sub/detail.adoc", "sub2/detail.adoc", &deps).unwrap();
+        assert_eq!(from, "sub/detail.adoc");
+        assert_eq!(to, "sub2/detail.adoc");
+        assert_eq!(
+            updated_files,
+            vec![UpdatedReference { docs_relative_path: "guide.adoc".to_string(), count: 1 }]
+        );
+        assert!(!docs.join("sub/detail.adoc").exists());
+        assert!(docs.join("sub2/detail.adoc").exists());
+        assert_eq!(
+            fs::read_to_string(docs.join("guide.adoc")).unwrap(),
+            "= Guide\n\ninclude::sub2/detail.adoc[]\n"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn move_of_an_unreferenced_file_reports_zero_updated_references() {
+        let (repo, docs) = fixture_repo();
+        let mut deps = EmbeddingDeps::empty();
+        deps.workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let (_, _, updated_files) =
+            move_it_with_deps(&scope, "intro.adoc", "introduction.adoc", &deps).unwrap();
+        assert!(updated_files.is_empty());
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -2144,6 +2443,23 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_move_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "move".to_string(),
+            arguments: r#"{"path":"old.adoc","newPath":"new.adoc"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::Move(MoveArgs {
+                path: "old.adoc".to_string(),
+                new_path: "new.adoc".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn parse_tool_call_parses_edit_file_args() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -2242,7 +2558,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_nine_by_default() {
+    fn llm_tool_definitions_includes_all_ten_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -2259,6 +2575,7 @@ mod tests {
                 "deleteFile",
                 "createDirectory",
                 "deleteDirectory",
+                "move",
                 "requestFullRepoAccess"
             ]
         );

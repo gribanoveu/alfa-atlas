@@ -15,18 +15,19 @@ use crate::services::ai_tools::EmbeddingDeps;
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::project_open;
 use crate::services::repo_index::RepositoryIndex;
+use crate::services::workspace_index::WorkspaceIndex;
 
 /// The frontend passes only `{ tool, args }` — no `docsRoot`/`repoRoot`, no
 /// access mode. `services::ai_tools::current_scope()` resolves whichever
 /// project is currently open and its persisted allowlist/mode itself. The
-/// six embedding/chunk/repo-index `State` params are what `SemanticSearch`
-/// needs (see `services::ai_tools::EmbeddingDeps`) — all already managed
-/// globally in `lib.rs`, cloned here into one bundle exactly like
-/// `commands::embeddings::embedding_sync` already does for its own params.
-/// `spawn_blocking` because `ListFiles` in `FullRepo` mode walks the whole
-/// repo (`infra::workspace_scanner::scan_all`), and `SemanticSearch` may run
-/// model inference — both comparable in cost to `check_standards`'s
-/// repo-wide walk.
+/// seven embedding/chunk/repo-index/workspace-index `State` params are what
+/// `SemanticSearch`/`Move` need (see `services::ai_tools::EmbeddingDeps`) —
+/// all already managed globally in `lib.rs`, cloned here into one bundle
+/// exactly like `commands::embeddings::embedding_sync` already does for its
+/// own params. `spawn_blocking` because `ListFiles` in `FullRepo` mode walks
+/// the whole repo (`infra::workspace_scanner::scan_all`), and
+/// `SemanticSearch` may run model inference — both comparable in cost to
+/// `check_standards`'s repo-wide walk.
 #[tauri::command]
 pub async fn ai_execute_tool(
     call: ToolCall,
@@ -36,6 +37,7 @@ pub async fn ai_execute_tool(
     index_store: State<'_, Arc<IndexStoreSlot>>,
     embedding_provider: State<'_, Arc<EmbeddingProviderSlot>>,
     sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
+    workspace_index: State<'_, Arc<WorkspaceIndex>>,
 ) -> Result<ToolResult, String> {
     let deps = EmbeddingDeps {
         repo_index: repo_index.inner().clone(),
@@ -44,6 +46,7 @@ pub async fn ai_execute_tool(
         index_store: index_store.inner().clone(),
         embedding_provider: embedding_provider.inner().clone(),
         sync_guard: sync_guard.inner().clone(),
+        workspace_index: workspace_index.inner().clone(),
     };
     tauri::async_runtime::spawn_blocking(move || {
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;

@@ -51,6 +51,7 @@ use crate::services::ai_tools::{self, EmbeddingDeps};
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::llm_config;
 use crate::services::repo_index::RepositoryIndex;
+use crate::services::workspace_index::WorkspaceIndex;
 
 /// Fires once per non-empty text chunk while `llm_chat_stream`'s promise is
 /// still in flight. Global/unscoped, matching `SYNC_PROGRESS_EVENT`'s
@@ -472,6 +473,7 @@ pub async fn llm_chat_stream(
     index_store: State<'_, Arc<IndexStoreSlot>>,
     embedding_provider: State<'_, Arc<EmbeddingProviderSlot>>,
     sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
+    workspace_index: State<'_, Arc<WorkspaceIndex>>,
 ) -> Result<ChatStreamOutcome, String> {
     let llm_provider = llm_provider.inner().clone();
     let deps = EmbeddingDeps {
@@ -481,6 +483,7 @@ pub async fn llm_chat_stream(
         index_store: index_store.inner().clone(),
         embedding_provider: embedding_provider.inner().clone(),
         sync_guard: sync_guard.inner().clone(),
+        workspace_index: workspace_index.inner().clone(),
     };
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
         let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
@@ -536,6 +539,7 @@ pub async fn llm_chat_stream_resume(
     index_store: State<'_, Arc<IndexStoreSlot>>,
     embedding_provider: State<'_, Arc<EmbeddingProviderSlot>>,
     sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
+    workspace_index: State<'_, Arc<WorkspaceIndex>>,
 ) -> Result<ChatStreamOutcome, String> {
     let llm_provider = llm_provider.inner().clone();
     let deps = EmbeddingDeps {
@@ -545,6 +549,7 @@ pub async fn llm_chat_stream_resume(
         index_store: index_store.inner().clone(),
         embedding_provider: embedding_provider.inner().clone(),
         sync_guard: sync_guard.inner().clone(),
+        workspace_index: workspace_index.inner().clone(),
     };
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
         let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;

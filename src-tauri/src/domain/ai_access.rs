@@ -31,6 +31,7 @@ pub enum ToolName {
     DeleteFile,
     CreateDirectory,
     DeleteDirectory,
+    Move,
     RequestFullRepoAccess,
 }
 
@@ -39,10 +40,11 @@ impl ToolName {
     /// before executing — see `commands::llm`'s tool-calling loop. Static
     /// per tool identity, not per-call: every `WriteFile` call needs
     /// confirmation, regardless of which file it targets. `EditFile`/
-    /// `DeleteFile`/`CreateDirectory`/`DeleteDirectory` are grouped with it
-    /// — same filesystem-mutation family, same "the user should see this
-    /// before it happens" reasoning, even though an empty directory itself
-    /// carries less risk than overwriting or deleting a file.
+    /// `DeleteFile`/`CreateDirectory`/`DeleteDirectory`/`Move` are grouped
+    /// with it — same filesystem-mutation family, same "the user should
+    /// see this before it happens" reasoning, even though an empty
+    /// directory itself carries less risk than overwriting or deleting a
+    /// file.
     pub fn requires_confirmation(self) -> bool {
         matches!(
             self,
@@ -51,6 +53,7 @@ impl ToolName {
                 | ToolName::DeleteFile
                 | ToolName::CreateDirectory
                 | ToolName::DeleteDirectory
+                | ToolName::Move
                 | ToolName::RequestFullRepoAccess
         )
     }
@@ -71,6 +74,7 @@ impl ToolName {
             "deleteFile" => Some(ToolName::DeleteFile),
             "createDirectory" => Some(ToolName::CreateDirectory),
             "deleteDirectory" => Some(ToolName::DeleteDirectory),
+            "move" => Some(ToolName::Move),
             "requestFullRepoAccess" => Some(ToolName::RequestFullRepoAccess),
             _ => None,
         }
@@ -82,7 +86,10 @@ impl ToolName {
     /// Local-filesystem-only tools are cheap; `SemanticSearch` is the one
     /// that can hit a network embedding-provider API after cascading
     /// through symbol/lexical matching first (`services::ai_tools::
-    /// semantic_search`), so it costs the most.
+    /// semantic_search`), so it costs the most. `Move` sits with
+    /// `WriteFile`/`EditFile` rather than the bare-syscall tools — besides
+    /// the move itself, it can rewrite `include::`/`xref:`/`$ref`
+    /// references in other files too (`services::ai_tools::move_path`).
     pub fn loop_weight(self) -> u32 {
         match self {
             ToolName::ListFiles => 1,
@@ -93,6 +100,7 @@ impl ToolName {
             ToolName::DeleteFile => 1,
             ToolName::CreateDirectory => 1,
             ToolName::DeleteDirectory => 1,
+            ToolName::Move => 2,
             ToolName::RequestFullRepoAccess => 1,
         }
     }
@@ -123,6 +131,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::DeleteFile,
         ToolName::CreateDirectory,
         ToolName::DeleteDirectory,
+        ToolName::Move,
         ToolName::RequestFullRepoAccess,
     ]
     .into_iter()
@@ -143,6 +152,7 @@ mod tests {
         assert!(ToolName::DeleteFile.requires_confirmation());
         assert!(ToolName::CreateDirectory.requires_confirmation());
         assert!(ToolName::DeleteDirectory.requires_confirmation());
+        assert!(ToolName::Move.requires_confirmation());
         assert!(ToolName::RequestFullRepoAccess.requires_confirmation());
     }
 
@@ -156,6 +166,7 @@ mod tests {
         assert_eq!(ToolName::from_wire_name("deleteFile"), Some(ToolName::DeleteFile));
         assert_eq!(ToolName::from_wire_name("createDirectory"), Some(ToolName::CreateDirectory));
         assert_eq!(ToolName::from_wire_name("deleteDirectory"), Some(ToolName::DeleteDirectory));
+        assert_eq!(ToolName::from_wire_name("move"), Some(ToolName::Move));
         assert_eq!(
             ToolName::from_wire_name("requestFullRepoAccess"),
             Some(ToolName::RequestFullRepoAccess)
@@ -173,18 +184,20 @@ mod tests {
         assert_eq!(ToolName::RequestFullRepoAccess.loop_weight(), 1);
         assert_eq!(ToolName::WriteFile.loop_weight(), 2);
         assert_eq!(ToolName::EditFile.loop_weight(), 2);
+        assert_eq!(ToolName::Move.loop_weight(), 2);
         assert_eq!(ToolName::SemanticSearch.loop_weight(), 4);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_nine() {
+    fn default_allowed_tools_includes_all_ten() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 9);
+        assert_eq!(allowed.len(), 10);
         assert!(allowed.contains(&ToolName::WriteFile));
         assert!(allowed.contains(&ToolName::EditFile));
         assert!(allowed.contains(&ToolName::DeleteFile));
         assert!(allowed.contains(&ToolName::CreateDirectory));
         assert!(allowed.contains(&ToolName::DeleteDirectory));
+        assert!(allowed.contains(&ToolName::Move));
         assert!(allowed.contains(&ToolName::RequestFullRepoAccess));
     }
 }

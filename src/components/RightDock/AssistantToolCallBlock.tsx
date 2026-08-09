@@ -317,6 +317,34 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
           <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
         </div>
       );
+    case "moved": {
+      const { from, to, updatedFiles } = result.result;
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Перемещено</div>
+          <pre className="assistant-tool-call-detail-code">
+            {from} → {to}
+          </pre>
+          {updatedFiles.length > 0 && (
+            <>
+              <div className="assistant-tool-call-detail-label">
+                Обновлены ссылки в других файлах
+              </div>
+              <ul className="assistant-tool-call-detail-list">
+                {updatedFiles.map((f) => (
+                  <li key={f.docsRelativePath}>
+                    <File className="assistant-tool-call-detail-icon" size={12} aria-hidden />
+                    <span>
+                      {f.docsRelativePath} ({f.count})
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      );
+    }
     case "accessModeChanged":
       return (
         <div className="assistant-tool-call-detail-section">

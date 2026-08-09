@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { UpdatedReference } from "./project";
 
 // Mirrors `domain::ai_access::AiAccessMode` in
 // `src-tauri/src/domain/ai_access.rs` (`#[serde(rename_all = "camelCase")]`
@@ -44,6 +45,7 @@ export type ToolCall =
   | { tool: "deleteFile"; args: { path: string } }
   | { tool: "createDirectory"; args: { path: string } }
   | { tool: "deleteDirectory"; args: { path: string; recursive: boolean | null } }
+  | { tool: "move"; args: { path: string; newPath: string } }
   | { tool: "requestFullRepoAccess"; args: { reason: string } };
 
 // `ToolResult`'s `"file"` case carries range/total-line metadata alongside
@@ -59,6 +61,7 @@ export type ToolResult =
   | { tool: "fileDeleted"; result: { path: string } }
   | { tool: "directoryCreated"; result: { path: string } }
   | { tool: "directoryDeleted"; result: { path: string } }
+  | { tool: "moved"; result: { from: string; to: string; updatedFiles: UpdatedReference[] } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } };
 
 /**

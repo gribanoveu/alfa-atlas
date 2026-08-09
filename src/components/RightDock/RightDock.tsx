@@ -13,6 +13,7 @@ import type {
   GitFileStatus,
 } from "../../lib/git";
 import type { SpecsRepoInfo } from "../../lib/openapi";
+import type { UpdatedReference } from "../../lib/project";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import { AssistantPanel } from "./AssistantPanel";
@@ -114,6 +115,7 @@ type RightDockProps = {
     specsRepoInfo: SpecsRepoInfo | null;
     docsRoot: string;
     onFileWritten: (info: { tool: string; path: string }) => void;
+    onFileMoved: (info: { from: string; to: string; updatedFiles: UpdatedReference[] }) => void;
     repoRoot: string | null;
   } | null;
 };
@@ -209,6 +211,7 @@ export function RightDock({
                 specsRepoInfo={assistant.specsRepoInfo}
                 docsRoot={assistant.docsRoot}
                 onFileWritten={assistant.onFileWritten}
+                onFileMoved={assistant.onFileMoved}
                 repoRoot={assistant.repoRoot}
               />
             ) : (

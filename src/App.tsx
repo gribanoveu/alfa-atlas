@@ -71,6 +71,7 @@ import {
   readProjectFile,
   renameProjectDir,
   renameProjectFile,
+  type UpdatedReference,
 } from "./lib/project";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
@@ -85,6 +86,12 @@ import { RenameModal } from "./components/Sidebar/RenameModal";
 function joinParent(parentPath: string, name: string): string {
   if (!parentPath || parentPath === ".") return name;
   return `${parentPath.replace(/[/\\]+$/, "")}/${name}`;
+}
+
+function dirnameOf(path: string): string {
+  const segments = path.split(/[/\\]/).filter(Boolean);
+  segments.pop();
+  return segments.length > 0 ? segments.join("/") : ".";
 }
 
 /** Append " copy" to a name. For files it goes before the extension
@@ -843,6 +850,26 @@ function App() {
     [tree, editor],
   );
 
+  // Same idea as `handleAssistantFileWritten`, but a `move` tool call has
+  // both an old and a new path, so a plain reload isn't enough — an open
+  // tab under `from` needs to keep pointing at the same file at its new
+  // path, exactly like the manual drag-and-drop `onMove` handler below
+  // achieves via `editor.remapTabsUnder`/`session.remapExpandedUnder`. The
+  // move's reference-rewrite report reuses `applyRenameReport` so cascaded
+  // changes to *other* open tabs (files that included/referenced the moved
+  // one) get reloaded and reported the same way a manual rename does.
+  const handleAssistantFileMoved = useCallback(
+    ({ from, to, updatedFiles }: { from: string; to: string; updatedFiles: UpdatedReference[] }) => {
+      editor.remapTabsUnder(from, to);
+      session.remapExpandedUnder(from, to);
+      session.ensureExpanded(dirnameOf(to));
+      void tree.refresh();
+      git.scheduleRefresh();
+      void applyRenameReport({ updatedFiles });
+    },
+    [editor, session, tree, git, applyRenameReport],
+  );
+
   const handleGitDiscard = useCallback(
     async (repoRelativePath: string) => {
       const ok = await git.discardFileChanges(repoRelativePath);
@@ -1381,6 +1408,7 @@ function App() {
               specsRepoInfo: specsRepo.info,
               docsRoot: project.docsRoot ?? "",
               onFileWritten: handleAssistantFileWritten,
+              onFileMoved: handleAssistantFileMoved,
               repoRoot: project.repoRoot,
             }}
           />
