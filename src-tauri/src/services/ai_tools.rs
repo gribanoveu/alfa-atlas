@@ -16,8 +16,8 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit,
-    ListFilesArgs, MatchSource, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs,
+    CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileDiffStats,
+    FileEdit, ListFilesArgs, MatchSource, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs,
     SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs,
     ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
 };
@@ -34,7 +34,7 @@ use crate::services::chunk_text::resolve_text;
 use crate::services::reference_rewrite;
 use crate::services::repo_index::RepositoryIndex;
 use crate::services::workspace_index::WorkspaceIndex;
-use crate::services::{docs_fs, embedding_config, project_open};
+use crate::services::{docs_fs, embedding_config, project_open, text_diff};
 
 const DEFAULT_TOP_K: usize = 10;
 const MAX_TOP_K: usize = 50;
@@ -127,13 +127,12 @@ pub fn execute_tool(
             semantic_search(scope, args, deps).map(ToolResult::SemanticSearchResults)
         }
         ToolCall::WriteFile(args) => {
-            write_file(scope, args).map(|path| ToolResult::FileWritten { path })
+            write_file(scope, args).map(|(path, diff)| ToolResult::FileWritten { path, diff })
         }
-        ToolCall::EditFile(args) => {
-            edit_file(scope, args, deps.fast_apply.as_ref()).map(|path| ToolResult::FileEdited { path })
-        }
+        ToolCall::EditFile(args) => edit_file(scope, args, deps.fast_apply.as_ref())
+            .map(|(path, diff)| ToolResult::FileEdited { path, diff }),
         ToolCall::DeleteFile(args) => {
-            delete_file(scope, args).map(|path| ToolResult::FileDeleted { path })
+            delete_file(scope, args).map(|(path, diff)| ToolResult::FileDeleted { path, diff })
         }
         ToolCall::CreateDirectory(args) => {
             create_directory(scope, args).map(|path| ToolResult::DirectoryCreated { path })
@@ -818,9 +817,19 @@ fn slice_lines(content: String, start_line: Option<u32>, end_line: Option<u32>) 
 /// parent directories, and rejects anything outside the recognized
 /// document-format allowlist (`domain::supported_files::is_supported_file`)
 /// regardless of `AiAccessMode`.
-fn write_file(scope: &ToolScope, args: WriteFileArgs) -> Result<String, ToolError> {
-    docs_fs::write_project_file(&scope.docs_root.to_string_lossy(), &args.path, &args.content)?;
-    Ok(args.path)
+fn write_file(scope: &ToolScope, args: WriteFileArgs) -> Result<(String, FileDiffStats), ToolError> {
+    let docs_root = scope.docs_root.to_string_lossy();
+    // NotFound-tolerant read, same pattern as `commands::project::
+    // read_project_file_or_none` — a brand-new file diffs against `""`
+    // rather than needing its own special case.
+    let old = match docs_fs::read_project_file(&docs_root, &args.path) {
+        Ok(content) => content,
+        Err(ProjectError::NotFound(_)) => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    docs_fs::write_project_file(&docs_root, &args.path, &args.content)?;
+    let diff = text_diff::diff_stats(&old, &args.content);
+    Ok((args.path, diff))
 }
 
 /// Same `scope.docs_root`-always targeting as `write_file`, but composes
@@ -835,12 +844,13 @@ fn edit_file(
     scope: &ToolScope,
     args: EditFileArgs,
     fast_apply: Option<&(Arc<dyn LlmProvider>, String)>,
-) -> Result<String, ToolError> {
+) -> Result<(String, FileDiffStats), ToolError> {
     let docs_root = scope.docs_root.to_string_lossy();
     let content = docs_fs::read_project_file(&docs_root, &args.path)?;
     let edited = apply_edits(&content, &args.edits, fast_apply)?;
     docs_fs::write_project_file(&docs_root, &args.path, &edited)?;
-    Ok(args.path)
+    let diff = text_diff::diff_stats(&content, &edited);
+    Ok((args.path, diff))
 }
 
 /// Applies every edit in `edits` to `content`. The primary path is exact and
@@ -1106,9 +1116,15 @@ fn validate_fast_apply_output(original: &str, candidate: &str, edit: &FileEdit) 
 /// Always targets `scope.docs_root`, same reasoning as `write_file`.
 /// Reuses `docs_fs::delete_project_file` as-is: fails if the path is
 /// missing or not a file.
-fn delete_file(scope: &ToolScope, args: DeleteFileArgs) -> Result<String, ToolError> {
-    docs_fs::delete_project_file(&scope.docs_root.to_string_lossy(), &args.path)?;
-    Ok(args.path)
+fn delete_file(scope: &ToolScope, args: DeleteFileArgs) -> Result<(String, FileDiffStats), ToolError> {
+    let docs_root = scope.docs_root.to_string_lossy();
+    // Missing-file already errors below via `delete_project_file`'s own
+    // `NotFound` (see `delete_file_rejects_missing_file`) — this read just
+    // surfaces that same error slightly earlier, with no fallback needed.
+    let old = docs_fs::read_project_file(&docs_root, &args.path)?;
+    docs_fs::delete_project_file(&docs_root, &args.path)?;
+    let diff = text_diff::diff_stats(&old, "");
+    Ok((args.path, diff))
 }
 
 /// Always targets `scope.docs_root`, same reasoning as `write_file` —
@@ -1685,7 +1701,7 @@ mod tests {
             &EmbeddingDeps::empty(),
             &[],
         )? {
-            ToolResult::FileWritten { path } => Ok(path),
+            ToolResult::FileWritten { path, .. } => Ok(path),
             other => panic!("expected ToolResult::FileWritten, got {other:?}"),
         }
     }
@@ -1703,7 +1719,7 @@ mod tests {
             &EmbeddingDeps::empty(),
             &[],
         )? {
-            ToolResult::FileEdited { path } => Ok(path),
+            ToolResult::FileEdited { path, .. } => Ok(path),
             other => panic!("expected ToolResult::FileEdited, got {other:?}"),
         }
     }
@@ -1727,7 +1743,7 @@ mod tests {
             &EmbeddingDeps::empty(),
             &[],
         )? {
-            ToolResult::FileDeleted { path } => Ok(path),
+            ToolResult::FileDeleted { path, .. } => Ok(path),
             other => panic!("expected ToolResult::FileDeleted, got {other:?}"),
         }
     }
@@ -2122,7 +2138,7 @@ mod tests {
             &deps,
             &[],
         )? {
-            ToolResult::FileEdited { path } => Ok(path),
+            ToolResult::FileEdited { path, .. } => Ok(path),
             other => panic!("expected ToolResult::FileEdited, got {other:?}"),
         }
     }
@@ -2369,11 +2385,15 @@ mod tests {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
-        // Same `validate_relative_name`-first shape as `create_dir`'s own
-        // path-escape test — `..` is rejected as `InvalidName` before
-        // `join_relative` gets a chance to produce `PathEscape`.
+        // `delete_file` now reads the file first (to diff against on
+        // deletion — see `text_diff::diff_stats`), and `read_project_file`
+        // validates via `join_relative` rather than `validate_relative_name`
+        // — so `..` surfaces as `PathEscape` here rather than the
+        // `InvalidName`-via-`Io` catch-all `delete_project_file` alone would
+        // have produced. Equally rejected either way; this is just the more
+        // specific variant.
         let err = delete(&scope, "../outside.adoc").unwrap_err();
-        assert!(matches!(err, ToolError::Io(_)));
+        assert!(matches!(err, ToolError::PathEscape(_)));
 
         fs::remove_dir_all(&repo).ok();
     }

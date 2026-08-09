@@ -1994,6 +1994,71 @@
   box-sizing: border-box;
 }
 
+/* Always-visible "+N -M" pill on a settled writeFile/editFile/deleteFile
+   call's header (see `DiffBadge` in AssistantToolCallBlock.tsx) — same
+   green/red convention as the rest of the app's diff UI (`--green`/
+   `--red-tag`, `styles/tokens.css`). */
+.assistant-tool-call-diff-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  font-size: var(--font-ui-sm);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+.assistant-tool-call-diff-added {
+  color: var(--green);
+}
+
+.assistant-tool-call-diff-removed {
+  color: var(--red-tag);
+}
+
+/* Lightweight colored unified-diff view in a settled call's expanded detail
+   (see `DiffLines`) — same line-background recipe as the editor's own git
+   gutter popup (`.git-gutter-diff-added`/`-removed` in
+   `components/Editor/GitGutter.css`), reused here as its own namespaced
+   classes rather than shared verbatim, consistent with this file's other
+   per-component styling. */
+.assistant-tool-call-diff {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--font-ui-sm);
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 260px;
+}
+
+.assistant-tool-call-diff-line {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-1);
+}
+
+.assistant-tool-call-diff-line-added {
+  background: color-mix(in srgb, #3fb950 10%, transparent);
+  color: var(--text-0);
+}
+
+.assistant-tool-call-diff-line-removed {
+  background: color-mix(in srgb, #f85149 10%, transparent);
+  color: var(--text-0);
+}
+
+.assistant-tool-call-diff-line-hunk {
+  color: var(--text-2);
+}
+
+.assistant-tool-call-diff-truncated {
+  padding: 2px 8px;
+  color: var(--text-2);
+  font-style: italic;
+}
+
 
 /* =========================================================
    Responsive

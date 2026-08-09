@@ -63,6 +63,20 @@ export type ToolCall =
   | { tool: "todoWrite"; args: { titles: string[] } }
   | { tool: "todoUpdate"; args: { id: string; status: "completed" | "cancelled"; note: string | null } };
 
+// Mirrors Rust's `domain::ai_tools::FileDiffStats` — attached to a settled
+// `fileWritten`/`fileEdited`/`fileDeleted` result, computed once
+// server-side (`services::text_diff::diff_stats`) and consumed both by the
+// chat UI (a `+N -M` badge and colored diff view) and by the model itself
+// (the same `ToolResult` JSON is what it reads back). `linesAdded`/
+// `linesRemoved` are always the true, untruncated totals even when
+// `unifiedDiff` was cut short (`truncated`).
+export type FileDiffStats = {
+  linesAdded: number;
+  linesRemoved: number;
+  unifiedDiff: string;
+  truncated: boolean;
+};
+
 // `ToolResult`'s `"file"` case carries range/total-line metadata alongside
 // the content — 1-indexed, inclusive, the range actually returned (after
 // clamping), not necessarily what was requested. `0`/`0`/`0` on an empty
@@ -71,9 +85,9 @@ export type ToolResult =
   | { tool: "file"; result: { content: string; startLine: number; endLine: number; totalLines: number } }
   | { tool: "fileList"; result: ToolFileEntry[] }
   | { tool: "semanticSearchResults"; result: ToolMatch[] }
-  | { tool: "fileWritten"; result: { path: string } }
-  | { tool: "fileEdited"; result: { path: string } }
-  | { tool: "fileDeleted"; result: { path: string } }
+  | { tool: "fileWritten"; result: { path: string; diff: FileDiffStats } }
+  | { tool: "fileEdited"; result: { path: string; diff: FileDiffStats } }
+  | { tool: "fileDeleted"; result: { path: string; diff: FileDiffStats } }
   | { tool: "directoryCreated"; result: { path: string } }
   | { tool: "directoryDeleted"; result: { path: string } }
   | { tool: "moved"; result: { from: string; to: string; updatedFiles: UpdatedReference[] } }

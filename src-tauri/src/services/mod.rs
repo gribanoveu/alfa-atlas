@@ -27,6 +27,7 @@ pub mod standards;
 pub mod standards_messages;
 pub mod standards_prefs;
 pub mod standards_rules;
+pub mod text_diff;
 pub mod window_settings;
 pub mod workspace_index;
 pub mod workspace_state;

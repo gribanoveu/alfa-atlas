@@ -288,6 +288,27 @@ impl ToolCall {
     }
 }
 
+/// Line-diff summary attached to a settled `FileWritten`/`FileEdited`/
+/// `FileDeleted` result — computed once (`services::text_diff::diff_stats`)
+/// and consumed by two independent readers: the chat UI's `+N -M` badge and
+/// colored diff view, and the model itself, which otherwise only ever saw
+/// `{"path": "..."}` and had no way to confirm what actually landed on disk
+/// (notably useful for `edit_file`'s fast-apply reconciliation path, where
+/// the applied text can differ slightly from what the model asked for).
+/// `lines_added`/`lines_removed` are always the true, untruncated totals
+/// even when `unified_diff` itself was cut short.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDiffStats {
+    pub lines_added: u32,
+    pub lines_removed: u32,
+    /// Unified-diff body only (no `--- a`/`+++ b` file header — the path is
+    /// already on the enclosing `ToolResult` variant), capped to
+    /// `services::text_diff::MAX_UNIFIED_DIFF_CHARS`.
+    pub unified_diff: String,
+    pub truncated: bool,
+}
+
 /// Result of a `ToolCall`. Variants are named after the shape of the
 /// payload (a file's content vs. a listing), not after the tool that
 /// produced it — mirrors `ToolCall` as the other half of the same
@@ -314,9 +335,9 @@ pub enum ToolResult {
     },
     FileList(Vec<ToolFileEntry>),
     SemanticSearchResults(Vec<ToolMatch>),
-    FileWritten { path: String },
-    FileEdited { path: String },
-    FileDeleted { path: String },
+    FileWritten { path: String, diff: FileDiffStats },
+    FileEdited { path: String, diff: FileDiffStats },
+    FileDeleted { path: String, diff: FileDiffStats },
     DirectoryCreated { path: String },
     DirectoryDeleted { path: String },
     /// `updated_files` lists every *other* file whose `include::`/`xref:`/

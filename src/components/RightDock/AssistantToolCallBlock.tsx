@@ -7,7 +7,7 @@ import {
   formatToolArguments,
   TOOL_APPROVAL_TIMEOUT_MS,
 } from "../../lib/assistantConfig";
-import type { Task, ToolResult, TodoStatus } from "../../lib/aiTools";
+import type { FileDiffStats, Task, ToolResult, TodoStatus } from "../../lib/aiTools";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
 import { WriteFileDiffReview } from "./WriteFileDiffReview";
 
@@ -29,6 +29,76 @@ function parseArgs(argumentsJson: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/** `diff` for a settled `writeFile`/`editFile`/`deleteFile` call, or `null`
+ * for every other tool/status — the one spot both the header badge and the
+ * expanded detail view read from, so they never drift on which tools carry
+ * a diff. */
+function diffStatsFor(block: ToolCallBlock): FileDiffStats | null {
+  if (block.status !== "done" || !block.result) return null;
+  switch (block.result.tool) {
+    case "fileWritten":
+    case "fileEdited":
+    case "fileDeleted":
+      return block.result.result.diff;
+    default:
+      return null;
+  }
+}
+
+/** The always-visible `+N -M` pill in a settled tool call's header —
+ * doesn't require expanding the block, matching how a git-status line or a
+ * PR file list shows change size at a glance. Omits whichever side is zero
+ * (a brand-new file shows only `+N`, a delete only `-M`), and renders
+ * nothing at all when nothing actually changed (e.g. an overwrite with
+ * identical content). */
+function DiffBadge({ diff }: { diff: FileDiffStats }) {
+  if (diff.linesAdded === 0 && diff.linesRemoved === 0) return null;
+  return (
+    <span className="assistant-tool-call-diff-badge">
+      {diff.linesAdded > 0 ? <span className="assistant-tool-call-diff-added">+{diff.linesAdded}</span> : null}
+      {diff.linesRemoved > 0 ? (
+        <span className="assistant-tool-call-diff-removed">−{diff.linesRemoved}</span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Lightweight colored line view of `diff.unifiedDiff` for the expanded
+ * detail — deliberately not the Monaco `DiffEditor` `WriteFileDiffReview`
+ * uses for the live pending-approval preview: that's a heavy editor
+ * instance meant for one active review, while this renders inline for
+ * every settled call in a potentially long chat history. Classifies each
+ * line by its unified-diff leading character; `similar`'s
+ * `unified_diff()` output has no `---`/`+++` file header (never
+ * requested), only `@@ ... @@` hunk markers and `+`/`-`/` `-prefixed
+ * lines. */
+function DiffLines({ diff }: { diff: FileDiffStats }) {
+  if (diff.unifiedDiff === "") return null;
+  const lines = diff.unifiedDiff.split("\n").filter((_, i, arr) => !(i === arr.length - 1 && arr[i] === ""));
+  return (
+    <div className="assistant-tool-call-detail-section">
+      <div className="assistant-tool-call-detail-label">Изменения</div>
+      <div className="assistant-tool-call-diff">
+        {lines.map((line, i) => {
+          const kind = line.startsWith("+")
+            ? "added"
+            : line.startsWith("-")
+              ? "removed"
+              : line.startsWith("@@")
+                ? "hunk"
+                : "context";
+          return (
+            <div key={i} className={`assistant-tool-call-diff-line assistant-tool-call-diff-line-${kind}`}>
+              {line}
+            </div>
+          );
+        })}
+        {diff.truncated ? <div className="assistant-tool-call-diff-truncated">… диф обрезан</div> : null}
+      </div>
+    </div>
+  );
 }
 
 type AssistantToolCallBlockProps = {
@@ -64,6 +134,7 @@ type AssistantToolCallBlockProps = {
 export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const diff = diffStatsFor(block);
 
   return (
     <div className={`assistant-tool-call assistant-tool-call-${block.status}`}>
@@ -84,6 +155,7 @@ export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantT
           <AlertCircle className="assistant-tool-call-icon" size={13} aria-hidden />
         )}
         <span className="assistant-tool-call-label">{describeToolActivity(block.name, block.argumentsJson)}</span>
+        {diff ? <DiffBadge diff={diff} /> : null}
         {block.autoApproved ? (
           <span
             className="assistant-tool-call-auto-approved"
@@ -284,24 +356,33 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
       );
     case "fileWritten":
       return (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Файл записан</div>
-          <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
-        </div>
+        <>
+          <div className="assistant-tool-call-detail-section">
+            <div className="assistant-tool-call-detail-label">Файл записан</div>
+            <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
+          </div>
+          <DiffLines diff={result.result.diff} />
+        </>
       );
     case "fileEdited":
       return (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Файл изменён</div>
-          <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
-        </div>
+        <>
+          <div className="assistant-tool-call-detail-section">
+            <div className="assistant-tool-call-detail-label">Файл изменён</div>
+            <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
+          </div>
+          <DiffLines diff={result.result.diff} />
+        </>
       );
     case "fileDeleted":
       return (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Файл удалён</div>
-          <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
-        </div>
+        <>
+          <div className="assistant-tool-call-detail-section">
+            <div className="assistant-tool-call-detail-label">Файл удалён</div>
+            <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
+          </div>
+          <DiffLines diff={result.result.diff} />
+        </>
       );
     case "directoryCreated":
       return (
