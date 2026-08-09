@@ -1,6 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Components } from "streamdown";
 import { Streamdown } from "streamdown";
+import { wrapAsciiTrees } from "../../lib/wrapAsciiTrees";
 import "./AssistantMarkdown.css";
 
 function fencedLang(className: string | undefined): string | null {
@@ -74,7 +75,7 @@ type AssistantMarkdownProps = {
 export function AssistantMarkdown({ content, streaming }: AssistantMarkdownProps) {
   return (
     <Streamdown className="assistant-md" isAnimating={streaming} linkSafety={{ enabled: false }} components={components}>
-      {content}
+      {wrapAsciiTrees(content)}
     </Streamdown>
   );
 }

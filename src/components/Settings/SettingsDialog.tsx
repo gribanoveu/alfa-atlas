@@ -20,6 +20,7 @@ import "./SettingsDialog.css";
 import { CredentialsTab } from "./CredentialsTab";
 import { EmbeddingsTab } from "./EmbeddingsTab";
 import { LlmTab } from "./LlmTab";
+import { PermissionsTab } from "./PermissionsTab";
 import { SpellcheckTab } from "./SpellcheckTab";
 import { StandardsRulesTab } from "./StandardsRulesTab";
 
@@ -32,7 +33,8 @@ export type SectionId =
   | "standards"
   | "spellcheck"
   | "embeddings"
-  | "llm";
+  | "llm"
+  | "permissions";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "Общие" },
@@ -43,7 +45,8 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "standards", label: "Стандарты" },
   { id: "spellcheck", label: "Орфография" },
   { id: "embeddings", label: "Эмбеддинги" },
-  { id: "llm", label: "LLM" },
+  { id: "llm", label: "Провайдеры" },
+  { id: "permissions", label: "Разрешения" },
 ];
 
 type FontSizePrefKey =
@@ -605,6 +608,8 @@ export function SettingsDialog({
             {section === "embeddings" ? <EmbeddingsTab /> : null}
 
             {section === "llm" ? <LlmTab /> : null}
+
+            {section === "permissions" ? <PermissionsTab /> : null}
 
             {error ? <div className="settings-error">{error}</div> : null}
           </div>
