@@ -1708,7 +1708,11 @@
 
   resize: none;
 
-  padding: 10px 42px 34px 12px;
+  /* Bottom padding must clear `.assistant-chat-input-tools`'s full
+     footprint (bottom: 6px + its tallest child `.assistant-chat-send`'s
+     30px = 36px), or the last line of typed text scrolls in underneath
+     the overlaid mode toggle/send button instead of stopping above it. */
+  padding: 10px 42px 40px 12px;
 
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1741,13 +1745,11 @@
 .assistant-chat-input-tools {
   position: absolute;
 
-  left: 6px;
   right: 6px;
   bottom: 6px;
 
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
 }
 

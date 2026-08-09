@@ -431,6 +431,7 @@ export function AssistantConversation({
       </div>
       {error ? <div className="assistant-chat-error">{error}</div> : null}
       <div className="assistant-model-bar">
+        <ChatModeSelect />
         <div className="clone-select assistant-model-select" ref={modelSelectRef}>
           <button
             type="button"
@@ -528,7 +529,6 @@ export function AssistantConversation({
             }}
           />
           <div className="assistant-chat-input-tools">
-            <ChatModeSelect />
             <button
               type="button"
               className="assistant-chat-send"
