@@ -308,7 +308,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "writeFile".to_string(),
             description:
-                "Create or overwrite one documentation file's full content, given its path relative to the project root. Always requires explicit user approval before the write actually happens — the user may deny it, in which case the file is left unchanged. Do not retry automatically after a denial; ask the user how they'd like to proceed instead. Only recognized documentation file types can be written."
+                "Create or overwrite one documentation file's full content, given its path relative to the project root. Any missing parent directories in the path are created automatically — there is no need to call createDirectory first. Always requires explicit user approval before the write actually happens — the user may deny it, in which case the file is left unchanged. Do not retry automatically after a denial; ask the user how they'd like to proceed instead. Only recognized documentation file types can be written."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
