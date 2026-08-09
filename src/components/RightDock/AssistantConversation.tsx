@@ -125,6 +125,12 @@ type AssistantConversationProps = {
   accessMode: AiAccessMode;
   specsRepoInfo: SpecsRepoInfo | null;
   toolDefinitions: LlmToolDefinition[];
+  /** The documentation root's path relative to the repository root (e.g.
+   * `"src/docs/asciidoc"`), or `null` when the distinction doesn't matter —
+   * see `docsRootRelativeToRepo` in `lib/paths.ts`. Forwarded into
+   * `useLlmChat` so the system prompt states the real Full-repo-mode path
+   * prefix instead of a generic illustrative example. */
+  docsRootRelativeToRepo: string | null;
   docsRoot: string;
   /** Fires once a `writeFile`/`editFile`/`deleteFile`/`createDirectory`/
    * `deleteDirectory` tool call actually lands on disk (its block settles
@@ -160,6 +166,7 @@ export function AssistantConversation({
   accessMode,
   specsRepoInfo,
   toolDefinitions,
+  docsRootRelativeToRepo,
   docsRoot,
   onFileWritten,
   onFileMoved,
@@ -173,6 +180,7 @@ export function AssistantConversation({
     accessMode,
     specsRepoInfo,
     toolDefinitions,
+    docsRootRelativeToRepo,
     initialMessages,
     onTurnSettled,
   );

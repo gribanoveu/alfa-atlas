@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FileText, FolderGit2, Settings2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
@@ -10,6 +10,7 @@ import type { AiAccessMode } from "../../lib/aiTools";
 import { deriveChatTitle } from "../../lib/chatHistory";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
+import { docsRootRelativeToRepo } from "../../lib/paths";
 import { ArchivedChatsPanel } from "./ArchivedChatsPanel";
 import { AssistantConversation } from "./AssistantConversation";
 import { ChatHistoryMenu } from "./ChatHistoryMenu";
@@ -106,6 +107,15 @@ export function AssistantPanel({
   const llmReady = activeProviderId !== null && Boolean(hasApiKeyMap[activeProviderId]);
 
   const chatHistory = useChatHistory(repoRoot);
+  // The documentation root's path relative to the repository root (e.g.
+  // `"src/docs/asciidoc"`), or `null` when the distinction doesn't matter —
+  // fed into the system prompt so it states the real Full-repo-mode path
+  // prefix instead of a generic illustrative example. See
+  // `docsRootRelativeToRepo`'s own doc comment.
+  const docsRootPrefix = useMemo(
+    () => docsRootRelativeToRepo(repoRoot ?? "", docsRoot),
+    [repoRoot, docsRoot],
+  );
   const [conversationSending, setConversationSending] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
 
@@ -233,6 +243,7 @@ export function AssistantPanel({
                 accessMode={accessMode ?? "docsOnly"}
                 specsRepoInfo={specsRepoInfo}
                 toolDefinitions={toolDefinitions}
+                docsRootRelativeToRepo={docsRootPrefix}
                 docsRoot={docsRoot}
                 onFileWritten={onFileWritten}
                 onFileMoved={onFileMoved}

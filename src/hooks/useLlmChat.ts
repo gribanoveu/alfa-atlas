@@ -66,6 +66,7 @@ export function useLlmChat(
   accessMode: AiAccessMode,
   specsRepoInfo: SpecsRepoInfo | null,
   toolDefinitions: LlmToolDefinition[],
+  docsRootRelativeToRepo: string | null,
   initialMessages: ChatMessage[],
   onTurnSettled: (messages: ChatMessage[]) => void,
 ) {
@@ -278,10 +279,20 @@ export function useLlmChat(
       const todoBlock = buildTodoContextBlock(todoListRef.current);
 
       const wireMessages: LlmMessage[] = [
-        { role: "system", content: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions), toolCallId: null },
+        {
+          role: "system",
+          content: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
+          toolCallId: null,
+        },
         ...priorTurns.map((m): LlmMessage => ({ role: m.role, content: chatMessageToPlainText(m), toolCallId: null })),
         ...(modeChanged
-          ? [{ role: "system" as const, content: buildAccessModeChangeNotice(accessMode), toolCallId: null }]
+          ? [
+              {
+                role: "system" as const,
+                content: buildAccessModeChangeNotice(accessMode, docsRootRelativeToRepo),
+                toolCallId: null,
+              },
+            ]
           : []),
         ...(todoBlock ? [{ role: "system" as const, content: todoBlock, toolCallId: null }] : []),
         { role: "user", content: trimmed, toolCallId: null },
@@ -357,7 +368,18 @@ export function useLlmChat(
         });
       }
     },
-    [providerId, sending, messages, accessMode, specsRepoInfo, toolDefinitions, collectDecisions, onTurnSettled, setTodos],
+    [
+      providerId,
+      sending,
+      messages,
+      accessMode,
+      specsRepoInfo,
+      toolDefinitions,
+      docsRootRelativeToRepo,
+      collectDecisions,
+      onTurnSettled,
+      setTodos,
+    ],
   );
 
   // Context-window usage so far. Every request resends the *entire* message
@@ -383,15 +405,16 @@ export function useLlmChat(
     });
     if (lastUsageIndex === -1 || lastUsageTotal === null) {
       return (
-        estimateTokenCount(buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions)) +
-        messages.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0)
+        estimateTokenCount(
+          buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
+        ) + messages.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0)
       );
     }
     const tail = messages
       .slice(lastUsageIndex + 1)
       .reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
     return lastUsageTotal + tail;
-  }, [messages, accessMode, specsRepoInfo, toolDefinitions]);
+  }, [messages, accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
 
   return {
     messages,
@@ -400,7 +423,7 @@ export function useLlmChat(
     sendMessage,
     contextTokens,
     todos,
-    systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions),
+    systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
     decideToolCall,
   };
 }

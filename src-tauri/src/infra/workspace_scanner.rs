@@ -50,6 +50,68 @@ pub fn scan_all_with_depth(
     walk(root, false, max_depth)
 }
 
+/// One directory-or-file entry from `scan_all_entries_with_depth` — unlike
+/// `ScannedFile`, this carries no mtime/size (nothing consuming it needs
+/// staleness info) and includes directories, which `walk`'s other callers
+/// (`scan`/`scan_all`/`scan_all_with_depth`, all indexing-focused) deliberately
+/// filter out.
+#[derive(Debug, Clone)]
+pub struct ScannedEntry {
+    pub path: PathBuf,
+    pub is_dir: bool,
+}
+
+/// Same gitignore-aware, depth-limited walk as `scan_all_with_depth`, but
+/// includes directory entries (tagged via `is_dir`) instead of silently
+/// dropping them — used by `services::ai_tools::list_full_repo` so a
+/// `listFiles` call in Full-repo mode can report real directories the way
+/// `list_docs_only` already does via `docs_fs::list_docs_tree_scoped`. A new
+/// function rather than a `walk()` parameter: `walk` backs `scan`/`scan_all`/
+/// `scan_all_with_depth`, all three used for indexing, where a directory
+/// entry would just have to be filtered back out by every caller — simpler
+/// and lower-risk to leave indexing's walk untouched and add a second,
+/// listing-only walk here. `root` itself is never included as an entry —
+/// same as `docs_fs::build_dir_children` never emitting a node for the
+/// directory it was asked to list, keeping both modes symmetric.
+pub fn scan_all_entries_with_depth(
+    root: &Path,
+    max_depth: Option<usize>,
+) -> Result<Vec<ScannedEntry>, WorkspaceIndexError> {
+    let canonical_root = root.canonicalize().map_err(WorkspaceIndexError::Io)?;
+
+    let walker = WalkBuilder::new(&canonical_root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .parents(true)
+        .max_depth(max_depth)
+        .build();
+
+    let mut entries = Vec::new();
+    for entry in walker {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let Some(file_type) = entry.file_type() else {
+            continue;
+        };
+        let path = entry.path().to_path_buf();
+        if path == canonical_root {
+            continue;
+        }
+        // Skip anything that escapes the canonical root (symlinks, etc.).
+        if !path.starts_with(&canonical_root) {
+            continue;
+        }
+        entries.push(ScannedEntry { path, is_dir: file_type.is_dir() });
+    }
+
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(entries)
+}
+
 fn walk(
     root: &Path,
     filter_supported: bool,
@@ -187,6 +249,53 @@ mod tests {
         let mut unlimited = names(scan_all_with_depth(&root, None).unwrap());
         unlimited.sort();
         assert_eq!(unlimited, vec!["a.txt", "sub/b.txt", "sub/deeper/c.txt"]);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn scan_all_entries_with_depth_includes_directories() {
+        let root = temp_dir();
+        fs::write(root.join("a.txt"), "a").unwrap();
+        fs::create_dir_all(root.join("sub/nested")).unwrap();
+        fs::write(root.join("sub/b.txt"), "b").unwrap();
+        fs::create_dir_all(root.join("empty")).unwrap();
+
+        let canonical_root = root.canonicalize().unwrap();
+        let mut names: Vec<(String, bool)> = scan_all_entries_with_depth(&root, None)
+            .unwrap()
+            .iter()
+            .map(|e| {
+                (
+                    e.path.strip_prefix(&canonical_root).unwrap().to_string_lossy().into_owned(),
+                    e.is_dir,
+                )
+            })
+            .collect();
+        names.sort();
+
+        assert_eq!(
+            names,
+            vec![
+                ("a.txt".to_string(), false),
+                ("empty".to_string(), true),
+                ("sub".to_string(), true),
+                ("sub/b.txt".to_string(), false),
+                ("sub/nested".to_string(), true),
+            ]
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn scan_all_entries_with_depth_excludes_root_itself() {
+        let root = temp_dir();
+        fs::write(root.join("a.txt"), "a").unwrap();
+
+        let canonical_root = root.canonicalize().unwrap();
+        let entries = scan_all_entries_with_depth(&root, None).unwrap();
+        assert!(!entries.iter().any(|e| e.path == canonical_root));
 
         fs::remove_dir_all(&root).ok();
     }

@@ -679,8 +679,10 @@ fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<ToolFileEntr
     if let Some(pattern) = args.pattern.as_deref() {
         let matcher = compile_glob(pattern)?;
         // Directories are always kept — `pattern` scopes which *files*
-        // come back, not the navigable structure. Moot in `FullRepo` mode
-        // anyway: `list_full_repo` never returns directory entries.
+        // come back, not the navigable structure. This applies in `FullRepo`
+        // mode too: `list_full_repo` reports real directory entries (see
+        // `workspace_scanner::scan_all_entries_with_depth`), so a pattern
+        // like "*.java" no longer hides the directories those files live in.
         entries.retain(|e| e.is_dir || matcher.is_match(basename(&e.path)));
     }
 
@@ -1260,14 +1262,15 @@ fn list_full_repo(
     max_depth: Option<u32>,
 ) -> Result<Vec<ToolFileEntry>, ToolError> {
     let scan_root = scan_root.unwrap_or_else(|| scope.root.clone());
-    let files = workspace_scanner::scan_all_with_depth(&scan_root, max_depth.map(|d| d as usize))?;
-    files
+    let entries =
+        workspace_scanner::scan_all_entries_with_depth(&scan_root, max_depth.map(|d| d as usize))?;
+    entries
         .into_iter()
-        .map(|f| {
-            let rel = paths::relative_to(&scope.root, &f.path)?;
+        .map(|e| {
+            let rel = paths::relative_to(&scope.root, &e.path)?;
             Ok(ToolFileEntry {
                 path: rel,
-                is_dir: false,
+                is_dir: e.is_dir,
             })
         })
         .collect()
@@ -2668,6 +2671,40 @@ mod tests {
         fs::remove_dir_all(&repo).ok();
     }
 
+    /// Regression test: `list_full_repo` used to hardcode `is_dir: false`
+    /// on every entry, so a real directory was indistinguishable from a
+    /// file in the model's eyes — see `workspace_scanner::
+    /// scan_all_entries_with_depth`.
+    #[test]
+    fn list_files_full_repo_reports_directories() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let entries = list(&scope, None).unwrap();
+        let is_dir_of = |p: &str| entries.iter().find(|e| e.path == p).map(|e| e.is_dir);
+        assert_eq!(is_dir_of("docs"), Some(true));
+        assert_eq!(is_dir_of("docs/intro.adoc"), Some(false));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    /// An empty directory has zero files under it — under the old
+    /// files-only scan it never appeared in the listing at all (not just
+    /// mislabeled, genuinely invisible). Confirms
+    /// `scan_all_entries_with_depth` surfaces it.
+    #[test]
+    fn list_files_full_repo_includes_empty_directory() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(repo.join("empty")).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let entries = list(&scope, None).unwrap();
+        let empty = entries.iter().find(|e| e.path == "empty");
+        assert_eq!(empty.map(|e| e.is_dir), Some(true));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
     #[test]
     fn read_file_full_read_reports_total_lines_and_is_byte_identical() {
         let (repo, docs) = fixture_repo();
@@ -2812,6 +2849,31 @@ mod tests {
         fs::remove_dir_all(&repo).ok();
     }
 
+    /// Regression coverage for a real user report: `listFiles` on an
+    /// existing, non-root subdirectory (`path` non-`None`, combined with
+    /// `depth`) in Full-repo mode. `resolve_subdir`/`join_relative`/
+    /// `ensure_under`/`relative_to` treat a one-segment and a multi-segment
+    /// path identically (no depth-dependent logic anywhere in that chain),
+    /// so this is expected to behave exactly like the root-path case above
+    /// — this test exists to actually pin that down rather than leave it
+    /// unverified.
+    #[test]
+    fn list_files_nested_path_with_depth_in_full_repo_returns_real_contents() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(repo.join("src/nested/deeper")).unwrap();
+        fs::write(repo.join("src/nested/one.rs"), "fn one() {}\n").unwrap();
+        fs::write(repo.join("src/nested/deeper/two.rs"), "fn two() {}\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let entries = list_scoped(&scope, Some("src/nested"), Some(1), None).unwrap();
+        let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains(&"src/nested/one.rs"));
+        assert!(paths.contains(&"src/nested/deeper"));
+        assert!(!paths.iter().any(|p| p.ends_with("two.rs")));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
     #[test]
     fn list_files_depth_zero_returns_no_descendant_entries() {
         let (repo, docs) = fixture_repo();
@@ -2835,7 +2897,13 @@ mod tests {
         let entries = list_scoped(&scope, Some("src"), None, Some("*.java")).unwrap();
         let mut paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
         paths.sort();
-        assert_eq!(paths, vec!["src/a.java", "src/sub/b.java"]);
+        // "src/sub" itself doesn't match "*.java" but is kept regardless —
+        // `pattern` scopes which *files* come back, not the directory
+        // structure (see `list_files_pattern_keeps_directory_entries` for
+        // the same rule in Docs-only mode). This only became observable in
+        // Full-repo mode once `list_full_repo` started reporting real
+        // directory entries at all.
+        assert_eq!(paths, vec!["src/a.java", "src/sub", "src/sub/b.java"]);
 
         fs::remove_dir_all(&repo).ok();
     }
