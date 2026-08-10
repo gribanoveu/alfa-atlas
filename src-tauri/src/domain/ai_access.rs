@@ -29,6 +29,7 @@ pub enum ToolName {
     Grep,
     GitDiff,
     GitBlame,
+    Check,
     WriteFile,
     EditFile,
     DeleteFile,
@@ -60,8 +61,8 @@ impl ToolName {
                 | ToolName::Move
                 | ToolName::RequestFullRepoAccess
         )
-        // `Todo`/`Grep`/`GitDiff`/`GitBlame` are deliberately NOT in this
-        // list — in-memory or read-only, no real-world side effect, same
+        // `Todo`/`Grep`/`GitDiff`/`GitBlame`/`Check` are deliberately NOT in
+        // this list — in-memory or read-only, no real-world side effect, same
         // bucket as `ListFiles`/`ReadFile`/`SemanticSearch`.
     }
 
@@ -87,6 +88,7 @@ impl ToolName {
             "move" => Some(ToolName::Move),
             "requestFullRepoAccess" => Some(ToolName::RequestFullRepoAccess),
             "todo" => Some(ToolName::Todo),
+            "check" => Some(ToolName::Check),
             _ => None,
         }
     }
@@ -113,6 +115,9 @@ impl ToolName {
             // than a bare file read, less than a network embedding search.
             ToolName::GitDiff => 2,
             ToolName::GitBlame => 2,
+            // In-memory diagnostics recompute over the workspace index —
+            // more than a bare list/read, still local (no network).
+            ToolName::Check => 2,
             ToolName::WriteFile => 2,
             ToolName::EditFile => 2,
             ToolName::DeleteFile => 1,
@@ -148,6 +153,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::Grep,
         ToolName::GitDiff,
         ToolName::GitBlame,
+        ToolName::Check,
         ToolName::WriteFile,
         ToolName::EditFile,
         ToolName::DeleteFile,
@@ -173,6 +179,7 @@ mod tests {
         assert!(!ToolName::Grep.requires_confirmation());
         assert!(!ToolName::GitDiff.requires_confirmation());
         assert!(!ToolName::GitBlame.requires_confirmation());
+        assert!(!ToolName::Check.requires_confirmation());
         assert!(ToolName::WriteFile.requires_confirmation());
         assert!(ToolName::EditFile.requires_confirmation());
         assert!(ToolName::DeleteFile.requires_confirmation());
@@ -191,6 +198,7 @@ mod tests {
         assert_eq!(ToolName::from_wire_name("grep"), Some(ToolName::Grep));
         assert_eq!(ToolName::from_wire_name("gitDiff"), Some(ToolName::GitDiff));
         assert_eq!(ToolName::from_wire_name("gitBlame"), Some(ToolName::GitBlame));
+        assert_eq!(ToolName::from_wire_name("check"), Some(ToolName::Check));
         assert_eq!(ToolName::from_wire_name("writeFile"), Some(ToolName::WriteFile));
         assert_eq!(ToolName::from_wire_name("editFile"), Some(ToolName::EditFile));
         assert_eq!(ToolName::from_wire_name("deleteFile"), Some(ToolName::DeleteFile));
@@ -219,17 +227,19 @@ mod tests {
         assert_eq!(ToolName::Grep.loop_weight(), 3);
         assert_eq!(ToolName::GitDiff.loop_weight(), 2);
         assert_eq!(ToolName::GitBlame.loop_weight(), 2);
+        assert_eq!(ToolName::Check.loop_weight(), 2);
         assert_eq!(ToolName::SemanticSearch.loop_weight(), 4);
         assert_eq!(ToolName::Todo.loop_weight(), 1);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_fourteen() {
+    fn default_allowed_tools_includes_all_fifteen() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 14);
+        assert_eq!(allowed.len(), 15);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
+        assert!(allowed.contains(&ToolName::Check));
         assert!(allowed.contains(&ToolName::WriteFile));
         assert!(allowed.contains(&ToolName::EditFile));
         assert!(allowed.contains(&ToolName::DeleteFile));

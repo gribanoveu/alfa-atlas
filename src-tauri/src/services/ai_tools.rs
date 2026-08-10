@@ -16,11 +16,11 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileDiffStats,
-    FileEdit, GitBlameArgs, GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs, MatchSource, MoveArgs,
-    ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs,
-    TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult,
-    ToolScope, WriteFileArgs,
+    CheckArgs, CheckKind, CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs,
+    FileDiffStats, FileEdit, GitBlameArgs, GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs,
+    MatchSource, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs, Task,
+    TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolFileEntry,
+    ToolMatch, ToolResult, ToolScope, WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::git::GitDiffScope;
@@ -30,13 +30,14 @@ use crate::domain::llm::{
 use crate::domain::paths;
 use crate::domain::project_config::{ProjectConfig, ProjectError, TreeNode, UpdatedReference};
 use crate::domain::repo_index::{FileId, Symbol};
+use crate::domain::workspace_index::DocumentId;
 use crate::infra::{embedding_credentials_store, embedding_providers, project_store, workspace_scanner};
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::chunk_text::resolve_text;
 use crate::services::reference_rewrite;
 use crate::services::repo_index::RepositoryIndex;
 use crate::services::workspace_index::WorkspaceIndex;
-use crate::services::{docs_fs, embedding_config, git_ops, project_open, text_diff};
+use crate::services::{diagnostics, docs_fs, embedding_config, git_ops, project_open, text_diff};
 
 const DEFAULT_TOP_K: usize = 10;
 const MAX_TOP_K: usize = 50;
@@ -54,6 +55,9 @@ const MAX_TODO_TASKS: usize = 20;
 const MAX_BLAME_LINES: u32 = 400;
 const DEFAULT_GREP_RESULTS: usize = 50;
 const MAX_GREP_RESULTS: usize = 200;
+/// Cap on how many diagnostics a single `check` call may return — keeps the
+/// tool-message payload bounded for a large docs tree.
+const MAX_CHECK_DIAGNOSTICS: usize = 200;
 /// Skip files larger than this when grepping — keeps a pathological repo
 /// from blowing the tool budget on one huge artifact.
 const MAX_GREP_FILE_BYTES: u64 = 1_048_576;
@@ -155,6 +159,7 @@ pub fn execute_tool(
         ToolCall::Grep(args) => grep(scope, args),
         ToolCall::GitDiff(args) => git_diff(scope, args),
         ToolCall::GitBlame(args) => git_blame(scope, args),
+        ToolCall::Check(args) => check(scope, args, deps),
         ToolCall::WriteFile(args) => {
             write_file(scope, args).map(|(path, diff)| ToolResult::FileWritten { path, diff })
         }
@@ -393,6 +398,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "gitBlame" => lenient_json_object::<GitBlameArgs>(&call.arguments)
             .map(ToolCall::GitBlame)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "check" => lenient_json_object::<CheckArgs>(&call.arguments)
+            .map(ToolCall::Check)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "writeFile" => lenient_json_object::<WriteFileArgs>(&call.arguments)
             .map(ToolCall::WriteFile)
@@ -674,6 +682,29 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
                     }
                 },
                 "required": ["path"]
+            }),
+        });
+    }
+    if scope.allows(ToolName::Check) {
+        defs.push(LlmToolDefinition {
+            name: "check".to_string(),
+            description:
+                "Run a documentation verification and return findings (the same list the editor's Problems panel shows). Currently only kind \"problems\" is available — broken xref/include/image targets, missing anchors, duplicate anchors, circular includes, and parse errors. Checks cover ONLY supported indexed documentation file types under the documentation root (.adoc/.asciidoc, .md/.markdown, .json, .yaml/.yml, .txt, .puml/.plantuml, .mmd/.mermaid) — not arbitrary repository source code or unsupported extensions. Recomputes diagnostics before returning so results are fresh. Optional path is relative to the documentation root (like writeFile/editFile), even in Full-repo mode. Omit path to check every indexed docs file. In the result, each diagnostic's `document` field and paths inside `message` are repository-root-relative (e.g. src/docs/asciidoc/.../file.adoc) — convert back to a docs-relative path before calling readFile/editFile/writeFile. Results are capped; truncated is true when the cap was hit."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["problems"],
+                        "description": "Which verification to run. \"problems\" = workspace diagnostics (Problems panel). More kinds may be added later."
+                    },
+                    "path": {
+                        "type": ["string", "null"],
+                        "description": "Optional file path relative to the documentation root. Omit or null to check all indexed documentation files. Unsupported types / files outside the index yield an empty list."
+                    }
+                },
+                "required": ["kind"]
             }),
         });
     }
@@ -1175,6 +1206,67 @@ fn git_blame(scope: &ToolScope, args: GitBlameArgs) -> Result<ToolResult, ToolEr
         hunks,
         truncated,
     })
+}
+
+/// Recomputes workspace diagnostics then returns them — same findings as
+/// BottomDock «Проблемы». Always targets documentation (docs-relative
+/// `path`, even in FullRepo); result `document`/message paths stay
+/// repo-relative. See `CheckKind` for which verifications exist.
+fn check(
+    scope: &ToolScope,
+    args: CheckArgs,
+    deps: &EmbeddingDeps,
+) -> Result<ToolResult, ToolError> {
+    match args.kind {
+        CheckKind::Problems => check_problems(scope, args.path.as_deref(), deps),
+    }
+}
+
+fn check_problems(
+    scope: &ToolScope,
+    path: Option<&str>,
+    deps: &EmbeddingDeps,
+) -> Result<ToolResult, ToolError> {
+    let mut diagnostics = match path {
+        None => {
+            diagnostics::run_all(&deps.workspace_index);
+            deps.workspace_index.get_diagnostics()
+        }
+        Some(docs_rel) => {
+            let doc_id = docs_path_to_document_id(scope, docs_rel)?;
+            diagnostics::run_for(&deps.workspace_index, &doc_id);
+            deps.workspace_index.get_diagnostics_for(&doc_id)
+        }
+    };
+
+    let truncated = diagnostics.len() > MAX_CHECK_DIAGNOSTICS;
+    if truncated {
+        diagnostics.truncate(MAX_CHECK_DIAGNOSTICS);
+    }
+
+    Ok(ToolResult::CheckResults {
+        kind: CheckKind::Problems,
+        diagnostics,
+        truncated,
+    })
+}
+
+/// Docs-root-relative path → repo-relative `DocumentId`, with containment
+/// under `scope.docs_root` (not `scope.root`) — diagnostics never leave
+/// the documentation subtree.
+fn docs_path_to_document_id(scope: &ToolScope, docs_rel: &str) -> Result<DocumentId, ToolError> {
+    let joined = paths::join_relative(&scope.docs_root, docs_rel)?;
+    let _canonical = paths::ensure_under(&scope.docs_root, &joined)?;
+    let docs_root = scope.docs_root.to_string_lossy();
+    let suffix = reference_rewrite::docs_root_suffix(&scope.repo_root, &docs_root).ok_or_else(
+        || ToolError::InvalidArguments {
+            tool: "check".into(),
+            reason: "documentation root is not under the repository root".into(),
+        },
+    )?;
+    Ok(DocumentId::new(reference_rewrite::to_repo_relative(
+        &suffix, docs_rel,
+    )))
 }
 
 /// Clamps `start_line`/`end_line` into range rather than erroring (mirrors
@@ -4042,6 +4134,199 @@ mod tests {
     }
 
     #[test]
+    fn check_problems_returns_broken_xref_for_all_and_for_one_file() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("broken.adoc"), "xref:nope.adoc[]\n").unwrap();
+        fs::write(docs.join("clean.adoc"), "[[ok]]\n= Clean\n").unwrap();
+
+        let workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps {
+            workspace_index,
+            ..EmbeddingDeps::empty()
+        };
+
+        let all = execute_tool(
+            &scope,
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: None,
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+        match all {
+            ToolResult::CheckResults {
+                kind,
+                diagnostics,
+                truncated,
+            } => {
+                assert_eq!(kind, CheckKind::Problems);
+                assert!(!truncated);
+                assert!(
+                    diagnostics.iter().any(|d| {
+                        d.kind
+                            == crate::domain::workspace_index::DiagnosticKind::MissingXrefDocument
+                            && d.document.as_str() == "docs/broken.adoc"
+                    }),
+                    "got: {diagnostics:?}"
+                );
+                assert!(
+                    !diagnostics
+                        .iter()
+                        .any(|d| d.document.as_str() == "docs/clean.adoc"),
+                    "clean file should not appear: {diagnostics:?}"
+                );
+            }
+            other => panic!("expected CheckResults, got {other:?}"),
+        }
+
+        let one = execute_tool(
+            &scope,
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: Some("broken.adoc".to_string()),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+        match one {
+            ToolResult::CheckResults { diagnostics, .. } => {
+                assert_eq!(diagnostics.len(), 1);
+                assert_eq!(diagnostics[0].document.as_str(), "docs/broken.adoc");
+            }
+            other => panic!("expected CheckResults, got {other:?}"),
+        }
+
+        let clean = execute_tool(
+            &scope,
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: Some("clean.adoc".to_string()),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+        match clean {
+            ToolResult::CheckResults { diagnostics, .. } => {
+                assert!(diagnostics.is_empty(), "got: {diagnostics:?}");
+            }
+            other => panic!("expected CheckResults, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn check_problems_rejects_path_escape_under_docs_root() {
+        let (repo, docs) = fixture_repo();
+        let workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps {
+            workspace_index,
+            ..EmbeddingDeps::empty()
+        };
+
+        let err = execute_tool(
+            &scope,
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: Some("../src/main.rs".to_string()),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap_err();
+        assert!(matches!(err, ToolError::PathEscape(_)), "got {err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn check_problems_truncates_when_over_cap() {
+        let (repo, docs) = fixture_repo();
+        let mut body = String::new();
+        for i in 0..(MAX_CHECK_DIAGNOSTICS + 5) {
+            body.push_str(&format!("xref:missing{i}.adoc[]\n"));
+        }
+        fs::write(docs.join("many.adoc"), body).unwrap();
+
+        let workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps {
+            workspace_index,
+            ..EmbeddingDeps::empty()
+        };
+
+        let result = execute_tool(
+            &scope,
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: Some("many.adoc".to_string()),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::CheckResults {
+                diagnostics,
+                truncated,
+                ..
+            } => {
+                assert!(truncated);
+                assert_eq!(diagnostics.len(), MAX_CHECK_DIAGNOSTICS);
+            }
+            other => panic!("expected CheckResults, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn parse_tool_call_parses_check_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "check".to_string(),
+            arguments: r#"{"kind":"problems"}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: None,
+            })
+        );
+
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "check".to_string(),
+            arguments: r#"{"kind":"problems","path":"api/foo.adoc"}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: Some("api/foo.adoc".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_unknown_check_kind() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "check".to_string(),
+            arguments: r#"{"kind":"docsVsCode"}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "check"));
+    }
+
+    #[test]
     fn git_diff_and_git_blame_reject_paths_outside_docs_root_in_docs_only() {
         let (repo, docs) = fixture_repo();
         // Real git repo so the tools get past open_repo — containment must
@@ -4351,7 +4636,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_fourteen_by_default() {
+    fn llm_tool_definitions_includes_all_fifteen_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -4366,6 +4651,7 @@ mod tests {
                 "grep",
                 "gitDiff",
                 "gitBlame",
+                "check",
                 "writeFile",
                 "editFile",
                 "deleteFile",
@@ -4466,6 +4752,15 @@ mod tests {
         .unwrap();
         assert_eq!(args.start_line, Some(1));
         assert_eq!(args.end_line, Some(5));
+
+        let check = defs.iter().find(|d| d.name == "check").unwrap();
+        assert_eq!(check.parameters["required"], serde_json::json!(["kind"]));
+        let args: CheckArgs = serde_json::from_value(
+            serde_json::json!({"kind": "problems", "path": "intro.adoc"}),
+        )
+        .unwrap();
+        assert_eq!(args.kind, CheckKind::Problems);
+        assert_eq!(args.path.as_deref(), Some("intro.adoc"));
 
         fs::remove_dir_all(&repo).ok();
     }

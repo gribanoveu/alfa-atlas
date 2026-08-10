@@ -200,15 +200,17 @@ Two different roots exist for tool paths — this split is intentional and does 
 
 - **Read tools** (\`listFiles\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`): resolve \`path\` relative to the **access-mode root** (documentation root in Docs-only, repository root in Full-repo).
 - **Write/mutate tools** (\`writeFile\`, \`editFile\`, \`deleteFile\`, \`createDirectory\`, \`deleteDirectory\`, \`move\`): always resolve \`path\` relative to the **documentation root**, in any mode including Full-repo.
+- **\`check\`**: optional \`path\` is always **documentation-root-relative** (like write tools). Findings' \`document\` fields and paths inside messages are **repository-root-relative** (same as the Problems panel). Convert back to docs-relative before \`readFile\`/\`editFile\`/\`writeFile\`. Only supported indexed documentation types — not arbitrary source files.
 
 In Docs-only mode both roots coincide, so the distinction has no effect.
 
 ${pathExampleIntro}
 
 - \`listFiles\`/\`readFile\`/\`grep\`/\`gitDiff\`/\`gitBlame\` in Full-repo: \`${pathExamplePrefix}/architecture/system.adoc\`
-- Any write/mutate tool in any mode: \`architecture/system.adoc\`
+- Any write/mutate tool or \`check\` path arg in any mode: \`architecture/system.adoc\`
+- \`check\` result \`document\`: \`${pathExamplePrefix}/architecture/system.adoc\`
 
-Never pass a path from \`listFiles\`/\`readFile\`/\`grep\`/\`gitDiff\`/\`gitBlame\` in Full-repo mode unchanged into a write tool — strip the documentation root segment (\`${pathExamplePrefix}/\`) first. Treat each tool's root as \`.\`.
+Never pass a path from \`listFiles\`/\`readFile\`/\`grep\`/\`gitDiff\`/\`gitBlame\` in Full-repo mode unchanged into a write tool — strip the documentation root segment (\`${pathExamplePrefix}/\`) first. Same for \`check\` result paths. Treat each tool's root as \`.\`.
 
 ${openApiPathLine}
 
@@ -302,7 +304,7 @@ Think first, plan second, never act. Every plan must be grounded in real reposit
 For every planning request, follow this sequence:
 
 1. **Clarify the goal internally.** Identify what the user wants to achieve, the scope, and the boundaries.
-2. **Research.** Use read-only tools (\`listFiles\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`, etc.) to inspect relevant files, understand current structure, recent changes, terminology, and patterns. Do not assume — verify.
+2. **Research.** Use read-only tools (\`listFiles\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`, \`check\`, etc.) to inspect relevant files, understand current structure, recent changes, terminology, and patterns. Do not assume — verify.
 3. **Draft the plan.** Write a structured plan in the format below.
 4. **Present it.** Show the plan to the user. Do not execute it.
 5. **Iterate.** If the user asks to refine, revise the plan in text. If the user approves and wants to execute, offer to switch to Agent mode.
@@ -525,6 +527,13 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       return typeof args.path === "string" ? `Смотрит diff: ${args.path}…` : "Смотрит git diff…";
     case "gitBlame":
       return typeof args.path === "string" ? `Смотрит blame: ${args.path}…` : "Смотрит git blame…";
+    case "check":
+      if (args.kind === "problems") {
+        return typeof args.path === "string"
+          ? `Проверяет проблемы: ${args.path}…`
+          : "Проверяет проблемы…";
+      }
+      return "Выполняет проверку…";
     case "writeFile":
       return typeof args.path === "string" ? `Изменяет файл: ${args.path}…` : "Изменяет файл…";
     case "editFile":
@@ -620,6 +629,11 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
       const { path, hunks, truncated } = block.result.result;
       const suffix = truncated ? ", обрезано" : "";
       return `Blame: ${path} (участков: ${hunks.length}${suffix})`;
+    }
+    case "checkResults": {
+      const { diagnostics, truncated } = block.result.result;
+      const suffix = truncated ? ", обрезано" : "";
+      return `Проблем: ${diagnostics.length}${suffix}`;
     }
     case "fileWritten":
       return `Записано: ${block.result.result.path}`;

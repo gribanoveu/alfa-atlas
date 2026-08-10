@@ -624,6 +624,36 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
         </div>
       );
     }
+    case "checkResults": {
+      const { kind, diagnostics, truncated } = result.result;
+      const shown = diagnostics.slice(0, 40);
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">
+            Проверка ({kind === "problems" ? "проблемы" : kind})
+          </div>
+          {diagnostics.length === 0 ? (
+            <p className="assistant-tool-call-detail-empty">Проблем нет</p>
+          ) : (
+            <ul className="assistant-tool-call-detail-list">
+              {shown.map((d, i) => (
+                <li key={`${d.document}:${d.line}:${d.column}:${i}`}>
+                  <span>
+                    [{d.severity}] {d.document}:{d.line} · {d.message}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {diagnostics.length > shown.length ? (
+            <p className="assistant-tool-call-detail-empty">
+              … ещё {diagnostics.length - shown.length}
+            </p>
+          ) : null}
+          {truncated ? <p className="assistant-tool-call-detail-empty">… результаты обрезаны</p> : null}
+        </div>
+      );
+    }
     case "gitDiff":
       return (
         <>

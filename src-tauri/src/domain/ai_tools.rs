@@ -211,6 +211,30 @@ pub struct GitBlameArgs {
     pub end_line: Option<u32>,
 }
 
+/// Which verification `check` should run. Extensible — add variants as new
+/// check kinds ship; wire name is camelCase (`"problems"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckKind {
+    /// Workspace-index diagnostics — the same list BottomDock «Проблемы»
+    /// shows (broken xref/include/image, duplicate anchors, circular
+    /// includes, parse errors). Only covers supported indexed file types
+    /// under the docs root, not arbitrary project source.
+    Problems,
+}
+
+/// Read-only verification tool — see `services::ai_tools::check`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckArgs {
+    pub kind: CheckKind,
+    /// Optional docs-root-relative file path. `None`/omit = all indexed
+    /// documents. Always docs-relative (like `writeFile`), even in
+    /// Full-repo mode — diagnostics only cover documentation.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
 /// A task's lifecycle state. Deliberately only these four — no `failed`,
 /// no `blocked`, no `dependsOn`: a failed step is either `Cancelled` with a
 /// `note` explaining why, or the agent keeps retrying within the same
@@ -332,6 +356,7 @@ pub enum ToolCall {
     Grep(GrepArgs),
     GitDiff(GitDiffArgs),
     GitBlame(GitBlameArgs),
+    Check(CheckArgs),
     WriteFile(WriteFileArgs),
     EditFile(EditFileArgs),
     DeleteFile(DeleteFileArgs),
@@ -352,6 +377,7 @@ impl ToolCall {
             ToolCall::Grep(_) => ToolName::Grep,
             ToolCall::GitDiff(_) => ToolName::GitDiff,
             ToolCall::GitBlame(_) => ToolName::GitBlame,
+            ToolCall::Check(_) => ToolName::Check,
             ToolCall::WriteFile(_) => ToolName::WriteFile,
             ToolCall::EditFile(_) => ToolName::EditFile,
             ToolCall::DeleteFile(_) => ToolName::DeleteFile,
@@ -438,6 +464,15 @@ pub enum ToolResult {
     GitBlame {
         path: String,
         hunks: Vec<crate::domain::git::GitBlameHunk>,
+        truncated: bool,
+    },
+    /// Settled `check` — `diagnostics` reuse the same `Diagnostic` wire
+    /// shape as the Problems panel (`document` / message paths are
+    /// repo-relative). `truncated` when the per-call cap was hit.
+    #[serde(rename_all = "camelCase")]
+    CheckResults {
+        kind: CheckKind,
+        diagnostics: Vec<crate::domain::workspace_index::Diagnostic>,
         truncated: bool,
     },
     FileWritten { path: String, diff: FileDiffStats },

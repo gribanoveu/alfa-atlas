@@ -29,6 +29,7 @@ const ALLOWED_TOOL_LABELS: Record<string, string> = {
   grep: "Точный поиск по содержимому (grep)",
   gitDiff: "Разница между состояниями файлов (gitDiff)",
   gitBlame: "Отслеживание изменений в файлах (gitBlame)",
+  check: "Проверка документации (check)",
   ...AUTO_APPROVABLE_TOOL_LABELS,
   todo: "Список задач (todo)",
 };
@@ -40,6 +41,7 @@ const ALLOWED_TOOL_ORDER = [
   "grep",
   "gitDiff",
   "gitBlame",
+  "check",
   "writeFile",
   "editFile",
   "deleteFile",

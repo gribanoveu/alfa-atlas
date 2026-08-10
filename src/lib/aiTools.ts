@@ -1,10 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { UpdatedReference } from "./project";
+import type { Diagnostic } from "./workspaceIndex";
 
 // Mirrors `domain::ai_access::AiAccessMode` in
 // `src-tauri/src/domain/ai_access.rs` (`#[serde(rename_all = "camelCase")]`
 // on the enum variants).
 export type AiAccessMode = "docsOnly" | "fullRepo";
+
+/** Mirrors `domain::ai_tools::CheckKind` — extensible; v1 is only `problems`. */
+export type CheckKind = "problems";
 
 export type ToolFileEntry = {
   path: string;
@@ -65,6 +69,7 @@ export type ToolCall =
     }
   | { tool: "gitDiff"; args: { path: string; scope: string | null; commit: string | null } }
   | { tool: "gitBlame"; args: { path: string; startLine: number | null; endLine: number | null } }
+  | { tool: "check"; args: { kind: CheckKind; path: string | null } }
   | { tool: "writeFile"; args: { path: string; content: string } }
   | { tool: "editFile"; args: { path: string; edits: FileEdit[] } }
   | { tool: "deleteFile"; args: { path: string } }
@@ -118,6 +123,7 @@ export type ToolResult =
   | { tool: "grepResults"; result: { matches: GrepMatch[]; truncated: boolean } }
   | { tool: "gitDiff"; result: { path: string; label: string; diff: FileDiffStats; isBinary: boolean } }
   | { tool: "gitBlame"; result: { path: string; hunks: GitBlameHunk[]; truncated: boolean } }
+  | { tool: "checkResults"; result: { kind: CheckKind; diagnostics: Diagnostic[]; truncated: boolean } }
   | { tool: "fileWritten"; result: { path: string; diff: FileDiffStats } }
   | { tool: "fileEdited"; result: { path: string; diff: FileDiffStats } }
   | { tool: "fileDeleted"; result: { path: string; diff: FileDiffStats } }
