@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(resolved.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
         assert!(resolved.is_system);
         // AlfaGen ships with a pinned manifest default model (see
-        // `system_llm_providers.json`) so the no-override case resolves to
+        // `system_providers.json`) so the no-override case resolves to
         // that, not `None`.
         assert_eq!(resolved.model.as_deref(), Some("DeepSeek-V4-Flash"));
         // AlfaGen ships with a real bundled trust cert (its internal CA

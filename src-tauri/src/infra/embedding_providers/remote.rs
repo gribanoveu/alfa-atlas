@@ -4,10 +4,15 @@
 //! `reqwest`: this project's `tokio` dependency only enables
 //! `sync, rt, macros, time` (no `net`), and a single blocking POST per
 //! `embed` call doesn't justify expanding that.
+//!
+//! Uses a per-provider `ureq::Agent` (via `infra::http_agent`) so a
+//! corporate internal CA from the bundled embedding preset — or a user
+//! override — can replace the agent's trust store, same as the LLM client.
 
 use serde::{Deserialize, Serialize};
 
 use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
+use crate::infra::http_agent;
 
 #[derive(Debug, Serialize)]
 struct EmbeddingsRequest<'a> {
@@ -26,6 +31,7 @@ struct EmbeddingDatum {
 }
 
 pub struct RemoteEmbeddingProvider {
+    agent: ureq::Agent,
     base_url: String,
     model: String,
     api_key: String,
@@ -33,13 +39,22 @@ pub struct RemoteEmbeddingProvider {
 }
 
 impl RemoteEmbeddingProvider {
-    pub fn new(base_url: String, model: String, api_key: String, dimensions: usize) -> Self {
-        Self {
+    pub fn new(
+        base_url: String,
+        model: String,
+        api_key: String,
+        dimensions: usize,
+        trusted_cert_pem: Option<&str>,
+    ) -> Result<Self, EmbeddingError> {
+        let agent = http_agent::build_agent(trusted_cert_pem)
+            .map_err(|e| EmbeddingError::Tls(e.0))?;
+        Ok(Self {
+            agent,
             base_url,
             model,
             api_key,
             dimensions,
-        }
+        })
     }
 
     fn embeddings_url(&self) -> String {
@@ -54,10 +69,23 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
             model: &self.model,
         };
 
-        let mut response = ureq::post(self.embeddings_url())
+        let mut response = self
+            .agent
+            .post(self.embeddings_url())
             .header("Authorization", &format!("Bearer {}", self.api_key))
             .send_json(&body)
             .map_err(|e| EmbeddingError::Http(e.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let err_body = response
+                .body_mut()
+                .read_to_string()
+                .unwrap_or_else(|e| format!("<failed to read error response body: {e}>"));
+            return Err(EmbeddingError::Http(format!(
+                "http status {status}: {err_body}"
+            )));
+        }
 
         let parsed: EmbeddingsResponse = response
             .body_mut()
@@ -80,18 +108,21 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
 mod tests {
     use super::*;
 
-    #[test]
-    fn embeddings_url_strips_trailing_slash() {
-        let provider = RemoteEmbeddingProvider::new(
-            "https://api.example.com/v1/".to_string(),
+    fn provider(base_url: &str) -> RemoteEmbeddingProvider {
+        RemoteEmbeddingProvider::new(
+            base_url.to_string(),
             "text-embedding-3-small".to_string(),
             "key".to_string(),
             1536,
-        );
-        assert_eq!(
-            provider.embeddings_url(),
-            "https://api.example.com/v1/embeddings"
-        );
+            None,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn embeddings_url_strips_trailing_slash() {
+        let p = provider("https://api.example.com/v1/");
+        assert_eq!(p.embeddings_url(), "https://api.example.com/v1/embeddings");
     }
 
     #[test]
@@ -114,5 +145,17 @@ mod tests {
             json,
             r#"{"input":["a","b"],"model":"text-embedding-3-small"}"#
         );
+    }
+
+    #[test]
+    fn rejects_malformed_trusted_cert() {
+        let result = RemoteEmbeddingProvider::new(
+            "https://api.example.com/v1".to_string(),
+            "m".to_string(),
+            "key".to_string(),
+            1536,
+            Some("not a pem"),
+        );
+        assert!(matches!(result, Err(EmbeddingError::Tls(_))));
     }
 }

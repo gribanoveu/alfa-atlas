@@ -345,10 +345,8 @@ mod tests {
     fn deserializes_legacy_settings_without_embedding() {
         let settings: AppSettings =
             serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
-        assert_eq!(
-            settings.embedding.kind,
-            crate::domain::embeddings::EmbeddingProviderKind::Local
-        );
+        // Empty override — resolve layer fills Local from the null bundled preset.
+        assert_eq!(settings.embedding.kind, None);
         assert_eq!(settings.embedding.remote_base_url, None);
     }
 

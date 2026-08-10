@@ -37,16 +37,39 @@ impl Default for EmbeddingProviderKind {
     }
 }
 
-/// Persisted globally (`AppSettings.embedding`) — one provider choice across
-/// every project, not per-repo. The remote API key is deliberately **not**
-/// a field here: it goes through `infra::embedding_credentials_store`
-/// (encrypted, mirrors how the SSH private key is stored), never through
-/// plain `settings.json`.
+/// One entry from the compiled-in system providers manifest's top-level
+/// `embedding` section (see `infra::embedding_provider_manifest`) — a
+/// global default, independent of any LLM provider id. Deserialize-only;
+/// every field is `Option` so a fork can leave the template as explicit
+/// `null`s (meaning "use the Local BGE-M3 provider") and fill them later
+/// without touching Rust.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingPreset {
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub dimensions: Option<usize>,
+    #[serde(default)]
+    pub trusted_cert_pem: Option<String>,
+}
+
+/// Persisted globally (`AppSettings.embedding`) as an **override** layer on
+/// top of the bundled `EmbeddingPreset` — same "field wins when `Some`,
+/// `None` means inherit" shape as `LlmProviderConfig`. The remote API key
+/// is deliberately **not** a field here: it goes through
+/// `infra::embedding_credentials_store` (encrypted), never through plain
+/// `settings.json`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmbeddingProviderConfig {
+    /// `None` = inherit from the bundled preset (Remote when the preset
+    /// has both `baseUrl` and `model`, else Local). Explicit `Some(Local)` /
+    /// `Some(Remote)` pins the choice regardless of the preset.
     #[serde(default)]
-    pub kind: EmbeddingProviderKind,
+    pub kind: Option<EmbeddingProviderKind>,
     #[serde(default)]
     pub remote_base_url: Option<String>,
     #[serde(default)]
@@ -56,14 +79,42 @@ pub struct EmbeddingProviderConfig {
     /// service's dimension count depends entirely on which model it's
     /// running — there's no way to discover it without either an extra API
     /// round-trip or the user stating it up front. Settings asks for this
-    /// when Remote is selected; `None` falls back to
+    /// when Remote is selected; `None` falls back to the preset, then to
     /// `DEFAULT_REMOTE_DIMENSIONS` (OpenAI's `text-embedding-3-small`
     /// size, the most common default).
     #[serde(default)]
     pub remote_dimensions: Option<usize>,
+    #[serde(default)]
+    pub remote_trusted_cert_pem: Option<String>,
 }
 
-/// Fallback when `EmbeddingProviderConfig.remote_dimensions` is unset.
+/// Merged, ready-to-use view of the embedding provider — bundled preset
+/// folded with the settings-layer override. What
+/// `services::embedding_config::resolve_embedding_config` produces and what
+/// runtime / IPC actually consume. Serialize-only.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedEmbeddingConfig {
+    pub kind: EmbeddingProviderKind,
+    pub remote_base_url: Option<String>,
+    pub remote_model: Option<String>,
+    pub remote_dimensions: Option<usize>,
+    pub remote_trusted_cert_pem: Option<String>,
+}
+
+impl Default for ResolvedEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            kind: EmbeddingProviderKind::Local,
+            remote_base_url: None,
+            remote_model: None,
+            remote_dimensions: None,
+            remote_trusted_cert_pem: None,
+        }
+    }
+}
+
+/// Fallback when neither the override nor the preset sets dimensions.
 pub const DEFAULT_REMOTE_DIMENSIONS: usize = 1536;
 
 /// Local model download/readiness state. `Downloading` only carries a
@@ -85,6 +136,8 @@ pub enum EmbeddingError {
     Provider(String),
     #[error("http error: {0}")]
     Http(String),
+    #[error("tls configuration error: {0}")]
+    Tls(String),
     #[error("vector store error: {0}")]
     VectorStore(String),
     #[error("io error: {0}")]
@@ -94,7 +147,7 @@ pub enum EmbeddingError {
 }
 
 /// One embedding backend — local on-device inference or a remote HTTP API,
-/// selected by `EmbeddingProviderConfig.kind`. Synchronous (not `async fn`):
+/// selected by `ResolvedEmbeddingConfig.kind`. Synchronous (not `async fn`):
 /// both concrete implementations are naturally blocking (`fastembed`'s
 /// inference has no Tokio dependency; the remote provider uses a blocking
 /// HTTP client rather than expanding this project's minimal `tokio`
@@ -154,20 +207,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_defaults_to_local_with_no_remote_fields() {
+    fn config_defaults_to_inherit_with_no_remote_fields() {
         let config = EmbeddingProviderConfig::default();
-        assert_eq!(config.kind, EmbeddingProviderKind::Local);
+        assert_eq!(config.kind, None);
         assert_eq!(config.remote_base_url, None);
+        assert_eq!(config.remote_dimensions, None);
+        assert_eq!(config.remote_trusted_cert_pem, None);
+    }
+
+    #[test]
+    fn deserializes_legacy_config_kind_as_explicit_override() {
+        let config: EmbeddingProviderConfig =
+            serde_json::from_str(r#"{"kind":"remote","remoteBaseUrl":"https://x"}"#).unwrap();
+        assert_eq!(config.kind, Some(EmbeddingProviderKind::Remote));
+        assert_eq!(config.remote_base_url.as_deref(), Some("https://x"));
         assert_eq!(config.remote_dimensions, None);
     }
 
     #[test]
-    fn deserializes_legacy_config_without_remote_dimensions() {
+    fn deserializes_legacy_config_without_kind_as_inherit() {
         let config: EmbeddingProviderConfig =
-            serde_json::from_str(r#"{"kind":"remote","remoteBaseUrl":"https://x"}"#).unwrap();
-        assert_eq!(config.kind, EmbeddingProviderKind::Remote);
+            serde_json::from_str(r#"{"remoteBaseUrl":"https://x"}"#).unwrap();
+        assert_eq!(config.kind, None);
         assert_eq!(config.remote_base_url.as_deref(), Some("https://x"));
-        assert_eq!(config.remote_dimensions, None);
+    }
+
+    #[test]
+    fn preset_deserializes_explicit_nulls() {
+        let preset: EmbeddingPreset = serde_json::from_str(
+            r#"{"baseUrl":null,"model":null,"dimensions":null,"trustedCertPem":null}"#,
+        )
+        .unwrap();
+        assert_eq!(preset.base_url, None);
+        assert_eq!(preset.model, None);
+        assert_eq!(preset.dimensions, None);
+        assert_eq!(preset.trusted_cert_pem, None);
     }
 
     #[test]

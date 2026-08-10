@@ -7,7 +7,8 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::domain::chunk_index::ChunkBuildOptions;
 use crate::domain::embeddings::{
-    EmbeddingIndexStatus, EmbeddingProvider, EmbeddingProviderConfig, ModelStatus, SyncStats,
+    EmbeddingIndexStatus, EmbeddingProvider, EmbeddingProviderConfig, ModelStatus,
+    ResolvedEmbeddingConfig, SyncStats,
 };
 use crate::domain::paths;
 use crate::domain::project_config::OpenedProject;
@@ -110,11 +111,12 @@ pub type IndexStoreSlot = Mutex<Option<(PathBuf, Arc<IndexStore>, bool)>>;
 /// rotation with an otherwise-unchanged config must still invalidate the
 /// cache. Global (not per-project): the provider choice itself is global
 /// (`AppSettings.embedding`), not per-repo.
-pub type EmbeddingProviderSlot = Mutex<Option<(EmbeddingProviderConfig, Option<String>, Arc<dyn EmbeddingProvider>)>>;
+pub type EmbeddingProviderSlot =
+    Mutex<Option<(ResolvedEmbeddingConfig, Option<String>, Arc<dyn EmbeddingProvider>)>>;
 
 pub(crate) fn ensure_provider(
     slot: &EmbeddingProviderSlot,
-    config: &EmbeddingProviderConfig,
+    config: &ResolvedEmbeddingConfig,
     api_key: Option<String>,
 ) -> Result<Arc<dyn EmbeddingProvider>, String> {
     let mut guard = slot
@@ -190,14 +192,19 @@ pub struct BackgroundBacklog {
 }
 pub type BackgroundBacklogSlot = Mutex<Option<BackgroundBacklog>>;
 
+/// Returns the **resolved** embedding config (bundled preset merged with
+/// the settings-layer override) — what the UI and runtime actually use.
 #[tauri::command]
-pub fn embedding_get_config() -> Result<EmbeddingProviderConfig, String> {
-    embedding_config::load_embedding_config().map_err(|e| e.to_string())
+pub fn embedding_get_config() -> Result<ResolvedEmbeddingConfig, String> {
+    embedding_config::resolve_embedding_config().map_err(|e| e.to_string())
 }
 
+/// Persists a settings-layer **override**. Pass explicit `Some` fields to
+/// pin values; `None` means inherit from the bundled preset on the next
+/// resolve.
 #[tauri::command]
 pub fn embedding_set_config(config: EmbeddingProviderConfig) -> Result<(), String> {
-    embedding_config::save_embedding_config(config).map_err(|e| e.to_string())
+    embedding_config::save_embedding_settings(config).map_err(|e| e.to_string())
 }
 
 /// Write-only, mirrors `git_save_credentials`/`git_get_key_status`: the key
@@ -570,7 +577,7 @@ fn run_incremental_sync(
         },
     }
 
-    let config = embedding_config::load_embedding_config().map_err(|e| e.to_string())?;
+    let config = embedding_config::resolve_embedding_config().map_err(|e| e.to_string())?;
     let dimensions = embedding_providers::expected_dimensions(&config);
 
     // A dimension mismatch means whatever's persisted can't be trusted for
@@ -673,7 +680,7 @@ fn sync_backlog_batch(
         }
     }
 
-    let config = embedding_config::load_embedding_config().map_err(|e| e.to_string())?;
+    let config = embedding_config::resolve_embedding_config().map_err(|e| e.to_string())?;
     let dimensions = embedding_providers::expected_dimensions(&config);
 
     // Mirrors `run_incremental_sync`'s same guard: a dimension mismatch
@@ -1198,7 +1205,7 @@ pub async fn embedding_sync(
             store.delete_files(&stale_file_ids).map_err(|e| e.to_string())?;
         }
 
-        let config = embedding_config::load_embedding_config().map_err(|e| e.to_string())?;
+        let config = embedding_config::resolve_embedding_config().map_err(|e| e.to_string())?;
         let api_key = embedding_credentials_store::get_api_key();
         let provider = ensure_provider(&embedding_provider, &config, api_key)?;
         let dimensions = provider.dimensions();
@@ -1354,7 +1361,7 @@ pub async fn embedding_index_status(
             });
         }
 
-        let config = embedding_config::load_embedding_config().map_err(|e| e.to_string())?;
+        let config = embedding_config::resolve_embedding_config().map_err(|e| e.to_string())?;
         let dimensions = embedding_providers::expected_dimensions(&config);
 
         attach_embedding_index(&embedding_index, &store, &index_root, dimensions, false)?;
@@ -1447,15 +1454,16 @@ mod tests {
     use super::*;
     use crate::domain::embeddings::EmbeddingProviderKind;
 
-    /// `Remote` config — cheap to construct (`RemoteEmbeddingProvider::new`
-    /// does no network I/O), unlike `Local`, which would load the ONNX
-    /// model.
-    fn remote_config(model: &str) -> EmbeddingProviderConfig {
-        EmbeddingProviderConfig {
+    /// `Remote` resolved config — cheap to construct
+    /// (`RemoteEmbeddingProvider::new` does no network I/O), unlike
+    /// `Local`, which would load the ONNX model.
+    fn remote_config(model: &str) -> ResolvedEmbeddingConfig {
+        ResolvedEmbeddingConfig {
             kind: EmbeddingProviderKind::Remote,
             remote_base_url: Some("https://api.example.com".to_string()),
             remote_model: Some(model.to_string()),
             remote_dimensions: Some(768),
+            remote_trusted_cert_pem: None,
         }
     }
 
@@ -1624,14 +1632,14 @@ mod tests {
     }
 
     /// Pre-populates `EmbeddingProviderSlot` with a mock cached under
-    /// whatever `embedding_config::load_embedding_config`/
+    /// whatever `embedding_config::resolve_embedding_config`/
     /// `embedding_credentials_store::get_api_key` actually return on this
     /// machine — `ensure_provider`'s cache check (same config, same key) then
     /// finds a hit and never calls the real `provider_for` (which would load
     /// the ~570MB local ONNX model, or fail outright, if this test's config
     /// happens to be `Local` or an incomplete `Remote` config).
     fn mock_provider_slot() -> EmbeddingProviderSlot {
-        let config = embedding_config::load_embedding_config().unwrap_or_default();
+        let config = embedding_config::resolve_embedding_config().unwrap_or_default();
         let api_key = embedding_credentials_store::get_api_key();
         let dimensions = embedding_providers::expected_dimensions(&config);
         let provider: Arc<dyn EmbeddingProvider> = Arc::new(MockProvider { dimensions });

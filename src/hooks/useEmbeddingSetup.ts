@@ -16,6 +16,7 @@ import {
   type EmbeddingProviderConfig,
   type ModelStatus,
   type RepoIndexSummary,
+  type ResolvedEmbeddingConfig,
   type SyncProgress,
   type SyncStats,
 } from "../lib/embeddings";
@@ -42,7 +43,7 @@ import {
  * `sync()`/`refresh()` settlements that still belong to the previous root.
  */
 export function useEmbeddingSetup(repoRoot: string | null = null) {
-  const [config, setConfigState] = useState<EmbeddingProviderConfig | null>(null);
+  const [config, setConfigState] = useState<ResolvedEmbeddingConfig | null>(null);
   const [modelStatus, setModelStatus] = useState<ModelStatus>({ status: "notDownloaded" });
   const [hasApiKey, setHasApiKey] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -199,13 +200,23 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
   }, [refresh]);
 
   const updateConfig = useCallback(
-    async (patch: Partial<EmbeddingProviderConfig>) => {
+    async (patch: Partial<ResolvedEmbeddingConfig>) => {
       if (!config) return;
-      const next = { ...config, ...patch };
+      // Optimistic resolved view for the UI; persist as an explicit override
+      // (every field pinned) so Settings edits keep winning over the bundled
+      // preset until the user clears them.
+      const next: ResolvedEmbeddingConfig = { ...config, ...patch };
+      const override: EmbeddingProviderConfig = {
+        kind: next.kind,
+        remoteBaseUrl: next.remoteBaseUrl,
+        remoteModel: next.remoteModel,
+        remoteDimensions: next.remoteDimensions,
+        remoteTrustedCertPem: next.remoteTrustedCertPem,
+      };
       setConfigState(next);
       setBusy(true);
       try {
-        await setEmbeddingConfig(next);
+        await setEmbeddingConfig(override);
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));

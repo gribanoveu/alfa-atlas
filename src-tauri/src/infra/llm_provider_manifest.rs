@@ -1,5 +1,7 @@
 //! Compiled-in registry of "system" LLM providers, embedded at compile
-//! time from `assets/llm/system_llm_providers.json`.
+//! time from the top-level `llm` section of
+//! `assets/llm/system_providers.json` (the same file that holds the
+//! global embedding preset under `embedding`).
 //!
 //! Embedding (rather than shipping as a Tauri bundle resource) sidesteps
 //! the resource-path differences between `cargo tauri dev` and a bundled
@@ -9,10 +11,10 @@
 //!
 //! This is the mechanism a downstream fork/rebrand uses to change or
 //! remove the app's baked-in LLM provider(s) **without touching any `.rs`
-//! file**: edit or empty out `system_llm_providers.json` and rebuild. An
-//! empty JSON array (`[]`) is a fully valid manifest — it just means no
-//! system providers ship at all, and every provider a user sees is one
-//! they configured themselves (see `domain::llm::LlmProviderConfig`).
+//! file**: edit or empty out the `llm` array and rebuild. An empty JSON
+//! array (`[]`) is a fully valid `llm` section — it just means no system
+//! providers ship at all, and every provider a user sees is one they
+//! configured themselves (see `domain::llm::LlmProviderConfig`).
 //!
 //! A system provider's entry here is only ever a *default* — a user can
 //! override its `model`/`trusted_cert_pem` (and, technically, `base_url`)
@@ -22,17 +24,30 @@
 
 use std::sync::LazyLock;
 
+use crate::domain::embeddings::EmbeddingPreset;
 use crate::domain::llm::LlmProviderPreset;
+use serde::Deserialize;
 
-const MANIFEST_JSON: &str = include_str!("../../assets/llm/system_llm_providers.json");
+const MANIFEST_JSON: &str = include_str!("../../assets/llm/system_providers.json");
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemProvidersManifest {
+    #[serde(default)]
+    llm: Vec<LlmProviderPreset>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    embedding: EmbeddingPreset,
+}
 
 static PARSED: LazyLock<Vec<LlmProviderPreset>> = LazyLock::new(|| {
-    serde_json::from_str(MANIFEST_JSON)
-        .expect("bundled system_llm_providers.json must be a valid JSON array of LlmProviderPreset")
+    let manifest: SystemProvidersManifest = serde_json::from_str(MANIFEST_JSON)
+        .expect("bundled system_providers.json must be a valid SystemProvidersManifest");
+    manifest.llm
 });
 
-/// Every system provider this build ships with — `&[]` if the manifest was
-/// emptied out by a fork. Parsed once, for the process lifetime.
+/// Every system provider this build ships with — `&[]` if the `llm`
+/// section was emptied out by a fork. Parsed once, for the process lifetime.
 pub fn system_providers() -> &'static [LlmProviderPreset] {
     &PARSED
 }
@@ -80,7 +95,7 @@ mod tests {
         let pem = alfagen.trusted_cert_pem.as_deref().expect("alfagen ships with a trusted cert");
         assert!(pem.contains("BEGIN CERTIFICATE"));
         assert!(
-            crate::infra::llm_providers::openai_compatible::build_agent(Some(pem)).is_ok(),
+            crate::infra::http_agent::build_agent(Some(pem)).is_ok(),
             "bundled alfagen trust cert must be valid, parseable PEM"
         );
     }
@@ -90,12 +105,13 @@ mod tests {
         assert!(find_system_provider("does-not-exist").is_none());
     }
 
-    /// An empty array is a valid manifest shape on its own — exercised
+    /// An empty `llm` array is a valid manifest shape on its own — exercised
     /// directly (not via `system_providers()`, since the real bundled file
-    /// isn't empty) so a fork that ships `[]` can trust this path works.
+    /// isn't empty) so a fork that ships `"llm": []` can trust this path works.
     #[test]
-    fn empty_manifest_array_is_valid() {
-        let presets: Vec<LlmProviderPreset> = serde_json::from_str("[]").unwrap();
-        assert!(presets.is_empty());
+    fn empty_llm_array_is_valid() {
+        let manifest: SystemProvidersManifest =
+            serde_json::from_str(r#"{"llm":[],"embedding":{}}"#).unwrap();
+        assert!(manifest.llm.is_empty());
     }
 }

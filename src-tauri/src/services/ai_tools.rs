@@ -1794,7 +1794,7 @@ fn is_semantic_ready(deps: &EmbeddingDeps) -> bool {
         return false;
     }
 
-    let Ok(config) = embedding_config::load_embedding_config() else {
+    let Ok(config) = embedding_config::resolve_embedding_config() else {
         return false;
     };
     let dimensions = embedding_providers::expected_dimensions(&config);
@@ -1834,7 +1834,7 @@ fn semantic_matches(
     )
     .map_err(ToolError::SemanticSearch)?;
 
-    let config = embedding_config::load_embedding_config()
+    let config = embedding_config::resolve_embedding_config()
         .map_err(|e| ToolError::SemanticSearch(e.to_string()))?;
     let dimensions = embedding_providers::expected_dimensions(&config);
     attach_embedding_index(&deps.embedding_index, &store, &index_root, dimensions, false)

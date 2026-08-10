@@ -3,13 +3,25 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type EmbeddingProviderKind = "local" | "remote";
 
-// Mirrors `domain::embeddings::EmbeddingProviderConfig` in
-// `src-tauri/src/domain/embeddings.rs`.
-export type EmbeddingProviderConfig = {
+// Mirrors `domain::embeddings::ResolvedEmbeddingConfig` — what
+// `embedding_get_config` returns (bundled preset merged with overrides).
+export type ResolvedEmbeddingConfig = {
   kind: EmbeddingProviderKind;
   remoteBaseUrl: string | null;
   remoteModel: string | null;
   remoteDimensions: number | null;
+  remoteTrustedCertPem: string | null;
+};
+
+// Mirrors `domain::embeddings::EmbeddingProviderConfig` — the settings-layer
+// override persisted by `embedding_set_config`. `kind: null` means inherit
+// from the bundled preset.
+export type EmbeddingProviderConfig = {
+  kind: EmbeddingProviderKind | null;
+  remoteBaseUrl: string | null;
+  remoteModel: string | null;
+  remoteDimensions: number | null;
+  remoteTrustedCertPem: string | null;
 };
 
 // Mirrors `domain::embeddings::ModelStatus` (adjacently tagged,
@@ -78,8 +90,8 @@ export type SyncProgress = {
   trigger: SyncTrigger;
 };
 
-export function getEmbeddingConfig(): Promise<EmbeddingProviderConfig> {
-  return invoke<EmbeddingProviderConfig>("embedding_get_config");
+export function getEmbeddingConfig(): Promise<ResolvedEmbeddingConfig> {
+  return invoke<ResolvedEmbeddingConfig>("embedding_get_config");
 }
 
 export function setEmbeddingConfig(config: EmbeddingProviderConfig): Promise<void> {
