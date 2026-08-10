@@ -158,6 +158,33 @@ pub(crate) fn lock_sync_guard(guard: &EmbeddingSyncGuard) -> std::sync::MutexGua
     guard.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Set only while a *full* `embedding_sync` walk is actually running for the
+/// current project (not while incremental per-file watcher ticks run — those
+/// are sub-second and safe to interleave with, see `EmbeddingSyncGuard`).
+/// Checked by the checkout-family git commands to reject a branch switch
+/// that would otherwise race the walk's reads against a concurrent
+/// `git checkout` rewriting the working tree.
+pub type FullSyncActiveSlot = std::sync::atomic::AtomicBool;
+
+/// RAII guard that flips `FullSyncActiveSlot` true on construction and back
+/// to false on drop, so it's cleared on every exit path out of the
+/// `embedding_sync` closure — success, an early `?` return, or a panic
+/// unwind — without needing a matching store on each branch.
+struct FullSyncActiveGuard<'a>(&'a FullSyncActiveSlot);
+
+impl<'a> FullSyncActiveGuard<'a> {
+    fn new(flag: &'a FullSyncActiveSlot) -> Self {
+        flag.store(true, std::sync::atomic::Ordering::Release);
+        Self(flag)
+    }
+}
+
+impl Drop for FullSyncActiveGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// The running file-watcher-driven incremental sync for `index_root`, if
 /// one is active. Restarted (drop old, start new) whenever `index_root`
 /// changes — a project switch — via `ensure_incremental_watcher`.
@@ -1013,6 +1040,7 @@ pub async fn embedding_sync(
     workspace_index: State<'_, Arc<WorkspaceIndex>>,
     priority_files: State<'_, Arc<PriorityFilesSlot>>,
     background_backlog: State<'_, Arc<BackgroundBacklogSlot>>,
+    full_sync_active: State<'_, Arc<FullSyncActiveSlot>>,
 ) -> Result<SyncStats, String> {
     let repo_index = repo_index.inner().clone();
     let chunk_index = chunk_index.inner().clone();
@@ -1024,6 +1052,7 @@ pub async fn embedding_sync(
     let workspace_index = workspace_index.inner().clone();
     let priority_files = priority_files.inner().clone();
     let background_backlog = background_backlog.inner().clone();
+    let full_sync_active = full_sync_active.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<SyncStats, String> {
         // Acquired first, before any other slot, and held for the entire
@@ -1041,6 +1070,9 @@ pub async fn embedding_sync(
         if !is_current_index_root(&index_root) {
             return Ok(SyncStats::default());
         }
+        // Rejects a concurrent branch checkout for the rest of this walk —
+        // see `FullSyncActiveGuard`.
+        let _full_sync_active = FullSyncActiveGuard::new(&full_sync_active);
         let (store, stale) = attach_index_store(&chunk_index, &index_store, &storage_dir, &index_root)?;
 
         // Started regardless of `stale` — harmless either way, since

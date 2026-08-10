@@ -11,7 +11,7 @@ use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, Window, Windo
 
 use crate::commands::embeddings::{
     BackgroundBacklogSlot, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard,
-    IndexStoreSlot, IndexWatcherSlot, PriorityFilesSlot,
+    FullSyncActiveSlot, IndexStoreSlot, IndexWatcherSlot, PriorityFilesSlot,
 };
 use crate::commands::llm::{ChatCancelFlag, LlmProviderSlot};
 use crate::infra::parsers::registry::ParserRegistry;
@@ -116,6 +116,7 @@ pub fn run() {
             app.manage(Arc::new(IndexStoreSlot::new(None)));
             app.manage(Arc::new(EmbeddingProviderSlot::new(None)));
             app.manage(Arc::new(EmbeddingSyncGuard::new(())));
+            app.manage(Arc::new(FullSyncActiveSlot::new(false)));
             app.manage(Arc::new(IndexWatcherSlot::new(None)));
             app.manage(Arc::new(PriorityFilesSlot::new(HashSet::new())));
             app.manage(Arc::new(BackgroundBacklogSlot::new(None)));

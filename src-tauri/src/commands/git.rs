@@ -1,9 +1,28 @@
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+
+use tauri::State;
+
+use crate::commands::embeddings::FullSyncActiveSlot;
 use crate::domain::git::{
     AppKeyStatus, GitBranchInfo, GitCommitSummary, GitConflictFile, GitCredentials, GitDiffScope,
     GitFileDiff, GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::domain::project_config::ProbeResult;
 use crate::services::{git_clone, git_credentials, git_ops};
+
+/// Rejects a branch-switching command while a full `embedding_sync` walk is
+/// in flight — see `FullSyncActiveSlot`'s doc comment for why this only
+/// covers the first/full sync, not incremental watcher ticks.
+fn reject_if_full_sync_active(flag: &FullSyncActiveSlot) -> Result<(), String> {
+    if flag.load(Ordering::Acquire) {
+        return Err(
+            "Идёт первичная синхронизация эмбеддингов. Дождитесь её завершения, затем переключите ветку."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
 
 #[tauri::command]
 pub fn git_status(repo_root: String) -> Result<GitStatusSnapshot, String> {
@@ -153,7 +172,9 @@ pub fn git_create_branch(
     repo_root: String,
     name: String,
     discard_changes: bool,
+    full_sync_active: State<'_, Arc<FullSyncActiveSlot>>,
 ) -> Result<(), String> {
+    reject_if_full_sync_active(&full_sync_active)?;
     git_ops::create_branch(&repo_root, &name, discard_changes).map_err(|e| e.to_string())
 }
 
@@ -162,7 +183,9 @@ pub fn git_checkout_branch(
     repo_root: String,
     name: String,
     discard_changes: bool,
+    full_sync_active: State<'_, Arc<FullSyncActiveSlot>>,
 ) -> Result<(), String> {
+    reject_if_full_sync_active(&full_sync_active)?;
     git_ops::checkout_branch(&repo_root, &name, discard_changes).map_err(|e| e.to_string())
 }
 
@@ -176,7 +199,9 @@ pub fn git_checkout_remote_branch(
     repo_root: String,
     name: String,
     discard_changes: bool,
+    full_sync_active: State<'_, Arc<FullSyncActiveSlot>>,
 ) -> Result<(), String> {
+    reject_if_full_sync_active(&full_sync_active)?;
     git_ops::checkout_remote_branch(&repo_root, &name, discard_changes).map_err(|e| e.to_string())
 }
 
@@ -225,4 +250,21 @@ pub async fn git_clone(url: String, destination: String) -> Result<ProbeResult, 
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reject_if_full_sync_active_errs_while_a_full_sync_is_running() {
+        let flag = FullSyncActiveSlot::new(true);
+        assert!(reject_if_full_sync_active(&flag).is_err());
+    }
+
+    #[test]
+    fn reject_if_full_sync_active_allows_checkout_when_idle() {
+        let flag = FullSyncActiveSlot::new(false);
+        assert!(reject_if_full_sync_active(&flag).is_ok());
+    }
 }

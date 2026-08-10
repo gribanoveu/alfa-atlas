@@ -1415,7 +1415,7 @@ function App() {
                 ? {
                     currentBranch: project.branchName ?? "—",
                     branches: branches.branches,
-                    busy: branches.busy,
+                    busy: branches.busy || embeddingSetup.busy,
                     error: branches.error,
                     onCheckout: (branch) => void handleCheckoutBranch(branch),
                     onCreateBranch: (name) => void handleCreateBranch(name),
