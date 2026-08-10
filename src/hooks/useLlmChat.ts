@@ -76,7 +76,6 @@ export function useLlmChat(
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // The mode the *previous* request actually went out with — `null` until
   // the first send, so the very first turn never fires a spurious "just
@@ -313,7 +312,6 @@ export function useLlmChat(
         { id: assistantId, role: "assistant", blocks: [], streaming: true },
       ]);
       setSending(true);
-      setError(null);
 
       // Placed as its own message right before the new user turn (not just
       // folded into the system prompt above) so a mode switch is impossible
@@ -418,11 +416,16 @@ export function useLlmChat(
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId && m.role === "assistant"
-              ? { ...m, blocks: markRunningToolCallsAsInterrupted(m.blocks), streaming: false, failed: true }
+              ? {
+                  ...m,
+                  blocks: markRunningToolCallsAsInterrupted(m.blocks),
+                  streaming: false,
+                  failed: true,
+                  errorMessage: message,
+                }
               : m,
           ),
         );
-        setError(message);
       } finally {
         setSending(false);
         // Reads the true final state for this turn via a functional-update
@@ -503,7 +506,6 @@ export function useLlmChat(
   return {
     messages,
     sending,
-    error,
     sendMessage,
     contextTokens,
     todos,

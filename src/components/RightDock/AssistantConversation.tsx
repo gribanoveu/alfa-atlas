@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ChevronUp, Send, Sparkles, Square } from "lucide-react";
+import { AlertCircle, ArrowDown, ChevronUp, Send, Sparkles, Square } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import {
   AUTO_MODEL_LABEL,
@@ -185,7 +185,7 @@ export function AssistantConversation({
   updateProviderConfig,
   loadModels,
 }: AssistantConversationProps) {
-  const { messages, sending, error, sendMessage, stopChat, contextTokens, decideToolCall, todos, clearTodos } = useLlmChat(
+  const { messages, sending, sendMessage, stopChat, contextTokens, decideToolCall, todos, clearTodos } = useLlmChat(
     providerId,
     accessMode,
     specsRepoInfo,
@@ -426,6 +426,12 @@ export function AssistantConversation({
                         ),
                       )}
                       {stopped ? <div className="assistant-chat-cancelled-note">Остановлено пользователем</div> : null}
+                      {failed ? (
+                        <div className="assistant-chat-error-card">
+                          <AlertCircle size={13} aria-hidden />
+                          <span>{m.errorMessage ?? "Не удалось получить ответ"}</span>
+                        </div>
+                      ) : null}
                     </div>
                   )
                 ) : (
@@ -446,7 +452,6 @@ export function AssistantConversation({
           </button>
         ) : null}
       </div>
-      {error ? <div className="assistant-chat-error">{error}</div> : null}
       <div className="assistant-model-bar">
         <ChatModeSelect />
         <div className="clone-select assistant-model-select" ref={modelSelectRef}>

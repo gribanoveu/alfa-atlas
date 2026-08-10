@@ -62,6 +62,11 @@ export type ChatMessage =
       blocks: MessageBlock[];
       streaming?: boolean;
       failed?: boolean;
+      /** Set alongside `failed` — the raw backend error text (network
+       * failure, HTTP status, tool-budget exhaustion, ...) shown in the
+       * error card rendered under this message, see
+       * `AssistantConversation`. */
+      errorMessage?: string;
       /** Set when the turn ended via a `{status: "cancelled"}` outcome (the
        * user clicked Stop — see `useLlmChat`'s `stopChat`) rather than the
        * model producing a final answer on its own. Mutually exclusive with

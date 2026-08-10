@@ -663,43 +663,10 @@
 }
 
 
-/* =========================================================
-   Inline code
-   ========================================================= */
-
-.assistant-chat-message code {
-  padding: 2px 5px;
-  border-radius: 4px;
-  background: var(--bg-2);
-  color: var(--text-0);
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.9em;
-}
-
-
-/* =========================================================
-   Code blocks
-   ========================================================= */
-
-.assistant-chat-message pre {
-  margin: 12px 0;
-  padding: 12px;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg-0);
-  color: var(--text-1);
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: 0.85em;
-  line-height: 1.5;
-}
-
-.assistant-chat-message pre code {
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font-size: inherit;
-}
+/* Inline code (`.markdown-code-inline`) and code blocks
+   (`.markdown-code-block`) are styled by AssistantMarkdown.css — that file
+   is the single source of truth for both, so no tag-selector rules for
+   `code`/`pre` live here anymore. */
 
 
 /* =========================================================
@@ -930,16 +897,6 @@
 
 
 /* =========================================================
-   Failed message
-   ========================================================= */
-
-.assistant-chat-message.failed {
-  border-color: var(--red-tag);
-  color: var(--red-tag);
-}
-
-
-/* =========================================================
    Cancelled message (user clicked Stop)
    ========================================================= */
 
@@ -948,6 +905,32 @@
   color: var(--text-2);
   font-size: var(--font-ui-sm);
   font-style: italic;
+}
+
+
+/* =========================================================
+   Failed message — a card under the turn's own text/blocks (which stay
+   their normal color, see AssistantConversation's `failed` handling)
+   rather than recoloring the whole message red.
+   ========================================================= */
+
+.assistant-chat-error-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--red-tag);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--red-tag) 7%, var(--bg-0));
+  color: var(--red-tag);
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-chat-error-card svg {
+  flex: none;
+  margin-top: 1px;
 }
 
 
@@ -1672,22 +1655,6 @@
   border-color: var(--green);
 }
 
-
-/* =========================================================
-   Chat error
-   ========================================================= */
-
-.assistant-chat-error {
-  flex: none;
-
-  padding: 6px 10px;
-
-  border-top: 1px solid var(--border);
-
-  color: var(--red-tag);
-
-  font-size: var(--font-ui-sm);
-}
 
 
 /* =========================================================
