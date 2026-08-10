@@ -1,14 +1,15 @@
 use std::path::{Path, PathBuf};
 
 use git2::{
-    build::CheckoutBuilder, AnnotatedCommit, Branch, BranchType, Cred, CredentialType, Delta,
-    DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions, RemoteCallbacks,
-    Repository, RepositoryState, ResetType, Signature, Status, StatusOptions, StatusShow,
+    build::CheckoutBuilder, AnnotatedCommit, BlameOptions, Branch, BranchType, Cred, CredentialType,
+    Delta, DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions,
+    RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, Status, StatusOptions,
+    StatusShow,
 };
 
 use crate::domain::git::{
-    GitBranchInfo, GitCommitSummary, GitConflictFile, GitCredentials, GitDiffScope, GitError,
-    GitFileDiff, GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode, SshKeySource,
+    GitBlameHunk, GitBranchInfo, GitCommitSummary, GitConflictFile, GitCredentials, GitDiffScope,
+    GitError, GitFileDiff, GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode, SshKeySource,
 };
 
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
@@ -1191,6 +1192,97 @@ pub fn file_diff(
     }
 }
 
+/// Line authorship for `path`, compacted into contiguous hunks that share
+/// the same final commit. Optional `start_line`/`end_line` are 1-indexed
+/// inclusive and passed straight to libgit2's blame options (`None` =
+/// whole file). Returns an empty vec for an empty file.
+pub fn blame(
+    repo_root: &Path,
+    path: &str,
+    start_line: Option<u32>,
+    end_line: Option<u32>,
+) -> Result<Vec<GitBlameHunk>, GitError> {
+    let rel = validate_relative_path(path)?;
+    let repo = open_repo(repo_root)?;
+
+    let mut opts = BlameOptions::new();
+    if let Some(start) = start_line {
+        opts.min_line(start.max(1) as usize);
+    }
+    if let Some(end) = end_line {
+        opts.max_line(end.max(1) as usize);
+    }
+
+    let blame = repo
+        .blame_file(rel, Some(&mut opts))
+        .map_err(GitError::Operation)?;
+
+    let mut hunks = Vec::new();
+    for hunk in blame.iter() {
+        let start = hunk.final_start_line() as u32;
+        let lines = hunk.lines_in_hunk() as u32;
+        if lines == 0 {
+            continue;
+        }
+        let end = start.saturating_add(lines).saturating_sub(1);
+        let oid = hunk.final_commit_id();
+        let commit = short_oid(oid);
+        let (author, authored_at) = match hunk.final_signature() {
+            Some(sig) => (sig.name().unwrap_or("unknown").to_string(), format_git_time(sig.when())),
+            None => ("unknown".into(), String::new()),
+        };
+        let summary = hunk
+            .summary()
+            .ok()
+            .flatten()
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        hunks.push(GitBlameHunk {
+            start_line: start,
+            end_line: end,
+            commit,
+            author,
+            authored_at,
+            summary,
+        });
+    }
+    Ok(hunks)
+}
+
+/// Format a libgit2 signature timestamp as UTC ISO-8601 (`YYYY-MM-DDTHH:MM:SSZ`)
+/// without pulling in chrono/time — epoch seconds are already UTC; the
+/// signature's recorded offset is ignored so the AI tool payload stays
+/// timezone-stable across machines.
+fn format_git_time(time: git2::Time) -> String {
+    let secs = time.seconds().max(0) as u64;
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let hour = rem / 3_600;
+    let min = (rem % 3_600) / 60;
+    let sec = rem % 60;
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
+}
+
+/// Convert days since Unix epoch to a Gregorian `(year, month, day)` —
+/// Howard Hinnant's `civil_from_days`.
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m as u32, d as u32)
+}
+
 /// Write `content` as the new state for `path` at the given diff `scope`,
 /// enabling partial (hunk-level) revert from the diff view — mirrors
 /// IDEA's per-chunk "revert" arrows, which edit the modified pane and save
@@ -2123,6 +2215,43 @@ mod tests {
         assert!(!diff.is_binary);
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn blame_compacts_contiguous_lines_from_the_same_commit() {
+        let dir = temp_dir("blame-basic");
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Alice").unwrap();
+            config.set_str("user.email", "alice@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "line1\nline2\n", "init");
+        commit_file(&repo, "a.txt", "line1\nline2\nline3\n", "append");
+
+        let hunks = blame(&dir, "a.txt", None, None).unwrap();
+        assert!(hunks.len() >= 1);
+        assert_eq!(hunks[0].start_line, 1);
+        assert!(!hunks[0].commit.is_empty());
+        assert_eq!(hunks[0].author, "Alice");
+        assert!(hunks[0].authored_at.ends_with('Z'));
+        assert!(hunks.iter().any(|h| h.summary.contains("init") || h.summary.contains("append")));
+
+        let ranged = blame(&dir, "a.txt", Some(3), Some(3)).unwrap();
+        assert_eq!(ranged.len(), 1);
+        assert_eq!(ranged[0].start_line, 3);
+        assert_eq!(ranged[0].end_line, 3);
+        assert!(ranged[0].summary.contains("append"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn format_git_time_formats_unix_epoch_as_utc_iso() {
+        let t = git2::Time::new(0, 0);
+        assert_eq!(format_git_time(t), "1970-01-01T00:00:00Z");
+        let t = git2::Time::new(1_000_000_000, 0);
+        assert_eq!(format_git_time(t), "2001-09-09T01:46:40Z");
     }
 
     #[test]

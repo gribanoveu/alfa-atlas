@@ -53,6 +53,8 @@ export type ToolCall =
   | { tool: "readFile"; args: { path: string; startLine: number | null; endLine: number | null } }
   | { tool: "listFiles"; args: { path: string | null; depth: number | null; pattern: string | null } }
   | { tool: "semanticSearch"; args: { query: string; topK: number | null } }
+  | { tool: "gitDiff";  args: { path: string; scope: string | null; commit: string | null }; }
+  | { tool: "gitBlame"; args: { path: string; startLine: number | null; endLine: number | null }; }
   | { tool: "writeFile"; args: { path: string; content: string } }
   | { tool: "editFile"; args: { path: string; edits: FileEdit[] } }
   | { tool: "deleteFile"; args: { path: string } }
@@ -77,6 +79,17 @@ export type FileDiffStats = {
   truncated: boolean;
 };
 
+/** Contiguous authorship run from `gitBlame` — mirrors
+ * `domain::git::GitBlameHunk`. */
+export type GitBlameHunk = {
+  startLine: number;
+  endLine: number;
+  commit: string;
+  author: string;
+  authoredAt: string;
+  summary: string;
+};
+
 // `ToolResult`'s `"file"` case carries range/total-line metadata alongside
 // the content — 1-indexed, inclusive, the range actually returned (after
 // clamping), not necessarily what was requested. `0`/`0`/`0` on an empty
@@ -85,6 +98,8 @@ export type ToolResult =
   | { tool: "file"; result: { content: string; startLine: number; endLine: number; totalLines: number } }
   | { tool: "fileList"; result: ToolFileEntry[] }
   | { tool: "semanticSearchResults"; result: ToolMatch[] }
+  | { tool: "gitDiff";  result: { path: string; label: string; diff: FileDiffStats; isBinary: boolean }; }
+  | { tool: "gitBlame";  result: { path: string; hunks: GitBlameHunk[]; truncated: boolean }; }
   | { tool: "fileWritten"; result: { path: string; diff: FileDiffStats } }
   | { tool: "fileEdited"; result: { path: string; diff: FileDiffStats } }
   | { tool: "fileDeleted"; result: { path: string; diff: FileDiffStats } }

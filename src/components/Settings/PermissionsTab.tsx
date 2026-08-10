@@ -26,6 +26,8 @@ const ALLOWED_TOOL_LABELS: Record<string, string> = {
   listFiles: "Просмотр списка файлов (listFiles)",
   readFile: "Чтение файлов (readFile)",
   semanticSearch: "Семантический поиск (semanticSearch)",
+  gitDiff: "Разница между состояниями файлов (gitDiff)",
+  gitBlame: "Отслеживание изменений в файлах (gitBlame)",
   ...AUTO_APPROVABLE_TOOL_LABELS,
   todo: "Список задач (todo)",
 };
@@ -34,6 +36,8 @@ const ALLOWED_TOOL_ORDER = [
   "listFiles",
   "readFile",
   "semanticSearch",
+  "gitDiff",
+  "gitBlame",
   "writeFile",
   "editFile",
   "deleteFile",

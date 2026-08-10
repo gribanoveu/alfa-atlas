@@ -144,6 +144,32 @@ pub struct RequestFullRepoAccessArgs {
     pub reason: String,
 }
 
+/// Working-tree / index / commit file diff for the assistant — read-only.
+/// Paths are relative to the tool scope root (`docsRoot` in DocsOnly,
+/// `repoRoot` in FullRepo); the executor converts to a repo-relative path
+/// after `ensure_under` (see `services::ai_tools::git_diff`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffArgs {
+    pub path: String,
+    /// `"staged"` or `"unstaged"` — ignored when `commit` is set. `None`
+    /// defaults to unstaged (working tree vs index/HEAD).
+    pub scope: Option<String>,
+    /// Optional commit hash/ref — when set, returns the parent→commit
+    /// file diff for `path` instead of a working-tree scope.
+    pub commit: Option<String>,
+}
+
+/// Line-authorship for one file — read-only. Same path containment as
+/// `GitDiffArgs`. Optional line range mirrors `ReadFileArgs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameArgs {
+    pub path: String,
+    pub start_line: Option<u32>,
+    pub end_line: Option<u32>,
+}
+
 /// A task's lifecycle state. Deliberately only these four — no `failed`,
 /// no `blocked`, no `dependsOn`: a failed step is either `Cancelled` with a
 /// `note` explaining why, or the agent keeps retrying within the same
@@ -262,6 +288,8 @@ pub enum ToolCall {
     ReadFile(ReadFileArgs),
     ListFiles(ListFilesArgs),
     SemanticSearch(SemanticSearchArgs),
+    GitDiff(GitDiffArgs),
+    GitBlame(GitBlameArgs),
     WriteFile(WriteFileArgs),
     EditFile(EditFileArgs),
     DeleteFile(DeleteFileArgs),
@@ -279,6 +307,8 @@ impl ToolCall {
             ToolCall::ReadFile(_) => ToolName::ReadFile,
             ToolCall::ListFiles(_) => ToolName::ListFiles,
             ToolCall::SemanticSearch(_) => ToolName::SemanticSearch,
+            ToolCall::GitDiff(_) => ToolName::GitDiff,
+            ToolCall::GitBlame(_) => ToolName::GitBlame,
             ToolCall::WriteFile(_) => ToolName::WriteFile,
             ToolCall::EditFile(_) => ToolName::EditFile,
             ToolCall::DeleteFile(_) => ToolName::DeleteFile,
@@ -339,6 +369,27 @@ pub enum ToolResult {
     },
     FileList(Vec<ToolFileEntry>),
     SemanticSearchResults(Vec<ToolMatch>),
+    /// Settled `gitDiff` — `label` is a short human/model-facing description
+    /// of the two sides (e.g. `"HEAD → Working tree"` or a commit short
+    /// oid pair). `diff` reuses the same `FileDiffStats` shape write/edit
+    /// tools already return so the chat UI can render it with the same
+    /// badge + colored unified-diff view.
+    #[serde(rename_all = "camelCase")]
+    GitDiff {
+        path: String,
+        label: String,
+        diff: FileDiffStats,
+        is_binary: bool,
+    },
+    /// Settled `gitBlame` — contiguous hunks, optionally truncated when
+    /// the requested line range exceeds
+    /// `services::ai_tools::MAX_BLAME_LINES`.
+    #[serde(rename_all = "camelCase")]
+    GitBlame {
+        path: String,
+        hunks: Vec<crate::domain::git::GitBlameHunk>,
+        truncated: bool,
+    },
     FileWritten { path: String, diff: FileDiffStats },
     FileEdited { path: String, diff: FileDiffStats },
     FileDeleted { path: String, diff: FileDiffStats },
@@ -451,11 +502,25 @@ pub enum ToolError {
     /// conversation.
     #[error("no task with id: {0}")]
     TaskNotFound(String),
+    /// A git read (`gitDiff`/`gitBlame`) failed — wraps `GitError` as a
+    /// string so the model sees a useful message without pulling git
+    /// types into the tool boundary.
+    #[error("git error: {0}")]
+    Git(String),
 }
 
 impl From<EmbeddingError> for ToolError {
     fn from(err: EmbeddingError) -> Self {
         ToolError::SemanticSearch(err.to_string())
+    }
+}
+
+impl From<crate::domain::git::GitError> for ToolError {
+    fn from(err: crate::domain::git::GitError) -> Self {
+        match err {
+            crate::domain::git::GitError::InvalidPath(p) => ToolError::PathEscape(p),
+            other => ToolError::Git(other.to_string()),
+        }
     }
 }
 

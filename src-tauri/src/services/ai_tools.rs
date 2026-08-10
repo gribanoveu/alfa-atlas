@@ -17,11 +17,13 @@ use crate::commands::embeddings::{
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
     CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileDiffStats,
-    FileEdit, ListFilesArgs, MatchSource, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs,
-    SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs,
-    ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
+    FileEdit, GitBlameArgs, GitDiffArgs, ListFilesArgs, MatchSource, MoveArgs, ReadFileArgs,
+    RequestFullRepoAccessArgs, SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs,
+    TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult,
+    ToolScope, WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
+use crate::domain::git::GitDiffScope;
 use crate::domain::llm::{
     ChatRequest, LlmMessage, LlmProvider, LlmRole, LlmToolCall, LlmToolDefinition,
 };
@@ -34,7 +36,7 @@ use crate::services::chunk_text::resolve_text;
 use crate::services::reference_rewrite;
 use crate::services::repo_index::RepositoryIndex;
 use crate::services::workspace_index::WorkspaceIndex;
-use crate::services::{docs_fs, embedding_config, project_open, text_diff};
+use crate::services::{docs_fs, embedding_config, git_ops, project_open, text_diff};
 
 const DEFAULT_TOP_K: usize = 10;
 const MAX_TOP_K: usize = 50;
@@ -46,6 +48,10 @@ const SNIPPET_MAX_CHARS: usize = 500;
 /// `write` that would exceed this fails outright (see
 /// `ToolError::TooManyTasks`) rather than silently truncating.
 const MAX_TODO_TASKS: usize = 20;
+/// Cap on how many lines a single `gitBlame` call may cover — keeps the
+/// tool-message payload bounded for large files. Ranges past this are
+/// clamped and flagged `truncated: true`.
+const MAX_BLAME_LINES: u32 = 400;
 
 /// The embedding/chunk/repo-index/workspace-index state `SemanticSearch`/
 /// `Move` need to reach — `execute_tool` is otherwise a pure function with
@@ -137,6 +143,8 @@ pub fn execute_tool(
         ToolCall::SemanticSearch(args) => {
             semantic_search(scope, args, deps).map(ToolResult::SemanticSearchResults)
         }
+        ToolCall::GitDiff(args) => git_diff(scope, args),
+        ToolCall::GitBlame(args) => git_blame(scope, args),
         ToolCall::WriteFile(args) => {
             write_file(scope, args).map(|(path, diff)| ToolResult::FileWritten { path, diff })
         }
@@ -363,6 +371,12 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "semanticSearch" => lenient_json_object::<SemanticSearchArgs>(&call.arguments)
             .map(ToolCall::SemanticSearch)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "gitDiff" => lenient_json_object::<GitDiffArgs>(&call.arguments)
+            .map(ToolCall::GitDiff)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "gitBlame" => lenient_json_object::<GitBlameArgs>(&call.arguments)
+            .map(ToolCall::GitBlame)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "writeFile" => lenient_json_object::<WriteFileArgs>(&call.arguments)
             .map(ToolCall::WriteFile)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
@@ -553,6 +567,61 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
                     }
                 },
                 "required": ["query"]
+            }),
+        });
+    }
+    if scope.allows(ToolName::GitDiff) {
+        defs.push(LlmToolDefinition {
+            name: "gitDiff".to_string(),
+            description:
+                "Show the git diff for one file — recent local changes (unstaged working-tree vs index/HEAD, or staged index vs HEAD) or the change introduced by a specific commit. Path is relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Use this to reason about what changed recently, not just the current file content. Returns a unified diff (truncated for large changes) plus +/- line counts."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the current access-mode root."
+                    },
+                    "scope": {
+                        "type": ["string", "null"],
+                        "enum": ["unstaged", "staged", null],
+                        "description": "Working-tree scope: \"unstaged\" (default) or \"staged\". Ignored when `commit` is set."
+                    },
+                    "commit": {
+                        "type": ["string", "null"],
+                        "description": "Optional commit hash/ref. When set, returns the parent→commit file diff and ignores `scope`."
+                    }
+                },
+                "required": ["path"]
+            }),
+        });
+    }
+    if scope.allows(ToolName::GitBlame) {
+        defs.push(LlmToolDefinition {
+            name: "gitBlame".to_string(),
+            description:
+                "Show line authorship (git blame) for one file as contiguous hunks sharing the same commit — who last changed which lines, when, and the commit summary. Path is relative to the current access-mode root. Optionally restrict to a 1-indexed inclusive line range; large ranges are capped. Use this to understand the history behind specific lines, not just their current content."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to the current access-mode root."
+                    },
+                    "startLine": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "description": "1-indexed first line (inclusive). Omit or null to start from line 1."
+                    },
+                    "endLine": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "description": "1-indexed last line (inclusive). Omit or null to continue through the file (still subject to the per-call line cap)."
+                    }
+                },
+                "required": ["path"]
             }),
         });
     }
@@ -869,6 +938,102 @@ fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<FileSlice, ToolErr
     }
     let content = fs::read_to_string(&canonical).map_err(ToolError::Io)?;
     Ok(slice_lines(content, args.start_line, args.end_line))
+}
+
+/// Resolve a scope-root-relative tool path to a repo-relative path safe for
+/// `git2`, after the same `ensure_under(scope.root)` gate every other
+/// read tool uses — this is what keeps `gitDiff`/`gitBlame` safe in
+/// DocsOnly (they cannot read tracked blobs outside `docsRoot`).
+fn resolve_repo_relative_path(scope: &ToolScope, path: &str) -> Result<String, ToolError> {
+    let joined = paths::join_relative(&scope.root, path)?;
+    let canonical = paths::ensure_under(&scope.root, &joined)?;
+    // Don't require the path to exist on disk — a staged-delete or
+    // commit-only path may not be in the worktree, but git still knows it.
+    // Containment under `scope.root` is enough.
+    let rel = paths::relative_to_lenient(&scope.repo_root, &canonical)?;
+    Ok(rel.replace('\\', "/"))
+}
+
+fn git_diff(scope: &ToolScope, args: GitDiffArgs) -> Result<ToolResult, ToolError> {
+    let repo_rel = resolve_repo_relative_path(scope, &args.path)?;
+    let repo_root = scope.repo_root.to_string_lossy();
+
+    let file_diff = if let Some(commit) = args.commit.as_deref().filter(|c| !c.is_empty()) {
+        git_ops::commit_file_diff(&repo_root, commit, &repo_rel)?
+    } else {
+        let diff_scope = match args.scope.as_deref() {
+            None | Some("unstaged") => GitDiffScope::Unstaged,
+            Some("staged") => GitDiffScope::Staged,
+            Some(other) => {
+                return Err(ToolError::InvalidArguments {
+                    tool: "gitDiff".into(),
+                    reason: format!(
+                        "scope must be \"unstaged\" or \"staged\" (got \"{other}\")"
+                    ),
+                });
+            }
+        };
+        git_ops::file_diff(&repo_root, &repo_rel, diff_scope)?
+    };
+
+    let label = format!("{} → {}", file_diff.original_label, file_diff.modified_label);
+    let diff = if file_diff.is_binary {
+        FileDiffStats {
+            lines_added: 0,
+            lines_removed: 0,
+            unified_diff: String::new(),
+            truncated: false,
+        }
+    } else {
+        text_diff::diff_stats(&file_diff.original, &file_diff.modified)
+    };
+
+    Ok(ToolResult::GitDiff {
+        path: args.path,
+        label,
+        diff,
+        is_binary: file_diff.is_binary,
+    })
+}
+
+fn git_blame(scope: &ToolScope, args: GitBlameArgs) -> Result<ToolResult, ToolError> {
+    let joined = paths::join_relative(&scope.root, &args.path)?;
+    let canonical = paths::ensure_under(&scope.root, &joined)?;
+    let repo_rel = paths::relative_to_lenient(&scope.repo_root, &canonical)?.replace('\\', "/");
+    let repo_root = scope.repo_root.to_string_lossy();
+
+    let start = args.start_line.unwrap_or(1).max(1);
+    let file_lines = fs::read_to_string(&canonical)
+        .map(|s| s.lines().count() as u32)
+        .unwrap_or(0);
+
+    let (end, truncated) = match args.end_line {
+        Some(e) => {
+            let e = e.max(start);
+            if e - start + 1 > MAX_BLAME_LINES {
+                (start + MAX_BLAME_LINES - 1, true)
+            } else {
+                (e, false)
+            }
+        }
+        None => {
+            let capped = start + MAX_BLAME_LINES - 1;
+            if file_lines == 0 {
+                (capped, false)
+            } else if file_lines > capped {
+                (capped, true)
+            } else {
+                (file_lines.max(start), false)
+            }
+        }
+    };
+
+    let hunks = git_ops::blame(&repo_root, &repo_rel, Some(start), Some(end))?;
+    Ok(ToolResult::GitBlame {
+        path: args.path,
+        hunks,
+        truncated,
+    })
 }
 
 /// Clamps `start_line`/`end_line` into range rather than erroring (mirrors
@@ -3489,6 +3654,140 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_git_diff_and_git_blame_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "gitDiff".to_string(),
+            arguments: r#"{"path":"intro.adoc","scope":"staged"}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::GitDiff(GitDiffArgs {
+                path: "intro.adoc".to_string(),
+                scope: Some("staged".to_string()),
+                commit: None,
+            })
+        );
+
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "gitDiff".to_string(),
+            arguments: r#"{"path":"intro.adoc","commit":"abc1234"}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::GitDiff(GitDiffArgs {
+                path: "intro.adoc".to_string(),
+                scope: None,
+                commit: Some("abc1234".to_string()),
+            })
+        );
+
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "gitBlame".to_string(),
+            arguments: r#"{"path":"intro.adoc","startLine":2,"endLine":10}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::GitBlame(GitBlameArgs {
+                path: "intro.adoc".to_string(),
+                start_line: Some(2),
+                end_line: Some(10),
+            })
+        );
+    }
+
+    #[test]
+    fn git_diff_and_git_blame_reject_paths_outside_docs_root_in_docs_only() {
+        let (repo, docs) = fixture_repo();
+        // Real git repo so the tools get past open_repo — containment must
+        // still fail before any blob read.
+        {
+            let git_repo = git2::Repository::init(&repo).unwrap();
+            let mut config = git_repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps::empty();
+
+        let err = execute_tool(
+            &scope,
+            ToolCall::GitDiff(GitDiffArgs {
+                path: "../src/main.rs".to_string(),
+                scope: None,
+                commit: None,
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap_err();
+        assert!(matches!(err, ToolError::PathEscape(_)), "got {err:?}");
+
+        let err = execute_tool(
+            &scope,
+            ToolCall::GitBlame(GitBlameArgs {
+                path: "../src/main.rs".to_string(),
+                start_line: None,
+                end_line: None,
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap_err();
+        assert!(matches!(err, ToolError::PathEscape(_)), "got {err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn git_diff_returns_unified_diff_for_unstaged_change_under_docs_root() {
+        let (repo, docs) = fixture_repo();
+        {
+            let git_repo = git2::Repository::init(&repo).unwrap();
+            let mut config = git_repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+            // Commit the docs file, then dirty the worktree.
+            let mut index = git_repo.index().unwrap();
+            index.add_path(Path::new("docs/intro.adoc")).unwrap();
+            index.write().unwrap();
+            let tree_oid = index.write_tree().unwrap();
+            let tree = git_repo.find_tree(tree_oid).unwrap();
+            let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+            git_repo
+                .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
+        }
+        fs::write(docs.join("intro.adoc"), "= Intro\nchanged\n").unwrap();
+
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let result = execute_tool(
+            &scope,
+            ToolCall::GitDiff(GitDiffArgs {
+                path: "intro.adoc".to_string(),
+                scope: Some("unstaged".to_string()),
+                commit: None,
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::GitDiff { path, label, diff, is_binary } => {
+                assert_eq!(path, "intro.adoc");
+                assert!(label.contains("Working tree") || label.contains("Index") || label.contains("HEAD"));
+                assert!(!is_binary);
+                assert!(diff.lines_added > 0 || diff.unified_diff.contains('+'));
+            }
+            other => panic!("expected GitDiff, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn parse_tool_call_parses_write_file_args() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -3689,7 +3988,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_eleven_by_default() {
+    fn llm_tool_definitions_includes_all_thirteen_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -3701,6 +4000,8 @@ mod tests {
                 "listFiles",
                 "readFile",
                 "semanticSearch",
+                "gitDiff",
+                "gitBlame",
                 "writeFile",
                 "editFile",
                 "deleteFile",
@@ -3767,6 +4068,25 @@ mod tests {
             serde_json::from_value(serde_json::json!({"query": "x", "topK": 3})).unwrap();
         assert_eq!(args.query, "x");
         assert_eq!(args.top_k, Some(3));
+
+        let git_diff = defs.iter().find(|d| d.name == "gitDiff").unwrap();
+        assert_eq!(git_diff.parameters["required"], serde_json::json!(["path"]));
+        let args: GitDiffArgs = serde_json::from_value(
+            serde_json::json!({"path": "intro.adoc", "scope": "staged", "commit": null}),
+        )
+        .unwrap();
+        assert_eq!(args.path, "intro.adoc");
+        assert_eq!(args.scope.as_deref(), Some("staged"));
+        assert_eq!(args.commit, None);
+
+        let git_blame = defs.iter().find(|d| d.name == "gitBlame").unwrap();
+        assert_eq!(git_blame.parameters["required"], serde_json::json!(["path"]));
+        let args: GitBlameArgs = serde_json::from_value(
+            serde_json::json!({"path": "intro.adoc", "startLine": 1, "endLine": 5}),
+        )
+        .unwrap();
+        assert_eq!(args.start_line, Some(1));
+        assert_eq!(args.end_line, Some(5));
 
         fs::remove_dir_all(&repo).ok();
     }

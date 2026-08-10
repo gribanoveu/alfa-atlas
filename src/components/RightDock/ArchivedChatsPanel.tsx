@@ -1,4 +1,4 @@
-import { ArchiveRestore, ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import type { ChatSummary } from "../../lib/chatHistory";
 
 type ArchivedChatsPanelProps = {

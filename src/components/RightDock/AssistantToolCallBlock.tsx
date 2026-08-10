@@ -61,6 +61,8 @@ function diffStatsFor(block: ToolCallBlock): FileDiffStats | null {
     case "fileEdited":
     case "fileDeleted":
       return block.result.result.diff;
+    case "gitDiff":
+      return block.result.result.isBinary ? null : block.result.result.diff;
     default:
       return null;
   }
@@ -547,6 +549,47 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
               })}
             </ul>
           )}
+        </div>
+      );
+    case "gitDiff":
+      return (
+        <>
+          <div className="assistant-tool-call-detail-section">
+            <div className="assistant-tool-call-detail-label">Git diff</div>
+            <pre className="assistant-tool-call-detail-code">
+              {result.result.path}
+              {"\n"}
+              {result.result.label}
+              {result.result.isBinary ? "\n(бинарный файл)" : ""}
+            </pre>
+          </div>
+          {!result.result.isBinary ? <DiffLines diff={result.result.diff} /> : null}
+        </>
+      );
+    case "gitBlame":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Git blame</div>
+          <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
+          {result.result.hunks.length === 0 ? (
+            <p className="assistant-tool-call-detail-empty">Нет данных</p>
+          ) : (
+            <ul className="assistant-tool-call-detail-list">
+              {result.result.hunks.map((hunk) => (
+                <li key={`${hunk.commit}-${hunk.startLine}-${hunk.endLine}`}>
+                  <span>
+                    L{hunk.startLine}
+                    {hunk.endLine !== hunk.startLine ? `–${hunk.endLine}` : ""} · {hunk.commit} ·{" "}
+                    {hunk.author}
+                    {hunk.summary ? ` · ${hunk.summary}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {result.result.truncated ? (
+            <p className="assistant-tool-call-detail-empty">… blame обрезан</p>
+          ) : null}
         </div>
       );
     case "todoWritten":

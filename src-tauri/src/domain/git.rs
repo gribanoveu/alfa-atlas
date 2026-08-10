@@ -74,6 +74,24 @@ pub struct GitFileDiff {
     pub is_binary: bool,
 }
 
+/// One contiguous run of lines attributed to the same commit — produced by
+/// `infra::git_repo::blame` and surfaced to the AI harness as
+/// `ToolResult::GitBlame`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameHunk {
+    /// 1-indexed, inclusive.
+    pub start_line: u32,
+    /// 1-indexed, inclusive.
+    pub end_line: u32,
+    /// Short (7-char) commit hash.
+    pub commit: String,
+    pub author: String,
+    /// ISO-8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
+    pub authored_at: String,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitBranchInfo {

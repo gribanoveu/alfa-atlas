@@ -26,6 +26,8 @@ pub enum ToolName {
     ListFiles,
     ReadFile,
     SemanticSearch,
+    GitDiff,
+    GitBlame,
     WriteFile,
     EditFile,
     DeleteFile,
@@ -57,8 +59,8 @@ impl ToolName {
                 | ToolName::Move
                 | ToolName::RequestFullRepoAccess
         )
-        // `Todo` is deliberately NOT in this list — it's in-memory,
-        // non-destructive, no real-world side effect, same bucket as
+        // `Todo`/`GitDiff`/`GitBlame` are deliberately NOT in this list —
+        // in-memory or read-only, no real-world side effect, same bucket as
         // `ListFiles`/`ReadFile`/`SemanticSearch`.
     }
 
@@ -73,6 +75,8 @@ impl ToolName {
             "listFiles" => Some(ToolName::ListFiles),
             "readFile" => Some(ToolName::ReadFile),
             "semanticSearch" => Some(ToolName::SemanticSearch),
+            "gitDiff" => Some(ToolName::GitDiff),
+            "gitBlame" => Some(ToolName::GitBlame),
             "writeFile" => Some(ToolName::WriteFile),
             "editFile" => Some(ToolName::EditFile),
             "deleteFile" => Some(ToolName::DeleteFile),
@@ -100,6 +104,10 @@ impl ToolName {
             ToolName::ListFiles => 1,
             ToolName::ReadFile => 1,
             ToolName::SemanticSearch => 4,
+            // Local git2 I/O + unified-diff / blame compaction — a bit more
+            // than a bare file read, less than a network embedding search.
+            ToolName::GitDiff => 2,
+            ToolName::GitBlame => 2,
             ToolName::WriteFile => 2,
             ToolName::EditFile => 2,
             ToolName::DeleteFile => 1,
@@ -132,6 +140,8 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::ListFiles,
         ToolName::ReadFile,
         ToolName::SemanticSearch,
+        ToolName::GitDiff,
+        ToolName::GitBlame,
         ToolName::WriteFile,
         ToolName::EditFile,
         ToolName::DeleteFile,
@@ -154,6 +164,8 @@ mod tests {
         assert!(!ToolName::ListFiles.requires_confirmation());
         assert!(!ToolName::ReadFile.requires_confirmation());
         assert!(!ToolName::SemanticSearch.requires_confirmation());
+        assert!(!ToolName::GitDiff.requires_confirmation());
+        assert!(!ToolName::GitBlame.requires_confirmation());
         assert!(ToolName::WriteFile.requires_confirmation());
         assert!(ToolName::EditFile.requires_confirmation());
         assert!(ToolName::DeleteFile.requires_confirmation());
@@ -169,6 +181,8 @@ mod tests {
         assert_eq!(ToolName::from_wire_name("listFiles"), Some(ToolName::ListFiles));
         assert_eq!(ToolName::from_wire_name("readFile"), Some(ToolName::ReadFile));
         assert_eq!(ToolName::from_wire_name("semanticSearch"), Some(ToolName::SemanticSearch));
+        assert_eq!(ToolName::from_wire_name("gitDiff"), Some(ToolName::GitDiff));
+        assert_eq!(ToolName::from_wire_name("gitBlame"), Some(ToolName::GitBlame));
         assert_eq!(ToolName::from_wire_name("writeFile"), Some(ToolName::WriteFile));
         assert_eq!(ToolName::from_wire_name("editFile"), Some(ToolName::EditFile));
         assert_eq!(ToolName::from_wire_name("deleteFile"), Some(ToolName::DeleteFile));
@@ -194,14 +208,18 @@ mod tests {
         assert_eq!(ToolName::WriteFile.loop_weight(), 2);
         assert_eq!(ToolName::EditFile.loop_weight(), 2);
         assert_eq!(ToolName::Move.loop_weight(), 2);
+        assert_eq!(ToolName::GitDiff.loop_weight(), 2);
+        assert_eq!(ToolName::GitBlame.loop_weight(), 2);
         assert_eq!(ToolName::SemanticSearch.loop_weight(), 4);
         assert_eq!(ToolName::Todo.loop_weight(), 1);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_eleven() {
+    fn default_allowed_tools_includes_all_thirteen() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 11);
+        assert_eq!(allowed.len(), 13);
+        assert!(allowed.contains(&ToolName::GitDiff));
+        assert!(allowed.contains(&ToolName::GitBlame));
         assert!(allowed.contains(&ToolName::WriteFile));
         assert!(allowed.contains(&ToolName::EditFile));
         assert!(allowed.contains(&ToolName::DeleteFile));
