@@ -129,6 +129,19 @@ export function setToolAutoApproved(tool: string, autoApproved: boolean): Promis
   return invoke("ai_set_tool_auto_approved", { tool, autoApproved });
 }
 
+/** Tool names the currently open project actually allows right now — the
+ * customized `ai_allowed_tools` set if one was ever saved, else the current
+ * access mode's default (which is every tool today). */
+export function getAllowedTools(): Promise<string[]> {
+  return invoke<string[]>("ai_get_allowed_tools");
+}
+
+/** Persists (or revokes) one tool's membership in `ai_allowed_tools` for the
+ * currently open project. */
+export function setToolAllowed(tool: string, allowed: boolean): Promise<void> {
+  return invoke("ai_set_tool_allowed", { tool, allowed });
+}
+
 // Mirrors `domain::llm::LlmToolDefinition` in `src-tauri/src/domain/llm.rs`
 // (`#[serde(rename_all = "camelCase")]`) — the same definitions actually
 // advertised to the model for function-calling.

@@ -47,6 +47,8 @@ use crate::domain::llm::{
     LlmMessage, LlmModelInfo, LlmProvider, LlmProviderConfig, LlmRole, LlmSettings, LlmToolCall,
     LlmToolDefinition, PendingApproval, PendingToolCall, ResolvedLlmProvider, ToolCallDecision,
 };
+use crate::domain::paths;
+use crate::domain::repo_index::FileId;
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
 use crate::services::ai_tools::{self, EmbeddingDeps};
 use crate::services::chunk_builder::ChunkIndex;
@@ -82,6 +84,18 @@ pub const TOOL_RESULT_EVENT: &str = "llm:tool-result";
 /// weight must never make the loop unstoppable), but `MAX_TOOL_BUDGET` is
 /// the more sensitive limit in practice — see its doc comment.
 const MAX_TOOL_ITERATIONS: usize = 20;
+
+/// Converts the frontend's docs-root-relative `EditorTab.path` (sent
+/// verbatim, same convention `embedding_set_priority_files` already
+/// establishes) into `FileId` space (`repo_root`-relative) for
+/// `EmbeddingDeps::active_file`. `None` on any resolution failure (no path,
+/// or a path outside `scope.repo_root`) — degrades to "no boost" rather
+/// than failing the whole chat turn over a best-effort ranking hint.
+fn resolve_active_file(scope: &ToolScope, active_file_path: Option<String>) -> Option<FileId> {
+    let path = active_file_path?;
+    let absolute = paths::join_relative(&scope.docs_root, &path).ok()?;
+    paths::relative_to_lenient(&scope.repo_root, &absolute).ok().map(FileId)
+}
 
 /// The primary loop limit: unlike `MAX_TOOL_ITERATIONS`, this weighs each
 /// round by what it actually cost (`round_cost`, sum of
@@ -599,6 +613,7 @@ pub async fn llm_chat_stream(
     provider_id: String,
     messages: Vec<LlmMessage>,
     todos: Vec<Task>,
+    active_file_path: Option<String>,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
     cancel_flag: State<'_, Arc<ChatCancelFlag>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
@@ -629,6 +644,9 @@ pub async fn llm_chat_stream(
         // turn is already using for chat, rather than resolving a second
         // one just for this.
         fast_apply: None,
+        // Set below, once `scope` is resolved — the conversion needs
+        // `scope.docs_root`/`scope.repo_root`. See `resolve_active_file`.
+        active_file: None,
     };
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
         let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
@@ -644,6 +662,7 @@ pub async fn llm_chat_stream(
         // trying again — hard-fail the whole command, same as
         // `ai_execute_tool` does for the same condition.
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
+        deps.active_file = resolve_active_file(&scope, active_file_path);
         let tools = ai_tools::llm_tool_definitions(&scope);
 
         let ctx = LoopCtx {
@@ -681,6 +700,7 @@ pub async fn llm_chat_stream_resume(
     budget_used: u32,
     decisions: Vec<ToolCallDecision>,
     todos: Vec<Task>,
+    active_file_path: Option<String>,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
     cancel_flag: State<'_, Arc<ChatCancelFlag>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
@@ -710,6 +730,8 @@ pub async fn llm_chat_stream_resume(
         // turn is already using for chat, rather than resolving a second
         // one just for this.
         fast_apply: None,
+        // Set below, once `scope` is resolved — see `resolve_active_file`.
+        active_file: None,
     };
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
         let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
@@ -722,6 +744,7 @@ pub async fn llm_chat_stream_resume(
         deps.fast_apply = Some((provider.clone(), model.clone()));
 
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
+        deps.active_file = resolve_active_file(&scope, active_file_path);
         let tools = ai_tools::llm_tool_definitions(&scope);
 
         let last = history

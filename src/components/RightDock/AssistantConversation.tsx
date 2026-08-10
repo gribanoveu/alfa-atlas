@@ -135,6 +135,11 @@ type AssistantConversationProps = {
    * prefix instead of a generic illustrative example. */
   docsRootRelativeToRepo: string | null;
   docsRoot: string;
+  /** The currently-open editor tab's path (docs-root-relative, same
+   * convention `readProjectFile`/`writeProjectFile` already use), or `null`
+   * when nothing's open — forwarded into `useLlmChat` so `SemanticSearch`
+   * can boost results related to whatever the user is looking at. */
+  activeFilePath: string | null;
   /** Fires once a `writeFile`/`editFile`/`deleteFile`/`createDirectory`/
    * `deleteDirectory` tool call actually lands on disk (its block settles
    * to `"done"`) — `tool`/`path` mirror the settled call so the caller can
@@ -172,6 +177,7 @@ export function AssistantConversation({
   toolDefinitions,
   docsRootRelativeToRepo,
   docsRoot,
+  activeFilePath,
   onFileWritten,
   onFileMoved,
   refreshAccessMode,
@@ -179,7 +185,7 @@ export function AssistantConversation({
   updateProviderConfig,
   loadModels,
 }: AssistantConversationProps) {
-  const { messages, sending, error, sendMessage, stopChat, contextTokens, decideToolCall, todos } = useLlmChat(
+  const { messages, sending, error, sendMessage, stopChat, contextTokens, decideToolCall, todos, clearTodos } = useLlmChat(
     providerId,
     accessMode,
     specsRepoInfo,
@@ -188,6 +194,7 @@ export function AssistantConversation({
     initialMessages,
     initialTodos,
     onTurnSettled,
+    activeFilePath,
   );
 
   useEffect(() => {
@@ -376,7 +383,7 @@ export function AssistantConversation({
 
   return (
     <>
-      <TodoProgressWidget tasks={todos} />
+      <TodoProgressWidget tasks={todos} onClearAll={sending ? undefined : clearTodos} />
       <div className="assistant-chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 ? (
           <div className="assistant-chat-placeholder">

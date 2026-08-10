@@ -117,6 +117,7 @@ type RightDockProps = {
     onFileWritten: (info: { tool: string; path: string }) => void;
     onFileMoved: (info: { from: string; to: string; updatedFiles: UpdatedReference[] }) => void;
     repoRoot: string | null;
+    activeFilePath: string | null;
   } | null;
 };
 
@@ -213,6 +214,7 @@ export function RightDock({
                 onFileWritten={assistant.onFileWritten}
                 onFileMoved={assistant.onFileMoved}
                 repoRoot={assistant.repoRoot}
+                activeFilePath={assistant.activeFilePath}
               />
             ) : (
               <div className="panel-empty">{active.empty}</div>

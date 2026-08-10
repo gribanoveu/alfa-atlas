@@ -52,6 +52,10 @@ type AssistantPanelProps = {
   /** The open project's repo root — keys persisted chat history
    * (`useChatHistory`) per repository. */
   repoRoot: string | null;
+  /** The currently-open editor tab's path (docs-root-relative), or `null`
+   * when nothing's open — forwarded to `AssistantConversation` so
+   * `SemanticSearch` can boost results related to it. */
+  activeFilePath: string | null;
 };
 
 /** This panel is the assistant's actual interaction surface. It owns
@@ -84,6 +88,7 @@ export function AssistantPanel({
   onFileWritten,
   onFileMoved,
   repoRoot,
+  activeFilePath,
 }: AssistantPanelProps) {
   const {
     providerConfigured: embeddingConfigured,
@@ -248,6 +253,7 @@ export function AssistantPanel({
                 toolDefinitions={toolDefinitions}
                 docsRootRelativeToRepo={docsRootPrefix}
                 docsRoot={docsRoot}
+                activeFilePath={activeFilePath}
                 onFileWritten={onFileWritten}
                 onFileMoved={onFileMoved}
                 refreshAccessMode={refreshAccessMode}

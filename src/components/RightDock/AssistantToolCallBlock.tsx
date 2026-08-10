@@ -9,6 +9,8 @@ import {
 } from "../../lib/assistantConfig";
 import type { FileDiffStats, FileEdit, Task, ToolResult, TodoStatus } from "../../lib/aiTools";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
+import { DeleteDirectoryReview } from "./DeleteDirectoryReview";
+import { DeleteFileReview } from "./DeleteFileReview";
 import { EditFileDiffReview } from "./EditFileDiffReview";
 import { WriteFileDiffReview } from "./WriteFileDiffReview";
 
@@ -284,6 +286,52 @@ function ToolApprovalCard({
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Папка</div>
           <div className="assistant-tool-approval-path">{args.path}</div>
+        </div>
+      ) : block.name === "deleteFile" && typeof args.path === "string" ? (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Файл будет удалён</div>
+          <button
+            type="button"
+            className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
+            aria-expanded={showDiff}
+            onClick={() => setShowDiff((v) => !v)}
+          >
+            {showDiff ? (
+              <ChevronDown className="assistant-tool-call-chevron" size={12} aria-hidden />
+            ) : (
+              <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
+            )}
+            <span>{args.path}</span>
+          </button>
+          {showDiff ? <DeleteFileReview docsRoot={docsRoot} path={args.path} /> : null}
+        </div>
+      ) : block.name === "deleteDirectory" && typeof args.path === "string" ? (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Папка будет удалена</div>
+          <button
+            type="button"
+            className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
+            aria-expanded={showDiff}
+            onClick={() => setShowDiff((v) => !v)}
+          >
+            {showDiff ? (
+              <ChevronDown className="assistant-tool-call-chevron" size={12} aria-hidden />
+            ) : (
+              <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
+            )}
+            <span>{args.path}</span>
+          </button>
+          {showDiff ? <DeleteDirectoryReview docsRoot={docsRoot} path={args.path} /> : null}
+        </div>
+      ) : block.name === "move" && typeof args.path === "string" && typeof args.newPath === "string" ? (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Перемещение</div>
+          <div className="assistant-tool-approval-path">
+            {args.path} → {args.newPath}
+          </div>
+          <div className="assistant-tool-approval-reason">
+            Ссылки на файл в других документах будут обновлены автоматически.
+          </div>
         </div>
       ) : block.name === "requestFullRepoAccess" && typeof args.reason === "string" ? (
         <div className="assistant-tool-call-detail-section">

@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, ListTodo } from "lucide-react";
+import { ChevronDown, ChevronUp, ListTodo, X } from "lucide-react";
 import type { Task, TodoStatus } from "../../lib/aiTools";
 
 function todoGlyph(status: TodoStatus): string {
@@ -63,9 +63,20 @@ const AUTO_COLLAPSE_DELAY_MS = 2000;
  * Subscribes to `useLlmChat`'s `todos` state directly (not the chat
  * transcript) — the same value threaded through every `streamLlmChat`
  * call, so this can never drift from what the model itself sees, per the
- * "one source of truth" requirement. Purely a view: nothing here can
- * change a task's status — only the agent does that via `todo update`. */
-export function TodoProgressWidget({ tasks }: { tasks: Task[] }) {
+ * "one source of truth" requirement. Almost purely a view: the one
+ * exception is `onClearAll` (`useLlmChat`'s `clearTodos`) — everything else
+ * about a task's status still only ever changes via the agent's own
+ * `todo update` calls. */
+export function TodoProgressWidget({
+  tasks,
+  onClearAll,
+}: {
+  tasks: Task[];
+  /** Bulk-cancels every open task — omitted (button hidden) while a turn is
+   * in flight, since a live `todo update` call could otherwise race a
+   * manual clear. */
+  onClearAll?: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const wasDoneRef = useRef(false);
 
@@ -119,20 +130,32 @@ export function TodoProgressWidget({ tasks }: { tasks: Task[] }) {
 
   return (
     <div className={`assistant-todo-widget${isDone ? " is-done" : ""}`}>
-      <button
-        type="button"
-        className="assistant-todo-widget-header"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((v) => !v)}
-      >
-        <ListTodo className="assistant-todo-widget-icon" size={14} aria-hidden />
-        <span className="assistant-todo-widget-summary">{summaryText}</span>
-        {expanded ? (
-          <ChevronUp className="assistant-todo-widget-chevron" size={13} aria-hidden />
-        ) : (
-          <ChevronDown className="assistant-todo-widget-chevron" size={13} aria-hidden />
-        )}
-      </button>
+      <div className="assistant-todo-widget-header-row">
+        <button
+          type="button"
+          className="assistant-todo-widget-header"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          <ListTodo className="assistant-todo-widget-icon" size={14} aria-hidden />
+          <span className="assistant-todo-widget-summary">{summaryText}</span>
+          {expanded ? (
+            <ChevronUp className="assistant-todo-widget-chevron" size={13} aria-hidden />
+          ) : (
+            <ChevronDown className="assistant-todo-widget-chevron" size={13} aria-hidden />
+          )}
+        </button>
+        {onClearAll && remaining > 0 ? (
+          <button
+            type="button"
+            className="assistant-todo-widget-clear"
+            title="Отменить все незавершённые пункты"
+            onClick={onClearAll}
+          >
+            <X size={14} aria-hidden />
+          </button>
+        ) : null}
+      </div>
       {expanded ? (
         <ul className="assistant-todo-widget-list">
           {tasks.map((t, i) => (

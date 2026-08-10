@@ -58,6 +58,10 @@ pub async fn ai_execute_tool(
         // a non-exact edit surfaces the plain deterministic error. See
         // `EmbeddingDeps::fast_apply`'s doc comment.
         fast_apply: None,
+        // Same standalone-endpoint reasoning as `fast_apply` above — no
+        // editor tab context reaches this call. See `EmbeddingDeps::
+        // active_file`'s doc comment.
+        active_file: None,
     };
     tauri::async_runtime::spawn_blocking(move || {
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
@@ -121,4 +125,23 @@ pub fn ai_get_auto_approved_tools() -> Result<Vec<ToolName>, String> {
 #[tauri::command]
 pub fn ai_set_tool_auto_approved(tool: ToolName, auto_approved: bool) -> Result<(), String> {
     ai_tools::set_tool_auto_approved(tool, auto_approved).map_err(|e| e.to_string())
+}
+
+/// Tool names the currently open project actually allows right now — the
+/// customized `ai_allowed_tools` set if one was ever saved, else `mode`'s
+/// default. Backs the Settings "Разрешённые инструменты" list.
+#[tauri::command]
+pub fn ai_get_allowed_tools() -> Result<Vec<ToolName>, String> {
+    Ok(ai_tools::allowed_tools()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect())
+}
+
+/// Persists (or revokes) one tool's membership in `ai_allowed_tools` for the
+/// currently open project — called from the Settings "Разрешённые
+/// инструменты" checkbox list.
+#[tauri::command]
+pub fn ai_set_tool_allowed(tool: ToolName, allowed: bool) -> Result<(), String> {
+    ai_tools::set_tool_allowed(tool, allowed).map_err(|e| e.to_string())
 }

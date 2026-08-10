@@ -299,11 +299,17 @@
   overflow: hidden;
 }
 
+.assistant-todo-widget-header-row {
+  display: flex;
+  align-items: center;
+}
+
 .assistant-todo-widget-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 7px 8px 7px 10px;
 
   border: none;
@@ -319,6 +325,33 @@
 
 .assistant-todo-widget-header:hover {
   background: var(--bg-2);
+}
+
+.assistant-todo-widget-clear {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 6px;
+
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+
+  cursor: pointer;
+}
+
+.assistant-todo-widget-clear:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+.assistant-todo-widget-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* Persistent "this is a plan/checklist" identifier, inline at the start of
@@ -2025,6 +2058,33 @@
 
 .tool-approval-diff-error {
   color: var(--red-tag);
+}
+
+/* Tool approval — deleteDirectory content listing (DeleteDirectoryReview). */
+
+.tool-approval-dir-list {
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+}
+
+.tool-approval-dir-list-item {
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-approval-dir-list-more {
+  padding-top: 4px;
+  color: var(--text-2);
 }
 
 .assistant-tool-call-auto-approved {

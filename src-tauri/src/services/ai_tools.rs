@@ -79,6 +79,16 @@ pub struct EmbeddingDeps {
     /// threading mechanism for one field — see this struct's own doc
     /// comment above, which already establishes that precedent for `Move`.
     pub fast_apply: Option<(Arc<dyn LlmProvider>, String)>,
+    /// The user's currently-open editor tab, if any — `FileId`-space
+    /// (already converted from the frontend's docs-root-relative
+    /// `EditorTab.path` by `commands::llm::llm_chat_stream`/
+    /// `llm_chat_stream_resume`, the same conversion
+    /// `embedding_set_priority_files` already establishes as precedent).
+    /// `semantic_search` uses this to boost chunks from files related to it
+    /// (via `related_files`) — `None` disables the boost entirely, same as
+    /// today's unboosted ranking. `commands::ai_tools::ai_execute_tool` (no
+    /// chat turn, no editor context) leaves it `None`, same as `fast_apply`.
+    pub active_file: Option<FileId>,
 }
 
 #[cfg(test)]
@@ -98,6 +108,7 @@ impl EmbeddingDeps {
                 crate::infra::parsers::registry::ParserRegistry::new(),
             )),
             fast_apply: None,
+            active_file: None,
         }
     }
 }
@@ -256,6 +267,47 @@ pub fn set_tool_auto_approved(tool: ToolName, auto_approved: bool) -> Result<(),
         set.remove(&tool);
     }
     config.ai_auto_approved_tools = Some(set.into_iter().collect());
+    project_store::save(&opened.root, &config)
+}
+
+/// Tool names the currently open project's `ai_allowed_tools` currently
+/// resolves to — the customized set if one was ever saved, else `mode`'s
+/// default (mirrors `scope_for_config`'s own resolution exactly, so what
+/// this reports is always what `execute_tool` actually enforces).
+pub fn allowed_tools() -> Result<HashSet<ToolName>, ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let config = project_store::load(&opened.root)?
+        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    Ok(config
+        .ai_allowed_tools
+        .clone()
+        .unwrap_or_else(|| default_allowed_tools(config.ai_access_mode).into_iter().collect())
+        .into_iter()
+        .collect())
+}
+
+/// Persists (or revokes) one tool's membership in `ai_allowed_tools` for the
+/// currently open project — the backend counterpart to a new Settings UI
+/// checkbox. Seeds the customized set from the current default (rather than
+/// starting from empty) the first time any tool is toggled, so unchecking
+/// one tool doesn't silently disallow every other tool too.
+pub fn set_tool_allowed(tool: ToolName, allowed: bool) -> Result<(), ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let mut config = project_store::load(&opened.root)?
+        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    let mut set: HashSet<ToolName> = config
+        .ai_allowed_tools
+        .clone()
+        .map(|v| v.into_iter().collect())
+        .unwrap_or_else(|| default_allowed_tools(config.ai_access_mode));
+    if allowed {
+        set.insert(tool);
+    } else {
+        set.remove(&tool);
+    }
+    config.ai_allowed_tools = Some(set.into_iter().collect());
     project_store::save(&opened.root, &config)
 }
 
@@ -1320,6 +1372,9 @@ fn semantic_search(
 ) -> Result<Vec<ToolMatch>, ToolError> {
     let top_k = args.top_k.unwrap_or(DEFAULT_TOP_K).clamp(1, MAX_TOP_K);
 
+    // Exact-name tier stays authoritative/unboosted — it's already the
+    // cheapest, most-precise signal, not the "did you mean something in the
+    // same file family" heuristic `related` below is.
     let mut results = symbol_matches(&deps.repo_index, scope, &args.query, top_k);
 
     let remaining = top_k.saturating_sub(results.len());
@@ -1327,12 +1382,81 @@ fn semantic_search(
         return Ok(results);
     }
 
-    if is_semantic_ready(deps) {
-        results.extend(semantic_matches(scope, deps, &args.query, remaining)?);
+    let related = deps
+        .active_file
+        .as_ref()
+        .map(|file_id| related_files(deps, file_id))
+        .unwrap_or_default();
+
+    // Over-fetch when a boost could reorder results — a related-but-not-
+    // quite-top-ranked chunk needs candidates beyond `remaining` to have any
+    // chance of surfacing after boosting.
+    let fetch_k = if related.is_empty() { remaining } else { (remaining * 3).min(MAX_TOP_K * 3) };
+
+    let tier_results = if is_semantic_ready(deps) {
+        semantic_matches(scope, deps, &args.query, fetch_k)?
     } else {
-        results.extend(lexical_matches(&deps.chunk_index, scope, &args.query, remaining));
-    }
+        lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
+    };
+
+    results.extend(apply_related_boost(tier_results, &related, remaining));
     Ok(results)
+}
+
+/// Boosts (multiplicatively, via `RELATED_FILE_BOOST`) every match whose
+/// file is in `related`, re-sorts descending by the (possibly boosted)
+/// score, then truncates to `budget` — the final step of the cascade's
+/// semantic/lexical tier, pulled out as its own pure function so it's
+/// testable without going through `is_semantic_ready`'s project-state
+/// lookups. A no-op re-sort when `related` is empty would still be correct
+/// but is skipped as a cheap early-out, matching `semantic_search`'s
+/// pre-existing behavior for "no active file".
+fn apply_related_boost(
+    mut matches: Vec<ToolMatch>,
+    related: &HashSet<FileId>,
+    budget: usize,
+) -> Vec<ToolMatch> {
+    if !related.is_empty() {
+        for m in &mut matches {
+            if related.contains(&FileId(m.path.clone())) {
+                m.score *= RELATED_FILE_BOOST;
+            }
+        }
+        matches.sort_by(|a, b| b.score.total_cmp(&a.score));
+    }
+    matches.truncate(budget);
+    matches
+}
+
+/// A light nudge (not a hard filter) applied to a search result's score when
+/// its file is one `related_files` returns for the currently-open editor
+/// tab — multiplicative so it scales sensibly against both the semantic
+/// tier's cosine-similarity scores (roughly `0..1`) and the lexical
+/// fallback's raw occurrence counts, without needing a tier-specific
+/// constant.
+const RELATED_FILE_BOOST: f32 = 1.25;
+
+/// Combines both dependency graphs `RepositoryIndex`/`WorkspaceIndex`
+/// already compute for `file_id`, one hop, forward-only: Java imports (via
+/// `RepositoryIndex::java_dependencies`) and AsciiDoc/JSON/YAML
+/// includes+`$ref`s (via `WorkspaceIndex::find_includes`/`find_references`).
+/// Same combination `commands::embeddings.rs`'s first-sync priority code
+/// already performs (`direct_dependencies` + `java_dependencies`), kept as
+/// its own small helper here rather than imported — `services` must not
+/// depend on `commands`.
+fn related_files(deps: &EmbeddingDeps, file_id: &FileId) -> HashSet<FileId> {
+    let mut out: HashSet<FileId> = deps.repo_index.java_dependencies(file_id).into_iter().collect();
+
+    let doc_id = crate::domain::workspace_index::DocumentId::new(file_id.0.clone());
+    for inc in deps.workspace_index.find_includes(&doc_id) {
+        out.insert(FileId(inc.path));
+    }
+    for r in deps.workspace_index.find_references(&doc_id) {
+        if !r.target_document.is_empty() {
+            out.insert(FileId(r.target_document));
+        }
+    }
+    out
 }
 
 /// Mirrors `commands::embeddings::embedding_index_status`'s readiness check
@@ -1622,6 +1746,101 @@ mod tests {
         let repo = repo.canonicalize().unwrap();
         let docs = docs.canonicalize().unwrap();
         (repo, docs)
+    }
+
+    // --- `related_files` ---
+
+    #[test]
+    fn related_files_combines_java_imports_and_workspace_includes() {
+        let (repo, docs) = fixture_repo();
+
+        // JSON `$ref` side: `current.json` -> `related.json`.
+        fs::write(docs.join("current.json"), r#"{"$ref": "./related.json"}"#).unwrap();
+        fs::write(docs.join("related.json"), "{}").unwrap();
+
+        let workspace_index =
+            Arc::new(WorkspaceIndex::new(crate::infra::parsers::registry::ParserRegistry::new()));
+        workspace_index.build(repo.clone()).unwrap();
+
+        // Java side: `Current.java` imports `com.example.Related` —
+        // `java_dependencies` matches on the literal on-disk path, so the
+        // package directory layout must actually match `com/example/`.
+        let pkg = repo.join("src/com/example");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("Current.java"), "import com.example.Related;\nclass Current {}\n").unwrap();
+        fs::write(pkg.join("Related.java"), "package com.example;\nclass Related {}\n").unwrap();
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+
+        let deps = EmbeddingDeps {
+            workspace_index,
+            repo_index: Arc::new(repo_index),
+            ..EmbeddingDeps::empty()
+        };
+
+        let json_related = related_files(&deps, &FileId("docs/current.json".to_string()));
+        assert!(json_related.contains(&FileId("docs/related.json".to_string())));
+
+        let java_related = related_files(&deps, &FileId("src/com/example/Current.java".to_string()));
+        assert!(java_related.contains(&FileId("src/com/example/Related.java".to_string())));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn related_files_is_empty_for_an_unknown_file() {
+        let deps = EmbeddingDeps::empty();
+        assert!(related_files(&deps, &FileId("nowhere.json".to_string())).is_empty());
+    }
+
+    // --- `apply_related_boost` ---
+
+    fn sample_match(path: &str, score: f32) -> ToolMatch {
+        ToolMatch {
+            path: path.to_string(),
+            snippet: String::new(),
+            score,
+            start_byte: 0,
+            end_byte: 0,
+            qualified_name: None,
+            source: MatchSource::Lexical,
+        }
+    }
+
+    #[test]
+    fn apply_related_boost_reorders_a_related_match_above_a_stronger_unrelated_one() {
+        let matches = vec![sample_match("unrelated.json", 6.0), sample_match("related.json", 5.0)];
+        let related: HashSet<FileId> = [FileId("related.json".to_string())].into_iter().collect();
+
+        // `5.0 * RELATED_FILE_BOOST` (`1.25`) = `6.25`, just enough to edge
+        // out the unboosted `6.0`.
+        let boosted = apply_related_boost(matches, &related, 2);
+
+        assert_eq!(boosted[0].path, "related.json");
+        assert_eq!(boosted[1].path, "unrelated.json");
+    }
+
+    #[test]
+    fn apply_related_boost_is_a_no_op_with_no_related_files() {
+        let matches = vec![sample_match("a.json", 6.0), sample_match("b.json", 5.0)];
+
+        let unboosted = apply_related_boost(matches, &HashSet::new(), 2);
+
+        assert_eq!(unboosted[0].path, "a.json");
+        assert_eq!(unboosted[0].score, 6.0);
+        assert_eq!(unboosted[1].path, "b.json");
+        assert_eq!(unboosted[1].score, 5.0);
+    }
+
+    #[test]
+    fn apply_related_boost_truncates_to_budget_after_resorting() {
+        let matches = vec![sample_match("unrelated.json", 6.0), sample_match("related.json", 5.0)];
+        let related: HashSet<FileId> = [FileId("related.json".to_string())].into_iter().collect();
+
+        let boosted = apply_related_boost(matches, &related, 1);
+
+        assert_eq!(boosted.len(), 1);
+        assert_eq!(boosted[0].path, "related.json");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
 use crate::domain::chunk_index::{ChunkId, ChunkKind, ChunkMetadata};
-use crate::domain::repo_index::{FileId, FileMetadata, Language, Symbol, SymbolKind};
+use crate::domain::repo_index::{FileId, FileMetadata, ImportRef, Language, Symbol, SymbolKind};
 
 const DB_FILE_NAME: &str = "chunks.db";
 pub const VECTORS_FILE_NAME: &str = "vectors.usearch";
@@ -77,6 +77,19 @@ CREATE TABLE IF NOT EXISTS symbols (
   end_byte   INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
+
+-- One row per `ImportRef` a `JavaIndexer` extracted, mirroring
+-- `RepositoryIndex`'s in-memory `IndexedFile.imports` — persisted so a cold
+-- start's `RepositoryIndex::build_reusing_symbols` can carry a reused (i.e.
+-- content-unchanged) file's import graph forward instead of silently
+-- dropping it (see `commands::embeddings::load_persisted_symbols`). Same
+-- shape/gating as `symbols`: no primary key, keyed by `file_id`.
+CREATE TABLE IF NOT EXISTS imports (
+  file_id     TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
+  fqn         TEXT NOT NULL,
+  is_wildcard INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_imports_file_id ON imports(file_id);
 "#;
 
 #[derive(Debug, Error)]
@@ -139,13 +152,14 @@ impl IndexStore {
         Ok(())
     }
 
-    /// Deletes every row (`meta`/`files`/`chunks`/`embeddings`/`symbols`) —
-    /// used when the version/`index_root` compatibility guard decides a
-    /// persisted store is unusable and must be rebuilt from scratch.
+    /// Deletes every row (`meta`/`files`/`chunks`/`embeddings`/`symbols`/
+    /// `imports`) — used when the version/`index_root` compatibility guard
+    /// decides a persisted store is unusable and must be rebuilt from
+    /// scratch.
     pub fn wipe(&self) -> Result<(), IndexStoreError> {
         let conn = self.lock()?;
         conn.execute_batch(
-            "DELETE FROM embeddings; DELETE FROM chunks; DELETE FROM symbols; DELETE FROM files; DELETE FROM meta;",
+            "DELETE FROM embeddings; DELETE FROM chunks; DELETE FROM symbols; DELETE FROM imports; DELETE FROM files; DELETE FROM meta;",
         )?;
         Ok(())
     }
@@ -371,6 +385,53 @@ impl IndexStore {
         for row in rows {
             let (file_id, symbol) = row?;
             out.entry(file_id).or_default().push(symbol);
+        }
+        Ok(out)
+    }
+
+    /// Drops every existing import row for `file_id`, then inserts
+    /// `imports` — mirrors `replace_symbols_for_file`'s "delete then bulk
+    /// insert" shape exactly.
+    pub fn replace_imports_for_file(
+        &self,
+        file_id: &FileId,
+        imports: &[ImportRef],
+    ) -> Result<(), IndexStoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM imports WHERE file_id = ?1", params![file_id.0])?;
+        for import in imports {
+            tx.execute(
+                "INSERT INTO imports (file_id, fqn, is_wildcard) VALUES (?1, ?2, ?3)",
+                params![file_id.0, import.fqn, import.is_wildcard],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every persisted import, grouped by the file it belongs to — what
+    /// `commands::embeddings::load_persisted_symbols` reuses so a cold-start
+    /// `RepositoryIndex::build_reusing_symbols` call carries a reused file's
+    /// Java import graph forward instead of losing it.
+    pub fn load_all_imports(&self) -> Result<HashMap<FileId, Vec<ImportRef>>, IndexStoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare("SELECT file_id, fqn, is_wildcard FROM imports")?;
+        let rows = stmt.query_map([], |row| {
+            let file_id: String = row.get(0)?;
+            Ok((
+                FileId(file_id),
+                ImportRef {
+                    fqn: row.get(1)?,
+                    is_wildcard: row.get(2)?,
+                },
+            ))
+        })?;
+
+        let mut out: HashMap<FileId, Vec<ImportRef>> = HashMap::new();
+        for row in rows {
+            let (file_id, import) = row?;
+            out.entry(file_id).or_default().push(import);
         }
         Ok(out)
     }
@@ -642,6 +703,34 @@ mod tests {
     }
 
     #[test]
+    fn imports_round_trip_through_replace_and_load_all() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        let file_id = FileId("com/foo/Bar.java".to_string());
+        store
+            .upsert_files(&[sample_file("com/foo/Bar.java", blake3::hash(b"x"))])
+            .unwrap();
+        let imports = vec![
+            ImportRef { fqn: "com.foo.Baz".to_string(), is_wildcard: false },
+            ImportRef { fqn: "com.foo.util".to_string(), is_wildcard: true },
+        ];
+        store.replace_imports_for_file(&file_id, &imports).unwrap();
+
+        let loaded = store.load_all_imports().unwrap();
+        let loaded_imports = loaded.get(&file_id).unwrap();
+        assert_eq!(loaded_imports.len(), 2);
+        assert!(loaded_imports.contains(&ImportRef { fqn: "com.foo.Baz".to_string(), is_wildcard: false }));
+        assert!(loaded_imports.contains(&ImportRef { fqn: "com.foo.util".to_string(), is_wildcard: true }));
+
+        // Replacing again with an empty set drops the file's imports.
+        store.replace_imports_for_file(&file_id, &[]).unwrap();
+        assert!(store.load_all_imports().unwrap().get(&file_id).is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn deleting_a_file_cascades_to_its_symbol_rows() {
         let dir = fixture_dir();
         let store = IndexStore::open(&dir).unwrap();
@@ -689,9 +778,13 @@ mod tests {
         store
             .replace_symbols_for_file(&file_id, &[sample_symbol("Foo", 0, 3)])
             .unwrap();
+        store
+            .replace_imports_for_file(&file_id, &[ImportRef { fqn: "com.foo.Bar".to_string(), is_wildcard: false }])
+            .unwrap();
 
         store.wipe().unwrap();
         assert!(store.load_all_symbols().unwrap().is_empty());
+        assert!(store.load_all_imports().unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }

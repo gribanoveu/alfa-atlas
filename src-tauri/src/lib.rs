@@ -240,6 +240,8 @@ pub fn run() {
             commands::ai_tools::ai_get_tool_definitions,
             commands::ai_tools::ai_get_auto_approved_tools,
             commands::ai_tools::ai_set_tool_auto_approved,
+            commands::ai_tools::ai_get_allowed_tools,
+            commands::ai_tools::ai_set_tool_allowed,
             commands::embeddings::embedding_get_config,
             commands::embeddings::embedding_set_config,
             commands::embeddings::embedding_set_remote_api_key,

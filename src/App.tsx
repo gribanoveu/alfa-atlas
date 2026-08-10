@@ -1413,6 +1413,7 @@ function App() {
               onFileWritten: handleAssistantFileWritten,
               onFileMoved: handleAssistantFileMoved,
               repoRoot: project.repoRoot,
+              activeFilePath: editor.activeTab?.path ?? null,
             }}
           />
         </div>

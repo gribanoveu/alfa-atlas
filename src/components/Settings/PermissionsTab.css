@@ -37,3 +37,16 @@
 .permissions-tab .settings-link-btn.danger {
   color: var(--danger);
 }
+
+.permissions-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.permissions-item-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}

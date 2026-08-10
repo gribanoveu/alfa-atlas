@@ -432,24 +432,23 @@ pub(crate) fn attach_embedding_index(
 }
 
 /// Combines `store`'s persisted per-file metadata (content hash, size,
-/// mtime, language) with its persisted symbols into the shape
+/// mtime, language) with its persisted symbols and imports into the shape
 /// `RepositoryIndex::build_reusing_symbols` wants — what a fresh (e.g.
 /// just-restarted) `embedding_sync` call feeds it so a file whose mtime/size
 /// (cheapest check) or content hash (fallback) still match the last sync
 /// skips a tree-sitter/pulldown-cmark re-parse entirely, not just
-/// re-embedding. `imports` is deliberately always empty here — Java imports
-/// aren't persisted to SQLite (see `ReusableFileData`'s doc comment); a
-/// reused entry's imports go stale until that file is genuinely re-parsed,
-/// which is fine only because nothing reads `imports` outside a *true* first
-/// sync, when `persisted`/`resident` are both empty by construction anyway.
+/// re-embedding — including its Java import graph, which used to be
+/// silently dropped here (see `IndexStore::load_all_imports`'s doc comment).
 fn load_persisted_symbols(store: &IndexStore) -> Result<HashMap<FileId, ReusableFileData>, String> {
     let files = store.load_all_files().map_err(|e| e.to_string())?;
     let mut symbols_by_file = store.load_all_symbols().map_err(|e| e.to_string())?;
+    let mut imports_by_file = store.load_all_imports().map_err(|e| e.to_string())?;
     Ok(files
         .into_iter()
         .map(|(file_id, metadata)| {
             let symbols = symbols_by_file.remove(&file_id).unwrap_or_default();
-            (file_id, ReusableFileData { metadata, symbols, imports: Vec::new() })
+            let imports = imports_by_file.remove(&file_id).unwrap_or_default();
+            (file_id, ReusableFileData { metadata, symbols, imports })
         })
         .collect())
 }
@@ -548,6 +547,9 @@ fn run_incremental_sync(
                         .map_err(|e| e.to_string())?;
                     store
                         .replace_symbols_for_file(&file_id, &indexed.symbols)
+                        .map_err(|e| e.to_string())?;
+                    store
+                        .replace_imports_for_file(&file_id, &indexed.imports)
                         .map_err(|e| e.to_string())?;
                 }
             }
@@ -656,6 +658,9 @@ fn sync_backlog_batch(
                     .map_err(|e| e.to_string())?;
                 store
                     .replace_symbols_for_file(file_id, &indexed.symbols)
+                    .map_err(|e| e.to_string())?;
+                store
+                    .replace_imports_for_file(file_id, &indexed.imports)
                     .map_err(|e| e.to_string())?;
             }
             Err(e) => eprintln!("[embedding-sync] background: skipping {}: {e}", file_id.0),
@@ -1147,6 +1152,9 @@ pub async fn embedding_sync(
             store
                 .replace_symbols_for_file(file_id, &indexed.symbols)
                 .map_err(|e| e.to_string())?;
+            store
+                .replace_imports_for_file(file_id, &indexed.imports)
+                .map_err(|e| e.to_string())?;
             chunked_so_far += 1;
             emit_sync_progress(&app, SyncPhase::Chunking, chunked_so_far, total_changed, SyncTrigger::Full);
         }
@@ -1504,6 +1512,36 @@ mod tests {
             WorkspaceIndex::new(crate::infra::parsers::registry::ParserRegistry::new());
         let file_id = FileId("guide.adoc".to_string());
         assert!(direct_dependencies(&workspace_index, &file_id).is_empty());
+    }
+
+    // --- `load_persisted_symbols` ---
+
+    #[test]
+    fn load_persisted_symbols_carries_persisted_imports_forward() {
+        use crate::domain::repo_index::{FileMetadata, ImportRef, Language};
+        use crate::infra::index_store::IndexStore;
+
+        let dir = fixture_dir("load-persisted-symbols");
+        let store = IndexStore::open(&dir).unwrap();
+
+        let file_id = FileId("com/foo/Bar.java".to_string());
+        store
+            .upsert_files(&[FileMetadata {
+                relative_path: file_id.0.clone(),
+                size_bytes: 10,
+                modified_at: SystemTime::now(),
+                hash: blake3::hash(b"x"),
+                language: Language::Java,
+            }])
+            .unwrap();
+        let imports = vec![ImportRef { fqn: "com.foo.Baz".to_string(), is_wildcard: false }];
+        store.replace_imports_for_file(&file_id, &imports).unwrap();
+
+        let persisted = load_persisted_symbols(&store).unwrap();
+        let entry = persisted.get(&file_id).unwrap();
+        assert_eq!(entry.imports, imports);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     // --- `sync_backlog_batch` ---

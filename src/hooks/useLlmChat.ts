@@ -72,6 +72,7 @@ export function useLlmChat(
   initialMessages: ChatMessage[],
   initialTodos: Task[],
   onTurnSettled: (messages: ChatMessage[], todos: Task[]) => void,
+  activeFilePath: string | null,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [sending, setSending] = useState(false);
@@ -352,7 +353,7 @@ export function useLlmChat(
         // card entirely for tool names already trusted, whether from this
         // chat or persisted from an earlier one on this project) before
         // resuming, potentially several times if later rounds pause again.
-        let outcome = await streamLlmChat(providerId, wireMessages, todoListRef.current);
+        let outcome = await streamLlmChat(providerId, wireMessages, todoListRef.current, activeFilePath);
         while (outcome.status === "pendingApproval") {
           const { history, round, budgetUsed, calls, todos: updatedTodos } = outcome.value;
           setTodos(updatedTodos);
@@ -375,7 +376,15 @@ export function useLlmChat(
                 ];
 
           autoApprovedIdsRef.current = autoApprovedIds;
-          outcome = await streamLlmChatResume(providerId, history, round, budgetUsed, decisions, todoListRef.current);
+          outcome = await streamLlmChatResume(
+            providerId,
+            history,
+            round,
+            budgetUsed,
+            decisions,
+            todoListRef.current,
+            activeFilePath,
+          );
         }
 
         // Authoritative full text of the *final* round corrects only the
@@ -439,6 +448,7 @@ export function useLlmChat(
       collectDecisions,
       onTurnSettled,
       setTodos,
+      activeFilePath,
     ],
   );
 
@@ -476,6 +486,20 @@ export function useLlmChat(
     return lastUsageTotal + tail;
   }, [messages, accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
 
+  /** Bulk version of what a model-driven `todo update` already does one
+   * task at a time — marks every non-terminal task `cancelled`, same status,
+   * not a different deletion semantic. Explicitly persists via
+   * `onTurnSettled` (the only place `useChatHistory`'s `saveChat` is invoked
+   * outside `sendMessage`'s own `finally` block), since a button firing
+   * between turns has no other path to survive a reload otherwise. */
+  const clearTodos = useCallback(() => {
+    const next = todoListRef.current.map((t) =>
+      t.status === "pending" || t.status === "inProgress" ? { ...t, status: "cancelled" as const } : t,
+    );
+    setTodos(next);
+    onTurnSettled(messages, next);
+  }, [messages, onTurnSettled, setTodos]);
+
   return {
     messages,
     sending,
@@ -483,6 +507,7 @@ export function useLlmChat(
     sendMessage,
     contextTokens,
     todos,
+    clearTodos,
     systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
     decideToolCall,
     stopChat,

@@ -186,8 +186,9 @@ export function streamLlmChat(
   providerId: string,
   messages: LlmMessage[],
   todos: Task[],
+  activeFilePath: string | null,
 ): Promise<ChatStreamOutcome> {
-  return invoke<ChatStreamOutcome>("llm_chat_stream", { providerId, messages, todos });
+  return invoke<ChatStreamOutcome>("llm_chat_stream", { providerId, messages, todos, activeFilePath });
 }
 
 /** Continues a conversation paused by a `{status: "pendingApproval"}`
@@ -204,6 +205,7 @@ export function streamLlmChatResume(
   budgetUsed: number,
   decisions: ToolCallDecision[],
   todos: Task[],
+  activeFilePath: string | null,
 ): Promise<ChatStreamOutcome> {
   return invoke<ChatStreamOutcome>("llm_chat_stream_resume", {
     providerId,
@@ -212,6 +214,7 @@ export function streamLlmChatResume(
     budgetUsed,
     decisions,
     todos,
+    activeFilePath,
   });
 }
 
