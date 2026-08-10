@@ -6,7 +6,7 @@
    `AssistantPanel.css`), so code here uses `--bg-0` instead for contrast. */
 
 .assistant-md {
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .assistant-md > :first-child {
@@ -23,7 +23,7 @@
 .markdown-h4,
 .markdown-h5,
 .markdown-h6 {
-  margin: 14px 0 6px;
+  margin: 16px 0 8px;
   color: var(--text-0);
   font-weight: 600;
   line-height: 1.3;
@@ -37,7 +37,7 @@
 .markdown-h6 { font-size: 0.93em; }
 
 .markdown-p {
-  margin: 6px 0;
+  margin: 10px 0;
   /* Preserves line breaks in unfenced text (e.g. ASCII tree diagrams the
      model sends as plain paragraphs) without breaking normal word wrap. */
   white-space: pre-line;
@@ -54,7 +54,7 @@
 
 .markdown-ul,
 .markdown-ol {
-  margin: 6px 0;
+  margin: 8px 0;
   padding-left: 20px;
 }
 
@@ -62,12 +62,16 @@
 .markdown-ol { list-style: decimal; }
 
 .markdown-li {
-  margin: 2px 0;
+  margin: 4px 0;
 }
 
 .markdown-li > .markdown-ul,
 .markdown-li > .markdown-ol {
-  margin-top: 2px;
+  margin-top: 4px;
+}
+
+.markdown-li > .markdown-p {
+  margin: 0;
 }
 
 .markdown-blockquote {

@@ -202,6 +202,10 @@ export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantT
         ) : null}
       </button>
 
+      {block.status !== "running" && block.status !== "pendingApproval" ? (
+        <div className="assistant-tool-call-summary">{describeToolResult(block)}</div>
+      ) : null}
+
       {block.status === "pendingApproval" ? (
         <ToolApprovalCard block={block} docsRoot={docsRoot} onDecide={onDecide} />
       ) : null}

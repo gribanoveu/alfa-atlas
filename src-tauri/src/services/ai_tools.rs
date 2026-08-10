@@ -522,7 +522,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ListFiles) {
         defs.push(LlmToolDefinition {
             name: "listFiles".to_string(),
-            description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use this tool to discover files, locate files, or inspect directories. Returns an indented ASCII tree (directories end with `/`), not a flat list."
+            description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use this tool to discover files, locate files, or inspect directories. Returns an indented ASCII tree (directories end with `/`), not a flat list. Do not manually prepend a documentation-root or repository-root segment to `path` — it is already relative to the current root."
     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -548,7 +548,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ReadFile) {
         defs.push(LlmToolDefinition {
             name: "readFile".to_string(),
-            description: "Read the text content of one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details. Prefer a line range for a large file when only part of it is relevant."
+            description: "Read the text content of one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details. Prefer a line range for a large file when only part of it is relevant. Paths returned by listFiles/grep are already correctly rooted — pass them here as-is, with no manual prefix added or stripped."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -599,7 +599,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "grep".to_string(),
             description:
-                "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Use when you need precision — every call site of a symbol, every occurrence of a literal string, or a regex pattern — not conceptual similarity. Prefer this over semanticSearch for \"find all places where X is used\". Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Honors .gitignore; skips binary and oversized files."
+                "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Use when you need precision — every call site of a symbol, every occurrence of a literal string, or a regex pattern — not conceptual similarity. Prefer this over semanticSearch for \"find all places where X is used\". Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Honors .gitignore; skips binary and oversized files. Returned paths are already relative to the same root readFile uses — pass them to readFile unchanged, no prefix needed."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -689,7 +689,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "check".to_string(),
             description:
-                "Run a documentation verification and return findings (the same list the editor's Problems panel shows). Currently only kind \"problems\" is available — broken xref/include/image targets, missing anchors, duplicate anchors, circular includes, and parse errors. Checks cover ONLY supported indexed documentation file types under the documentation root (.adoc/.asciidoc, .md/.markdown, .json, .yaml/.yml, .txt, .puml/.plantuml, .mmd/.mermaid) — not arbitrary repository source code or unsupported extensions. Recomputes diagnostics before returning so results are fresh. Optional path is relative to the documentation root (like writeFile/editFile), even in Full-repo mode. Omit path to check every indexed docs file. In the result, each diagnostic's `document` field and paths inside `message` are repository-root-relative (e.g. src/docs/asciidoc/.../file.adoc) — convert back to a docs-relative path before calling readFile/editFile/writeFile. Results are capped; truncated is true when the cap was hit."
+                "Run a documentation verification and return findings (the same list the editor's Problems panel shows). Currently only kind \"problems\" is available — broken xref/include/image targets, missing anchors, duplicate anchors, circular includes, and parse errors. Checks cover ONLY supported indexed documentation file types under the documentation root (.adoc/.asciidoc, .md/.markdown, .json, .yaml/.yml, .txt, .puml/.plantuml, .mmd/.mermaid) — not arbitrary repository source code or unsupported extensions. Recomputes diagnostics before returning so results are fresh. Optional path is relative to the documentation root (like writeFile/editFile), even in Full-repo mode. Omit path to check every indexed docs file. In the result, each diagnostic's `document` field and paths inside `message` are repository-root-relative — e.g. `<repo-root>/<docs-root>/.../file.adoc`, a schematic placeholder, NOT a literal path for this project. Strip the actual documentation-root segment (discover it with listFiles if unsure) to get a docs-relative path before calling readFile/editFile/writeFile. Results are capped; truncated is true when the cap was hit."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",

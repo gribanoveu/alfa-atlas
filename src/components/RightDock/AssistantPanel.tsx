@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { FileText, FolderGit2, RefreshCw, Settings2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
@@ -7,6 +8,8 @@ import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
 import { useToolDefinitions } from "../../hooks/useToolDefinitions";
 import type { AiAccessMode } from "../../lib/aiTools";
+import type { ChatExportFormat } from "../../lib/chatExport";
+import { chatMessagesToJson, chatMessagesToMarkdown, sanitizeFilename, writeExportFile } from "../../lib/chatExport";
 import { deriveChatTitle } from "../../lib/chatHistory";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
@@ -124,6 +127,7 @@ export function AssistantPanel({
   );
   const [conversationSending, setConversationSending] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // The active chat's saved title, or — for a chat that hasn't completed
   // its first turn yet (so it isn't in `activeChats`) — a live preview
@@ -185,6 +189,43 @@ export function AssistantPanel({
     chatHistory.newChat();
   };
 
+  // Format is chosen up front (via `ChatHistoryMenu`'s popover) so the save
+  // dialog's `filters`/`defaultPath` extension are unambiguous — Tauri's
+  // `save()` only ever returns the final path, not which filter the user
+  // picked, so a single-format dialog is the only reliable way to know
+  // which serializer to run.
+  const handleExportChat = async (format: ChatExportFormat) => {
+    setExportError(null);
+    const messages = chatHistory.currentMessages;
+    if (!messages || messages.length === 0) return;
+    const filename = sanitizeFilename(currentTitle);
+    const extension = format === "markdown" ? "md" : "json";
+    let path: string | null;
+    try {
+      path = await save({
+        defaultPath: `${filename}.${extension}`,
+        filters: [
+          format === "markdown"
+            ? { name: "Markdown", extensions: ["md"] }
+            : { name: "JSON", extensions: ["json"] },
+        ],
+      });
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : String(e));
+      return;
+    }
+    if (path === null) return;
+    const content =
+      format === "markdown"
+        ? chatMessagesToMarkdown(currentTitle, messages, chatHistory.currentTodos ?? [])
+        : chatMessagesToJson(chatHistory.currentChatId ?? "", currentTitle, messages, chatHistory.currentTodos ?? []);
+    try {
+      await writeExportFile(path, content);
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   return (
     <div className="assistant-panel">
       {llmReady ? (
@@ -193,12 +234,15 @@ export function AssistantPanel({
           currentChatId={chatHistory.currentChatId}
           currentTitle={currentTitle}
           disabled={conversationSending}
+          exportDisabled={!chatHistory.currentMessages || chatHistory.currentMessages.length === 0}
           onSelect={handleSelectChat}
           onArchive={(id) => void chatHistory.archiveChat(id)}
           onNewChat={handleNewChat}
           onShowArchive={handleShowArchive}
+          onExport={(format) => void handleExportChat(format)}
         />
       ) : null}
+      {exportError ? <div className="assistant-export-error">Не удалось сохранить чат: {exportError}</div> : null}
 
       <section className="assistant-panel-access">
         <div className="assistant-access-toggle" role="radiogroup" aria-label="Область доступа AI">

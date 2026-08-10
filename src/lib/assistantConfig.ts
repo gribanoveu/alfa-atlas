@@ -63,10 +63,10 @@ export function buildAssistantSystemPrompt(
       }`
     : "Documentation";
 
-  const pathExamplePrefix = docsRootRelativeToRepo ?? "src/docs/asciidoc";
+  const pathExamplePrefix = docsRootRelativeToRepo ?? "<docs-root>";
   const pathExampleIntro = docsRootRelativeToRepo
     ? `The documentation root in this project is \`${docsRootRelativeToRepo}\`. For the file \`architecture/system.adoc\` within it:`
-    : `If the documentation root were \`src/docs/asciidoc\`, then for the file \`architecture/system.adoc\` within it:`;
+    : `The documentation root in this project coincides with the repository root (or is not yet known — use listFiles to confirm). Using the placeholder \`<docs-root>\` below is illustrative only, not a literal path — for the file \`architecture/system.adoc\` within it:`;
   const openApiPathLine = docsRootRelativeToRepo
     ? `For OpenAPI projects, the spec directory is the documentation root: write paths never include \`specs/\`. Read paths in Full-repo mode use \`${docsRootRelativeToRepo}\`.`
     : `For OpenAPI projects, the spec directory is the documentation root: write paths never include \`specs/\`. Read paths in Full-repo mode use the full path — discover it with \`listFiles\` if unknown.`;
@@ -90,6 +90,7 @@ Be clear, practical, and substantive. Give a complete answer that the analyst ca
 - Timezone: ${timeZone}
 - Access mode: ${modeDescription}
 - Project type: ${projectTypeDescription}
+- Response language: always respond in Russian, regardless of the language of the user's message. Keep code, identifiers, file paths, and technical terms as-is.
 
 You cannot change your access mode directly. Use \`requestFullRepoAccess\` only when the current mode is clearly insufficient — with a specific reason, not speculatively. User approval is required and may be denied.
 
@@ -204,6 +205,8 @@ Two different roots exist for tool paths — this split is intentional and does 
 
 In Docs-only mode both roots coincide, so the distinction has no effect.
 
+Any example path shown in a tool description (including \`check\`'s "e.g. ..." path) is schematic, not a literal path in this project — never copy it verbatim into a tool call. The actual documentation root for this project is given below (or discover it with \`listFiles\` if it isn't).
+
 ${pathExampleIntro}
 
 - \`listFiles\`/\`readFile\`/\`grep\`/\`gitDiff\`/\`gitBlame\` in Full-repo: \`${pathExamplePrefix}/architecture/system.adoc\`
@@ -241,7 +244,9 @@ Use the current date and timezone only when relevant. Do not assume that dates/t
 `;
 }
 
-// TODO: for future implementation
+// TODO: for future implementation — currently unused (dead code). When wired up, mirror the
+// "Response language" runtime-context line and the illustrative (non-literal) path-example
+// wording from buildAssistantSystemPrompt above, including the "src/docs/asciidoc" fallback fix.
 export function buildPlanModeSystemPrompt(
   mode: AiAccessMode,
   specsRepoInfo: SpecsRepoInfo | null,

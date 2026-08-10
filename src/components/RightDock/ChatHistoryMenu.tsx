@@ -1,5 +1,6 @@
-import { Archive, ChevronDown, Plus } from "lucide-react";
+import { Archive, ChevronDown, Download, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { ChatExportFormat } from "../../lib/chatExport";
 import type { ChatSummary } from "../../lib/chatHistory";
 
 type ChatHistoryMenuProps = {
@@ -12,10 +13,14 @@ type ChatHistoryMenuProps = {
   /** Disabled while a turn is in flight — see `AssistantPanel.tsx`'s doc
    * comment on why switching mid-turn isn't safe. */
   disabled: boolean;
+  /** Additionally disables just the export button — true while there's
+   * nothing to export yet (no messages, or still loading). */
+  exportDisabled: boolean;
   onSelect: (chatId: string) => void;
   onArchive: (chatId: string) => void;
   onNewChat: () => void;
   onShowArchive: () => void;
+  onExport: (format: ChatExportFormat) => void;
 };
 
 function formatRelativeTime(unixMillis: number): string {
@@ -40,13 +45,17 @@ export function ChatHistoryMenu({
   currentChatId,
   currentTitle,
   disabled,
+  exportDisabled,
   onSelect,
   onArchive,
   onNewChat,
   onShowArchive,
+  onExport,
 }: ChatHistoryMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -63,6 +72,22 @@ export function ChatHistoryMenu({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!exportRef.current?.contains(event.target as Node)) setExportMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExportMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [exportMenuOpen]);
 
   return (
     <div className="assistant-chat-switcher">
@@ -142,6 +167,46 @@ export function ChatHistoryMenu({
       >
         <Archive size={17} strokeWidth={1.9} aria-hidden />
       </button>
+      <div className="assistant-chat-export" ref={exportRef}>
+        <button
+          type="button"
+          className="assistant-btn assistant-chat-icon-btn"
+          disabled={disabled || exportDisabled}
+          title="Экспортировать чат"
+          aria-label="Экспортировать чат"
+          aria-haspopup="menu"
+          aria-expanded={exportMenuOpen}
+          onClick={() => setExportMenuOpen((v) => !v)}
+        >
+          <Download size={17} strokeWidth={1.9} aria-hidden />
+        </button>
+        {exportMenuOpen ? (
+          <div className="clone-select-menu assistant-chat-export-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              className="clone-select-option"
+              onClick={() => {
+                setExportMenuOpen(false);
+                onExport("markdown");
+              }}
+            >
+              <span className="clone-select-path">Markdown (.md)</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="clone-select-option"
+              onClick={() => {
+                setExportMenuOpen(false);
+                onExport("json");
+              }}
+            >
+              <span className="clone-select-path">JSON (.json)</span>
+            </button>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
