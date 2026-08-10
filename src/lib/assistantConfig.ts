@@ -502,6 +502,17 @@ export function buildTodoContextBlock(tasks: Task[]): string | null {
   return `TODO:\n${lines.join("\n")}`;
 }
 
+// Docs-relative paths in tool-call labels/summaries can be arbitrarily deep
+// (e.g. `createEnsPaymentDocument/createEnsPaymentDocument.puml`) and these
+// strings render inline in a narrow dock panel — showing just the final
+// segment keeps the card readable; the full path is still available via a
+// `title` tooltip where these are used, and unabridged in the expanded
+// detail view (`ToolResultDetail`'s `<pre>` blocks).
+export function basename(path: string): string {
+  const parts = path.split(/[/\\]/).filter(Boolean);
+  return parts.length === 0 ? path : parts[parts.length - 1]!;
+}
+
 // Header line for one tool-call block (see `AssistantToolCallBlock`) — used
 // unchanged regardless of the block's status ("is/was being done" both read
 // fine off the same phrasing; a separate icon and, once settled,
@@ -521,40 +532,40 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
   }
   switch (name) {
     case "readFile":
-      return typeof args.path === "string" ? `Читает файл: ${args.path}…` : "Читает файл…";
+      return typeof args.path === "string" ? `Читает файл: ${basename(args.path)}…` : "Читает файл…";
     case "listFiles":
-      return typeof args.path === "string" ? `Просматривает: ${args.path}…` : "Просматривает файлы…";
+      return typeof args.path === "string" ? `Просматривает: ${basename(args.path)}…` : "Просматривает файлы…";
     case "semanticSearch":
       return typeof args.query === "string" ? `Ищет: «${args.query}»…` : "Ищет в документации…";
     case "grep":
       return typeof args.pattern === "string" ? `Ищет по regex: ${args.pattern}…` : "Ищет по regex…";
     case "gitDiff":
-      return typeof args.path === "string" ? `Смотрит diff: ${args.path}…` : "Смотрит git diff…";
+      return typeof args.path === "string" ? `Смотрит diff: ${basename(args.path)}…` : "Смотрит git diff…";
     case "gitBlame":
-      return typeof args.path === "string" ? `Смотрит blame: ${args.path}…` : "Смотрит git blame…";
+      return typeof args.path === "string" ? `Смотрит blame: ${basename(args.path)}…` : "Смотрит git blame…";
     case "check":
       if (args.kind === "problems") {
         return typeof args.path === "string"
-          ? `Проверяет проблемы: ${args.path}…`
+          ? `Проверяет проблемы: ${basename(args.path)}…`
           : "Проверяет проблемы…";
       }
       return "Выполняет проверку…";
     case "writeFile":
-      return typeof args.path === "string" ? `Изменяет файл: ${args.path}…` : "Изменяет файл…";
+      return typeof args.path === "string" ? `Изменяет файл: ${basename(args.path)}…` : "Изменяет файл…";
     case "editFile":
-      return typeof args.path === "string" ? `Редактирует файл: ${args.path}…` : "Редактирует файл…";
+      return typeof args.path === "string" ? `Редактирует файл: ${basename(args.path)}…` : "Редактирует файл…";
     case "deleteFile":
-      return typeof args.path === "string" ? `Удаляет файл: ${args.path}…` : "Удаляет файл…";
+      return typeof args.path === "string" ? `Удаляет файл: ${basename(args.path)}…` : "Удаляет файл…";
     case "createDirectory":
       if (typeof args.path !== "string") return "Создаёт папку…";
       return args.template === "restEndpoint"
-        ? `Создаёт папку по шаблону REST: ${args.path}…`
-        : `Создаёт папку: ${args.path}…`;
+        ? `Создаёт папку по шаблону REST: ${basename(args.path)}…`
+        : `Создаёт папку: ${basename(args.path)}…`;
     case "deleteDirectory":
-      return typeof args.path === "string" ? `Удаляет папку: ${args.path}…` : "Удаляет папку…";
+      return typeof args.path === "string" ? `Удаляет папку: ${basename(args.path)}…` : "Удаляет папку…";
     case "move":
       return typeof args.path === "string" && typeof args.newPath === "string"
-        ? `Перемещает: ${args.path} → ${args.newPath}…`
+        ? `Перемещает: ${basename(args.path)} → ${basename(args.newPath)}…`
         : "Перемещает…";
     case "requestFullRepoAccess":
       return "Запрашивает доступ к репозиторию…";
@@ -623,42 +634,39 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
     }
     case "gitDiff": {
       const { path, diff, isBinary } = block.result.result;
-      if (isBinary) return `Diff: ${path} (бинарный)`;
+      const name = basename(path);
+      if (isBinary) return `Diff: ${name} (бинарный)`;
       const parts = [
         ...(diff.linesAdded > 0 ? [`+${diff.linesAdded}`] : []),
         ...(diff.linesRemoved > 0 ? [`−${diff.linesRemoved}`] : []),
       ];
-      return parts.length > 0 ? `Diff: ${path} (${parts.join(" ")})` : `Diff: ${path} (без изменений)`;
+      return parts.length > 0 ? `Diff: ${name} (${parts.join(" ")})` : `Diff: ${name} (без изменений)`;
     }
     case "gitBlame": {
       const { path, hunks, truncated } = block.result.result;
       const suffix = truncated ? ", обрезано" : "";
-      return `Blame: ${path} (участков: ${hunks.length}${suffix})`;
+      return `Blame: ${basename(path)} (участков: ${hunks.length}${suffix})`;
     }
     case "checkResults": {
       const { diagnostics, truncated } = block.result.result;
       const suffix = truncated ? ", обрезано" : "";
       return `Проблем: ${diagnostics.length}${suffix}`;
     }
+    // No summary line for these — the header (`describeToolActivity`) already
+    // names the action and the file, and the `+N −M` diff badge already
+    // shows the change size, so a "Verb: path" line here would just repeat
+    // what's already visible without adding anything.
     case "fileWritten":
-      return `Записано: ${block.result.result.path}`;
     case "fileEdited":
-      return `Изменён: ${block.result.result.path}`;
     case "fileDeleted":
-      return `Удалён: ${block.result.result.path}`;
-    case "directoryCreated": {
-      const { path, template } = block.result.result;
-      return template === "restEndpoint"
-        ? `Создана папка (шаблон REST): ${path}`
-        : `Создана папка: ${path}`;
-    }
+    case "directoryCreated":
     case "directoryDeleted":
-      return `Удалена папка: ${block.result.result.path}`;
+      return "";
     case "moved": {
       const { from, to, updatedFiles } = block.result.result;
       const totalRefs = updatedFiles.reduce((sum, f) => sum + f.count, 0);
       const suffix = totalRefs > 0 ? ` (обновлено ссылок: ${totalRefs})` : "";
-      return `Перемещено: ${from} → ${to}${suffix}`;
+      return `Перемещено: ${basename(from)} → ${basename(to)}${suffix}`;
     }
     case "accessModeChanged":
       return block.result.result.mode === "fullRepo" ? "Доступ изменён: весь репозиторий" : "Доступ изменён: только документация";

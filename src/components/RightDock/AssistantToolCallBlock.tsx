@@ -1,6 +1,7 @@
-import { AlertCircle, Check, ChevronDown, ChevronRight, Clock, File, Folder, Loader2 } from "lucide-react";
+import { AlertCircle, Bot, Check, ChevronDown, ChevronRight, Clock, File, Folder, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
+  basename,
   describeMatchSource,
   describeToolActivity,
   describeToolResult,
@@ -171,6 +172,8 @@ export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantT
   const [expanded, setExpanded] = useState(false);
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const diff = diffStatsFor(block);
+  const settled = block.status !== "running" && block.status !== "pendingApproval";
+  const summary = settled ? describeToolResult(block) : "";
 
   return (
     <div className={`assistant-tool-call assistant-tool-call-${block.status}`}>
@@ -197,14 +200,12 @@ export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantT
             className="assistant-tool-call-auto-approved"
             title="Одобрено автоматически — вы отключили запрос подтверждения для этого действия в этом диалоге"
           >
-            авто
+            <Bot size={12} aria-hidden />
           </span>
         ) : null}
       </button>
 
-      {block.status !== "running" && block.status !== "pendingApproval" ? (
-        <div className="assistant-tool-call-summary">{describeToolResult(block)}</div>
-      ) : null}
+      {summary ? <div className="assistant-tool-call-summary">{summary}</div> : null}
 
       {block.status === "pendingApproval" ? (
         <ToolApprovalCard block={block} docsRoot={docsRoot} onDecide={onDecide} />
@@ -212,9 +213,7 @@ export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantT
 
       {expanded ? (
         <div className="assistant-tool-call-detail">
-          {block.status !== "running" && block.status !== "pendingApproval" ? (
-            <div className="assistant-tool-call-detail-summary">{describeToolResult(block)}</div>
-          ) : null}
+          {summary ? <div className="assistant-tool-call-detail-summary">{summary}</div> : null}
 
           <div className="assistant-tool-call-detail-section">
             <div className="assistant-tool-call-detail-label">Аргументы</div>
@@ -273,6 +272,7 @@ function ToolApprovalCard({
             type="button"
             className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
             aria-expanded={showDiff}
+            title={args.path}
             onClick={() => setShowDiff((v) => !v)}
           >
             {showDiff ? (
@@ -280,7 +280,7 @@ function ToolApprovalCard({
             ) : (
               <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
             )}
-            <span>{args.path}</span>
+            <span>{basename(args.path)}</span>
           </button>
           {showDiff ? <WriteFileDiffReview docsRoot={docsRoot} path={args.path} content={args.content} /> : null}
         </div>
@@ -291,6 +291,7 @@ function ToolApprovalCard({
             type="button"
             className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
             aria-expanded={showDiff}
+            title={args.path}
             onClick={() => setShowDiff((v) => !v)}
           >
             {showDiff ? (
@@ -298,7 +299,7 @@ function ToolApprovalCard({
             ) : (
               <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
             )}
-            <span>{args.path}</span>
+            <span>{basename(args.path)}</span>
             <span className="assistant-tool-approval-edit-count">Правок: {args.edits.length}</span>
           </button>
           {showDiff ? <EditFileDiffReview docsRoot={docsRoot} path={args.path} edits={args.edits} /> : null}
@@ -306,7 +307,9 @@ function ToolApprovalCard({
       ) : block.name === "createDirectory" && typeof args.path === "string" ? (
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Папка</div>
-          <div className="assistant-tool-approval-path">{args.path}</div>
+          <div className="assistant-tool-approval-path" title={args.path}>
+            {basename(args.path)}
+          </div>
           {args.template === "restEndpoint" ? (
             <>
               <div className="assistant-tool-call-detail-label">Шаблон</div>
@@ -314,9 +317,9 @@ function ToolApprovalCard({
               <div className="assistant-tool-call-detail-label">Будут созданы файлы</div>
               <ul className="assistant-tool-call-detail-list">
                 {restEndpointPreviewFiles(args.path).map((file) => (
-                  <li key={file}>
+                  <li key={file} title={file}>
                     <File className="assistant-tool-call-detail-icon" size={12} aria-hidden />
-                    <span>{file}</span>
+                    <span>{basename(file)}</span>
                   </li>
                 ))}
               </ul>
@@ -330,6 +333,7 @@ function ToolApprovalCard({
             type="button"
             className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
             aria-expanded={showDiff}
+            title={args.path}
             onClick={() => setShowDiff((v) => !v)}
           >
             {showDiff ? (
@@ -337,7 +341,7 @@ function ToolApprovalCard({
             ) : (
               <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
             )}
-            <span>{args.path}</span>
+            <span>{basename(args.path)}</span>
           </button>
           {showDiff ? <DeleteFileReview docsRoot={docsRoot} path={args.path} /> : null}
         </div>
@@ -348,6 +352,7 @@ function ToolApprovalCard({
             type="button"
             className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
             aria-expanded={showDiff}
+            title={args.path}
             onClick={() => setShowDiff((v) => !v)}
           >
             {showDiff ? (
@@ -355,15 +360,15 @@ function ToolApprovalCard({
             ) : (
               <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
             )}
-            <span>{args.path}</span>
+            <span>{basename(args.path)}</span>
           </button>
           {showDiff ? <DeleteDirectoryReview docsRoot={docsRoot} path={args.path} /> : null}
         </div>
       ) : block.name === "move" && typeof args.path === "string" && typeof args.newPath === "string" ? (
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Перемещение</div>
-          <div className="assistant-tool-approval-path">
-            {args.path} → {args.newPath}
+          <div className="assistant-tool-approval-path" title={`${args.path} → ${args.newPath}`}>
+            {basename(args.path)} → {basename(args.newPath)}
           </div>
           <div className="assistant-tool-approval-reason">
             Ссылки на файл в других документах будут обновлены автоматически.
