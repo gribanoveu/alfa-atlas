@@ -71,6 +71,29 @@
   animation: statusbar-spin 0.9s linear infinite;
 }
 
+.statusbar .seg.clickable {
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.statusbar .seg.clickable:hover:not(:disabled) {
+  color: var(--text-0, var(--text-1));
+  text-decoration: underline;
+}
+
+.statusbar .seg.clickable:disabled {
+  cursor: default;
+}
+
+.statusbar .seg.embed.just-synced {
+  color: var(--green, #4caf50);
+}
+
 @keyframes statusbar-spin {
   from {
     transform: rotate(0deg);

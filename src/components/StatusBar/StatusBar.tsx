@@ -18,6 +18,19 @@ type StatusBarProps = {
    * the workspace index segment hides for `indexStatus === "idle"`. */
   embedIndexStatus: EmbeddingIndexStatus | null;
   embedSyncProgress: SyncProgress | null;
+  /** Clicking the embeddings segment triggers the same sync
+   * `EmbeddingsTab.tsx`'s own button calls. `undefined` (no project open)
+   * renders the segment as a plain, non-interactive `<div>` again. */
+  onEmbedSyncClick?: () => void;
+  /** While `true`, the segment still shows (and reacts to hover/click
+   * cosmetically), but the click itself is a no-op — mirrors
+   * `EmbeddingsTab.tsx`'s own `busy || syncing || !providerConfigured`
+   * guard on its sync button. */
+  embedSyncDisabled?: boolean;
+  /** Shows a brief "Синхронизировано" confirmation in place of the normal
+   * label right after a successful click-to-sync — see `App.tsx`'s
+   * `embedJustSynced` state for the timing. */
+  embedJustSynced?: boolean;
 };
 
 type EmbedIndexState = "syncing" | "stale" | "synced" | "unsynced";
@@ -126,6 +139,9 @@ export function StatusBar({
   indexStats,
   embedIndexStatus,
   embedSyncProgress,
+  onEmbedSyncClick,
+  embedSyncDisabled,
+  embedJustSynced,
 }: StatusBarProps) {
   const showIndex = indexStatus !== "idle";
   const Icon =
@@ -170,12 +186,33 @@ export function StatusBar({
         </div>
       ) : null}
       {embedState ? (
-        <div className={`seg embed ${embedState}`} title="Индекс эмбеддингов (документация и репозиторий)">
-          {EmbedIcon ? (
-            <EmbedIcon size={11} className={embedState === "syncing" ? "spin" : ""} />
-          ) : null}
-          {embedIndexLabel(embedState, embedIndexStatus, embedSyncProgress)}
-        </div>
+        onEmbedSyncClick ? (
+          <button
+            type="button"
+            className={`seg embed clickable ${embedState}${embedJustSynced ? " just-synced" : ""}`}
+            title={
+              embedSyncDisabled
+                ? "Индекс эмбеддингов (документация и репозиторий)"
+                : "Индекс эмбеддингов (документация и репозиторий) — нажмите, чтобы синхронизировать"
+            }
+            disabled={embedSyncDisabled}
+            onClick={onEmbedSyncClick}
+          >
+            {embedJustSynced ? (
+              <Check size={11} />
+            ) : EmbedIcon ? (
+              <EmbedIcon size={11} className={embedState === "syncing" ? "spin" : ""} />
+            ) : null}
+            {embedJustSynced ? "Синхронизировано" : embedIndexLabel(embedState, embedIndexStatus, embedSyncProgress)}
+          </button>
+        ) : (
+          <div className={`seg embed ${embedState}`} title="Индекс эмбеддингов (документация и репозиторий)">
+            {EmbedIcon ? (
+              <EmbedIcon size={11} className={embedState === "syncing" ? "spin" : ""} />
+            ) : null}
+            {embedIndexLabel(embedState, embedIndexStatus, embedSyncProgress)}
+          </div>
+        )
       ) : null}
       {hasActiveFile ? (
         <>

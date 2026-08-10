@@ -298,7 +298,14 @@ export function EmbeddingsTab() {
             Индекс устарел (обновилось приложение) — требуется повторная синхронизация.
           </p>
         ) : indexStatus?.synced ? (
-          <p className="settings-hint" style={{ paddingLeft: 0 }}>
+          <button
+            type="button"
+            className="settings-hint settings-hint-button"
+            style={{ paddingLeft: 0 }}
+            disabled={busy || syncing || !providerConfigured}
+            title="Нажмите, чтобы синхронизировать снова"
+            onClick={() => void handleSync()}
+          >
             Проиндексировано чанков: {indexStatus.embeddedCount}.
             {indexStatus.backgroundPending > 0
               ? ` Индексация остальной части репозитория продолжается в фоне (осталось файлов: ${indexStatus.backgroundPending}).`
@@ -306,7 +313,7 @@ export function EmbeddingsTab() {
             {repoIndexSummary && repoIndexSummary.filesIndexed > 0
               ? ` Файлов: ${repoIndexSummary.filesIndexed} (${describeByLanguage(repoIndexSummary.byLanguage)}).`
               : null}
-          </p>
+          </button>
         ) : null}
       </div>
 

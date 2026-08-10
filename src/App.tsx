@@ -441,12 +441,28 @@ function App() {
     active: hasProject,
   });
   useEmbeddingIndexWarmup(project.repoRoot, { active: hasProject });
-  // Read-only observer feeding the status bar's embedding-index segment —
-  // never calls `sync()`/`updateConfig()`/etc. itself, only ever displays
-  // whatever `AssistantPanel`/`EmbeddingsTab`'s own instances (or the
-  // incremental file watcher) triggered. See those hooks' doc comment on
-  // why each panel keeps its own separate instance rather than sharing one.
+  // Feeds the status bar's embedding-index segment — mostly a read-only
+  // observer of whatever `AssistantPanel`/`EmbeddingsTab`'s own instances
+  // (or the incremental file watcher) triggered, except for the segment's
+  // own click-to-sync handler below, which calls this instance's `sync()`
+  // directly. See those hooks' doc comment on why each panel keeps its own
+  // separate instance rather than sharing one.
   const embeddingSetup = useEmbeddingSetup();
+  // Shows a brief "Синхронизировано" confirmation in the status bar segment
+  // right after a successful click-to-sync — `indexStatus` alone would just
+  // silently settle back to the normal "Проиндексировано чанков: N" label,
+  // which doesn't read as clear feedback that the click actually did
+  // something. `stats === null` means `sync()` caught an error internally
+  // (it never rejects — see `useEmbeddingSetup.ts`), so this only fires on
+  // a real success.
+  const [embedJustSynced, setEmbedJustSynced] = useState(false);
+  const handleEmbedSyncClick = () => {
+    void embeddingSetup.sync().then((stats) => {
+      if (!stats) return;
+      setEmbedJustSynced(true);
+      setTimeout(() => setEmbedJustSynced(false), 1500);
+    });
+  };
   useEmbeddingPriorityFiles(
     editor.tabs.map((t) => t.path),
     { active: hasProject },
@@ -1461,6 +1477,9 @@ function App() {
         indexStats={workspaceIndex.stats}
         embedIndexStatus={hasProject ? embeddingSetup.indexStatus : null}
         embedSyncProgress={hasProject ? embeddingSetup.syncProgress : null}
+        onEmbedSyncClick={hasProject ? handleEmbedSyncClick : undefined}
+        embedSyncDisabled={embeddingSetup.busy || !embeddingSetup.providerConfigured}
+        embedJustSynced={embedJustSynced}
       />
 
       {project.pendingOpen ? (

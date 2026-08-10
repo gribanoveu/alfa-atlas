@@ -275,6 +275,27 @@
   line-height: 1.4;
 }
 
+.assistant-chat-index-sync-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent, var(--text-1));
+  font-size: inherit;
+  font-family: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.assistant-chat-index-sync-btn:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.assistant-chat-index-sync-btn:disabled {
+  color: var(--text-2);
+  text-decoration: none;
+  cursor: default;
+}
+
 
 /* =========================================================
    Todo progress widget
