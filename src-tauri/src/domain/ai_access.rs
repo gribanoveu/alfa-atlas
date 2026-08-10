@@ -26,6 +26,7 @@ pub enum ToolName {
     ListFiles,
     ReadFile,
     SemanticSearch,
+    Grep,
     GitDiff,
     GitBlame,
     WriteFile,
@@ -59,9 +60,9 @@ impl ToolName {
                 | ToolName::Move
                 | ToolName::RequestFullRepoAccess
         )
-        // `Todo`/`GitDiff`/`GitBlame` are deliberately NOT in this list —
-        // in-memory or read-only, no real-world side effect, same bucket as
-        // `ListFiles`/`ReadFile`/`SemanticSearch`.
+        // `Todo`/`Grep`/`GitDiff`/`GitBlame` are deliberately NOT in this
+        // list — in-memory or read-only, no real-world side effect, same
+        // bucket as `ListFiles`/`ReadFile`/`SemanticSearch`.
     }
 
     /// Maps the wire `LlmToolCall::name` string to a `ToolName`, independent
@@ -75,6 +76,7 @@ impl ToolName {
             "listFiles" => Some(ToolName::ListFiles),
             "readFile" => Some(ToolName::ReadFile),
             "semanticSearch" => Some(ToolName::SemanticSearch),
+            "grep" => Some(ToolName::Grep),
             "gitDiff" => Some(ToolName::GitDiff),
             "gitBlame" => Some(ToolName::GitBlame),
             "writeFile" => Some(ToolName::WriteFile),
@@ -104,6 +106,9 @@ impl ToolName {
             ToolName::ListFiles => 1,
             ToolName::ReadFile => 1,
             ToolName::SemanticSearch => 4,
+            // Gitignore walk + regex over many files — more than a single
+            // file read, still local (no embedding network call).
+            ToolName::Grep => 3,
             // Local git2 I/O + unified-diff / blame compaction — a bit more
             // than a bare file read, less than a network embedding search.
             ToolName::GitDiff => 2,
@@ -140,6 +145,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::ListFiles,
         ToolName::ReadFile,
         ToolName::SemanticSearch,
+        ToolName::Grep,
         ToolName::GitDiff,
         ToolName::GitBlame,
         ToolName::WriteFile,
@@ -164,6 +170,7 @@ mod tests {
         assert!(!ToolName::ListFiles.requires_confirmation());
         assert!(!ToolName::ReadFile.requires_confirmation());
         assert!(!ToolName::SemanticSearch.requires_confirmation());
+        assert!(!ToolName::Grep.requires_confirmation());
         assert!(!ToolName::GitDiff.requires_confirmation());
         assert!(!ToolName::GitBlame.requires_confirmation());
         assert!(ToolName::WriteFile.requires_confirmation());
@@ -181,6 +188,7 @@ mod tests {
         assert_eq!(ToolName::from_wire_name("listFiles"), Some(ToolName::ListFiles));
         assert_eq!(ToolName::from_wire_name("readFile"), Some(ToolName::ReadFile));
         assert_eq!(ToolName::from_wire_name("semanticSearch"), Some(ToolName::SemanticSearch));
+        assert_eq!(ToolName::from_wire_name("grep"), Some(ToolName::Grep));
         assert_eq!(ToolName::from_wire_name("gitDiff"), Some(ToolName::GitDiff));
         assert_eq!(ToolName::from_wire_name("gitBlame"), Some(ToolName::GitBlame));
         assert_eq!(ToolName::from_wire_name("writeFile"), Some(ToolName::WriteFile));
@@ -208,6 +216,7 @@ mod tests {
         assert_eq!(ToolName::WriteFile.loop_weight(), 2);
         assert_eq!(ToolName::EditFile.loop_weight(), 2);
         assert_eq!(ToolName::Move.loop_weight(), 2);
+        assert_eq!(ToolName::Grep.loop_weight(), 3);
         assert_eq!(ToolName::GitDiff.loop_weight(), 2);
         assert_eq!(ToolName::GitBlame.loop_weight(), 2);
         assert_eq!(ToolName::SemanticSearch.loop_weight(), 4);
@@ -215,9 +224,10 @@ mod tests {
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_thirteen() {
+    fn default_allowed_tools_includes_all_fourteen() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 13);
+        assert_eq!(allowed.len(), 14);
+        assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
         assert!(allowed.contains(&ToolName::WriteFile));

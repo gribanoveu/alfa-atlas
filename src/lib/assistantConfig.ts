@@ -198,17 +198,17 @@ Implementation can verify: API signatures, model fields, validation, defaults, s
 
 Two different roots exist for tool paths — this split is intentional and does not change based on access mode for write/mutate tools:
 
-- **Read tools** (\`listFiles\`, \`readFile\`, \`gitDiff\`, \`gitBlame\`): resolve \`path\` relative to the **access-mode root** (documentation root in Docs-only, repository root in Full-repo).
+- **Read tools** (\`listFiles\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`): resolve \`path\` relative to the **access-mode root** (documentation root in Docs-only, repository root in Full-repo).
 - **Write/mutate tools** (\`writeFile\`, \`editFile\`, \`deleteFile\`, \`createDirectory\`, \`deleteDirectory\`, \`move\`): always resolve \`path\` relative to the **documentation root**, in any mode including Full-repo.
 
 In Docs-only mode both roots coincide, so the distinction has no effect.
 
 ${pathExampleIntro}
 
-- \`listFiles\`/\`readFile\`/\`gitDiff\`/\`gitBlame\` in Full-repo: \`${pathExamplePrefix}/architecture/system.adoc\`
+- \`listFiles\`/\`readFile\`/\`grep\`/\`gitDiff\`/\`gitBlame\` in Full-repo: \`${pathExamplePrefix}/architecture/system.adoc\`
 - Any write/mutate tool in any mode: \`architecture/system.adoc\`
 
-Never pass a path from \`listFiles\`/\`readFile\`/\`gitDiff\`/\`gitBlame\` in Full-repo mode unchanged into a write tool — strip the documentation root segment (\`${pathExamplePrefix}/\`) first. Treat each tool's root as \`.\`.
+Never pass a path from \`listFiles\`/\`readFile\`/\`grep\`/\`gitDiff\`/\`gitBlame\` in Full-repo mode unchanged into a write tool — strip the documentation root segment (\`${pathExamplePrefix}/\`) first. Treat each tool's root as \`.\`.
 
 ${openApiPathLine}
 
@@ -302,7 +302,7 @@ Think first, plan second, never act. Every plan must be grounded in real reposit
 For every planning request, follow this sequence:
 
 1. **Clarify the goal internally.** Identify what the user wants to achieve, the scope, and the boundaries.
-2. **Research.** Use read-only tools (\`listFiles\`, \`readFile\`, \`gitDiff\`, \`gitBlame\`, etc.) to inspect relevant files, understand current structure, recent changes, terminology, and patterns. Do not assume — verify.
+2. **Research.** Use read-only tools (\`listFiles\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`, etc.) to inspect relevant files, understand current structure, recent changes, terminology, and patterns. Do not assume — verify.
 3. **Draft the plan.** Write a structured plan in the format below.
 4. **Present it.** Show the plan to the user. Do not execute it.
 5. **Iterate.** If the user asks to refine, revise the plan in text. If the user approves and wants to execute, offer to switch to Agent mode.
@@ -406,7 +406,7 @@ For ASCII directory/file trees and any pre-formatted diagram using \`├──\`
 
 ## Path resolution (for read tools only)
 
-Read tools (\`listFiles\`, \`readFile\`) resolve \`path\` relative to the **access-mode root**: the documentation root in Docs-only mode, the repository root in Full-repo mode.
+Read tools (\`listFiles\`, \`readFile\`, \`grep\`) resolve \`path\` relative to the **access-mode root**: the documentation root in Docs-only mode, the repository root in Full-repo mode.
 
 ${pathExampleIntro}
 
@@ -519,6 +519,8 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       return typeof args.path === "string" ? `Просматривает: ${args.path}…` : "Просматривает файлы…";
     case "semanticSearch":
       return typeof args.query === "string" ? `Ищет: «${args.query}»…` : "Ищет в документации…";
+    case "grep":
+      return typeof args.pattern === "string" ? `Ищет по regex: ${args.pattern}…` : "Ищет по regex…";
     case "gitDiff":
       return typeof args.path === "string" ? `Смотрит diff: ${args.path}…` : "Смотрит git diff…";
     case "gitBlame":
@@ -596,6 +598,11 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
         .map(([source, count]) => `${describeMatchSourceShort(source)}: ${count}`)
         .join(", ");
       return `Результатов: ${matches.length} (${breakdown})`;
+    }
+    case "grepResults": {
+      const { matches, truncated } = block.result.result;
+      const suffix = truncated ? ", обрезано" : "";
+      return `Совпадений: ${matches.length}${suffix}`;
     }
     case "gitDiff": {
       const { path, diff, isBinary } = block.result.result;

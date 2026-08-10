@@ -59,6 +59,41 @@ pub struct SemanticSearchArgs {
     pub top_k: Option<usize>,
 }
 
+/// Exact regex content search across files under the tool scope root —
+/// read-only, complementary to `SemanticSearch` (precision vs similarity).
+/// See `services::ai_tools::grep`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrepArgs {
+    /// Rust `regex` pattern (no backreferences). Invalid patterns surface
+    /// as `ToolError::InvalidPattern`.
+    pub pattern: String,
+    /// Optional subdirectory relative to the scope root (same as
+    /// `ListFilesArgs::path`).
+    pub path: Option<String>,
+    /// Filename-only glob filter (same semantics as `ListFilesArgs::pattern`).
+    pub glob: Option<String>,
+    /// Default `false` — exact case-sensitive match unless opted in.
+    pub case_insensitive: Option<bool>,
+    /// Cap on returned matches; `None` → default, clamped to a hard max
+    /// (see `services::ai_tools`).
+    pub max_results: Option<usize>,
+}
+
+/// One line hit from `grep` — deliberately not `Deserialize` (serialize
+/// only), same asymmetry as `ToolMatch`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrepMatch {
+    /// Relative to the scope root, `/`-separated — same shape as
+    /// `ToolFileEntry::path` / `readFile` paths.
+    pub path: String,
+    /// 1-indexed line number.
+    pub line: u32,
+    /// The matching line's text (possibly truncated for payload size).
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteFileArgs {
@@ -288,6 +323,7 @@ pub enum ToolCall {
     ReadFile(ReadFileArgs),
     ListFiles(ListFilesArgs),
     SemanticSearch(SemanticSearchArgs),
+    Grep(GrepArgs),
     GitDiff(GitDiffArgs),
     GitBlame(GitBlameArgs),
     WriteFile(WriteFileArgs),
@@ -307,6 +343,7 @@ impl ToolCall {
             ToolCall::ReadFile(_) => ToolName::ReadFile,
             ToolCall::ListFiles(_) => ToolName::ListFiles,
             ToolCall::SemanticSearch(_) => ToolName::SemanticSearch,
+            ToolCall::Grep(_) => ToolName::Grep,
             ToolCall::GitDiff(_) => ToolName::GitDiff,
             ToolCall::GitBlame(_) => ToolName::GitBlame,
             ToolCall::WriteFile(_) => ToolName::WriteFile,
@@ -369,6 +406,13 @@ pub enum ToolResult {
     },
     FileList(Vec<ToolFileEntry>),
     SemanticSearchResults(Vec<ToolMatch>),
+    /// Settled `grep` — line-oriented regex hits under `scope.root`.
+    /// `truncated` is true when the match cap was hit before the walk finished.
+    #[serde(rename_all = "camelCase")]
+    GrepResults {
+        matches: Vec<GrepMatch>,
+        truncated: bool,
+    },
     /// Settled `gitDiff` — `label` is a short human/model-facing description
     /// of the two sides (e.g. `"HEAD → Working tree"` or a commit short
     /// oid pair). `diff` reuses the same `FileDiffStats` shape write/edit

@@ -53,8 +53,18 @@ export type ToolCall =
   | { tool: "readFile"; args: { path: string; startLine: number | null; endLine: number | null } }
   | { tool: "listFiles"; args: { path: string | null; depth: number | null; pattern: string | null } }
   | { tool: "semanticSearch"; args: { query: string; topK: number | null } }
-  | { tool: "gitDiff";  args: { path: string; scope: string | null; commit: string | null }; }
-  | { tool: "gitBlame"; args: { path: string; startLine: number | null; endLine: number | null }; }
+  | {
+      tool: "grep";
+      args: {
+        pattern: string;
+        path: string | null;
+        glob: string | null;
+        caseInsensitive: boolean | null;
+        maxResults: number | null;
+      };
+    }
+  | { tool: "gitDiff"; args: { path: string; scope: string | null; commit: string | null } }
+  | { tool: "gitBlame"; args: { path: string; startLine: number | null; endLine: number | null } }
   | { tool: "writeFile"; args: { path: string; content: string } }
   | { tool: "editFile"; args: { path: string; edits: FileEdit[] } }
   | { tool: "deleteFile"; args: { path: string } }
@@ -90,6 +100,13 @@ export type GitBlameHunk = {
   summary: string;
 };
 
+/** One line hit from `grep` — mirrors `domain::ai_tools::GrepMatch`. */
+export type GrepMatch = {
+  path: string;
+  line: number;
+  text: string;
+};
+
 // `ToolResult`'s `"file"` case carries range/total-line metadata alongside
 // the content — 1-indexed, inclusive, the range actually returned (after
 // clamping), not necessarily what was requested. `0`/`0`/`0` on an empty
@@ -98,8 +115,9 @@ export type ToolResult =
   | { tool: "file"; result: { content: string; startLine: number; endLine: number; totalLines: number } }
   | { tool: "fileList"; result: ToolFileEntry[] }
   | { tool: "semanticSearchResults"; result: ToolMatch[] }
-  | { tool: "gitDiff";  result: { path: string; label: string; diff: FileDiffStats; isBinary: boolean }; }
-  | { tool: "gitBlame";  result: { path: string; hunks: GitBlameHunk[]; truncated: boolean }; }
+  | { tool: "grepResults"; result: { matches: GrepMatch[]; truncated: boolean } }
+  | { tool: "gitDiff"; result: { path: string; label: string; diff: FileDiffStats; isBinary: boolean } }
+  | { tool: "gitBlame"; result: { path: string; hunks: GitBlameHunk[]; truncated: boolean } }
   | { tool: "fileWritten"; result: { path: string; diff: FileDiffStats } }
   | { tool: "fileEdited"; result: { path: string; diff: FileDiffStats } }
   | { tool: "fileDeleted"; result: { path: string; diff: FileDiffStats } }

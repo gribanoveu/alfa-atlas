@@ -17,8 +17,8 @@ use crate::commands::embeddings::{
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
     CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileDiffStats,
-    FileEdit, GitBlameArgs, GitDiffArgs, ListFilesArgs, MatchSource, MoveArgs, ReadFileArgs,
-    RequestFullRepoAccessArgs, SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs,
+    FileEdit, GitBlameArgs, GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs, MatchSource, MoveArgs,
+    ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs,
     TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult,
     ToolScope, WriteFileArgs,
 };
@@ -52,6 +52,15 @@ const MAX_TODO_TASKS: usize = 20;
 /// tool-message payload bounded for large files. Ranges past this are
 /// clamped and flagged `truncated: true`.
 const MAX_BLAME_LINES: u32 = 400;
+const DEFAULT_GREP_RESULTS: usize = 50;
+const MAX_GREP_RESULTS: usize = 200;
+/// Skip files larger than this when grepping — keeps a pathological repo
+/// from blowing the tool budget on one huge artifact.
+const MAX_GREP_FILE_BYTES: u64 = 1_048_576;
+/// NUL in the first N bytes → treat as binary and skip.
+const GREP_BINARY_SNIFF_BYTES: usize = 8_192;
+/// Cap on a single match line's `text` field in the tool result.
+const GREP_LINE_MAX_CHARS: usize = 300;
 
 /// The embedding/chunk/repo-index/workspace-index state `SemanticSearch`/
 /// `Move` need to reach — `execute_tool` is otherwise a pure function with
@@ -143,6 +152,7 @@ pub fn execute_tool(
         ToolCall::SemanticSearch(args) => {
             semantic_search(scope, args, deps).map(ToolResult::SemanticSearchResults)
         }
+        ToolCall::Grep(args) => grep(scope, args),
         ToolCall::GitDiff(args) => git_diff(scope, args),
         ToolCall::GitBlame(args) => git_blame(scope, args),
         ToolCall::WriteFile(args) => {
@@ -371,6 +381,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "semanticSearch" => lenient_json_object::<SemanticSearchArgs>(&call.arguments)
             .map(ToolCall::SemanticSearch)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "grep" => lenient_json_object::<GrepArgs>(&call.arguments)
+            .map(ToolCall::Grep)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "gitDiff" => lenient_json_object::<GitDiffArgs>(&call.arguments)
             .map(ToolCall::GitDiff)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
@@ -551,7 +564,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "semanticSearch".to_string(),
             description:
-                "Search the project's documentation/code for content relevant to a natural-language query. Use for semantic discovery: finding documents related to a concept, locating terminology, finding related implementations, or discovering potentially relevant files when the exact location is unknown. Results are useful for discovery but may not be sufficient evidence for precise claims — verify with readFile when precise details matter."
+                "Search the project's documentation/code for content relevant to a natural-language query. Use for semantic discovery: finding documents related to a concept, locating terminology, finding related implementations, or discovering potentially relevant files when the exact location is unknown. Results are useful for discovery but may not be sufficient evidence for precise claims — verify with readFile when precise details matter. For exact symbol/string/regex matches (e.g. \"find every call site of X\"), use grep instead."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -567,6 +580,41 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
                     }
                 },
                 "required": ["query"]
+            }),
+        });
+    }
+    if scope.allows(ToolName::Grep) {
+        defs.push(LlmToolDefinition {
+            name: "grep".to_string(),
+            description:
+                "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Use when you need precision — every call site of a symbol, every occurrence of a literal string, or a regex pattern — not conceptual similarity. Prefer this over semanticSearch for \"find all places where X is used\". Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Honors .gitignore; skips binary and oversized files."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "Rust regex pattern (no backreferences). Case-sensitive unless caseInsensitive is true."
+                    },
+                    "path": {
+                        "type": ["string", "null"],
+                        "description": "Optional subdirectory relative to the current access-mode root. Omit or null to search the whole root."
+                    },
+                    "glob": {
+                        "type": ["string", "null"],
+                        "description": "Optional filename-only glob (e.g. \"*.java\") to restrict which files are searched."
+                    },
+                    "caseInsensitive": {
+                        "type": ["boolean", "null"],
+                        "description": "When true, match case-insensitively. Default false."
+                    },
+                    "maxResults": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "description": "Max number of line hits to return, default 50, capped at 200."
+                    }
+                },
+                "required": ["pattern"]
             }),
         });
     }
@@ -855,6 +903,90 @@ fn compile_glob(pattern: &str) -> Result<globset::GlobMatcher, ToolError> {
     globset::Glob::new(pattern)
         .map(|g| g.compile_matcher())
         .map_err(|e| ToolError::InvalidPattern(e.to_string()))
+}
+
+/// Exact regex content search under `scope.root` — walk via
+/// `workspace_scanner::scan_all_with_depth` (gitignore-aware), then match
+/// line-by-line. Complementary to `semantic_search`: precision, not
+/// similarity. Paths in results are scope-root-relative so they round-trip
+/// into `readFile`.
+fn grep(scope: &ToolScope, args: GrepArgs) -> Result<ToolResult, ToolError> {
+    let max_results = args
+        .max_results
+        .unwrap_or(DEFAULT_GREP_RESULTS)
+        .clamp(1, MAX_GREP_RESULTS);
+
+    let mut builder = regex::RegexBuilder::new(&args.pattern);
+    builder.case_insensitive(args.case_insensitive.unwrap_or(false));
+    let re = builder
+        .build()
+        .map_err(|e| ToolError::InvalidPattern(e.to_string()))?;
+
+    let glob = match args.glob.as_deref() {
+        Some(p) if !p.is_empty() => Some(compile_glob(p)?),
+        _ => None,
+    };
+
+    let subdir = resolve_subdir(scope, args.path.as_deref())?;
+    let scan_root = subdir
+        .as_ref()
+        .map(|(_, abs)| abs.clone())
+        .unwrap_or_else(|| scope.root.clone());
+
+    let files = workspace_scanner::scan_all_with_depth(&scan_root, None)?;
+    let mut matches = Vec::new();
+    let mut truncated = false;
+
+    'files: for scanned in files {
+        if scanned.size > MAX_GREP_FILE_BYTES {
+            continue;
+        }
+        let rel = match paths::relative_to(&scope.root, &scanned.path) {
+            Ok(r) => r.replace('\\', "/"),
+            Err(_) => continue,
+        };
+        if let Some(ref matcher) = glob {
+            if !matcher.is_match(basename(&rel)) {
+                continue;
+            }
+        }
+
+        let Ok(bytes) = fs::read(&scanned.path) else {
+            continue;
+        };
+        let sniff_len = GREP_BINARY_SNIFF_BYTES.min(bytes.len());
+        if bytes[..sniff_len].contains(&0) {
+            continue;
+        }
+        let Ok(content) = String::from_utf8(bytes) else {
+            continue;
+        };
+
+        for (idx, line) in content.lines().enumerate() {
+            if !re.is_match(line) {
+                continue;
+            }
+            if matches.len() >= max_results {
+                truncated = true;
+                break 'files;
+            }
+            matches.push(GrepMatch {
+                path: rel.clone(),
+                line: (idx + 1) as u32,
+                text: truncate_grep_line(line),
+            });
+        }
+    }
+
+    Ok(ToolResult::GrepResults { matches, truncated })
+}
+
+fn truncate_grep_line(line: &str) -> String {
+    if line.chars().count() <= GREP_LINE_MAX_CHARS {
+        return line.to_string();
+    }
+    let truncated: String = line.chars().take(GREP_LINE_MAX_CHARS).collect();
+    format!("{truncated}…")
 }
 
 /// One directory level of the tree `render_file_tree` builds out of a flat
@@ -3654,6 +3786,108 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_grep_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "grep".to_string(),
+            arguments: r#"{"pattern":"Needle","glob":"*.adoc","caseInsensitive":true,"maxResults":20}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::Grep(GrepArgs {
+                pattern: "Needle".to_string(),
+                path: None,
+                glob: Some("*.adoc".to_string()),
+                case_insensitive: Some(true),
+                max_results: Some(20),
+            })
+        );
+    }
+
+    #[test]
+    fn grep_finds_line_hits_under_docs_root_and_rejects_invalid_regex() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("guide.adoc"), "= Guide\ncall Needle.here()\nmore\n").unwrap();
+        fs::write(repo.join("src/main.rs"), "fn Needle() {}\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let result = execute_tool(
+            &scope,
+            ToolCall::Grep(GrepArgs {
+                pattern: "Needle".to_string(),
+                path: None,
+                glob: None,
+                case_insensitive: None,
+                max_results: None,
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::GrepResults { matches, truncated } => {
+                assert!(!truncated);
+                assert_eq!(matches.len(), 1);
+                assert_eq!(matches[0].path, "guide.adoc");
+                assert_eq!(matches[0].line, 2);
+                assert!(matches[0].text.contains("Needle"));
+            }
+            other => panic!("expected GrepResults, got {other:?}"),
+        }
+
+        let err = execute_tool(
+            &scope,
+            ToolCall::Grep(GrepArgs {
+                pattern: "(unclosed".to_string(),
+                path: None,
+                glob: None,
+                case_insensitive: None,
+                max_results: None,
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap_err();
+        assert!(matches!(err, ToolError::InvalidPattern(_)), "got {err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn grep_truncates_when_max_results_is_hit() {
+        let (repo, docs) = fixture_repo();
+        let mut body = String::new();
+        for i in 0..10 {
+            body.push_str(&format!("hit {i}\n"));
+        }
+        fs::write(docs.join("many.adoc"), body).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let result = execute_tool(
+            &scope,
+            ToolCall::Grep(GrepArgs {
+                pattern: "hit".to_string(),
+                path: None,
+                glob: None,
+                case_insensitive: None,
+                max_results: Some(3),
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::GrepResults { matches, truncated } => {
+                assert!(truncated);
+                assert_eq!(matches.len(), 3);
+            }
+            other => panic!("expected GrepResults, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn parse_tool_call_parses_git_diff_and_git_blame_args() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -3988,7 +4222,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_thirteen_by_default() {
+    fn llm_tool_definitions_includes_all_fourteen_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -4000,6 +4234,7 @@ mod tests {
                 "listFiles",
                 "readFile",
                 "semanticSearch",
+                "grep",
                 "gitDiff",
                 "gitBlame",
                 "writeFile",
@@ -4068,6 +4303,21 @@ mod tests {
             serde_json::from_value(serde_json::json!({"query": "x", "topK": 3})).unwrap();
         assert_eq!(args.query, "x");
         assert_eq!(args.top_k, Some(3));
+
+        let grep = defs.iter().find(|d| d.name == "grep").unwrap();
+        assert_eq!(grep.parameters["required"], serde_json::json!(["pattern"]));
+        let args: GrepArgs = serde_json::from_value(serde_json::json!({
+            "pattern": "foo\\(",
+            "path": null,
+            "glob": "*.adoc",
+            "caseInsensitive": true,
+            "maxResults": 10
+        }))
+        .unwrap();
+        assert_eq!(args.pattern, "foo\\(");
+        assert_eq!(args.glob.as_deref(), Some("*.adoc"));
+        assert_eq!(args.case_insensitive, Some(true));
+        assert_eq!(args.max_results, Some(10));
 
         let git_diff = defs.iter().find(|d| d.name == "gitDiff").unwrap();
         assert_eq!(git_diff.parameters["required"], serde_json::json!(["path"]));

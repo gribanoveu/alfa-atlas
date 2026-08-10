@@ -551,6 +551,28 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
           )}
         </div>
       );
+    case "grepResults": {
+      const { matches, truncated } = result.result;
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Grep</div>
+          {matches.length === 0 ? (
+            <p className="assistant-tool-call-detail-empty">Ничего не найдено</p>
+          ) : (
+            <ul className="assistant-tool-call-detail-list">
+              {matches.map((m, i) => (
+                <li key={`${m.path}:${m.line}:${i}`}>
+                  <span>
+                    {m.path}:{m.line} · {m.text}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {truncated ? <p className="assistant-tool-call-detail-empty">… результаты обрезаны</p> : null}
+        </div>
+      );
+    }
     case "gitDiff":
       return (
         <>
