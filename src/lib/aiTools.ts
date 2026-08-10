@@ -68,7 +68,7 @@ export type ToolCall =
   | { tool: "writeFile"; args: { path: string; content: string } }
   | { tool: "editFile"; args: { path: string; edits: FileEdit[] } }
   | { tool: "deleteFile"; args: { path: string } }
-  | { tool: "createDirectory"; args: { path: string } }
+  | { tool: "createDirectory"; args: { path: string; template: string | null } }
   | { tool: "deleteDirectory"; args: { path: string; recursive: boolean | null } }
   | { tool: "move"; args: { path: string; newPath: string } }
   | { tool: "requestFullRepoAccess"; args: { reason: string } }
@@ -121,7 +121,7 @@ export type ToolResult =
   | { tool: "fileWritten"; result: { path: string; diff: FileDiffStats } }
   | { tool: "fileEdited"; result: { path: string; diff: FileDiffStats } }
   | { tool: "fileDeleted"; result: { path: string; diff: FileDiffStats } }
-  | { tool: "directoryCreated"; result: { path: string } }
+  | { tool: "directoryCreated"; result: { path: string; template: string | null; createdFiles: string[] } }
   | { tool: "directoryDeleted"; result: { path: string } }
   | { tool: "moved"; result: { from: string; to: string; updatedFiles: UpdatedReference[] } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } }

@@ -34,6 +34,21 @@ function parseArgs(argumentsJson: string): Record<string, unknown> {
   }
 }
 
+/** Docs-relative paths the REST-method folder scaffold will create — mirrors
+ * `services::ai_tools::rest_endpoint_created_files` / `docs_fs::create_rest_endpoint_folder`. */
+function restEndpointPreviewFiles(folderPath: string): string[] {
+  const parts = folderPath.split("/").filter(Boolean);
+  const methodName = parts.length > 0 ? parts[parts.length - 1]! : folderPath;
+  const child = (name: string) =>
+    folderPath === "" || folderPath === "." ? name : `${folderPath}/${name}`;
+  return [
+    child(`${methodName}.adoc`),
+    child("request.adoc"),
+    child("response.adoc"),
+    child(`${methodName}.puml`),
+  ];
+}
+
 /** Guards a pending `editFile` call's `args.edits` before handing it to
  * `EditFileDiffReview` — `parseArgs` only guarantees valid JSON, not this
  * shape. */
@@ -288,6 +303,21 @@ function ToolApprovalCard({
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Папка</div>
           <div className="assistant-tool-approval-path">{args.path}</div>
+          {args.template === "restEndpoint" ? (
+            <>
+              <div className="assistant-tool-call-detail-label">Шаблон</div>
+              <div className="assistant-tool-approval-path">Документация на REST метод</div>
+              <div className="assistant-tool-call-detail-label">Будут созданы файлы</div>
+              <ul className="assistant-tool-call-detail-list">
+                {restEndpointPreviewFiles(args.path).map((file) => (
+                  <li key={file}>
+                    <File className="assistant-tool-call-detail-icon" size={12} aria-hidden />
+                    <span>{file}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
         </div>
       ) : block.name === "deleteFile" && typeof args.path === "string" ? (
         <div className="assistant-tool-call-detail-section">
@@ -471,13 +501,34 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
           <DiffLines diff={result.result.diff} />
         </>
       );
-    case "directoryCreated":
+    case "directoryCreated": {
+      const { path, template, createdFiles } = result.result;
       return (
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Папка создана</div>
-          <pre className="assistant-tool-call-detail-code">{result.result.path}</pre>
+          <pre className="assistant-tool-call-detail-code">{path}</pre>
+          {template === "restEndpoint" ? (
+            <>
+              <div className="assistant-tool-call-detail-label">Шаблон</div>
+              <pre className="assistant-tool-call-detail-code">Документация на REST метод</pre>
+            </>
+          ) : null}
+          {createdFiles.length > 0 ? (
+            <>
+              <div className="assistant-tool-call-detail-label">Созданные файлы</div>
+              <ul className="assistant-tool-call-detail-list">
+                {createdFiles.map((file) => (
+                  <li key={file}>
+                    <File className="assistant-tool-call-detail-icon" size={12} aria-hidden />
+                    <span>{file}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
         </div>
       );
+    }
     case "directoryDeleted":
       return (
         <div className="assistant-tool-call-detail-section">

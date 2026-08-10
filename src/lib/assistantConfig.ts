@@ -532,7 +532,10 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
     case "deleteFile":
       return typeof args.path === "string" ? `Удаляет файл: ${args.path}…` : "Удаляет файл…";
     case "createDirectory":
-      return typeof args.path === "string" ? `Создаёт папку: ${args.path}…` : "Создаёт папку…";
+      if (typeof args.path !== "string") return "Создаёт папку…";
+      return args.template === "restEndpoint"
+        ? `Создаёт папку по шаблону REST: ${args.path}…`
+        : `Создаёт папку: ${args.path}…`;
     case "deleteDirectory":
       return typeof args.path === "string" ? `Удаляет папку: ${args.path}…` : "Удаляет папку…";
     case "move":
@@ -624,8 +627,12 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
       return `Изменён: ${block.result.result.path}`;
     case "fileDeleted":
       return `Удалён: ${block.result.result.path}`;
-    case "directoryCreated":
-      return `Создана папка: ${block.result.result.path}`;
+    case "directoryCreated": {
+      const { path, template } = block.result.result;
+      return template === "restEndpoint"
+        ? `Создана папка (шаблон REST): ${path}`
+        : `Создана папка: ${path}`;
+    }
     case "directoryDeleted":
       return `Удалена папка: ${block.result.result.path}`;
     case "moved": {

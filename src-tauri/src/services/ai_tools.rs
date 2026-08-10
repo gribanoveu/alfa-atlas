@@ -163,9 +163,13 @@ pub fn execute_tool(
         ToolCall::DeleteFile(args) => {
             delete_file(scope, args).map(|(path, diff)| ToolResult::FileDeleted { path, diff })
         }
-        ToolCall::CreateDirectory(args) => {
-            create_directory(scope, args).map(|path| ToolResult::DirectoryCreated { path })
-        }
+        ToolCall::CreateDirectory(args) => create_directory(scope, args).map(
+            |(path, template, created_files)| ToolResult::DirectoryCreated {
+                path,
+                template,
+                created_files,
+            },
+        ),
         ToolCall::DeleteDirectory(args) => {
             delete_directory(scope, args).map(|path| ToolResult::DirectoryDeleted { path })
         }
@@ -754,14 +758,19 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "createDirectory".to_string(),
             description:
-                "Create a directory (including any missing parent directories) given its path relative to the documentation root — not the repository root, even in Full-repo mode. Use this before writing a file into a folder that doesn't exist yet. Always requires explicit user approval before it actually happens — the user may deny it, in which case nothing is created. Fails if the path already exists as a file or directory."
+                "Create a directory (including any missing parent directories) given its path relative to the documentation root — not the repository root, even in Full-repo mode. Use this before writing a file into a folder that doesn't exist yet. For a new REST API method's documentation folder, pass template: \"restEndpoint\" — the same scaffold the editor's \"New folder\" dialog offers (method.adoc, request.adoc, response.adoc, and a PlantUML sequence diagram named after the folder). Omit template (or pass null) for an empty directory. Always requires explicit user approval before it actually happens — the user may deny it, in which case nothing is created. Fails if the path already exists as a file or directory."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Directory path relative to the documentation root (not the repository root, even in Full-repo mode)."
+                        "description": "Directory path relative to the documentation root (not the repository root, even in Full-repo mode). For template: \"restEndpoint\", the final path segment is used as the method name for generated filenames."
+                    },
+                    "template": {
+                        "type": ["string", "null"],
+                        "enum": ["restEndpoint", null],
+                        "description": "Optional folder scaffold. \"restEndpoint\" creates REST-method documentation files inside the new folder (same as the UI template \"Документация на REST метод\"). Omit or null for an empty directory."
                     }
                 },
                 "required": ["path"]
@@ -1514,12 +1523,59 @@ fn delete_file(scope: &ToolScope, args: DeleteFileArgs) -> Result<(String, FileD
 
 /// Always targets `scope.docs_root`, same reasoning as `write_file` —
 /// `FullRepo` widens what the assistant can read for context, not where it
-/// may create directories. Reuses `docs_fs::create_project_dir` as-is:
-/// creates missing parent directories, fails if the path already exists
-/// (as either a file or a directory).
-fn create_directory(scope: &ToolScope, args: CreateDirectoryArgs) -> Result<String, ToolError> {
-    docs_fs::create_project_dir(&scope.docs_root.to_string_lossy(), &args.path)?;
-    Ok(args.path)
+/// may create directories. Without a template, reuses `docs_fs::create_project_dir`
+/// as-is (creates missing parents, fails if the path already exists). With
+/// `template: "restEndpoint"`, reuses `docs_fs::create_rest_endpoint_folder`
+/// — the same scaffold the Sidebar "Новая папка" dialog uses. Returns
+/// `(path, template, created_files)`.
+fn create_directory(
+    scope: &ToolScope,
+    args: CreateDirectoryArgs,
+) -> Result<(String, Option<String>, Vec<String>), ToolError> {
+    let docs_root = scope.docs_root.to_string_lossy();
+    match args.template.as_deref() {
+        None => {
+            docs_fs::create_project_dir(&docs_root, &args.path)?;
+            Ok((args.path, None, Vec::new()))
+        }
+        Some("restEndpoint") => {
+            let method_name = basename(&args.path);
+            if method_name.is_empty() || method_name == "." {
+                return Err(ToolError::InvalidArguments {
+                    tool: "createDirectory".into(),
+                    reason: "path must end with a folder name to use as the REST method name"
+                        .into(),
+                });
+            }
+            let created_files = rest_endpoint_created_files(&args.path, method_name);
+            docs_fs::create_rest_endpoint_folder(&docs_root, &args.path, method_name)?;
+            Ok((args.path, Some("restEndpoint".into()), created_files))
+        }
+        Some(other) => Err(ToolError::InvalidArguments {
+            tool: "createDirectory".into(),
+            reason: format!(
+                "unknown template \"{other}\" (expected \"restEndpoint\" or null)"
+            ),
+        }),
+    }
+}
+
+/// Docs-relative paths `create_rest_endpoint_folder` writes for `method_name`
+/// under `folder_path` — kept in sync with `docs_fs::create_rest_endpoint_folder`.
+fn rest_endpoint_created_files(folder_path: &str, method_name: &str) -> Vec<String> {
+    let child = |name: &str| -> String {
+        if folder_path.is_empty() || folder_path == "." {
+            name.to_string()
+        } else {
+            format!("{folder_path}/{name}")
+        }
+    };
+    vec![
+        child(&format!("{method_name}.adoc")),
+        child("request.adoc"),
+        child("response.adoc"),
+        child(&format!("{method_name}.puml")),
+    ]
 }
 
 /// Always targets `scope.docs_root`, same reasoning as `write_file`.
@@ -2278,13 +2334,28 @@ mod tests {
     }
 
     fn create_dir(scope: &ToolScope, path: &str) -> Result<String, ToolError> {
+        create_dir_with_template(scope, path, None).map(|(path, _, _)| path)
+    }
+
+    fn create_dir_with_template(
+        scope: &ToolScope,
+        path: &str,
+        template: Option<&str>,
+    ) -> Result<(String, Option<String>, Vec<String>), ToolError> {
         match execute_tool(
             scope,
-            ToolCall::CreateDirectory(CreateDirectoryArgs { path: path.to_string() }),
+            ToolCall::CreateDirectory(CreateDirectoryArgs {
+                path: path.to_string(),
+                template: template.map(str::to_string),
+            }),
             &EmbeddingDeps::empty(),
             &[],
         )? {
-            ToolResult::DirectoryCreated { path } => Ok(path),
+            ToolResult::DirectoryCreated {
+                path,
+                template,
+                created_files,
+            } => Ok((path, template, created_files)),
             other => panic!("expected ToolResult::DirectoryCreated, got {other:?}"),
         }
     }
@@ -2897,6 +2968,44 @@ mod tests {
         let err = create_dir(&scope, "../outside-dir").unwrap_err();
         assert!(matches!(err, ToolError::Io(_)));
         assert!(!repo.join("outside-dir").exists());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn create_directory_rest_endpoint_template_creates_scaffold_files() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let (path, template, created_files) =
+            create_dir_with_template(&scope, "api/getUser", Some("restEndpoint")).unwrap();
+
+        assert_eq!(path, "api/getUser");
+        assert_eq!(template.as_deref(), Some("restEndpoint"));
+        assert_eq!(
+            created_files,
+            vec![
+                "api/getUser/getUser.adoc",
+                "api/getUser/request.adoc",
+                "api/getUser/response.adoc",
+                "api/getUser/getUser.puml",
+            ]
+        );
+        for rel in &created_files {
+            assert!(docs.join(rel).is_file(), "missing scaffold file {rel}");
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn create_directory_rejects_unknown_template() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = create_dir_with_template(&scope, "api/foo", Some("openapi")).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { .. }));
+        assert!(!docs.join("api/foo").exists());
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -4048,7 +4157,27 @@ mod tests {
         let parsed = parse_tool_call(&call).unwrap();
         assert_eq!(
             parsed,
-            ToolCall::CreateDirectory(CreateDirectoryArgs { path: "guides/nested".to_string() })
+            ToolCall::CreateDirectory(CreateDirectoryArgs {
+                path: "guides/nested".to_string(),
+                template: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_create_directory_with_rest_endpoint_template() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "createDirectory".to_string(),
+            arguments: r#"{"path":"api/getUser","template":"restEndpoint"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::CreateDirectory(CreateDirectoryArgs {
+                path: "api/getUser".to_string(),
+                template: Some("restEndpoint".to_string()),
+            })
         );
     }
 

@@ -143,6 +143,12 @@ pub struct CreateDirectoryArgs {
     /// `AiAccessMode`; see `services::ai_tools::create_directory`). Parent
     /// directories are created as needed.
     pub path: String,
+    /// Optional folder scaffold. `"restEndpoint"` populates the directory
+    /// with the same REST-method template set the Sidebar "Новая папка"
+    /// dialog uses (`docs_fs::create_rest_endpoint_folder`). `None`/omit
+    /// creates an empty directory.
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -390,9 +396,9 @@ pub enum ToolResult {
     /// `rename_all` on this variant is needed explicitly — the container
     /// attribute above doesn't cascade to a struct variant's own field
     /// names for this adjacently-tagged representation, unlike variant tag
-    /// spelling. Every other struct variant here (`FileWritten`,
-    /// `DirectoryCreated`, `AccessModeChanged`) has only single-word field
-    /// names, so this was never previously visible on the wire.
+    /// spelling. Struct variants with multi-word fields (`File`,
+    /// `DirectoryCreated`, `Moved`, …) set `rename_all = "camelCase"` on the
+    /// variant itself — the container attribute does not cascade.
     #[serde(rename_all = "camelCase")]
     File {
         content: String,
@@ -437,7 +443,15 @@ pub enum ToolResult {
     FileWritten { path: String, diff: FileDiffStats },
     FileEdited { path: String, diff: FileDiffStats },
     FileDeleted { path: String, diff: FileDiffStats },
-    DirectoryCreated { path: String },
+    /// Settled `createDirectory`. `template`/`created_files` are empty when
+    /// the call created a bare folder; with `template: "restEndpoint"` they
+    /// report the scaffold that was written (docs-relative paths).
+    #[serde(rename_all = "camelCase")]
+    DirectoryCreated {
+        path: String,
+        template: Option<String>,
+        created_files: Vec<String>,
+    },
     DirectoryDeleted { path: String },
     /// `updated_files` lists every *other* file whose `include::`/`xref:`/
     /// `$ref` references were rewritten as a side effect of this move
