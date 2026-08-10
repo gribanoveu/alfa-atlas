@@ -221,6 +221,11 @@ pub enum CheckKind {
     /// includes, parse errors). Only covers supported indexed file types
     /// under the docs root, not arbitrary project source.
     Problems,
+    /// The API-documentation standards checker — same engine as the
+    /// «Стандарты» panel's «Проверить» button (К.1.1–К.7.1 weighted
+    /// criteria, 80% pass threshold per method folder). Purely local file
+    /// reads, no network access — link-correctness (К.1.3) is out of scope.
+    Standards,
 }
 
 /// Read-only verification tool — see `services::ai_tools::check`.
@@ -473,6 +478,16 @@ pub enum ToolResult {
     CheckResults {
         kind: CheckKind,
         diagnostics: Vec<crate::domain::workspace_index::Diagnostic>,
+        truncated: bool,
+    },
+    /// Settled `check` with `kind: "standards"` — reuses the same
+    /// `StandardsReport` shape the «Стандарты» panel renders (per-folder
+    /// weighted score/pass/findings). `truncated` when the folder count
+    /// exceeded `services::ai_tools::MAX_STANDARDS_FOLDERS` (failing
+    /// folders are kept first).
+    #[serde(rename_all = "camelCase")]
+    StandardsChecked {
+        report: crate::domain::standards::StandardsReport,
         truncated: bool,
     },
     FileWritten { path: String, diff: FileDiffStats },

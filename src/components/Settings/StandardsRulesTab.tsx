@@ -83,16 +83,13 @@ export function StandardsRulesTab() {
                 <input
                   type="checkbox"
                   checked={isEnabled(rule)}
-                  disabled={!config || busy || rule.requiresNetwork}
+                  disabled={!config || busy}
                   onChange={(event) => void toggleRule(rule, event.target.checked)}
                 />
                 <span className="standards-rule-id">{rule.id}</span>
                 <span>{rule.title}</span>
               </label>
               <span className="standards-rule-weight">{rule.weight}</span>
-              {rule.requiresNetwork ? (
-                <span className="standards-rule-note">требует сети — не реализовано</span>
-              ) : null}
             </div>
           ))
         )}

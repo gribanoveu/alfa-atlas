@@ -37,7 +37,10 @@ use crate::services::chunk_text::resolve_text;
 use crate::services::reference_rewrite;
 use crate::services::repo_index::RepositoryIndex;
 use crate::services::workspace_index::WorkspaceIndex;
-use crate::services::{diagnostics, docs_fs, embedding_config, git_ops, project_open, text_diff};
+use crate::services::{
+    diagnostics, docs_fs, embedding_config, git_ops, project_open, standards, standards_prefs,
+    text_diff,
+};
 
 const DEFAULT_TOP_K: usize = 10;
 const MAX_TOP_K: usize = 50;
@@ -58,6 +61,12 @@ const MAX_GREP_RESULTS: usize = 200;
 /// Cap on how many diagnostics a single `check` call may return — keeps the
 /// tool-message payload bounded for a large docs tree.
 const MAX_CHECK_DIAGNOSTICS: usize = 200;
+/// Cap on how many method-folder results a single `check` (`kind:
+/// "standards"`) call may return — same rationale as
+/// `MAX_CHECK_DIAGNOSTICS`. Failing folders are kept first (see
+/// `check_doc_standards`), so a truncated response still surfaces the
+/// folders most worth the model's attention.
+const MAX_STANDARDS_FOLDERS: usize = 100;
 /// Skip files larger than this when grepping — keeps a pathological repo
 /// from blowing the tool budget on one huge artifact.
 const MAX_GREP_FILE_BYTES: u64 = 1_048_576;
@@ -689,19 +698,19 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "check".to_string(),
             description:
-                "Run a documentation verification and return findings (the same list the editor's Problems panel shows). Currently only kind \"problems\" is available — broken xref/include/image targets, missing anchors, duplicate anchors, circular includes, and parse errors. Checks cover ONLY supported indexed documentation file types under the documentation root (.adoc/.asciidoc, .md/.markdown, .json, .yaml/.yml, .txt, .puml/.plantuml, .mmd/.mermaid) — not arbitrary repository source code or unsupported extensions. Recomputes diagnostics before returning so results are fresh. Optional path is relative to the documentation root (like writeFile/editFile), even in Full-repo mode. Omit path to check every indexed docs file. In the result, each diagnostic's `document` field and paths inside `message` are repository-root-relative — e.g. `<repo-root>/<docs-root>/.../file.adoc`, a schematic placeholder, NOT a literal path for this project. Strip the actual documentation-root segment (discover it with listFiles if unsure) to get a docs-relative path before calling readFile/editFile/writeFile. Results are capped; truncated is true when the cap was hit."
+                "Run a documentation verification and return findings. Two kinds are available. kind \"problems\": the same list the editor's Problems panel shows — broken xref/include/image targets, missing anchors, duplicate anchors, circular includes, and parse errors. Checks cover ONLY supported indexed documentation file types under the documentation root (.adoc/.asciidoc, .md/.markdown, .json, .yaml/.yml, .txt, .puml/.plantuml, .mmd/.mermaid) — not arbitrary repository source code or unsupported extensions. Recomputes diagnostics before returning so results are fresh. In the result, each diagnostic's `document` field and paths inside `message` are repository-root-relative — e.g. `<repo-root>/<docs-root>/.../file.adoc`, a schematic placeholder, NOT a literal path for this project. Strip the actual documentation-root segment (discover it with listFiles if unsure) to get a docs-relative path before calling readFile/editFile/writeFile. kind \"standards\": checks API-method documentation against the corporate documentation standard (rules К.1.1–К.7.1) — same engine as the «Стандарты» panel's «Проверить» button. Each method's documentation lives in its own `methodName` folder (containing diagram.puml, methodName.adoc, request.adoc, response.adoc); a folder passes when its weighted rule score exceeds 80%. The result's `report.folders` lists each checked folder with `score`/`maxScore`/`passed` and a `findings` array (`ruleId`, `title`, `weight`, `passed`, and — for failing rules — a `message` with a concrete, actionable fix hint, localized per the user's error-language setting). This kind makes NO network requests: link-correctness (К.1.3 in the standard) is intentionally not checked, so a passing report never implies every link is reachable. Both kinds: results are capped; truncated is true when the cap was hit."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "enum": ["problems"],
-                        "description": "Which verification to run. \"problems\" = workspace diagnostics (Problems panel). More kinds may be added later."
+                        "enum": ["problems", "standards"],
+                        "description": "Which verification to run. \"problems\" = workspace diagnostics (Problems panel). \"standards\" = API-documentation corporate standard compliance (К.1.1–К.7.1, weighted, 80% pass threshold per method folder)."
                     },
                     "path": {
                         "type": ["string", "null"],
-                        "description": "Optional file path relative to the documentation root. Omit or null to check all indexed documentation files. Unsupported types / files outside the index yield an empty list."
+                        "description": "Optional path relative to the documentation root; meaning depends on kind. For \"problems\": a single file to check (omit/null to check all indexed documentation files). For \"standards\": a method folder to check, or any file inside one (its parent folder is used) — omit/null to check the entire documentation tree."
                     }
                 },
                 "required": ["kind"]
@@ -789,7 +798,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "createDirectory".to_string(),
             description:
-                "Create a directory (including any missing parent directories) given its path relative to the documentation root — not the repository root, even in Full-repo mode. Use this before writing a file into a folder that doesn't exist yet. For a new REST API method's documentation folder, pass template: \"restEndpoint\" — the same scaffold the editor's \"New folder\" dialog offers (method.adoc, request.adoc, response.adoc, and a PlantUML sequence diagram named after the folder). Omit template (or pass null) for an empty directory. Always requires explicit user approval before it actually happens — the user may deny it, in which case nothing is created. Fails if the path already exists as a file or directory."
+                "Create a directory (including any missing parent directories) given its path relative to the documentation root — not the repository root, even in Full-repo mode. Use this before writing a file into a folder that doesn't exist yet. For a new REST API method's documentation folder, pass template: \"restEndpoint\" — the same scaffold the editor's \"New folder\" dialog offers (method.adoc, request.adoc, response.adoc, and a PlantUML sequence diagram named after the folder). The request.adoc/response.adoc names are always bare, never prefixed with the method name — one folder is one method by convention, so the prefix would be redundant; do not rename them to match differently-named legacy folders. Omit template (or pass null) for an empty directory. Always requires explicit user approval before it actually happens — the user may deny it, in which case nothing is created. Fails if the path already exists as a file or directory, so a successful result always means the folder is newly created, never pre-existing. On success, the result's `createdFiles` field already lists every generated file's exact path — treat it as authoritative and do not call listFiles to re-verify what was created."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1219,6 +1228,7 @@ fn check(
 ) -> Result<ToolResult, ToolError> {
     match args.kind {
         CheckKind::Problems => check_problems(scope, args.path.as_deref(), deps),
+        CheckKind::Standards => check_doc_standards(scope, args.path.as_deref()),
     }
 }
 
@@ -1267,6 +1277,51 @@ fn docs_path_to_document_id(scope: &ToolScope, docs_rel: &str) -> Result<Documen
     Ok(DocumentId::new(reference_rewrite::to_repo_relative(
         &suffix, docs_rel,
     )))
+}
+
+/// Runs the API-documentation standards checker (`services::standards`,
+/// same engine as the «Стандарты» panel's «Проверить» button) against the
+/// whole docs root, then — when `path` narrows it — filters down to just
+/// one method folder. Always walks the full docs root first rather than
+/// rooting `check_repository` at the target folder directly: that
+/// function's own root argument doubles as "the container, not itself a
+/// checkable folder" (mirrors the real docs root never being a method
+/// folder), so pointing it straight at a method folder would incorrectly
+/// skip evaluating that very folder. This mirrors how the «Стандарты»
+/// panel's "Текущий файл" tab scopes too (client-side filtering over a
+/// full-project report). Unlike `check_problems`'s `path` (a single file),
+/// `standards` checking operates at directory granularity — per К.1.1 of
+/// the standard, a "unit" is a `methodName` folder, not a file — so a file
+/// path is resolved to its parent directory rather than rejected.
+fn check_doc_standards(scope: &ToolScope, path: Option<&str>) -> Result<ToolResult, ToolError> {
+    let config = standards_prefs::load_standards_config().unwrap_or_default();
+    let mut report = standards::check_repository(&scope.docs_root, &config);
+
+    if let Some(docs_rel) = path {
+        let joined = paths::join_relative(&scope.docs_root, docs_rel)?;
+        let canonical = paths::ensure_under(&scope.docs_root, &joined)?;
+        let target_dir = if canonical.is_file() {
+            canonical.parent().map(Path::to_path_buf).unwrap_or(canonical)
+        } else {
+            canonical
+        };
+        let target_rel =
+            paths::relative_to(&scope.docs_root, &target_dir).unwrap_or_default();
+        let prefix = format!("{target_rel}/");
+        report.folders.retain(|f| f.folder == target_rel || f.folder.starts_with(&prefix));
+        report.overall_passed =
+            !report.folders.is_empty() && report.folders.iter().all(|f| f.passed);
+    }
+
+    // Failing folders first, so a truncated response still surfaces what's
+    // most worth the model's attention.
+    report.folders.sort_by_key(|f| f.passed);
+    let truncated = report.folders.len() > MAX_STANDARDS_FOLDERS;
+    if truncated {
+        report.folders.truncate(MAX_STANDARDS_FOLDERS);
+    }
+
+    Ok(ToolResult::StandardsChecked { report, truncated })
 }
 
 /// Clamps `start_line`/`end_line` into range rather than erroring (mirrors
@@ -4286,6 +4341,112 @@ mod tests {
         fs::remove_dir_all(&repo).ok();
     }
 
+    /// Writes a `methodName` folder under `root` that passes every default
+    /// standards rule (mirrors `services::standards::tests::write_full_method`).
+    fn write_full_standards_method(root: &Path, method: &str) {
+        let dir = root.join(method);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{method}.puml")), "@startuml\n@enduml").unwrap();
+        let main = format!(
+            "= {method}\n:toc:\n\n== Назначение\nЭто достаточно длинное описание метода для прохождения проверки на пятьдесят символов.\n\n== Схема работы\nimage::{method}.puml[]\n\n== Описание входных параметров\n|===\n| Имя | Тип | Обязательный | Описание\n| id | string | да | идентификатор\n|===\n\ninclude::./request.adoc[]\n\n== Описание выходных параметров\n|===\n| Имя | Тип | Обязательный | Описание\n| id | string | да | идентификатор\n|===\n\ninclude::./response.adoc[]\n\n== Алгоритм работы\nШаг 1.\n\n== Обработка ошибок\n404 - не найдено.\n"
+        );
+        fs::write(dir.join(format!("{method}.adoc")), main).unwrap();
+        fs::write(dir.join("request.adoc"), "${HOST}/api/x\ncurl example").unwrap();
+        fs::write(dir.join("response.adoc"), "{}").unwrap();
+    }
+
+    #[test]
+    fn check_standards_whole_project_reports_per_folder_results() {
+        let (repo, docs) = fixture_repo();
+        write_full_standards_method(&docs, "getUser");
+        fs::create_dir_all(docs.join("createUser")).unwrap();
+        fs::write(docs.join("createUser").join("createUser.adoc"), "= createUser").unwrap();
+
+        let workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps { workspace_index, ..EmbeddingDeps::empty() };
+
+        let result = execute_tool(
+            &scope,
+            ToolCall::Check(CheckArgs { kind: CheckKind::Standards, path: None }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::StandardsChecked { report, truncated } => {
+                assert!(!truncated);
+                assert_eq!(report.folders.len(), 2);
+                // Failing folder sorted first.
+                assert_eq!(report.folders[0].method_name, "createUser");
+                assert!(!report.folders[0].passed);
+                assert_eq!(report.folders[1].method_name, "getUser");
+                assert!(report.folders[1].passed, "{:?}", report.folders[1]);
+                assert!(!report.overall_passed);
+            }
+            other => panic!("expected StandardsChecked, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn check_standards_scopes_to_method_folder_via_file_path() {
+        let (repo, docs) = fixture_repo();
+        write_full_standards_method(&docs, "getUser");
+        fs::create_dir_all(docs.join("createUser")).unwrap();
+        fs::write(docs.join("createUser").join("createUser.adoc"), "= createUser").unwrap();
+
+        let workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps { workspace_index, ..EmbeddingDeps::empty() };
+
+        // Points at a *file* inside getUser/ — should resolve to that
+        // folder only, not the whole docs root.
+        let result = execute_tool(
+            &scope,
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Standards,
+                path: Some("getUser/getUser.adoc".to_string()),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::StandardsChecked { report, .. } => {
+                assert_eq!(report.folders.len(), 1);
+                assert_eq!(report.folders[0].method_name, "getUser");
+                assert!(report.folders[0].passed);
+            }
+            other => panic!("expected StandardsChecked, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn check_standards_rejects_path_escape_under_docs_root() {
+        let (repo, docs) = fixture_repo();
+        let workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps { workspace_index, ..EmbeddingDeps::empty() };
+
+        let err = execute_tool(
+            &scope,
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Standards,
+                path: Some("../src/main.rs".to_string()),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap_err();
+        assert!(matches!(err, ToolError::PathEscape(_)), "got {err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
     #[test]
     fn parse_tool_call_parses_check_args() {
         let call = LlmToolCall {
@@ -4755,12 +4916,21 @@ mod tests {
 
         let check = defs.iter().find(|d| d.name == "check").unwrap();
         assert_eq!(check.parameters["required"], serde_json::json!(["kind"]));
+        assert_eq!(
+            check.parameters["properties"]["kind"]["enum"],
+            serde_json::json!(["problems", "standards"])
+        );
         let args: CheckArgs = serde_json::from_value(
             serde_json::json!({"kind": "problems", "path": "intro.adoc"}),
         )
         .unwrap();
         assert_eq!(args.kind, CheckKind::Problems);
         assert_eq!(args.path.as_deref(), Some("intro.adoc"));
+
+        let standards_args: CheckArgs =
+            serde_json::from_value(serde_json::json!({"kind": "standards"})).unwrap();
+        assert_eq!(standards_args.kind, CheckKind::Standards);
+        assert_eq!(standards_args.path, None);
 
         fs::remove_dir_all(&repo).ok();
     }

@@ -549,6 +549,11 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
           ? `Проверяет проблемы: ${basename(args.path)}…`
           : "Проверяет проблемы…";
       }
+      if (args.kind === "standards") {
+        return typeof args.path === "string"
+          ? `Проверяет стандарт документации: ${basename(args.path)}…`
+          : "Проверяет документацию на соответствие стандарту…";
+      }
       return "Выполняет проверку…";
     case "writeFile":
       return typeof args.path === "string" ? `Изменяет файл: ${basename(args.path)}…` : "Изменяет файл…";
@@ -651,6 +656,12 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
       const { diagnostics, truncated } = block.result.result;
       const suffix = truncated ? ", обрезано" : "";
       return `Проблем: ${diagnostics.length}${suffix}`;
+    }
+    case "standardsChecked": {
+      const { report, truncated } = block.result.result;
+      const passedCount = report.folders.filter((f) => f.passed).length;
+      const suffix = truncated ? ", обрезано" : "";
+      return `Стандарт: ${passedCount}/${report.folders.length} папок соответствуют${suffix}`;
     }
     // No summary line for these — the header (`describeToolActivity`) already
     // names the action and the file, and the `+N −M` diff badge already

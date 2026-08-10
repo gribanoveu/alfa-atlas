@@ -663,6 +663,44 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
         </div>
       );
     }
+    case "standardsChecked": {
+      const { report, truncated } = result.result;
+      const shown = report.folders.slice(0, 40);
+      const passedCount = report.folders.filter((f) => f.passed).length;
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">
+            Стандарты документации ({passedCount}/{report.folders.length} папок соответствуют)
+          </div>
+          {report.folders.length === 0 ? (
+            <p className="assistant-tool-call-detail-empty">Папки с документацией не найдены</p>
+          ) : (
+            <ul className="assistant-tool-call-detail-list">
+              {shown.map((f) => {
+                const pct = f.maxScore > 0 ? Math.round((f.score / f.maxScore) * 100) : 0;
+                const failing = f.findings.filter((finding) => !finding.passed);
+                return (
+                  <li key={f.folder}>
+                    <span>
+                      [{f.passed ? "✓" : "✗"} {pct}%] {f.folder}
+                      {failing.length > 0
+                        ? ` — ${failing.map((finding) => `${finding.ruleId}: ${finding.message}`).join("; ")}`
+                        : ""}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {report.folders.length > shown.length ? (
+            <p className="assistant-tool-call-detail-empty">
+              … ещё {report.folders.length - shown.length}
+            </p>
+          ) : null}
+          {truncated ? <p className="assistant-tool-call-detail-empty">… результаты обрезаны</p> : null}
+        </div>
+      );
+    }
     case "gitDiff":
       return (
         <>
