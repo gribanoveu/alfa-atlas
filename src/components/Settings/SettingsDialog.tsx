@@ -605,7 +605,7 @@ export function SettingsDialog({
               <SpellcheckTab onConfigChange={onSpellcheckConfigChange} />
             ) : null}
 
-            {section === "embeddings" ? <EmbeddingsTab /> : null}
+            {section === "embeddings" ? <EmbeddingsTab repoRoot={projectRoot} /> : null}
 
             {section === "llm" ? <LlmTab /> : null}
 

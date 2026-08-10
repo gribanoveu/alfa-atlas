@@ -34,8 +34,14 @@ import {
  * index already built" survives this hook remounting — e.g. `AssistantPanel`
  * unmounting when the RightDock panel is hidden or another tool tab is
  * selected — instead of resetting every time.
+ *
+ * `repoRoot` keys per-project UI state: on switch/close, progress and
+ * index status from the previous project are cleared so the StatusBar
+ * never keeps showing the old project's "synced"/"syncing" after a mid-sync
+ * close. A generation counter ignores late progress events and late
+ * `sync()`/`refresh()` settlements that still belong to the previous root.
  */
-export function useEmbeddingSetup() {
+export function useEmbeddingSetup(repoRoot: string | null = null) {
   const [config, setConfigState] = useState<EmbeddingProviderConfig | null>(null);
   const [modelStatus, setModelStatus] = useState<ModelStatus>({ status: "notDownloaded" });
   const [hasApiKey, setHasApiKey] = useState(false);
@@ -55,17 +61,27 @@ export function useEmbeddingSetup() {
   // `downloadModel`'s catch block that a rejection is an expected
   // cancellation, not a real failure to surface as an error.
   const cancelRequestedRef = useRef(false);
+  // Bumped on every `repoRoot` change so in-flight IPC / progress from the
+  // previous project can't write into the new project's UI state.
+  const generationRef = useRef(0);
+  const repoRootRef = useRef(repoRoot);
+  repoRootRef.current = repoRoot;
 
   const refresh = useCallback(async () => {
+    const generation = generationRef.current;
+    const root = repoRootRef.current;
     try {
       const [nextConfig, nextStatus, nextHasKey, nextIndexStatus, nextRepoIndexSummary] =
         await Promise.all([
           getEmbeddingConfig(),
           getEmbeddingModelStatus(),
           hasEmbeddingRemoteApiKey(),
-          getEmbeddingIndexStatus(),
-          getRepoIndexSummary(),
+          root ? getEmbeddingIndexStatus() : Promise.resolve(null),
+          root ? getRepoIndexSummary() : Promise.resolve(null),
         ]);
+      if (generation !== generationRef.current || repoRootRef.current !== root) {
+        return;
+      }
       setConfigState(nextConfig);
       setModelStatus(nextStatus);
       setHasApiKey(nextHasKey);
@@ -73,13 +89,24 @@ export function useEmbeddingSetup() {
       setRepoIndexSummary(nextRepoIndexSummary);
       setError(null);
     } catch (e) {
+      if (generation !== generationRef.current || repoRootRef.current !== root) {
+        return;
+      }
       setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
   useEffect(() => {
+    generationRef.current += 1;
+    setSyncProgress(null);
+    setBackgroundSyncProgress(null);
+    setIndexStatus(null);
+    setRepoIndexSummary(null);
+    setLastSync(null);
+    setError(null);
+    setBusy(false);
     void refresh();
-  }, [refresh]);
+  }, [repoRoot, refresh]);
 
   // Live download progress, independent of `refresh` — the backend emits
   // this while `downloadEmbeddingModel()`'s promise is still in flight.
@@ -127,10 +154,15 @@ export function useEmbeddingSetup() {
   // chunking-phase tick (fired once per backlog batch, not per file) also
   // opportunistically refreshes `indexStatus` so `backgroundPending` stays
   // reasonably current without polling.
+  //
+  // Progress is ignored while no project is open (`repoRoot` null) so a
+  // dying sync from a just-closed project can't resurrect "syncing" UI.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenSyncProgress((payload) => {
+      if (!repoRootRef.current) return;
+      const generation = generationRef.current;
       if (payload.trigger === "full") {
         setSyncProgress(payload);
         // A passive instance of this hook (one that never calls `sync()`
@@ -143,11 +175,15 @@ export function useEmbeddingSetup() {
         // refresh/reset).
         if (payload.phase === "embedding" && payload.current >= payload.total) {
           setSyncProgress(null);
-          void refresh();
+          if (generation === generationRef.current) {
+            void refresh();
+          }
         }
       } else if (payload.trigger === "background") {
         setBackgroundSyncProgress(payload);
-        if (payload.phase === "chunking") void refresh();
+        if (payload.phase === "chunking" && generation === generationRef.current) {
+          void refresh();
+        }
       }
     }).then((fn) => {
       if (cancelled) {
@@ -230,21 +266,35 @@ export function useEmbeddingSetup() {
   }, []);
 
   const sync = useCallback(async () => {
+    const generation = generationRef.current;
+    const root = repoRootRef.current;
+    if (!root) return null;
     setBusy(true);
     setSyncProgress(null);
+    const stillCurrent = () =>
+      generation === generationRef.current && repoRootRef.current === root;
     try {
       const stats = await syncEmbeddings();
+      if (!stillCurrent()) return null;
+      const [nextIndexStatus, nextRepoIndexSummary] = await Promise.all([
+        getEmbeddingIndexStatus(),
+        getRepoIndexSummary(),
+      ]);
+      if (!stillCurrent()) return null;
       setLastSync(stats);
       setError(null);
-      setIndexStatus(await getEmbeddingIndexStatus());
-      setRepoIndexSummary(await getRepoIndexSummary());
+      setIndexStatus(nextIndexStatus);
+      setRepoIndexSummary(nextRepoIndexSummary);
       return stats;
     } catch (e) {
+      if (!stillCurrent()) return null;
       setError(e instanceof Error ? e.message : String(e));
       return null;
     } finally {
-      setBusy(false);
-      setSyncProgress(null);
+      if (stillCurrent()) {
+        setBusy(false);
+        setSyncProgress(null);
+      }
     }
   }, []);
 

@@ -35,7 +35,11 @@ const PROVIDER_OPTIONS: { value: EmbeddingProviderKind; label: string; hint: str
   },
 ];
 
-export function EmbeddingsTab() {
+type EmbeddingsTabProps = {
+  repoRoot: string | null;
+};
+
+export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
   const {
     config,
     modelStatus,
@@ -52,7 +56,7 @@ export function EmbeddingsTab() {
     downloadModel,
     cancelDownload,
     sync,
-  } = useEmbeddingSetup();
+  } = useEmbeddingSetup(repoRoot);
 
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");

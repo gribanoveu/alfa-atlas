@@ -450,7 +450,7 @@ function App() {
   // own click-to-sync handler below, which calls this instance's `sync()`
   // directly. See those hooks' doc comment on why each panel keeps its own
   // separate instance rather than sharing one.
-  const embeddingSetup = useEmbeddingSetup();
+  const embeddingSetup = useEmbeddingSetup(project.repoRoot);
   // Shows a brief "Синхронизировано" confirmation in the status bar segment
   // right after a successful click-to-sync — `indexStatus` alone would just
   // silently settle back to the normal "Проиндексировано чанков: N" label,

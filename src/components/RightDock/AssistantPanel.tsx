@@ -98,7 +98,7 @@ export function AssistantPanel({
     syncProgress,
     busy,
     sync,
-  } = useEmbeddingSetup();
+  } = useEmbeddingSetup(repoRoot);
   const {
     mode: accessMode,
     busy: accessModeBusy,

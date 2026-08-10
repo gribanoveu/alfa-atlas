@@ -337,10 +337,14 @@ fn direct_dependencies(workspace_index: &WorkspaceIndex, file_id: &FileId) -> Ve
 /// different, work.
 ///
 /// If the store is stale (see `index_store_ensure`), `chunk_index` is
-/// deliberately left empty rather than loaded from metadata that might
-/// describe an incompatible chunking algorithm — the caller decides what
-/// to do with a stale attach (`embedding_sync` repairs it;
-/// `embedding_index_status` just reports it).
+/// cleared rather than loaded from metadata that might describe an
+/// incompatible chunking algorithm — the caller decides what to do with a
+/// stale attach (`embedding_sync` repairs it; `embedding_index_status` just
+/// reports it). Clearing (not leaving the previous project's chunks) is
+/// required so a project switch onto a never-synced / version-mismatched
+/// store cannot leave foreign `ChunkId`s resident for the next sync to
+/// try writing into the new SQLite DB (FOREIGN KEY failures on
+/// `embeddings`/`chunks`).
 pub(crate) fn attach_index_store(
     chunk_index: &ChunkIndex,
     index_store: &IndexStoreSlot,
@@ -353,7 +357,9 @@ pub(crate) fn attach_index_store(
     let is_new_attach = !matches!(store_slot.as_ref(), Some((root, _, _)) if root == index_root);
     if is_new_attach {
         let attachment = index_store_ensure::open_for(storage_dir)?;
-        if !attachment.stale {
+        if attachment.stale {
+            chunk_index.clear();
+        } else {
             chunk_index.load_metadata(attachment.store.load_all_chunks().map_err(|e| e.to_string())?);
         }
         *store_slot = Some((index_root.to_path_buf(), Arc::new(attachment.store), attachment.stale));
@@ -701,11 +707,12 @@ fn sync_backlog_batch(
 }
 
 /// `true` if the currently open project still resolves to `index_root` —
-/// the background backlog's abort check. Unlike a single incremental tick,
-/// the backlog can run long enough to plausibly outlive the project it
-/// started for; continuing past a project switch would mutate
-/// `EmbeddingIndexSlot`/`IndexStoreSlot` on behalf of a project that
-/// already reattached them to something else.
+/// abort check for the background backlog and for a full `embedding_sync`.
+/// Both can run long enough to outlive the project they started for;
+/// continuing past a project switch would mutate shared
+/// `ChunkIndex`/`EmbeddingIndexSlot`/`IndexStoreSlot` on behalf of a
+/// project that is about to (or already did) reattach them to something
+/// else.
 fn is_current_index_root(index_root: &Path) -> bool {
     let Ok(Some(project)) = project_open::get_project() else {
         return false;
@@ -1021,6 +1028,12 @@ pub async fn embedding_sync(
             .map_err(|e| e.to_string())?
             .ok_or_else(|| "no project is open".to_string())?;
         let (index_root, storage_dir) = resolve_index_paths(&project)?;
+        // Soft-abort (Ok empty stats, not Err): the caller may already have
+        // switched projects, and surfacing an error would paint the new
+        // project's UI. Same policy as `run_background_backlog_sync`.
+        if !is_current_index_root(&index_root) {
+            return Ok(SyncStats::default());
+        }
         let (store, stale) = attach_index_store(&chunk_index, &index_store, &storage_dir, &index_root)?;
 
         // Started regardless of `stale` — harmless either way, since
@@ -1056,6 +1069,10 @@ pub async fn embedding_sync(
         repo_index
             .build_reusing_symbols(&index_root, &persisted_symbols)
             .map_err(|e| e.to_string())?;
+
+        if !is_current_index_root(&index_root) {
+            return Ok(SyncStats::default());
+        }
 
         // A fresh project (nothing chunked yet, in this store or ever) is
         // the only case that additionally prioritizes open editor files —
@@ -1132,6 +1149,9 @@ pub async fn embedding_sync(
         let total_changed = changed_files.len();
         let mut chunked_so_far = 0usize;
         for file_id in &tier1_ids {
+            if !is_current_index_root(&index_root) {
+                return Ok(SyncStats::default());
+            }
             let Some(indexed) = repo_index.get(file_id) else {
                 continue;
             };
@@ -1159,6 +1179,10 @@ pub async fn embedding_sync(
             emit_sync_progress(&app, SyncPhase::Chunking, chunked_so_far, total_changed, SyncTrigger::Full);
         }
 
+        if !is_current_index_root(&index_root) {
+            return Ok(SyncStats::default());
+        }
+
         // Files present in `ChunkIndex` but gone from this scan — deleted
         // since the index was last built/loaded.
         let stale_file_ids: Vec<_> = chunk_index
@@ -1180,6 +1204,10 @@ pub async fn embedding_sync(
         let dimensions = provider.dimensions();
         let builder = EmbeddingBuilder::new(provider);
 
+        if !is_current_index_root(&index_root) {
+            return Ok(SyncStats::default());
+        }
+
         attach_embedding_index(&embedding_index, &store, &index_root, dimensions, true)?;
         let stats = {
             let mut slot = embedding_index
@@ -1193,6 +1221,13 @@ pub async fn embedding_sync(
                 .sync(&chunk_index, &builder, &index_root, Some(&store), Some(&on_progress))
                 .map_err(|e| e.to_string())?
         };
+
+        if !is_current_index_root(&index_root) {
+            // Chunk/embed work for the abandoned project is already on its
+            // own disk; skip spawning a backlog that would keep mutating
+            // shared in-memory slots after the switch.
+            return Ok(stats);
+        }
 
         // Any large non-doc backlog (a fresh project's first sync, or a
         // routine sync catching up after a big upstream change), merged
@@ -1270,6 +1305,13 @@ pub async fn embedding_index_status(
     let background_backlog = background_backlog.inner().clone();
 
     tauri::async_runtime::spawn_blocking(move || -> Result<EmbeddingIndexStatus, String> {
+        // Same guard `embedding_sync` acquires first — attach swaps the
+        // shared `ChunkIndex`/`IndexStoreSlot`/`EmbeddingIndexSlot`, so a
+        // status warm-up on project open must never race an in-flight full
+        // sync (or incremental tick) that still holds those for the previous
+        // project. Waits the sync out rather than interleaving.
+        let _guard = lock_sync_guard(&sync_guard);
+
         let Some(project) = project_open::get_project().map_err(|e| e.to_string())? else {
             return Ok(EmbeddingIndexStatus {
                 synced: false,
@@ -1875,5 +1917,56 @@ mod tests {
         let backlog = guard.as_ref().unwrap();
         assert_eq!(backlog.index_root, root_b);
         assert_eq!(backlog.pending, HashSet::from([FileId("b.json".to_string())]));
+    }
+
+    // --- `attach_index_store` / project-switch safety ---
+
+    #[test]
+    fn attach_index_store_clears_chunk_index_on_stale_new_attach() {
+        use crate::domain::chunk_index::{ChunkId, ChunkKind, ChunkMetadata};
+        use crate::domain::repo_index::Language;
+
+        // Simulate leftover metadata from a previously attached project —
+        // the bug that produced FOREIGN KEY failures on resync after a
+        // mid-sync project switch onto a never-synced (stale) store.
+        let chunk_index = ChunkIndex::new();
+        chunk_index.load_metadata(vec![ChunkMetadata {
+            id: ChunkId("old.json#0-1".to_string()),
+            file_id: FileId("old.json".to_string()),
+            language: Language::Json,
+            kind: ChunkKind::File,
+            start_byte: 0,
+            end_byte: 1,
+            file_hash: blake3::hash(b"x"),
+            hash: blake3::hash(b"y"),
+            qualified_name: None,
+            ordinal: 0,
+        }]);
+        assert!(!chunk_index.chunk_ids().is_empty());
+
+        let store_dir = fixture_dir("stale-attach-store");
+        let index_root = fixture_dir("stale-attach-root");
+        let slot = IndexStoreSlot::new(None);
+
+        // Brand-new store has no version meta → `open_for` reports stale.
+        let (_store, stale) =
+            attach_index_store(&chunk_index, &slot, &store_dir, &index_root).unwrap();
+        assert!(stale);
+        assert!(
+            chunk_index.chunk_ids().is_empty(),
+            "stale attach must clear previous project's chunks, not leave them resident"
+        );
+
+        fs::remove_dir_all(&store_dir).ok();
+        fs::remove_dir_all(&index_root).ok();
+    }
+
+    #[test]
+    fn is_current_index_root_is_false_when_no_project_is_open() {
+        use crate::infra::settings_store::test_support::with_temp_home;
+
+        with_temp_home(|| {
+            assert!(!is_current_index_root(Path::new("/any/repo")));
+        });
     }
 }
