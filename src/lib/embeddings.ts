@@ -45,6 +45,16 @@ export type EmbeddingIndexStatus = {
   backgroundPending: number;
 };
 
+// Mirrors `commands::repo_index::RepoIndexSummary` — a live snapshot of
+// `RepositoryIndex`/`ChunkIndex`'s current resident state (no walk, no I/O,
+// safe to call any time; reports whatever the last sync left resident, or
+// all-zero before the first one).
+export type RepoIndexSummary = {
+  filesIndexed: number;
+  byLanguage: Record<string, number>;
+  chunksIndexed: number;
+};
+
 export type ModelDownloadProgress = {
   progress: number;
   error?: string;
@@ -115,6 +125,14 @@ export function syncEmbeddings(): Promise<SyncStats> {
  * recover real state after a remount. */
 export function getEmbeddingIndexStatus(): Promise<EmbeddingIndexStatus> {
   return invoke<EmbeddingIndexStatus>("embedding_index_status");
+}
+
+/** Read-only, cheap (in-memory only): the current project's `RepositoryIndex`/
+ * `ChunkIndex` state as of the last sync — per-language file counts and a
+ * chunk count, previously computed on every full sync and silently
+ * discarded (`services::repo_index::RepoIndexStats`), now exposed directly. */
+export function getRepoIndexSummary(): Promise<RepoIndexSummary> {
+  return invoke<RepoIndexSummary>("repo_index_summary");
 }
 
 export function listenModelDownloadProgress(

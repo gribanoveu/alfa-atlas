@@ -5,6 +5,7 @@ import {
   getEmbeddingConfig,
   getEmbeddingIndexStatus,
   getEmbeddingModelStatus,
+  getRepoIndexSummary,
   hasEmbeddingRemoteApiKey,
   listenModelDownloadProgress,
   listenSyncProgress,
@@ -14,6 +15,7 @@ import {
   type EmbeddingIndexStatus,
   type EmbeddingProviderConfig,
   type ModelStatus,
+  type RepoIndexSummary,
   type SyncProgress,
   type SyncStats,
 } from "../lib/embeddings";
@@ -41,6 +43,7 @@ export function useEmbeddingSetup() {
   const [error, setError] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<SyncStats | null>(null);
   const [indexStatus, setIndexStatus] = useState<EmbeddingIndexStatus | null>(null);
+  const [repoIndexSummary, setRepoIndexSummary] = useState<RepoIndexSummary | null>(null);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   // The low-priority backlog catch-up after a fresh project's first sync —
   // deliberately separate from `syncProgress`/`busy` (see the listener
@@ -55,16 +58,19 @@ export function useEmbeddingSetup() {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextConfig, nextStatus, nextHasKey, nextIndexStatus] = await Promise.all([
-        getEmbeddingConfig(),
-        getEmbeddingModelStatus(),
-        hasEmbeddingRemoteApiKey(),
-        getEmbeddingIndexStatus(),
-      ]);
+      const [nextConfig, nextStatus, nextHasKey, nextIndexStatus, nextRepoIndexSummary] =
+        await Promise.all([
+          getEmbeddingConfig(),
+          getEmbeddingModelStatus(),
+          hasEmbeddingRemoteApiKey(),
+          getEmbeddingIndexStatus(),
+          getRepoIndexSummary(),
+        ]);
       setConfigState(nextConfig);
       setModelStatus(nextStatus);
       setHasApiKey(nextHasKey);
       setIndexStatus(nextIndexStatus);
+      setRepoIndexSummary(nextRepoIndexSummary);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -231,6 +237,7 @@ export function useEmbeddingSetup() {
       setLastSync(stats);
       setError(null);
       setIndexStatus(await getEmbeddingIndexStatus());
+      setRepoIndexSummary(await getRepoIndexSummary());
       return stats;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -254,6 +261,7 @@ export function useEmbeddingSetup() {
     error,
     lastSync,
     indexStatus,
+    repoIndexSummary,
     syncProgress,
     backgroundSyncProgress,
     providerConfigured,

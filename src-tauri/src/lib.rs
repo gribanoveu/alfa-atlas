@@ -251,6 +251,7 @@ pub fn run() {
             commands::embeddings::embedding_index_status,
             commands::embeddings::embedding_index_teardown,
             commands::embeddings::embedding_set_priority_files,
+            commands::repo_index::repo_index_summary,
             commands::llm::llm_get_settings,
             commands::llm::llm_set_settings,
             commands::llm::llm_list_providers,

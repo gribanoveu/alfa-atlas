@@ -4,6 +4,24 @@ import type { EmbeddingProviderKind } from "../../lib/embeddings";
 import "../Welcome/CloneRepoModal.css";
 import "./EmbeddingsTab.css";
 
+// Mirrors `commands::repo_index::language_label`'s wire labels.
+const LANGUAGE_LABELS: Record<string, string> = {
+  java: "Java",
+  json: "JSON",
+  yaml: "YAML",
+  markdown: "Markdown",
+  asciidoc: "AsciiDoc",
+};
+
+/** "Java: 12, JSON: 5" — sorted by count descending so the dominant
+ * language in the repo reads first. */
+function describeByLanguage(byLanguage: Record<string, number>): string {
+  return Object.entries(byLanguage)
+    .sort(([, a], [, b]) => b - a)
+    .map(([lang, count]) => `${LANGUAGE_LABELS[lang] ?? lang}: ${count}`)
+    .join(", ");
+}
+
 const PROVIDER_OPTIONS: { value: EmbeddingProviderKind; label: string; hint: string }[] = [
   {
     value: "local",
@@ -26,6 +44,7 @@ export function EmbeddingsTab() {
     error,
     lastSync,
     indexStatus,
+    repoIndexSummary,
     syncProgress,
     providerConfigured,
     updateConfig,
@@ -283,6 +302,9 @@ export function EmbeddingsTab() {
             Проиндексировано чанков: {indexStatus.embeddedCount}.
             {indexStatus.backgroundPending > 0
               ? ` Индексация остальной части репозитория продолжается в фоне (осталось файлов: ${indexStatus.backgroundPending}).`
+              : null}
+            {repoIndexSummary && repoIndexSummary.filesIndexed > 0
+              ? ` Файлов: ${repoIndexSummary.filesIndexed} (${describeByLanguage(repoIndexSummary.byLanguage)}).`
               : null}
           </p>
         ) : null}

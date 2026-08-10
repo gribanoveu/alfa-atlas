@@ -16,7 +16,7 @@ use crate::domain::workspace_index::DocumentId;
 use crate::infra::index_store::IndexStore;
 use crate::infra::{
     embedding_credentials_store, embedding_providers, project_store, repository_identity,
-    settings_store,
+    settings_store, workspace_scanner,
 };
 use crate::services::chunk_builder::{ChunkBuilder, ChunkIndex};
 use crate::services::embedding_config;
@@ -461,14 +461,17 @@ fn load_persisted_symbols(store: &IndexStore) -> Result<HashMap<FileId, Reusable
 /// Tauri's async runtime — matching requirement 4 (never block the UI or a
 /// tool-call).
 ///
-/// Only already-tracked files are updated incrementally (`repo_index.get`
-/// must already know about `file_id`) — a genuinely new file, or one
-/// that's always been gitignored, waits for the next full/manual
-/// `embedding_sync`, which does the real gitignore-aware walk
-/// (`workspace_scanner::scan_all`). This also means nothing happens here
-/// until `RepositoryIndex` has a baseline for this `index_root` (at least
-/// one `embedding_sync` this session) — expected, not a bug:
-/// `RepositoryIndex` has no persistence of its own.
+/// A genuinely new, untracked file (`repo_index.get` doesn't know about
+/// `file_id` yet) is still indexed here, not deferred to the next full
+/// sync — `workspace_scanner::is_new_file_indexable` answers the one thing
+/// a full gitignore-aware walk would otherwise be needed for (is this path
+/// actually hidden/gitignored, given `IndexWatcher`'s own `is_relevant`
+/// filter is extension-only and doesn't know about `.gitignore`) far more
+/// cheaply than re-walking the whole tree. A genuinely gitignored file
+/// still never reaches `update_file` below. This also means nothing
+/// happens here until `RepositoryIndex` has a baseline for this
+/// `index_root` (at least one `embedding_sync` this session) — expected,
+/// not a bug: `RepositoryIndex` has no persistence of its own.
 ///
 /// `on_embedding_progress` is injected (mirrors `EmbeddingIndex::sync`'s own
 /// callback-based design) rather than taking an `AppHandle` directly — this
@@ -506,7 +509,10 @@ fn run_incremental_sync(
         kind
     };
 
-    if effective_kind == FileChangeKind::Upserted && repo_index.get(&file_id).is_none() {
+    if effective_kind == FileChangeKind::Upserted
+        && repo_index.get(&file_id).is_none()
+        && !workspace_scanner::is_new_file_indexable(index_root, &path)
+    {
         return Ok(());
     }
 
@@ -1630,6 +1636,90 @@ mod tests {
 
         assert_eq!(stats.embedded, 0);
         assert_eq!(stats.skipped_unchanged, 1);
+
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&store_dir).ok();
+    }
+
+    // --- `run_incremental_sync` ---
+
+    #[test]
+    fn run_incremental_sync_indexes_a_brand_new_untracked_file() {
+        let root = fixture_dir("repo");
+        fs::write(root.join("existing.json"), "1").unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        let chunk_index = ChunkIndex::new();
+        let embedding_index = EmbeddingIndexSlot::new(None);
+        let embedding_provider = mock_provider_slot();
+        let sync_guard = EmbeddingSyncGuard::new(());
+        let store_dir = fixture_dir("store");
+        let store = IndexStore::open(&store_dir).unwrap();
+
+        // `new.json` never went through `repo_index.build()` above — the
+        // exact "watcher saw a Create for a path RepositoryIndex has never
+        // heard of" scenario this fix targets.
+        let new_path = root.join("new.json");
+        fs::write(&new_path, "2").unwrap();
+        assert!(repo_index.get(&FileId("new.json".to_string())).is_none());
+
+        run_incremental_sync(
+            &repo_index,
+            &chunk_index,
+            &embedding_index,
+            &embedding_provider,
+            &sync_guard,
+            &root,
+            &store,
+            new_path,
+            FileChangeKind::Upserted,
+            &|_, _| {},
+        )
+        .unwrap();
+
+        assert!(repo_index.get(&FileId("new.json".to_string())).is_some());
+        assert!(chunk_index.file_ids().contains(&FileId("new.json".to_string())));
+
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&store_dir).ok();
+    }
+
+    #[test]
+    fn run_incremental_sync_ignores_a_new_gitignored_file() {
+        let root = fixture_dir("repo");
+        git2::Repository::init(&root).unwrap();
+        fs::write(root.join(".gitignore"), "ignored.json\n").unwrap();
+        fs::write(root.join("existing.json"), "1").unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        let chunk_index = ChunkIndex::new();
+        let embedding_index = EmbeddingIndexSlot::new(None);
+        let embedding_provider = mock_provider_slot();
+        let sync_guard = EmbeddingSyncGuard::new(());
+        let store_dir = fixture_dir("store");
+        let store = IndexStore::open(&store_dir).unwrap();
+
+        let new_path = root.join("ignored.json");
+        fs::write(&new_path, "2").unwrap();
+
+        run_incremental_sync(
+            &repo_index,
+            &chunk_index,
+            &embedding_index,
+            &embedding_provider,
+            &sync_guard,
+            &root,
+            &store,
+            new_path,
+            FileChangeKind::Upserted,
+            &|_, _| {},
+        )
+        .unwrap();
+
+        assert!(repo_index.get(&FileId("ignored.json".to_string())).is_none());
+        assert!(!chunk_index.file_ids().contains(&FileId("ignored.json".to_string())));
 
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&store_dir).ok();
