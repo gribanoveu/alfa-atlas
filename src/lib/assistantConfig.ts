@@ -754,3 +754,20 @@ export const CONTEXT_NEAR_LIMIT_RATIO = 0.9;
 // duration, so what the user sees running out is exactly the deadline that
 // actually fires.
 export const TOOL_APPROVAL_TIMEOUT_MS = 30_000;
+
+// Suggestion chips shown in the assistant panel's empty-state placeholder
+// (`AssistantConversation`) before the first message is sent. Clicking one
+// fills the compose box via `setDraft` without sending — the user can still
+// edit before submitting. Add, remove, or reorder entries here; nothing
+// else needs to change for the chip row to reflect it.
+export interface AssistantSuggestion {
+  label: string;
+  text: string;
+}
+
+export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
+  { label: "Документация на новый метод", text: "Создай в разделе документации новую папку с названием метода, используя тул для создания папок с шаблоном «документация на REST метод» (метод.adoc, request.adoc, response.adoc и диаграмма последовательности). Заполнять содержимое не нужно — достаточно создать заготовку. Название метода - " },
+  { label: "Найти пробелы в документации", text: "Проверь документацию проекта и найди, где не хватает описания. Считай проблемой пустые секции, заголовки-заглушки, TODO-комментарии и отсутствующие у REST-метода файлы request.adoc/response.adoc. Проходы: check → listFiles → grep → readFile. Дай список из 3–5 мест с путём и причинами, ничего не правь." },
+  { label: "Обновить раздел документации", text: "Помоги обновить раздел документации" },
+  { label: "Объяснить как работает фича", text: "Объясни, как работает фича, главным источником истины должен быть код — разбирай реализацию по файлам и сигнатурам, а не по названиям и структуре. Документацию используй только для сверки терминов и поиска расхождений, но финальный вывод строй на фактах из кода. В ответе опиши поток выполнения, сошлиcь на конкретные файлы и код, а если документация и код расходятся — явно покажи оба варианта и отметь, какой фактический. Не выдумывай поведение, которого нет в коде, и отдельно помечай, что осталось предположением. Запроси переключение в режим для доступа к коду если ты находишься в Docs-only. Фича это - " },
+];

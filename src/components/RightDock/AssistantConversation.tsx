@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, ChevronUp, Send, Sparkles, Square } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import {
+  ASSISTANT_SUGGESTIONS,
   AUTO_MODEL_LABEL,
   AUTO_MODEL_VALUE,
   CHAT_INPUT_ROWS,
@@ -266,6 +267,7 @@ export function AssistantConversation({
   const [draft, setDraft] = useState("");
 
   const messagesRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // Auto-follow state for the transcript scroll — separate from React state
   // where possible (`pinnedToBottomRef`) since it's read inside the
   // high-frequency `messages` effect below and mustn't itself trigger a
@@ -370,6 +372,16 @@ export function AssistantConversation({
     void updateProviderConfig(providerId, { model: value === AUTO_MODEL_VALUE ? null : value });
   };
 
+  const handleSuggestionClick = (text: string) => {
+    setDraft(text);
+    requestAnimationFrame(() => {
+      const el = chatInputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
+
   const handleSend = () => {
     const text = draft.trim();
     if (!text || sending) return;
@@ -390,6 +402,18 @@ export function AssistantConversation({
             <Sparkles size={22} strokeWidth={1.5} aria-hidden />
             <p className="assistant-chat-placeholder-title">Ассистент готов</p>
             <p className="assistant-chat-placeholder-desc">Задайте вопрос о документации проекта.</p>
+            <div className="assistant-chat-suggestions">
+              {ASSISTANT_SUGGESTIONS.map((s) => (
+                <button
+                  key={s.label}
+                  type="button"
+                  className="assistant-suggestion-chip"
+                  onClick={() => handleSuggestionClick(s.text)}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
           </div>
         ) : (
           messages.map((m) => {
@@ -537,6 +561,7 @@ export function AssistantConversation({
       <div className="assistant-chat-input-row">
         <div className="assistant-chat-input-wrap">
           <textarea
+            ref={chatInputRef}
             className="assistant-chat-input"
             rows={CHAT_INPUT_ROWS}
             value={draft}
