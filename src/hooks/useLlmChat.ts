@@ -54,14 +54,15 @@ export type { ChatMessage, MessageBlock, TextBlock, ToolCallBlock, ToolCallStatu
  * so the system prompt's "## Tool usage" section is generated from the
  * same live registry the backend uses for real function-calling.
  *
- * `initialMessages` seeds this hook's conversation — the caller
- * (`AssistantConversation`) is expected to remount this hook (via a
+ * `initialMessages`/`initialTodos` seed this hook's conversation — the
+ * caller (`AssistantConversation`) is expected to remount this hook (via a
  * `key={chatId}` on its own component) whenever the active chat changes,
- * so a plain initial value is enough; this never needs to react to
- * `initialMessages` changing in place. `onTurnSettled` fires once per
- * `sendMessage` call, on both the success and error paths, with the
- * turn's final `messages` snapshot — the caller's `useChatHistory` uses it
- * to persist the conversation. */
+ * so a plain initial value is enough; this never needs to react to either
+ * changing in place. `onTurnSettled` fires once per `sendMessage` call, on
+ * both the success and error paths, with the turn's final `messages`/
+ * `todos` snapshot — the caller's `useChatHistory` uses it to persist the
+ * conversation (including the todo checklist, which otherwise only ever
+ * lived in this hook's own `todoListRef`). */
 export function useLlmChat(
   providerId: string | null,
   accessMode: AiAccessMode,
@@ -69,7 +70,8 @@ export function useLlmChat(
   toolDefinitions: LlmToolDefinition[],
   docsRootRelativeToRepo: string | null,
   initialMessages: ChatMessage[],
-  onTurnSettled: (messages: ChatMessage[]) => void,
+  initialTodos: Task[],
+  onTurnSettled: (messages: ChatMessage[], todos: Task[]) => void,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [sending, setSending] = useState(false);
@@ -128,8 +130,8 @@ export function useLlmChat(
   // render), while `todos` (state) exists purely so `TodoProgressWidget`
   // re-renders when the list changes. `setTodos` below keeps both in sync
   // on every mutation; nothing should assign to either independently.
-  const todoListRef = useRef<Task[]>([]);
-  const [todos, setTodosState] = useState<Task[]>([]);
+  const todoListRef = useRef<Task[]>(initialTodos);
+  const [todos, setTodosState] = useState<Task[]>(initialTodos);
   const setTodos = useCallback((next: Task[]) => {
     todoListRef.current = next;
     setTodosState(next);
@@ -421,7 +423,7 @@ export function useLlmChat(
         // queue in order; this updater sees exactly what the turn ended
         // with, covering both the success and error paths in one place.
         setMessages((prev) => {
-          onTurnSettled(prev);
+          onTurnSettled(prev, todoListRef.current);
           return prev;
         });
       }

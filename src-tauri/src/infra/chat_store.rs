@@ -12,7 +12,11 @@
 //! `messages.data` is an opaque JSON blob — this module never parses a
 //! message's internal shape (the frontend's `ChatMessage`/`MessageBlock`
 //! union, which evolves independently). Rust's only job is to store and
-//! return it byte-for-byte.
+//! return it byte-for-byte. `chats.todos`, by contrast, *is* typed
+//! (`Vec<domain::ai_tools::Task>`) — unlike `MessageBlock`, `Task` is
+//! already a stable, shared domain type used throughout the tool-calling
+//! boundary, so there's no independent-evolution risk to guard against by
+//! keeping it opaque too.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,7 +24,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use thiserror::Error;
 
-use crate::domain::chat::ChatSummary;
+use crate::domain::ai_tools::Task;
+use crate::domain::chat::{ChatSummary, LoadedChat};
 
 const DB_FILE_NAME: &str = "chat.db";
 
@@ -34,6 +39,7 @@ CREATE TABLE IF NOT EXISTS chats (
   repo_root  TEXT NOT NULL,
   title      TEXT NOT NULL DEFAULT '',
   archived   INTEGER NOT NULL DEFAULT 0,
+  todos      TEXT NOT NULL DEFAULT '[]',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -72,7 +78,32 @@ fn open() -> Result<Connection, ChatStoreError> {
     }
     let conn = Connection::open(path)?;
     conn.execute_batch(SCHEMA_SQL)?;
+    migrate_add_todos_column(&conn)?;
     Ok(conn)
+}
+
+/// Additive migration for a `chats` table created before this column
+/// existed — `CREATE TABLE IF NOT EXISTS` above only shapes brand-new
+/// databases. Checked-then-`ALTER` (SQLite has no `ADD COLUMN IF NOT
+/// EXISTS`) rather than blindly running the `ALTER` and swallowing a
+/// "duplicate column" error, which would also hide a real failure (a
+/// locked db, say) behind "already migrated". Runs on every `open()` call
+/// — cheap, one `PRAGMA table_info` query — since this store already
+/// opens a fresh connection per call with no persistent place to remember
+/// "already checked" (see this module's own doc comment). User data —
+/// unlike `index_store`'s rebuildable embeddings cache, this must never be
+/// wiped on a schema change.
+fn migrate_add_todos_column(conn: &Connection) -> Result<(), ChatStoreError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(chats)")?;
+    let has_todos = stmt
+        .query_map([], |row| row.get::<_, String>(1))? // column 1 = name
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "todos");
+    if !has_todos {
+        conn.execute("ALTER TABLE chats ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'", [])?;
+    }
+    Ok(())
 }
 
 fn now_millis() -> i64 {
@@ -117,18 +148,36 @@ pub fn list_chats(repo_root: &str, archived: bool) -> Result<Vec<ChatSummary>, C
     rows.collect::<Result<Vec<_>, _>>().map_err(ChatStoreError::from)
 }
 
-/// One chat's messages, in save order — each element is the opaque
-/// `ChatMessage` JSON blob exactly as `save_chat` received it.
-pub fn load_messages(chat_id: &str) -> Result<Vec<serde_json::Value>, ChatStoreError> {
+/// One chat's full state: its messages (opaque JSON, save order — each
+/// element exactly as `save_chat` received it) and its todo checklist.
+pub fn load_chat(chat_id: &str) -> Result<LoadedChat, ChatStoreError> {
     let conn = open()?;
     let mut stmt = conn.prepare("SELECT data FROM messages WHERE chat_id = ?1 ORDER BY ordinal ASC")?;
     let raw: Vec<String> = stmt
         .query_map(params![chat_id], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
-    raw.iter().map(|s| serde_json::from_str(s).map_err(ChatStoreError::from)).collect()
+    let messages = raw
+        .iter()
+        .map(|s| serde_json::from_str(s).map_err(ChatStoreError::from))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // No `chats` row (nothing saved yet for this id) yields empty
+    // messages/todos rather than `NotFound` — keeps this function total
+    // for a caller like `useChatHistory::switchChat`, which only ever
+    // passes ids it already knows exist, but there's no reason to make
+    // this partial for that.
+    let todos_json: Option<String> = conn
+        .query_row("SELECT todos FROM chats WHERE id = ?1", params![chat_id], |row| row.get(0))
+        .optional()?;
+    let todos = match todos_json {
+        Some(s) => serde_json::from_str(&s)?,
+        None => Vec::new(),
+    };
+
+    Ok(LoadedChat { messages, todos })
 }
 
-/// Upserts the `chats` row (title/`updated_at` always overwritten;
+/// Upserts the `chats` row (title/`todos`/`updated_at` always overwritten;
 /// `created_at`/`archived` preserved across an existing row) and replaces
 /// `messages` wholesale — delete-then-reinsert under one transaction,
 /// mirroring `IndexStore::replace_chunks_for_file`'s established pattern.
@@ -140,16 +189,18 @@ pub fn save_chat(
     chat_id: &str,
     title: &str,
     messages: &[serde_json::Value],
+    todos: &[Task],
 ) -> Result<ChatSummary, ChatStoreError> {
     let mut conn = open()?;
     let now = now_millis();
+    let todos_json = serde_json::to_string(todos)?;
     let tx = conn.transaction()?;
 
     tx.execute(
-        "INSERT INTO chats (id, repo_root, title, archived, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 0, ?4, ?4)
-         ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at",
-        params![chat_id, repo_root, title, now],
+        "INSERT INTO chats (id, repo_root, title, todos, archived, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, 0, ?5, ?5)
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title, todos = excluded.todos, updated_at = excluded.updated_at",
+        params![chat_id, repo_root, title, todos_json, now],
     )?;
 
     tx.execute("DELETE FROM messages WHERE chat_id = ?1", params![chat_id])?;
@@ -180,17 +231,22 @@ pub fn set_archived(chat_id: &str, archived: bool) -> Result<(), ChatStoreError>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::ai_tools::TodoStatus;
     use crate::infra::settings_store::test_support::with_temp_home;
 
     fn sample_message(text: &str) -> serde_json::Value {
         serde_json::json!({ "id": text, "role": "user", "content": text })
     }
 
+    fn sample_todo(id: &str, title: &str) -> Task {
+        Task { id: id.to_string(), title: title.to_string(), status: TodoStatus::Pending, note: None }
+    }
+
     #[test]
     fn save_then_list_round_trips_a_new_chat() {
         with_temp_home(|| {
             let repo = "/repo/one";
-            let summary = save_chat(repo, "chat-1", "Первый вопрос", &[sample_message("hi")]).unwrap();
+            let summary = save_chat(repo, "chat-1", "Первый вопрос", &[sample_message("hi")], &[]).unwrap();
             assert_eq!(summary.id, "chat-1");
             assert_eq!(summary.repo_root, repo);
             assert_eq!(summary.title, "Первый вопрос");
@@ -206,24 +262,25 @@ mod tests {
     fn save_then_load_messages_preserves_order() {
         with_temp_home(|| {
             let messages = vec![sample_message("first"), sample_message("second"), sample_message("third")];
-            save_chat("/repo/one", "chat-1", "t", &messages).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &messages, &[]).unwrap();
 
-            let loaded = load_messages("chat-1").unwrap();
-            assert_eq!(loaded, messages);
+            let loaded = load_chat("chat-1").unwrap();
+            assert_eq!(loaded.messages, messages);
         });
     }
 
     #[test]
     fn resaving_a_chat_replaces_its_messages_and_preserves_created_at() {
         with_temp_home(|| {
-            let first = save_chat("/repo/one", "chat-1", "t", &[sample_message("a")]).unwrap();
+            let first = save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[]).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
-            let second = save_chat("/repo/one", "chat-1", "t2", &[sample_message("a"), sample_message("b")]).unwrap();
+            let second =
+                save_chat("/repo/one", "chat-1", "t2", &[sample_message("a"), sample_message("b")], &[]).unwrap();
 
             assert_eq!(second.created_at, first.created_at);
             assert!(second.updated_at >= first.updated_at);
             assert_eq!(second.title, "t2");
-            assert_eq!(load_messages("chat-1").unwrap().len(), 2);
+            assert_eq!(load_chat("chat-1").unwrap().messages.len(), 2);
 
             // Still exactly one row in the active list, not a duplicate.
             assert_eq!(list_chats("/repo/one", false).unwrap().len(), 1);
@@ -234,7 +291,7 @@ mod tests {
     fn archiving_moves_a_chat_between_active_and_archived_lists() {
         with_temp_home(|| {
             let repo = "/repo/one";
-            save_chat(repo, "chat-1", "t", &[sample_message("a")]).unwrap();
+            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[]).unwrap();
 
             set_archived("chat-1", true).unwrap();
             assert!(list_chats(repo, false).unwrap().is_empty());
@@ -257,8 +314,8 @@ mod tests {
     #[test]
     fn chats_are_scoped_to_their_repo_root() {
         with_temp_home(|| {
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")]).unwrap();
-            save_chat("/repo/two", "chat-2", "t", &[sample_message("a")]).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[]).unwrap();
+            save_chat("/repo/two", "chat-2", "t", &[sample_message("a")], &[]).unwrap();
 
             let repo_one = list_chats("/repo/one", false).unwrap();
             assert_eq!(repo_one.len(), 1);
@@ -274,11 +331,11 @@ mod tests {
     fn list_chats_orders_by_most_recently_updated_first() {
         with_temp_home(|| {
             let repo = "/repo/one";
-            save_chat(repo, "chat-1", "t", &[sample_message("a")]).unwrap();
+            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[]).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
-            save_chat(repo, "chat-2", "t", &[sample_message("a")]).unwrap();
+            save_chat(repo, "chat-2", "t", &[sample_message("a")], &[]).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
-            save_chat(repo, "chat-1", "t", &[sample_message("a"), sample_message("b")]).unwrap();
+            save_chat(repo, "chat-1", "t", &[sample_message("a"), sample_message("b")], &[]).unwrap();
 
             let active = list_chats(repo, false).unwrap();
             assert_eq!(active.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["chat-1", "chat-2"]);
@@ -290,9 +347,67 @@ mod tests {
         with_temp_home(|| {
             // save_chat on a brand-new id: the DELETE before insert matches
             // zero rows, which must not error.
-            let summary = save_chat("/repo/one", "chat-new", "t", &[]).unwrap();
+            let summary = save_chat("/repo/one", "chat-new", "t", &[], &[]).unwrap();
             assert_eq!(summary.id, "chat-new");
-            assert!(load_messages("chat-new").unwrap().is_empty());
+            assert!(load_chat("chat-new").unwrap().messages.is_empty());
+        });
+    }
+
+    #[test]
+    fn save_then_load_todos_round_trips() {
+        with_temp_home(|| {
+            let todos = vec![sample_todo("t1", "Write the docs")];
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &todos).unwrap();
+            assert_eq!(load_chat("chat-1").unwrap().todos, todos);
+        });
+    }
+
+    #[test]
+    fn resaving_a_chat_replaces_its_todos() {
+        with_temp_home(|| {
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t1", "first")]).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t2", "second")]).unwrap();
+            assert_eq!(load_chat("chat-1").unwrap().todos, vec![sample_todo("t2", "second")]);
+        });
+    }
+
+    /// Simulates a database created before this feature: a raw connection
+    /// at the same path, with the legacy `chats` schema (no `todos`
+    /// column), closed *before* this module's own `open()` ever runs
+    /// against this path — then exercises the normal `load_chat`/
+    /// `save_chat` API and confirms the migration happens transparently,
+    /// with the pre-existing row untouched.
+    #[test]
+    fn opening_a_pre_existing_database_without_the_todos_column_migrates_cleanly() {
+        with_temp_home(|| {
+            let path = db_path().unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            {
+                let legacy = Connection::open(&path).unwrap();
+                legacy
+                    .execute_batch(
+                        "CREATE TABLE chats (
+                           id TEXT PRIMARY KEY, repo_root TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+                           archived INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                         );
+                         CREATE TABLE messages (
+                           chat_id TEXT NOT NULL, ordinal INTEGER NOT NULL, data TEXT NOT NULL,
+                           PRIMARY KEY (chat_id, ordinal)
+                         );
+                         INSERT INTO chats (id, repo_root, title, archived, created_at, updated_at)
+                           VALUES ('chat-old', '/repo/one', 'old chat', 0, 1, 1);",
+                    )
+                    .unwrap();
+            }
+
+            let loaded = load_chat("chat-old").unwrap();
+            assert!(loaded.todos.is_empty());
+
+            let updated =
+                save_chat("/repo/one", "chat-old", "old chat", &[sample_message("a")], &[sample_todo("t1", "x")])
+                    .unwrap();
+            assert_eq!(updated.created_at, 1); // preserved across migration + upsert
+            assert_eq!(load_chat("chat-old").unwrap().todos, vec![sample_todo("t1", "x")]);
         });
     }
 }

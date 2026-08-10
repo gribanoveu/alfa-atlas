@@ -160,13 +160,17 @@ pub enum TodoStatus {
 }
 
 /// One entry in the model's working task checklist for the current
-/// conversation. Never persisted server-side — this backend keeps no
-/// session state between calls (see `commands::llm`'s tool-loop doc
-/// comment) — round-tripped through `ChatStreamOutcome`/`PendingApproval`
-/// and owned by the frontend (`useLlmChat`'s `todoListRef`) between turns,
-/// the same way `LlmMessage` history already is. `id` is runtime-generated
-/// (`"t1"`, `"t2"`, ... sequential) — the model never invents or chooses
-/// one.
+/// conversation. Within a single streaming turn it's round-tripped
+/// through `ChatStreamOutcome`/`PendingApproval` and owned by the frontend
+/// (`useLlmChat`'s `todoListRef`) — the backend's tool-loop itself still
+/// keeps no in-memory session state between calls (see `commands::llm`'s
+/// tool-loop doc comment). Separately, `infra::chat_store::save_chat`/
+/// `load_chat` persist the current list alongside chat messages (the
+/// `chats.todos` column), so — unlike the transient per-turn round-trip —
+/// it does survive a chat switch, new chat, or app restart; `useLlmChat`
+/// just seeds `todoListRef` from that persisted list on mount instead of
+/// always starting empty. `id` is runtime-generated (`"t1"`, `"t2"`, ...
+/// sequential) — the model never invents or chooses one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {

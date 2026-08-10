@@ -229,7 +229,9 @@ export function AssistantPanel({
               </p>
             ) : null}
 
-            {chatHistory.currentChatId === null || chatHistory.currentMessages === null ? (
+            {chatHistory.currentChatId === null ||
+            chatHistory.currentMessages === null ||
+            chatHistory.currentTodos === null ? (
               <div className="assistant-chat-placeholder">
                 <p className="assistant-chat-placeholder-desc">Загрузка истории чата…</p>
               </div>
@@ -237,6 +239,7 @@ export function AssistantPanel({
               <AssistantConversation
                 key={chatHistory.currentChatId}
                 initialMessages={chatHistory.currentMessages}
+                initialTodos={chatHistory.currentTodos}
                 onTurnSettled={chatHistory.saveTurn}
                 onSendingChange={setConversationSending}
                 providerId={activeProviderId}

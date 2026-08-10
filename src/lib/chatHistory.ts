@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { Task } from "./aiTools";
 import type { ChatMessage } from "./chatBlocks";
 
 // Mirrors `domain::chat::ChatSummary` in `src-tauri/src/domain/chat.rs`
@@ -19,25 +20,34 @@ export function listChats(repoRoot: string, archived: boolean): Promise<ChatSumm
   return invoke<ChatSummary[]>("chat_list", { repoRoot, archived });
 }
 
-/** One chat's messages, in save order. Trusts the stored blob's shape at
- * runtime — same trust boundary every other `invoke<T>()` call in this
- * codebase already has; the backend never inspects a message's internals
- * (see `infra::chat_store`'s module doc), it only stores/returns whatever
- * JSON `saveChat` last wrote. */
-export function loadChatMessages(chatId: string): Promise<ChatMessage[]> {
-  return invoke<ChatMessage[]>("chat_load_messages", { chatId });
+// Mirrors `domain::chat::LoadedChat`. `messages` trusts the stored blob's
+// shape at runtime — same trust boundary every other `invoke<T>()` call in
+// this codebase already has; the backend never inspects a message's
+// internals (see `infra::chat_store`'s module doc), it only stores/returns
+// whatever JSON `saveChat` last wrote. `todos`, unlike `messages`, is a
+// real shared type (`Task`), not an opaque blob.
+export type LoadedChat = {
+  messages: ChatMessage[];
+  todos: Task[];
+};
+
+/** One chat's full state — messages (save order) and its todo checklist —
+ * in one round trip, since every caller needs both together. */
+export function loadChatMessages(chatId: string): Promise<LoadedChat> {
+  return invoke<LoadedChat>("chat_load_messages", { chatId });
 }
 
-/** Upserts the chat row (title/recency) and replaces its messages wholesale
- * — call with the conversation's full current `ChatMessage[]` any time it
- * should be persisted, not incremental deltas. */
+/** Upserts the chat row (title/todos/recency) and replaces its messages
+ * wholesale — call with the conversation's full current `ChatMessage[]`
+ * and `Task[]` any time it should be persisted, not incremental deltas. */
 export function saveChat(
   repoRoot: string,
   chatId: string,
   title: string,
   messages: ChatMessage[],
+  todos: Task[],
 ): Promise<ChatSummary> {
-  return invoke<ChatSummary>("chat_save", { repoRoot, chatId, title, messages });
+  return invoke<ChatSummary>("chat_save", { repoRoot, chatId, title, messages, todos });
 }
 
 export function setChatArchived(chatId: string, archived: boolean): Promise<void> {

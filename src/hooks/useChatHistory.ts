@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { Task } from "../lib/aiTools";
 import type { ChatMessage } from "../lib/chatBlocks";
 import {
   deriveChatTitle,
@@ -28,6 +29,7 @@ export function useChatHistory(repoRoot: string | null) {
   const [archivedLoading, setArchivedLoading] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [currentMessages, setCurrentMessages] = useState<ChatMessage[] | null>(null);
+  const [currentTodos, setCurrentTodos] = useState<Task[] | null>(null);
 
   // Guards against a stale async load (the initial repo scan, or a
   // `switchChat`) applying its result after a newer one has already
@@ -41,6 +43,7 @@ export function useChatHistory(repoRoot: string | null) {
     const token = ++loadTokenRef.current;
     setCurrentChatId(null);
     setCurrentMessages(null);
+    setCurrentTodos(null);
     setArchivedChats(null);
     if (!repoRoot) {
       setActiveChats([]);
@@ -51,13 +54,15 @@ export function useChatHistory(repoRoot: string | null) {
       if (loadTokenRef.current !== token) return;
       setActiveChats(chats);
       if (chats.length > 0) {
-        const messages = await loadChatMessages(chats[0].id).catch(() => []);
+        const loaded = await loadChatMessages(chats[0].id).catch(() => ({ messages: [], todos: [] }));
         if (loadTokenRef.current !== token) return;
         setCurrentChatId(chats[0].id);
-        setCurrentMessages(messages);
+        setCurrentMessages(loaded.messages);
+        setCurrentTodos(loaded.todos);
       } else {
         setCurrentChatId(crypto.randomUUID());
         setCurrentMessages([]);
+        setCurrentTodos([]);
       }
     })();
   }, [repoRoot]);
@@ -66,12 +71,19 @@ export function useChatHistory(repoRoot: string | null) {
     const token = ++loadTokenRef.current;
     setCurrentChatId(chatId);
     setCurrentMessages(null);
+    setCurrentTodos(null);
     void loadChatMessages(chatId)
-      .then((messages) => {
-        if (loadTokenRef.current === token) setCurrentMessages(messages);
+      .then((loaded) => {
+        if (loadTokenRef.current === token) {
+          setCurrentMessages(loaded.messages);
+          setCurrentTodos(loaded.todos);
+        }
       })
       .catch(() => {
-        if (loadTokenRef.current === token) setCurrentMessages([]);
+        if (loadTokenRef.current === token) {
+          setCurrentMessages([]);
+          setCurrentTodos([]);
+        }
       });
   }, []);
 
@@ -79,6 +91,7 @@ export function useChatHistory(repoRoot: string | null) {
     loadTokenRef.current++; // invalidate any in-flight load — nothing left to wait for
     setCurrentChatId(crypto.randomUUID());
     setCurrentMessages([]);
+    setCurrentTodos([]);
   }, []);
 
   const loadArchived = useCallback(async () => {
@@ -130,10 +143,10 @@ export function useChatHistory(repoRoot: string | null) {
   // something that should interrupt an in-progress conversation — no error
   // UI, just a console note.
   const saveTurn = useCallback(
-    (messages: ChatMessage[]) => {
+    (messages: ChatMessage[], todos: Task[]) => {
       if (!repoRoot || !currentChatId || messages.length === 0) return;
       const title = deriveChatTitle(messages);
-      void saveChat(repoRoot, currentChatId, title, messages)
+      void saveChat(repoRoot, currentChatId, title, messages, todos)
         .then((summary) => {
           setActiveChats((prev) => [summary, ...prev.filter((c) => c.id !== summary.id)]);
         })
@@ -150,6 +163,7 @@ export function useChatHistory(repoRoot: string | null) {
     archivedLoading,
     currentChatId,
     currentMessages,
+    currentTodos,
     switchChat,
     newChat,
     archiveChat,

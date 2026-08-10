@@ -5,7 +5,8 @@
 //! network calls or long-running work, matching `commands::onboarding`/
 //! `commands::prefs`'s precedent for the same kind of store access.
 
-use crate::domain::chat::ChatSummary;
+use crate::domain::ai_tools::Task;
+use crate::domain::chat::{ChatSummary, LoadedChat};
 use crate::infra::chat_store;
 
 #[tauri::command]
@@ -14,8 +15,8 @@ pub fn chat_list(repo_root: String, archived: bool) -> Result<Vec<ChatSummary>, 
 }
 
 #[tauri::command]
-pub fn chat_load_messages(chat_id: String) -> Result<Vec<serde_json::Value>, String> {
-    chat_store::load_messages(&chat_id).map_err(|e| e.to_string())
+pub fn chat_load_messages(chat_id: String) -> Result<LoadedChat, String> {
+    chat_store::load_chat(&chat_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -24,8 +25,9 @@ pub fn chat_save(
     chat_id: String,
     title: String,
     messages: Vec<serde_json::Value>,
+    todos: Vec<Task>,
 ) -> Result<ChatSummary, String> {
-    chat_store::save_chat(&repo_root, &chat_id, &title, &messages).map_err(|e| e.to_string())
+    chat_store::save_chat(&repo_root, &chat_id, &title, &messages, &todos).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

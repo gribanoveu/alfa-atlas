@@ -7,7 +7,7 @@ import {
   CHAT_INPUT_ROWS,
   CONTEXT_NEAR_LIMIT_RATIO,
 } from "../../lib/assistantConfig";
-import type { AiAccessMode, LlmToolDefinition } from "../../lib/aiTools";
+import type { AiAccessMode, LlmToolDefinition, Task } from "../../lib/aiTools";
 import type { ChatMessage } from "../../lib/chatBlocks";
 import type { LlmModelInfo, LlmProviderConfig, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
@@ -115,7 +115,10 @@ type AssistantConversationProps = {
    * in-flight approval timers) cleanly, without a manual reset effect that
    * could race an in-flight turn. */
   initialMessages: ChatMessage[];
-  onTurnSettled: (messages: ChatMessage[]) => void;
+  /** The chat's persisted todo checklist, seeding `useLlmChat`'s
+   * `todoListRef` — same remount-driven reset as `initialMessages`. */
+  initialTodos: Task[];
+  onTurnSettled: (messages: ChatMessage[], todos: Task[]) => void;
   /** Bubbles `useLlmChat`'s `sending` up to the parent, which uses it to
    * disable chat-switching/new-chat while a turn (including a
    * `pendingApproval` pause) is in flight — see `AssistantPanel.tsx`'s own
@@ -160,6 +163,7 @@ type AssistantConversationProps = {
  * one doesn't need its own `llmReady` checks. */
 export function AssistantConversation({
   initialMessages,
+  initialTodos,
   onTurnSettled,
   onSendingChange,
   providerId,
@@ -182,6 +186,7 @@ export function AssistantConversation({
     toolDefinitions,
     docsRootRelativeToRepo,
     initialMessages,
+    initialTodos,
     onTurnSettled,
   );
 
