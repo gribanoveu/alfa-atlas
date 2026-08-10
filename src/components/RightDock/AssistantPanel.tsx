@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileText, FolderGit2, Settings2 } from "lucide-react";
+import { FileText, FolderGit2, RefreshCw, Settings2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useChatHistory } from "../../hooks/useChatHistory";
@@ -241,17 +241,22 @@ export function AssistantPanel({
                 ) : isRemoteEmbeddingProvider ? (
                   "Индекс документации ещё строится — ответы будут менее точными, пока индексация не завершится."
                 ) : (
-                  <>
-                    Индекс документации ещё не построен — поиск по документации будет менее точным.{" "}
+                  <span className="assistant-chat-index-row">
+                    <span>
+                      Индекс документации ещё не построен — поиск по документации будет менее
+                      точным. Нажмите, чтобы начать синхронизацию.
+                    </span>
                     <button
                       type="button"
                       className="assistant-chat-index-sync-btn"
                       disabled={busy}
                       onClick={() => void sync()}
+                      title="Синхронизировать"
+                      aria-label="Синхронизировать"
                     >
-                      Синхронизировать
+                      <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
                     </button>
-                  </>
+                  </span>
                 )}
               </p>
             ) : null}

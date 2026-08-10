@@ -361,6 +361,7 @@ function App() {
   const insertCounter = useRef(0);
   const skipNextPanelSync = useRef(false);
   const prevDirtyCount = useRef(0);
+  const seededDocsRoot = useRef<string | null>(null);
 
   useEffect(() => {
     if (!session.ready || !session.loadedState || !project.docsRoot) return;
@@ -409,6 +410,8 @@ function App() {
   useEffect(() => {
     if (!session.ready || !session.loadedState || !project.docsRoot) return;
     if (tree.nodes.length === 0) return;
+    if (seededDocsRoot.current === project.docsRoot) return;
+    seededDocsRoot.current = project.docsRoot;
     const loaded = session.loadedState.expandedDirs;
     const isDefault =
       loaded.length === 0 || (loaded.length === 1 && loaded[0] === ".");

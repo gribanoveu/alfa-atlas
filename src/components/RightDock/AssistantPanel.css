@@ -275,24 +275,35 @@
   line-height: 1.4;
 }
 
+.assistant-chat-index-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .assistant-chat-index-sync-btn {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border: none;
-  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
   color: var(--accent, var(--text-1));
-  font-size: inherit;
-  font-family: inherit;
-  text-decoration: underline;
   cursor: pointer;
 }
 
 .assistant-chat-index-sync-btn:hover:not(:disabled) {
+  background: var(--bg-2);
   filter: brightness(1.15);
 }
 
 .assistant-chat-index-sync-btn:disabled {
   color: var(--text-2);
-  text-decoration: none;
   cursor: default;
 }
 
