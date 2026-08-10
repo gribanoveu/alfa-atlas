@@ -1186,6 +1186,14 @@
   color: var(--text-0, var(--text-1));
 }
 
+.assistant-tool-approval-edit-count {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-ui, sans-serif);
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
 .assistant-tool-approval-reason {
   font-size: var(--font-ui-sm);
   color: var(--text-1);

@@ -7,8 +7,9 @@ import {
   formatToolArguments,
   TOOL_APPROVAL_TIMEOUT_MS,
 } from "../../lib/assistantConfig";
-import type { FileDiffStats, Task, ToolResult, TodoStatus } from "../../lib/aiTools";
+import type { FileDiffStats, FileEdit, Task, ToolResult, TodoStatus } from "../../lib/aiTools";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
+import { EditFileDiffReview } from "./EditFileDiffReview";
 import { WriteFileDiffReview } from "./WriteFileDiffReview";
 
 /** A file's content can be arbitrarily large — this caps how much of it the
@@ -29,6 +30,22 @@ function parseArgs(argumentsJson: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+/** Guards a pending `editFile` call's `args.edits` before handing it to
+ * `EditFileDiffReview` — `parseArgs` only guarantees valid JSON, not this
+ * shape. */
+function isFileEditArray(value: unknown): value is FileEdit[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (e) =>
+        e !== null &&
+        typeof e === "object" &&
+        typeof (e as FileEdit).old === "string" &&
+        typeof (e as FileEdit).new === "string",
+    )
+  );
 }
 
 /** `diff` for a settled `writeFile`/`editFile`/`deleteFile` call, or `null`
@@ -243,6 +260,25 @@ function ToolApprovalCard({
             <span>{args.path}</span>
           </button>
           {showDiff ? <WriteFileDiffReview docsRoot={docsRoot} path={args.path} content={args.content} /> : null}
+        </div>
+      ) : block.name === "editFile" && typeof args.path === "string" && isFileEditArray(args.edits) ? (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Файл</div>
+          <button
+            type="button"
+            className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
+            aria-expanded={showDiff}
+            onClick={() => setShowDiff((v) => !v)}
+          >
+            {showDiff ? (
+              <ChevronDown className="assistant-tool-call-chevron" size={12} aria-hidden />
+            ) : (
+              <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
+            )}
+            <span>{args.path}</span>
+            <span className="assistant-tool-approval-edit-count">Правок: {args.edits.length}</span>
+          </button>
+          {showDiff ? <EditFileDiffReview docsRoot={docsRoot} path={args.path} edits={args.edits} /> : null}
         </div>
       ) : block.name === "createDirectory" && typeof args.path === "string" ? (
         <div className="assistant-tool-call-detail-section">
