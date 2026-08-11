@@ -16,12 +16,15 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    CheckArgs, CheckKind, CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs,
-    FileDiffStats, FileEdit, GitBlameArgs, GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs,
-    MatchSource, MemoryArgs, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs,
-    RequestModeSwitchArgs, SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus,
-    TodoWriteArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope,
-    WriteFileArgs,
+    AsciidocTemplateEntry, CheckArgs, CheckKind, CreateDirectoryArgs, DeleteDirectoryArgs,
+    DeleteFileArgs, EditFileArgs, FileDiffStats, FileEdit, GetAsciidocTemplatesArgs, GitBlameArgs,
+    GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs, MatchSource, MemoryArgs, MoveArgs,
+    ReadFileArgs, RequestFullRepoAccessArgs, RequestModeSwitchArgs, SemanticSearchArgs, Task,
+    TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError,
+    ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
+};
+use crate::domain::asciidoc_element_templates::{
+    find_many as find_asciidoc_templates, ASCIIDOC_ELEMENT_TEMPLATES,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::conversation_mode::{mode_tools, ConversationMode};
@@ -210,7 +213,27 @@ pub fn execute_tool(
         ToolCall::RequestModeSwitch(args) => {
             Ok(ToolResult::ModeSwitchRequested { mode: args.mode, reason: args.reason })
         }
+        ToolCall::GetAsciidocTemplates(args) => Ok(get_asciidoc_templates(args)),
     }
+}
+
+/// Executes `getAsciidocTemplates` — a pure in-memory lookup against the
+/// fixed `domain::asciidoc_element_templates::ASCIIDOC_ELEMENT_TEMPLATES`
+/// catalog, so unlike almost every other tool here this cannot fail: an
+/// empty or entirely-unmatched `ids` just yields an empty/`not_found`-only
+/// result rather than a `ToolError`.
+fn get_asciidoc_templates(args: GetAsciidocTemplatesArgs) -> ToolResult {
+    let (found, not_found) = find_asciidoc_templates(&args.ids);
+    let templates = found
+        .into_iter()
+        .map(|t| AsciidocTemplateEntry {
+            id: t.id.to_string(),
+            label: t.label.to_string(),
+            category: t.category.to_string(),
+            template: t.template.to_string(),
+        })
+        .collect();
+    ToolResult::AsciidocTemplates { templates, not_found }
 }
 
 /// Correlation info available at a real (non-test) call site, threaded
@@ -533,6 +556,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "requestModeSwitch" => lenient_json_object::<RequestModeSwitchArgs>(&call.arguments)
             .map(ToolCall::RequestModeSwitch)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "getAsciidocTemplates" => lenient_json_object::<GetAsciidocTemplatesArgs>(&call.arguments)
+            .map(ToolCall::GetAsciidocTemplates)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
@@ -1112,7 +1138,57 @@ pub fn llm_tool_definitions(
             }),
         });
     }
+    if visible(ToolName::GetAsciidocTemplates) {
+        defs.push(LlmToolDefinition {
+            name: "getAsciidocTemplates".to_string(),
+            description: format!(
+                "Fetch the full canonical AsciiDoc markup for one or more house element templates (tables, admonitions, lists, includes, etc.) by id, from this fixed catalog:\n\n{}\nCall this before drafting a table, admonition block, list, or include that matches one of the entries above, passing its `id` (multiple ids may be requested in one call). Reuse the returned markup as the baseline for what you write — only placeholder values/content change — instead of inventing different syntax. If none of the entries fit the specific need, plain AsciiDoc without calling this is fine.",
+                asciidoc_template_catalog_description()
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1,
+                        "description": "One or more template ids from the catalog above."
+                    }
+                },
+                "required": ["ids"]
+            }),
+        });
+    }
     defs
+}
+
+/// Renders `ASCIIDOC_ELEMENT_TEMPLATES` as a compact, grouped index for
+/// `getAsciidocTemplates`'s own tool description — generated straight from
+/// the same catalog `get_asciidoc_templates` looks ids up in, so the index
+/// the model sees can never list an id the tool can't actually resolve (or
+/// vice versa). Relies on the catalog already being grouped by category in
+/// declaration order (structure, tables, examples, includes).
+fn asciidoc_template_catalog_description() -> String {
+    fn category_label(category: &str) -> &str {
+        match category {
+            "structure" => "Структура",
+            "tables" => "Таблицы",
+            "examples" => "Примеры",
+            "includes" => "Вставки",
+            other => other,
+        }
+    }
+    let mut out = String::new();
+    let mut current_category = "";
+    for t in ASCIIDOC_ELEMENT_TEMPLATES {
+        if t.category != current_category {
+            out.push_str(category_label(t.category));
+            out.push_str(":\n");
+            current_category = t.category;
+        }
+        out.push_str(&format!("- `{}`: {} — {}\n", t.id, t.label, t.description));
+    }
+    out
 }
 
 fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<ToolFileEntry>, ToolError> {
@@ -5237,7 +5313,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_seventeen_in_agent_mode_by_default() {
+    fn llm_tool_definitions_includes_all_eighteen_in_agent_mode_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -5262,7 +5338,8 @@ mod tests {
                 "requestFullRepoAccess",
                 "todo",
                 "memory",
-                "requestModeSwitch"
+                "requestModeSwitch",
+                "getAsciidocTemplates"
             ]
         );
 
@@ -5295,6 +5372,7 @@ mod tests {
         assert!(!plan_names.contains("todo"));
         assert!(plan_names.contains("requestFullRepoAccess"));
         assert!(plan_names.contains("requestModeSwitch"));
+        assert!(plan_names.contains("getAsciidocTemplates"));
 
         let question_names: HashSet<String> = llm_tool_definitions(&scope, ConversationMode::Question)
             .into_iter()
@@ -5303,6 +5381,7 @@ mod tests {
         assert!(!question_names.contains("writeFile"));
         assert!(!question_names.contains("requestFullRepoAccess"));
         assert!(question_names.contains("requestModeSwitch"));
+        assert!(question_names.contains("getAsciidocTemplates"));
 
         fs::remove_dir_all(&repo).ok();
     }

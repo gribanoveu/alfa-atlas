@@ -475,6 +475,27 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
           ) : null}
         </div>
       );
+    case "asciidocTemplates":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Шаблоны AsciiDoc</div>
+          {result.result.templates.length === 0 ? (
+            <p className="assistant-tool-call-detail-empty">Ничего не найдено</p>
+          ) : (
+            result.result.templates.map((t) => (
+              <div key={t.id}>
+                <div className="assistant-tool-call-detail-label">{t.label}</div>
+                <pre className="assistant-tool-call-detail-code">{t.template}</pre>
+              </div>
+            ))
+          )}
+          {result.result.notFound.length > 0 ? (
+            <p className="assistant-tool-call-detail-empty">
+              Не найдено: {result.result.notFound.join(", ")}
+            </p>
+          ) : null}
+        </div>
+      );
     case "todoWritten":
     case "todoUpdated":
       return <TodoChecklistDetail tasks={result.result} />;

@@ -40,6 +40,7 @@ pub enum ToolName {
     Todo,
     Memory,
     RequestModeSwitch,
+    GetAsciidocTemplates,
 }
 
 impl ToolName {
@@ -105,6 +106,7 @@ impl ToolName {
             "memory" => Some(ToolName::Memory),
             "check" => Some(ToolName::Check),
             "requestModeSwitch" => Some(ToolName::RequestModeSwitch),
+            "getAsciidocTemplates" => Some(ToolName::GetAsciidocTemplates),
             _ => None,
         }
     }
@@ -144,6 +146,9 @@ impl ToolName {
             ToolName::Todo => 1,
             ToolName::Memory => 1,
             ToolName::RequestModeSwitch => 1,
+            // Pure in-memory lookup over a fixed static catalog — no I/O,
+            // even cheaper than a bare filesystem read.
+            ToolName::GetAsciidocTemplates => 1,
         }
     }
 }
@@ -224,6 +229,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::Todo,
         ToolName::Memory,
         ToolName::RequestModeSwitch,
+        ToolName::GetAsciidocTemplates,
     ]
     .into_iter()
     .collect()
@@ -252,6 +258,7 @@ mod tests {
         assert!(!ToolName::Todo.requires_confirmation());
         assert!(!ToolName::Memory.requires_confirmation());
         assert!(ToolName::RequestModeSwitch.requires_confirmation());
+        assert!(!ToolName::GetAsciidocTemplates.requires_confirmation());
     }
 
     #[test]
@@ -279,6 +286,10 @@ mod tests {
             ToolName::from_wire_name("requestModeSwitch"),
             Some(ToolName::RequestModeSwitch)
         );
+        assert_eq!(
+            ToolName::from_wire_name("getAsciidocTemplates"),
+            Some(ToolName::GetAsciidocTemplates)
+        );
         assert_eq!(ToolName::from_wire_name("somethingElse"), None);
     }
 
@@ -301,12 +312,13 @@ mod tests {
         assert_eq!(ToolName::Todo.loop_weight(), 1);
         assert_eq!(ToolName::Memory.loop_weight(), 1);
         assert_eq!(ToolName::RequestModeSwitch.loop_weight(), 1);
+        assert_eq!(ToolName::GetAsciidocTemplates.loop_weight(), 1);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_seventeen() {
+    fn default_allowed_tools_includes_all_eighteen() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 17);
+        assert_eq!(allowed.len(), 18);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
@@ -321,6 +333,7 @@ mod tests {
         assert!(allowed.contains(&ToolName::Todo));
         assert!(allowed.contains(&ToolName::Memory));
         assert!(allowed.contains(&ToolName::RequestModeSwitch));
+        assert!(allowed.contains(&ToolName::GetAsciidocTemplates));
     }
 
     #[test]
@@ -379,6 +392,7 @@ mod tests {
             ToolName::RequestFullRepoAccess,
             ToolName::Todo,
             ToolName::RequestModeSwitch,
+            ToolName::GetAsciidocTemplates,
         ] {
             let name = serde_json::to_value(tool)
                 .unwrap()

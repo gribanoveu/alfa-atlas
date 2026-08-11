@@ -90,6 +90,7 @@ export type ToolCall =
   | { tool: "move"; args: { path: string; newPath: string } }
   | { tool: "requestFullRepoAccess"; args: { reason: string } }
   | { tool: "requestModeSwitch"; args: { mode: ConversationMode; reason: string } }
+  | { tool: "getAsciidocTemplates"; args: { ids: string[] } }
   | { tool: "todoWrite"; args: { titles: string[] } }
   | { tool: "todoUpdate"; args: { id: string; status: "completed" | "cancelled"; note: string | null } }
   | {
@@ -138,6 +139,15 @@ export type GrepMatch = {
   text: string;
 };
 
+/** One resolved template from `getAsciidocTemplates` — mirrors
+ * `domain::ai_tools::AsciidocTemplateEntry`. */
+export type AsciidocTemplateEntry = {
+  id: string;
+  label: string;
+  category: string;
+  template: string;
+};
+
 // `ToolResult`'s `"file"` case carries range/total-line metadata alongside
 // the content — 1-indexed, inclusive, the range actually returned (after
 // clamping), not necessarily what was requested. `0`/`0`/`0` on an empty
@@ -159,6 +169,10 @@ export type ToolResult =
   | { tool: "moved"; result: { from: string; to: string; updatedFiles: UpdatedReference[] } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } }
   | { tool: "modeSwitchRequested"; result: { mode: ConversationMode; reason: string } }
+  | {
+      tool: "asciidocTemplates";
+      result: { templates: AsciidocTemplateEntry[]; notFound: string[] };
+    }
   | { tool: "todoWritten"; result: Task[] }
   | { tool: "todoUpdated"; result: Task[] }
   | { tool: "memory"; result: { text: string } };

@@ -40,6 +40,11 @@ pub fn base_tools() -> HashSet<ToolName> {
         ToolName::Check,
         ToolName::Memory,
         ToolName::RequestModeSwitch,
+        // Read-only lookup over a fixed catalog — useful in every mode:
+        // Agent to actually draft with it, Plan to reference the exact
+        // shape while planning a future edit, Question to answer "how do we
+        // format X" without needing write access.
+        ToolName::GetAsciidocTemplates,
     ]
     .into_iter()
     .collect()
@@ -87,7 +92,7 @@ mod tests {
 
     #[test]
     fn agent_mode_has_every_tool() {
-        assert_eq!(mode_tools(ConversationMode::Agent).len(), 17);
+        assert_eq!(mode_tools(ConversationMode::Agent).len(), 18);
     }
 
     #[test]

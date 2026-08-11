@@ -223,6 +223,15 @@ pub struct GitBlameArgs {
     pub end_line: Option<u32>,
 }
 
+/// Fetches full template markup by id from the fixed
+/// `domain::asciidoc_element_templates::ASCIIDOC_ELEMENT_TEMPLATES` catalog
+/// — read-only, no path/scope containment needed (it isn't filesystem I/O).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAsciidocTemplatesArgs {
+    pub ids: Vec<String>,
+}
+
 /// Which verification `check` should run. Extensible — add variants as new
 /// check kinds ship; wire name is camelCase (`"problems"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -413,6 +422,7 @@ pub enum ToolCall {
     TodoUpdate(TodoUpdateArgs),
     Memory(MemoryArgs),
     RequestModeSwitch(RequestModeSwitchArgs),
+    GetAsciidocTemplates(GetAsciidocTemplatesArgs),
 }
 
 impl ToolCall {
@@ -436,6 +446,7 @@ impl ToolCall {
             ToolCall::TodoUpdate(_) => ToolName::Todo,
             ToolCall::Memory(_) => ToolName::Memory,
             ToolCall::RequestModeSwitch(_) => ToolName::RequestModeSwitch,
+            ToolCall::GetAsciidocTemplates(_) => ToolName::GetAsciidocTemplates,
         }
     }
 }
@@ -577,6 +588,30 @@ pub enum ToolResult {
     /// back mainly so the model's own tool-call history stays legible.
     #[serde(rename_all = "camelCase")]
     ModeSwitchRequested { mode: ConversationMode, reason: String },
+    /// Settled `getAsciidocTemplates` — full markup for every requested id
+    /// that matched `domain::asciidoc_element_templates::
+    /// ASCIIDOC_ELEMENT_TEMPLATES`, in request order. `not_found` echoes
+    /// back any ids that didn't match anything, so the model can retry with
+    /// a corrected id instead of silently getting fewer templates than it
+    /// asked for.
+    #[serde(rename_all = "camelCase")]
+    AsciidocTemplates {
+        templates: Vec<AsciidocTemplateEntry>,
+        not_found: Vec<String>,
+    },
+}
+
+/// One catalog entry's wire shape for `ToolResult::AsciidocTemplates` — see
+/// `domain::asciidoc_element_templates::AsciidocElementTemplate`, which this
+/// mirrors minus `description` (not needed once the model already picked
+/// this `id` from the tool's own description).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AsciidocTemplateEntry {
+    pub id: String,
+    pub label: String,
+    pub category: String,
+    pub template: String,
 }
 
 #[derive(Debug, Error)]

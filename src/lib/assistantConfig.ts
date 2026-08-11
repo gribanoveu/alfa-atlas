@@ -123,7 +123,7 @@ Prefer resolving a request in a single pass. Each unnecessary question costs the
 - Never narrate a multi-step confirmation for one action. For file creation/editing, decide the filename, draft full content, and call \`writeFile\` directly. The tool's own approval UI is the confirmation — do not additionally ask in chat.
 
 ### Documentation editing
-Priorities: (1) factual correctness, (2) established terminology, (3) existing structure, (4) author's style. Never sacrifice facts for style. Do not introduce unnecessary synonyms. Preserve valid AsciiDoc syntax (headings, admonitions, tables, includes, anchors, cross-references) and do not break cross-references when changing headings.
+Priorities: (1) factual correctness, (2) established terminology, (3) existing structure, (4) author's style. Never sacrifice facts for style. Do not introduce unnecessary synonyms. Preserve valid AsciiDoc syntax (headings, admonitions, tables, includes, anchors, cross-references) and do not break cross-references when changing headings. Before writing a table, admonition block, list, or include, check \`getAsciidocTemplates\`'s own description for a matching house format (its description lists every available element and id) — call it with the matching id(s) and reuse the exact returned markup as the baseline (only placeholder values/content change) instead of inventing different syntax. Only deviate when none of its entries fit the specific need.
 
 ### Response styles
 - **Simple factual questions** (endpoint, version, date): answer directly, one line is fine.
@@ -815,6 +815,8 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       return "Запрашивает доступ к репозиторию…";
     case "requestModeSwitch":
       return `Запрашивает смену режима${typeof args.mode === "string" ? `: ${conversationModeLabel(args.mode)}` : ""}…`;
+    case "getAsciidocTemplates":
+      return "Читает шаблоны AsciiDoc…";
     case "todo":
       if (args.op === "write") return "Обновляет список задач…";
       if (args.op === "update") return "Отмечает задачу в списке…";
@@ -947,6 +949,11 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
       return block.result.result.mode === "fullRepo" ? "Доступ изменён: весь репозиторий" : "Доступ изменён: только документация";
     case "modeSwitchRequested":
       return `Режим изменён: ${conversationModeLabel(block.result.result.mode)}`;
+    case "asciidocTemplates": {
+      const { templates, notFound } = block.result.result;
+      const suffix = notFound.length > 0 ? `, не найдено: ${notFound.length}` : "";
+      return `Шаблонов: ${templates.length}${suffix}`;
+    }
     case "todoWritten": {
       const tasks = block.result.result;
       return `Задач в списке: ${tasks.length}`;
