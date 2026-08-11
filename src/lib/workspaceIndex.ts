@@ -112,6 +112,16 @@ export function getDocument(path: string): Promise<Document | null> {
   return invoke<Document | null>("get_document", { path });
 }
 
+/** Same lookup as `getDocument`, but by repo-relative `DocumentId` key
+ * rather than a filesystem path — the backend's `get_document` resolves
+ * `path` against the real filesystem (canonicalize), so it needs an
+ * absolute path; this variant looks up the index's own string key
+ * directly, which is all the frontend ever has on hand for a document it
+ * hasn't opened yet (e.g. resolving an `include::`/`xref:` target). */
+export function getDocumentById(id: string): Promise<Document | null> {
+  return invoke<Document | null>("get_document_by_id", { id });
+}
+
 export function getDocuments(): Promise<Document[]> {
   return invoke<Document[]>("get_documents");
 }

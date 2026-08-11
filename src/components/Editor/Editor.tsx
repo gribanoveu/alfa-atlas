@@ -7,6 +7,7 @@ import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
 import { useMonacoDefinitions } from "../../hooks/useMonacoDefinitions";
 import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
 import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
+import { useMonacoIncludeGutter } from "../../hooks/useMonacoIncludeGutter";
 import { useMonacoOutline } from "../../hooks/useMonacoOutline";
 import { useMonacoSpellcheck } from "../../hooks/useMonacoSpellcheck";
 import type { GitFileDiff } from "../../lib/git";
@@ -71,6 +72,10 @@ type EditorPaneProps = {
   onOpenProblems: () => void;
   /** Клик по xref-ссылке в превью AsciiDoc (path#anchor или #anchor). */
   onOpenXref?: (href: string) => void;
+  /** Клик по иконке перехода в жёлобе редактора рядом с include::/image::/
+   * xref: (docs-relative путь + опциональный якорь) — та же функция,
+   * что открывает файл по Ctrl+Click в самом Monaco. */
+  onOpenDocumentReference?: (docsRelativePath: string, anchor: string | null) => void;
   viewMode: EditorViewMode;
   onViewModeChange: (mode: EditorViewMode) => void;
   docsRoot: string | null;
@@ -107,6 +112,7 @@ export function EditorPane({
   insertRequest,
   onOpenProblems,
   onOpenXref,
+  onOpenDocumentReference,
   viewMode,
   onViewModeChange,
   docsRoot,
@@ -219,6 +225,16 @@ export function EditorPane({
       (async () => null),
     onContentChange: onChangeContent,
   });
+
+  // Регистрируется после useGitGutter — см. useMonacoIncludeGutter.ts о том,
+  // почему порядок здесь важен для курсора в жёлобе.
+  useMonacoIncludeGutter(
+    monaco,
+    editor,
+    docsRoot,
+    gitGutter?.repoRoot ?? null,
+    onOpenDocumentReference,
+  );
 
   const handleChange = useCallback(
     (value: string | undefined) => {

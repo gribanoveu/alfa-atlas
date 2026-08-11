@@ -223,6 +223,7 @@ pub fn run() {
             commands::workspace_index::clear_index,
             commands::workspace_index::index_is_open,
             commands::workspace_index::get_document,
+            commands::workspace_index::get_document_by_id,
             commands::workspace_index::get_documents,
             commands::workspace_index::find_document,
             commands::workspace_index::find_anchor,

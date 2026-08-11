@@ -872,6 +872,17 @@ impl WorkspaceIndex {
         self.documents.get(&id).map(|r| r.clone())
     }
 
+    /// Same lookup as `get_document`, but by the document's already-known
+    /// repo-relative `DocumentId` key directly — no filesystem
+    /// canonicalize, so (unlike `get_document`) this works from a frontend
+    /// that only ever deals in repo-relative path strings and has no
+    /// absolute filesystem path to pass in. Same pattern `find_anchors`/
+    /// `find_includes`/`find_references` already use for an exact-key
+    /// lookup.
+    pub fn get_document_by_id(&self, id: &str) -> Option<Document> {
+        self.documents.get(&DocumentId::new(id.to_string())).map(|r| r.clone())
+    }
+
     pub fn get_documents(&self) -> Vec<Document> {
         self.documents.iter().map(|r| r.value().clone()).collect()
     }

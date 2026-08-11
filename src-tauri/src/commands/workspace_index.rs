@@ -46,6 +46,17 @@ pub fn get_document(
     Ok(index.get_document(std::path::Path::new(&path)))
 }
 
+/// Same lookup as `get_document`, but by repo-relative `DocumentId` key
+/// rather than a filesystem path — see `WorkspaceIndex::get_document_by_id`'s
+/// doc comment for why the frontend needs this variant.
+#[tauri::command]
+pub fn get_document_by_id(
+    index: State<'_, Arc<WorkspaceIndex>>,
+    id: String,
+) -> Result<Option<Document>, String> {
+    Ok(index.get_document_by_id(&id))
+}
+
 #[tauri::command]
 pub fn get_documents(index: State<'_, Arc<WorkspaceIndex>>) -> Result<Vec<Document>, String> {
     Ok(index.get_documents())

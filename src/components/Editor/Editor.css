@@ -211,6 +211,22 @@
   box-shadow: inset 3px 0 0 #ffb300;
 }
 
+/* ── Include/xref/image gutter navigation icon ───────────────────── */
+
+/* codicon-шрифт Monaco (см. Diagnostics выше) — иконка перехода к файлу
+   рядом со строками include::/image::/xref:, назначается через
+   glyphMarginClassName и кликабельна (useMonacoIncludeGutter.ts). */
+.asciidoc-include-gutter-icon {
+  color: var(--text-2);
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.asciidoc-include-gutter-icon:hover {
+  opacity: 1;
+  color: var(--accent);
+}
+
 /* ── Errors indicator overlay widget ─────────────────────────────── */
 
 /* Рендерится Monaco overlay widget'ом в правом верхнем углу редактора.

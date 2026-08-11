@@ -1633,6 +1633,7 @@ function App() {
               insertRequest={insertRequest}
               onOpenProblems={openProblems}
               onOpenXref={openXref}
+              onOpenDocumentReference={openDocumentReference}
               viewMode={viewMode.viewMode}
               onViewModeChange={viewMode.setViewMode}
               docsRoot={project.docsRoot}
