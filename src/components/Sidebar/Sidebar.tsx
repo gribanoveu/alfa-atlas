@@ -33,6 +33,7 @@ type SidebarProps = {
   onCopy: (target: FileTreeDeleteTarget) => void;
   onPaste: (destDirPath: string) => void;
   copiedItem: FileTreeDeleteTarget | null;
+  osDropTargetPath?: string | null;
   onResize?: (delta: number) => void;
   onResizeEnd?: () => void;
   onResizeExternal?: (delta: number) => void;
@@ -68,6 +69,7 @@ export function Sidebar({
   onCopy,
   onPaste,
   copiedItem,
+  osDropTargetPath = null,
   onResize,
   onResizeEnd,
   onResizeExternal,
@@ -184,6 +186,7 @@ export function Sidebar({
               onCopy={onCopy}
               onPaste={onPaste}
               copiedItem={copiedItem}
+              osDropTargetPath={osDropTargetPath}
               onResizeExternal={onResizeExternal}
               onResizeExternalEnd={onResizeExternalEnd}
             />

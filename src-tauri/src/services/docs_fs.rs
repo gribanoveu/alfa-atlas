@@ -524,6 +524,123 @@ fn resolve_docs_root(docs_root: &str) -> Result<PathBuf, ProjectError> {
     path.canonicalize().map_err(ProjectError::Canonicalize)
 }
 
+/// Resolve a docs-root destination directory. `"."` / empty means the docs root itself.
+fn resolve_dest_dir(docs_root: &Path, dest_dir_relative: &str) -> Result<PathBuf, ProjectError> {
+    let trimmed = dest_dir_relative.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return Ok(docs_root.to_path_buf());
+    }
+    validate_relative_name(trimmed)?;
+    let joined = paths::join_relative(docs_root, trimmed)?;
+    let canonical = paths::ensure_under(docs_root, &joined)?;
+    if !canonical.is_dir() {
+        return Err(ProjectError::NotADirectory(trimmed.to_string()));
+    }
+    Ok(canonical)
+}
+
+/// Split `file_name` into `(stem, extension_without_dot)`. `"logo.png"` → `("logo", "png")`.
+fn split_file_name(file_name: &str) -> (&str, &str) {
+    match file_name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() && !stem.contains('/') => {
+            (stem, ext)
+        }
+        _ => (file_name, ""),
+    }
+}
+
+/// Pick a non-colliding path under `dest_dir`: `name.ext`, then `name (1).ext`, …
+fn unique_dest_path(dest_dir: &Path, file_name: &str) -> PathBuf {
+    let candidate = dest_dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let (stem, ext) = split_file_name(file_name);
+    for n in 1..10_000 {
+        let name = if ext.is_empty() {
+            format!("{stem} ({n})")
+        } else {
+            format!("{stem} ({n}).{ext}")
+        };
+        let candidate = dest_dir.join(&name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    dest_dir.join(file_name)
+}
+
+/// Copy an OS file into `docs_root/dest_dir_relative/`, generating a unique
+/// name on collision. Any extension is allowed (tree listing still filters).
+/// Returns the docs-root-relative destination path.
+pub fn import_external_file(
+    docs_root: &str,
+    dest_dir_relative: &str,
+    source_absolute: &str,
+) -> Result<String, ProjectError> {
+    let root = resolve_docs_root(docs_root)?;
+    let dest_dir = resolve_dest_dir(&root, dest_dir_relative)?;
+
+    let source = Path::new(source_absolute);
+    let source_canonical = source.canonicalize().map_err(ProjectError::Canonicalize)?;
+    if !source_canonical.is_file() {
+        return Err(ProjectError::NotFound(source_absolute.to_string()));
+    }
+
+    let file_name = source_canonical
+        .file_name()
+        .ok_or_else(|| ProjectError::InvalidName(source_absolute.to_string()))?
+        .to_string_lossy()
+        .into_owned();
+
+    let target = unique_dest_path(&dest_dir, &file_name);
+    fs::copy(&source_canonical, &target).map_err(ProjectError::Copy)?;
+
+    let target_canonical = target.canonicalize().map_err(ProjectError::Canonicalize)?;
+    if !target_canonical.starts_with(&root) {
+        let _ = fs::remove_file(&target_canonical);
+        return Err(ProjectError::PathEscape(target.display().to_string()));
+    }
+
+    paths::relative_to(&root, &target_canonical)
+}
+
+/// Read a supported text file from an absolute OS path (outside docs root).
+pub fn read_external_text_file(absolute_path: &str) -> Result<String, ProjectError> {
+    if !is_supported_file(absolute_path) {
+        return Err(ProjectError::UnsupportedFile(absolute_path.to_string()));
+    }
+    let canonical = Path::new(absolute_path)
+        .canonicalize()
+        .map_err(ProjectError::Canonicalize)?;
+    if !canonical.is_file() {
+        return Err(ProjectError::NotFound(absolute_path.to_string()));
+    }
+    if !is_supported_file(&canonical.to_string_lossy()) {
+        return Err(ProjectError::UnsupportedFile(absolute_path.to_string()));
+    }
+    fs::read_to_string(&canonical).map_err(ProjectError::Read)
+}
+
+/// Write a supported text file at an absolute OS path (outside docs root).
+pub fn write_external_text_file(absolute_path: &str, content: &str) -> Result<(), ProjectError> {
+    if !is_supported_file(absolute_path) {
+        return Err(ProjectError::UnsupportedFile(absolute_path.to_string()));
+    }
+    let path = Path::new(absolute_path);
+    if path.exists() {
+        let canonical = path.canonicalize().map_err(ProjectError::Canonicalize)?;
+        if !canonical.is_file() {
+            return Err(ProjectError::NotFound(absolute_path.to_string()));
+        }
+        if !is_supported_file(&canonical.to_string_lossy()) {
+            return Err(ProjectError::UnsupportedFile(absolute_path.to_string()));
+        }
+        return fs::write(&canonical, content).map_err(ProjectError::Write);
+    }
+    fs::write(path, content).map_err(ProjectError::Write)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -956,5 +1073,77 @@ mod tests {
         assert_eq!(tree[0].name, "x.adoc");
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn import_external_file_copies_and_avoids_name_collisions() {
+        let root = temp_dir();
+        create_project_dir(root.to_str().unwrap(), "img").unwrap();
+
+        let outside = temp_dir();
+        let src = outside.join("logo.png");
+        fs::write(&src, b"png-bytes").unwrap();
+
+        let rel = import_external_file(
+            root.to_str().unwrap(),
+            "img",
+            src.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rel, "img/logo.png");
+        assert_eq!(fs::read(root.join("img/logo.png")).unwrap(), b"png-bytes");
+
+        let rel2 = import_external_file(
+            root.to_str().unwrap(),
+            "img",
+            src.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rel2, "img/logo (1).png");
+        assert!(root.join("img/logo (1).png").is_file());
+
+        let tree = list_docs_tree(root.to_str().unwrap()).unwrap();
+        let img = tree.iter().find(|n| n.name == "img").unwrap();
+        let names: Vec<&str> = img
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect();
+        assert!(names.contains(&"logo.png"));
+        assert!(names.contains(&"logo (1).png"));
+
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn import_external_into_docs_root_and_read_write_external_text() {
+        let root = temp_dir();
+        let outside = temp_dir();
+        let src = outside.join("note.md");
+        fs::write(&src, "# hi\n").unwrap();
+
+        let rel = import_external_file(
+            root.to_str().unwrap(),
+            ".",
+            src.to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rel, "note.md");
+
+        let content = read_external_text_file(src.to_str().unwrap()).unwrap();
+        assert_eq!(content, "# hi\n");
+        write_external_text_file(src.to_str().unwrap(), "# bye\n").unwrap();
+        assert_eq!(fs::read_to_string(&src).unwrap(), "# bye\n");
+
+        let png = outside.join("x.png");
+        fs::write(&png, b"x").unwrap();
+        let err = read_external_text_file(png.to_str().unwrap()).unwrap_err();
+        assert!(matches!(err, ProjectError::UnsupportedFile(_)));
+
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
     }
 }

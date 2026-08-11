@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GeneralPrefs } from "../lib/prefs";
 import { DEFAULT_GENERAL_PREFS } from "../lib/prefs";
-import { readProjectFile, writeProjectFile } from "../lib/project";
-import { isImageAsset, monacoLanguageFor } from "../lib/supportedFiles";
+import {
+  readExternalTextFile,
+  readProjectFile,
+  writeExternalTextFile,
+  writeProjectFile,
+} from "../lib/project";
+import { isImageAsset, isSupportedFile, monacoLanguageFor } from "../lib/supportedFiles";
 
 export type EditorTabKind = "text" | "image";
+export type EditorTabOrigin = "project" | "external";
 
 export type EditorTab = {
   id: string;
@@ -16,6 +22,8 @@ export type EditorTab = {
   dirty: boolean;
   /** Image tabs are preview-only — never read/write text content. */
   kind: EditorTabKind;
+  /** Project tabs use docs-root-relative paths; external use absolute OS paths. */
+  origin: EditorTabOrigin;
 };
 
 export type CursorPosition = {
@@ -32,6 +40,10 @@ function titleOf(relativePath: string): string {
   return relativePath.split(/[/\\]/).pop() ?? relativePath;
 }
 
+function externalTabId(absolutePath: string): string {
+  return `external:${absolutePath}`;
+}
+
 function makeImageTab(relativePath: string): EditorTab {
   return {
     id: relativePath,
@@ -42,6 +54,7 @@ function makeImageTab(relativePath: string): EditorTab {
     language: "plaintext",
     dirty: false,
     kind: "image",
+    origin: "project",
   };
 }
 
@@ -55,6 +68,21 @@ function makeTextTab(relativePath: string, content: string): EditorTab {
     language: monacoLanguageFor(relativePath),
     dirty: false,
     kind: "text",
+    origin: "project",
+  };
+}
+
+function makeExternalTextTab(absolutePath: string, content: string): EditorTab {
+  return {
+    id: externalTabId(absolutePath),
+    path: absolutePath,
+    title: titleOf(absolutePath),
+    content,
+    savedContent: content,
+    language: monacoLanguageFor(absolutePath),
+    dirty: false,
+    kind: "text",
+    origin: "external",
   };
 }
 
@@ -118,14 +146,19 @@ export function useEditorTabs(
   const saveTab = useCallback(async (id: string): Promise<boolean> => {
     const root = docsRootRef.current;
     const tab = tabsRef.current.find((t) => t.id === id);
-    if (!root || !tab) return false;
+    if (!tab) return false;
     if (tab.kind === "image") return true;
     if (!tab.dirty) return true;
+    if (tab.origin === "project" && !root) return false;
 
     const contentToSave = tab.content;
     const path = tab.path;
     try {
-      await writeProjectFile(root, path, contentToSave);
+      if (tab.origin === "external") {
+        await writeExternalTextFile(path, contentToSave);
+      } else {
+        await writeProjectFile(root!, path, contentToSave);
+      }
       setTabs((prev) => {
         const next = prev.map((t) => {
           if (t.id !== id) return t;
@@ -211,7 +244,6 @@ export function useEditorTabs(
       clearDebounce();
       if (
         !hadPending ||
-        !rootForSession ||
         !prefsRef.current.autosaveEnabled
       ) {
         return;
@@ -219,16 +251,27 @@ export function useEditorTabs(
       const id = activeTabIdRef.current;
       if (!id) return;
       const tab = tabsRef.current.find((t) => t.id === id);
-      if (!tab?.dirty) return;
+      if (!tab?.dirty || tab.kind === "image") return;
+      if (tab.origin === "external") {
+        void writeExternalTextFile(tab.path, tab.content);
+        return;
+      }
+      if (!rootForSession) return;
       void writeProjectFile(rootForSession, tab.path, tab.content);
     };
   }, [docsRoot, clearDebounce]);
 
   useEffect(() => {
     if (!hydrated) return;
+    const projectTabs = tabs.filter((t) => t.origin === "project");
+    const activeProject =
+      activeTabId &&
+      projectTabs.some((t) => t.id === activeTabId)
+        ? activeTabId
+        : null;
     onTabsChange?.(
-      tabs.map((t) => t.path),
-      activeTabId,
+      projectTabs.map((t) => t.path),
+      activeProject,
     );
   }, [tabs, activeTabId, onTabsChange, hydrated]);
 
@@ -249,14 +292,16 @@ export function useEditorTabs(
     async (relativePath: string, opts?: { addToHistory?: boolean }) => {
       const addToHistory = opts?.addToHistory ?? true;
       if (!docsRoot) return;
-      const existing = tabsRef.current.find((tab) => tab.path === relativePath);
+      const existing = tabsRef.current.find(
+        (tab) => tab.origin === "project" && tab.path === relativePath,
+      );
       if (existing) {
         if (addToHistory && activeTabIdRef.current) {
-          const currentPath = tabsRef.current.find(
+          const current = tabsRef.current.find(
             (t) => t.id === activeTabIdRef.current,
-          )?.path;
-          if (currentPath) {
-            pushToHistory(currentPath);
+          );
+          if (current?.origin === "project") {
+            pushToHistory(current.path);
           }
           setForwardStack([]);
         }
@@ -284,11 +329,9 @@ export function useEditorTabs(
           }
         }
         if (addToHistory && currentId) {
-          const currentPath = tabsRef.current.find(
-            (t) => t.id === currentId,
-          )?.path;
-          if (currentPath) {
-            pushToHistory(currentPath);
+          const current = tabsRef.current.find((t) => t.id === currentId);
+          if (current?.origin === "project") {
+            pushToHistory(current.path);
           }
           setForwardStack([]);
         }
@@ -309,13 +352,55 @@ export function useEditorTabs(
     [docsRoot, flushDebounce, saveTab, switchToTab, pushToHistory],
   );
 
+  const openExternalFile = useCallback(
+    async (absolutePath: string) => {
+      if (!isSupportedFile(absolutePath)) {
+        setError(
+          `Формат не поддерживается для открытия: ${titleOf(absolutePath)}`,
+        );
+        return;
+      }
+      const id = externalTabId(absolutePath);
+      const existing = tabsRef.current.find((tab) => tab.id === id);
+      if (existing) {
+        await switchToTab(existing.id);
+        setError(null);
+        return;
+      }
+      try {
+        const content = await readExternalTextFile(absolutePath);
+        const tab = makeExternalTextTab(absolutePath, content);
+        await flushDebounce();
+        const currentId = activeTabIdRef.current;
+        if (currentId && prefsRef.current.saveOnTabSwitch) {
+          const current = tabsRef.current.find((t) => t.id === currentId);
+          if (current?.dirty) {
+            const ok = await saveTab(currentId);
+            if (!ok) return;
+          }
+        }
+        setTabs((prev) => {
+          const next = [...prev, tab];
+          tabsRef.current = next;
+          return next;
+        });
+        setActiveTabId(tab.id);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [flushDebounce, saveTab, switchToTab],
+  );
+
   const goBack = useCallback(async () => {
     const stack = backStackRef.current;
     if (stack.length === 0) return;
     const current = tabsRef.current.find(
       (t) => t.id === activeTabIdRef.current,
     );
-    const currentPath = current?.path ?? null;
+    const currentPath =
+      current?.origin === "project" ? current.path : null;
     const prevPath = stack[stack.length - 1];
     setBackStack((s) => s.slice(0, -1));
     if (currentPath) {
@@ -335,7 +420,8 @@ export function useEditorTabs(
     const current = tabsRef.current.find(
       (t) => t.id === activeTabIdRef.current,
     );
-    const currentPath = current?.path ?? null;
+    const currentPath =
+      current?.origin === "project" ? current.path : null;
     const nextPath = stack[stack.length - 1];
     setForwardStack((s) => s.slice(0, -1));
     if (currentPath) {
@@ -386,16 +472,16 @@ export function useEditorTabs(
   const selectTab = useCallback(
     (id: string) => {
       if (id === activeTabIdRef.current) return;
-      const currentPath = tabsRef.current.find(
+      const current = tabsRef.current.find(
         (t) => t.id === activeTabIdRef.current,
-      )?.path;
-      if (currentPath) {
-        pushToHistory(currentPath);
+      );
+      if (current?.origin === "project") {
+        pushToHistory(current.path);
         setForwardStack([]);
       }
       void switchToTab(id);
     },
-    [switchToTab, pushToHistory],
+    [pushToHistory, switchToTab],
   );
 
   const closeTab = useCallback(
@@ -448,12 +534,17 @@ export function useEditorTabs(
 
   const discardTabsUnder = useCallback((relativePath: string) => {
     const prefix = relativePath.replace(/[/\\]+$/, "") + "/";
-    const isUnder = (tabPath: string) =>
-      tabPath === relativePath ||
-      tabPath.startsWith(prefix) ||
-      tabPath.startsWith(relativePath + "\\");
+    const isUnder = (tab: EditorTab) => {
+      if (tab.origin !== "project") return false;
+      const tabPath = tab.path;
+      return (
+        tabPath === relativePath ||
+        tabPath.startsWith(prefix) ||
+        tabPath.startsWith(relativePath + "\\")
+      );
+    };
     setTabs((prev) => {
-      const next = prev.filter((t) => !isUnder(t.path));
+      const next = prev.filter((t) => !isUnder(t));
       if (next.length === prev.length) return prev;
       tabsRef.current = next;
       const activeId = activeTabIdRef.current;
@@ -481,6 +572,7 @@ export function useEditorTabs(
       setTabs((prev) => {
         let changed = false;
         const next = prev.map((tab) => {
+          if (tab.origin !== "project") return tab;
           const remapped = remap(tab.path);
           if (!remapped) return tab;
           changed = true;
@@ -492,6 +584,7 @@ export function useEditorTabs(
             title: titleOf(remapped),
             language: monacoLanguageFor(remapped),
             kind,
+            origin: "project" as const,
             ...(kind === "image"
               ? { content: "", savedContent: "", dirty: false as const }
               : {}),
@@ -567,7 +660,9 @@ export function useEditorTabs(
   const reloadTabFromDisk = useCallback(
     async (relativePath: string): Promise<boolean> => {
       const root = docsRootRef.current;
-      const tab = tabsRef.current.find((t) => t.path === relativePath);
+      const tab = tabsRef.current.find(
+        (t) => t.origin === "project" && t.path === relativePath,
+      );
       if (!root || !tab) return false;
       if (tab.kind === "image") return true;
       try {
@@ -609,6 +704,7 @@ export function useEditorTabs(
     if (!root) return;
     const open = [...tabsRef.current];
     for (const tab of open) {
+      if (tab.origin !== "project" || tab.kind === "image") continue;
       try {
         const content = await readProjectFile(root, tab.path);
         setTabs((prev) => {
@@ -642,6 +738,7 @@ export function useEditorTabs(
     discardTabsUnder,
     remapTabsUnder,
     openFile,
+    openExternalFile,
     restoreTabs,
     updateActiveContent,
     saveActive,

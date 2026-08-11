@@ -129,6 +129,32 @@ export function listImageFiles(docsRoot: string): Promise<ImageFileEntry[]> {
   return invoke<ImageFileEntry[]>("list_image_files", { docsRoot });
 }
 
+/** Copy an OS file into docsRoot/destDirRelative/. Returns the new relative path. */
+export function importExternalFile(
+  docsRoot: string,
+  destDirRelative: string,
+  sourceAbsolute: string,
+): Promise<string> {
+  return invoke<string>("import_external_file", {
+    docsRoot,
+    destDirRelative,
+    sourceAbsolute,
+  });
+}
+
+/** Read a supported text file from an absolute path outside the project. */
+export function readExternalTextFile(absolutePath: string): Promise<string> {
+  return invoke<string>("read_external_text_file", { absolutePath });
+}
+
+/** Write a supported text file at an absolute path outside the project. */
+export function writeExternalTextFile(
+  absolutePath: string,
+  content: string,
+): Promise<void> {
+  return invoke<void>("write_external_text_file", { absolutePath, content });
+}
+
 export function writeProjectFile(
   docsRoot: string,
   relativePath: string,

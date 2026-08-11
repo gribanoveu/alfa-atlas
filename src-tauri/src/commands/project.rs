@@ -99,6 +99,26 @@ pub fn list_image_files(docs_root: String) -> Result<Vec<docs_fs::ImageFileEntry
 }
 
 #[tauri::command]
+pub fn import_external_file(
+    docs_root: String,
+    dest_dir_relative: String,
+    source_absolute: String,
+) -> Result<String, String> {
+    docs_fs::import_external_file(&docs_root, &dest_dir_relative, &source_absolute)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn read_external_text_file(absolute_path: String) -> Result<String, String> {
+    docs_fs::read_external_text_file(&absolute_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn write_external_text_file(absolute_path: String, content: String) -> Result<(), String> {
+    docs_fs::write_external_text_file(&absolute_path, &content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn write_project_file(
     docs_root: String,
     relative_path: String,

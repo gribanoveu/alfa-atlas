@@ -82,6 +82,7 @@ import {
   createRestEndpointFolder,
   deleteProjectDir,
   deleteProjectFile,
+  importExternalFile,
   readProjectFile,
   renameProjectDir,
   renameProjectFile,
@@ -89,13 +90,20 @@ import {
 } from "./lib/project";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
-import { formatLabelFor, isAsciiDocPath, lineEndingLabelFor } from "./lib/supportedFiles";
+import {
+  formatLabelFor,
+  isAsciiDocPath,
+  isImageAsset,
+  isSupportedFile,
+  lineEndingLabelFor,
+} from "./lib/supportedFiles";
 import {
   resolveRelativeToDocument,
   toDocsRelativePath,
   toRepoRelativePath,
 } from "./lib/paths";
 import { RenameModal } from "./components/Sidebar/RenameModal";
+import { useOsFileDrop } from "./hooks/useOsFileDrop";
 
 function joinParent(parentPath: string, name: string): string {
   if (!parentPath || parentPath === ".") return name;
@@ -464,6 +472,48 @@ function App() {
     .join(" ");
 
   const hasProject = Boolean(project.docsRoot && project.repoRoot);
+
+  const handleOsImportExternal = useCallback(
+    async (destDirPath: string, absolutePaths: string[]) => {
+      const docsRoot = project.docsRoot;
+      if (!docsRoot) return;
+      let lastOpened: string | null = null;
+      for (const sourceAbsolute of absolutePaths) {
+        try {
+          const rel = await importExternalFile(
+            docsRoot,
+            destDirPath,
+            sourceAbsolute,
+          );
+          if (isSupportedFile(rel) || isImageAsset(rel)) {
+            lastOpened = rel;
+          }
+        } catch (e) {
+          setFolderError(e instanceof Error ? e.message : String(e));
+        }
+      }
+      session.ensureExpanded(destDirPath);
+      await tree.refresh();
+      git.scheduleRefresh();
+      if (lastOpened) {
+        void editor.openFile(lastOpened);
+      }
+    },
+    [project.docsRoot, session, tree, git, editor],
+  );
+
+  const { osDropTargetPath } = useOsFileDrop(hasProject, {
+    onImportExternal: (destDirPath, paths) => {
+      void handleOsImportExternal(destDirPath, paths);
+    },
+    onOpenExternal: (absolutePath) => {
+      void editor.openExternalFile(absolutePath);
+    },
+    onReject: (message) => {
+      setFolderError(message);
+    },
+  });
+
   const workspaceIndex = useWorkspaceIndex(project.repoRoot, {
     active: hasProject,
   });
@@ -494,7 +544,7 @@ function App() {
     });
   };
   useEmbeddingPriorityFiles(
-    editor.tabs.map((t) => t.path),
+    editor.tabs.filter((t) => t.origin === "project").map((t) => t.path),
     { active: hasProject },
   );
   const [standardsSettingsSignal, setStandardsSettingsSignal] = useState(0);
@@ -1526,7 +1576,11 @@ function App() {
             tree={tree.nodes}
             treeLoading={tree.loading}
             treeError={tree.error}
-            activePath={editor.activeTab?.path ?? null}
+            activePath={
+              editor.activeTab?.origin === "project"
+                ? editor.activeTab.path
+                : null
+            }
             expandedDirs={session.expandedDirs}
             separateExternal={generalPrefs.prefs.separateExternalFolder}
             specsRepo={specsRepo.info}
@@ -1578,6 +1632,7 @@ function App() {
               setCopiedItem(target);
             }}
             copiedItem={copiedItem}
+            osDropTargetPath={osDropTargetPath}
             onPaste={async (destDirPath) => {
               if (!project.docsRoot || !copiedItem) return;
               const name = copiedItem.path.split(/[/\\]/).filter(Boolean).pop();
