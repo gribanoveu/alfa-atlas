@@ -19,6 +19,7 @@ pub mod llm_debug_log;
 pub mod llm_provider_manifest;
 pub mod llm_providers;
 pub mod onboarding_store;
+pub mod optmem_store;
 pub mod parsers;
 pub mod project_store;
 pub mod repository_identity;

@@ -18,9 +18,9 @@ use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
     CheckArgs, CheckKind, CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs,
     FileDiffStats, FileEdit, GitBlameArgs, GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs,
-    MatchSource, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs, Task,
-    TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolFileEntry,
-    ToolMatch, ToolResult, ToolScope, WriteFileArgs,
+    MatchSource, MemoryArgs, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs,
+    Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError,
+    ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::git::GitDiffScope;
@@ -38,8 +38,8 @@ use crate::services::reference_rewrite;
 use crate::services::repo_index::RepositoryIndex;
 use crate::services::workspace_index::WorkspaceIndex;
 use crate::services::{
-    diagnostics, docs_fs, embedding_config, git_ops, project_open, standards, standards_prefs,
-    text_diff,
+    agent_memory, diagnostics, docs_fs, embedding_config, git_ops, project_open, standards,
+    standards_prefs, text_diff,
 };
 
 const DEFAULT_TOP_K: usize = 10;
@@ -198,6 +198,7 @@ pub fn execute_tool(
             .map_err(ToolError::from),
         ToolCall::TodoWrite(args) => todo_write(todos, args).map(ToolResult::TodoWritten),
         ToolCall::TodoUpdate(args) => todo_update(todos, args).map(ToolResult::TodoUpdated),
+        ToolCall::Memory(args) => memory(scope, args).map(|text| ToolResult::Memory { text }),
     }
 }
 
@@ -232,6 +233,10 @@ pub fn execute_tool_logged(
 ) -> Result<ToolResult, ToolError> {
     let tool = crate::infra::tool_call_log::tool_label(&call);
     let args_json = crate::infra::tool_call_log::redact_args(&call);
+    let memory_op = match &call {
+        ToolCall::Memory(args) => Some(args.op.clone()),
+        _ => None,
+    };
     let started = std::time::Instant::now();
     let result = execute_tool(scope, call, deps, todos);
     let duration_ms = started.elapsed().as_millis() as i64;
@@ -248,7 +253,10 @@ pub fn execute_tool_logged(
             args_json,
             status: if result.is_ok() { "ok" } else { "error" }.to_string(),
             error_message: result.as_ref().err().map(ToString::to_string),
-            result_json: result.as_ref().ok().map(crate::infra::tool_call_log::redact_result),
+            result_json: result
+                .as_ref()
+                .ok()
+                .map(|r| crate::infra::tool_call_log::redact_result(r, memory_op.as_deref())),
             duration_ms,
         },
     );
@@ -290,6 +298,27 @@ fn todo_update(todos: &[Task], args: TodoUpdateArgs) -> Result<Vec<Task>, ToolEr
         task.note = Some(note);
     }
     Ok(enforce_todo_invariant(updated))
+}
+
+fn memory(scope: &ToolScope, args: MemoryArgs) -> Result<String, ToolError> {
+    let mem_scope = agent_memory::MemoryScope::from_wire(&args.scope).map_err(|e| {
+        ToolError::InvalidArguments {
+            tool: "memory".to_string(),
+            reason: e,
+        }
+    })?;
+    agent_memory::run_op(
+        mem_scope,
+        &scope.repo_root,
+        &args.op,
+        args.text.as_deref(),
+        args.pattern.as_deref(),
+        args.block.as_deref(),
+        args.knob.as_deref(),
+        args.part.map(|p| p as usize),
+        args.snapshot_t.map(|t| t as usize),
+    )
+    .map_err(|e| ToolError::Memory(e.to_string()))
 }
 
 /// The one shared invariant-enforcement function, run at the end of both
@@ -487,6 +516,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map(ToolCall::RequestFullRepoAccess)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "todo" => parse_todo_call(&call.arguments)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "memory" => lenient_json_object::<MemoryArgs>(&call.arguments)
+            .map(ToolCall::Memory)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
@@ -989,6 +1021,52 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
+    if scope.allows(ToolName::Memory) {
+        defs.push(LlmToolDefinition {
+            name: "memory".to_string(),
+            description: "Permanent OptMem-style agent memory that outlives sessions and compaction. Two scopes: \"project\" (`{repo}/.atlas/memory`, shareable via git) for repo/docs facts and decisions; \"global\" (`~/.atlas/memory`) for user preferences across projects. Ops: \"wake\" reads the compressed context (also auto-injected at the start of each turn when this tool is allowed — call again only to continue a multi-part wake or after finishing pending naps); \"note\" appends one lasting fact (one line, max ~280 bytes) — do not note redundant memories; pauses for user approval unless the user previously chose \"always allow\" for memory, and the user may deny a note (do not retry automatically after a denial); \"nap\" saves a compression summary the previous note/wake asked for (`block` like \"0-15\" and `text` = the one-line summary) and runs without a confirmation pause; \"recall\" searches every raw memory with a regex; \"zoom\" opens a tree node `#a-b` into its two halves; \"forget\" drops a bad summary so the next nap rebuilds it (the raw log is never deleted) — requires approval like note; \"config\" shows sizes, or sets WAKE_LINES/ENTRY_CHARS/PART_CHARS/PART_LINES via `knob` \"NAME=VALUE\" (setting a knob requires approval). If note/wake asks for a compression, do nap before your next action.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "op": {
+                        "type": "string",
+                        "enum": ["wake", "note", "nap", "recall", "zoom", "forget", "config"],
+                        "description": "Memory operation."
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["project", "global"],
+                        "description": "Which store to use."
+                    },
+                    "text": {
+                        "type": ["string", "null"],
+                        "description": "For note: the one-line memory. For nap: the compression summary."
+                    },
+                    "pattern": {
+                        "type": ["string", "null"],
+                        "description": "For recall: regex over every raw memory line."
+                    },
+                    "block": {
+                        "type": ["string", "null"],
+                        "description": "For nap/zoom/forget: inclusive block id as wake prints it, e.g. \"0-15\"."
+                    },
+                    "knob": {
+                        "type": ["string", "null"],
+                        "description": "For config: \"NAME=VALUE\" (empty value restores default). Omit to only show sizes."
+                    },
+                    "part": {
+                        "type": ["integer", "null"],
+                        "description": "For wake: 1-based part index when the context is paginated."
+                    },
+                    "snapshotT": {
+                        "type": ["integer", "null"],
+                        "description": "For wake: snapshot memory count T when continuing a multi-part wake."
+                    }
+                },
+                "required": ["op", "scope"]
+            }),
+        });
+    }
     defs
 }
 
@@ -1437,6 +1515,7 @@ fn write_file(
     args: WriteFileArgs,
     deps: &EmbeddingDeps,
 ) -> Result<(String, FileDiffStats), ToolError> {
+    reject_atlas_memory_path(scope, &args.path)?;
     let docs_root = scope.docs_root.to_string_lossy();
     // NotFound-tolerant read, same pattern as `commands::project::
     // read_project_file_or_none` — a brand-new file diffs against `""`
@@ -1474,6 +1553,7 @@ fn edit_file(
     fast_apply: Option<&(Arc<dyn LlmProvider>, String)>,
     deps: &EmbeddingDeps,
 ) -> Result<(String, FileDiffStats), ToolError> {
+    reject_atlas_memory_path(scope, &args.path)?;
     let docs_root = scope.docs_root.to_string_lossy();
     let content = docs_fs::read_project_file(&docs_root, &args.path)?;
     let edited = apply_edits(&content, &args.edits, fast_apply)?;
@@ -1752,6 +1832,7 @@ fn delete_file(
     args: DeleteFileArgs,
     deps: &EmbeddingDeps,
 ) -> Result<(String, FileDiffStats), ToolError> {
+    reject_atlas_memory_path(scope, &args.path)?;
     let docs_root = scope.docs_root.to_string_lossy();
     // Missing-file already errors below via `delete_project_file`'s own
     // `NotFound` (see `delete_file_rejects_missing_file`) — this read just
@@ -1778,6 +1859,7 @@ fn create_directory(
     args: CreateDirectoryArgs,
     deps: &EmbeddingDeps,
 ) -> Result<(String, Option<String>, Vec<String>), ToolError> {
+    reject_atlas_memory_path(scope, &args.path)?;
     let docs_root = scope.docs_root.to_string_lossy();
     match args.template.as_deref() {
         None => {
@@ -1840,6 +1922,7 @@ fn delete_directory(
     args: DeleteDirectoryArgs,
     deps: &EmbeddingDeps,
 ) -> Result<String, ToolError> {
+    reject_atlas_memory_path(scope, &args.path)?;
     let recursive = args.recursive.unwrap_or(false);
     // Only a `recursive` delete can remove indexed files at all — a
     // non-recursive delete only ever succeeds against an already-empty
@@ -1884,6 +1967,8 @@ fn move_path(
     args: MoveArgs,
     deps: &EmbeddingDeps,
 ) -> Result<(String, String, Vec<UpdatedReference>), ToolError> {
+    reject_atlas_memory_path(scope, &args.path)?;
+    reject_atlas_memory_path(scope, &args.new_path)?;
     let docs_root = scope.docs_root.to_string_lossy();
     let is_dir = scope.docs_root.join(&args.path).is_dir();
 
@@ -1933,6 +2018,20 @@ fn move_path(
     }
 
     Ok((args.path, args.new_path, updated_files))
+}
+
+/// Hard-deny mutate tools against `{repo}/.atlas/memory/**` — the OptMem
+/// store is managed only by the `memory` tool. Prompt text alone is not
+/// enough when `docsRoot` is the repo root (`.txt` is a supported docs
+/// extension).
+fn reject_atlas_memory_path(scope: &ToolScope, relative: &str) -> Result<(), ToolError> {
+    let joined = paths::join_relative(&scope.docs_root, relative)?;
+    if agent_memory::path_is_under_project_memory(&scope.repo_root, &joined) {
+        return Err(ToolError::PathEscape(format!(
+            "protected agent memory store (.atlas/memory): {relative}"
+        )));
+    }
+    Ok(())
 }
 
 /// Validates an optional subdirectory argument once, shared by both mode
@@ -2835,6 +2934,21 @@ mod tests {
         assert!(matches!(err, ToolError::Io(_)));
         assert!(!docs.join("notes.py").exists());
 
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn write_file_rejects_atlas_memory_store() {
+        let (repo, _docs) = fixture_repo();
+        // When docs root is the repo itself, `.txt` under `.atlas/memory`
+        // would otherwise be a writable supported path.
+        let scope = ToolScope::for_project(&repo, &repo, AiAccessMode::DocsOnly);
+        let err = write(&scope, ".atlas/memory/LOG.txt", "hijack\n").unwrap_err();
+        assert!(
+            matches!(err, ToolError::PathEscape(ref p) if p.contains(".atlas/memory")),
+            "got {err:?}"
+        );
+        assert!(!repo.join(".atlas/memory/LOG.txt").exists());
         fs::remove_dir_all(&repo).ok();
     }
 
@@ -5033,7 +5147,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_fifteen_by_default() {
+    fn llm_tool_definitions_includes_all_sixteen_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -5056,7 +5170,8 @@ mod tests {
                 "deleteDirectory",
                 "move",
                 "requestFullRepoAccess",
-                "todo"
+                "todo",
+                "memory"
             ]
         );
 

@@ -379,6 +379,36 @@ function ToolApprovalCard({
           <div className="assistant-tool-call-detail-label">Причина</div>
           <div className="assistant-tool-approval-reason">{args.reason}</div>
         </div>
+      ) : block.name === "memory" && args.op === "note" && typeof args.text === "string" ? (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">
+            Новая запись в памяти
+            {args.scope === "global" ? " (глобальная)" : args.scope === "project" ? " (проектная)" : ""}
+          </div>
+          <div className="assistant-tool-approval-reason">{args.text}</div>
+        </div>
+      ) : block.name === "memory" && args.op === "forget" ? (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">
+            Забыть summary
+            {args.scope === "global" ? " (глобальная)" : args.scope === "project" ? " (проектная)" : ""}
+          </div>
+          <div className="assistant-tool-approval-reason">
+            {typeof args.block === "string" ? `Блок ${args.block}` : "Блок не указан"}
+          </div>
+        </div>
+      ) : block.name === "memory" && args.op === "config" ? (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">
+            Настройка памяти
+            {args.scope === "global" ? " (глобальная)" : args.scope === "project" ? " (проектная)" : ""}
+          </div>
+          <div className="assistant-tool-approval-reason">
+            {typeof args.knob === "string" && args.knob.trim()
+              ? args.knob
+              : "Изменение размеров памяти"}
+          </div>
+        </div>
       ) : null}
 
       <div className="assistant-tool-approval-actions">
@@ -745,6 +775,12 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
     case "todoWritten":
     case "todoUpdated":
       return <TodoChecklistDetail tasks={result.result} />;
+    case "memory":
+      return (
+        <pre className="assistant-tool-call-detail-pre" style={{ whiteSpace: "pre-wrap" }}>
+          {result.result.text}
+        </pre>
+      );
     default:
       return null;
   }

@@ -23,7 +23,16 @@ pub fn open_project(root: String, docs_root: String) -> Result<OpenedProject, St
 
 #[tauri::command]
 pub fn add_gitignore_entry(root: String, entry: String) -> Result<(), String> {
+    // Prefer the OptMem-aware atlas block when the UI asks to ignore `.atlas`.
+    if entry.trim() == ".atlas" || entry.trim() == ".atlas/*" {
+        return gitignore::ensure_atlas_gitignore(&root).map_err(|e| e.to_string());
+    }
     gitignore::ensure_entry(&root, &entry).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn ensure_atlas_gitignore(root: String) -> Result<(), String> {
+    gitignore::ensure_atlas_gitignore(&root).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

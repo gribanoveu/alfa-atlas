@@ -58,4 +58,5 @@ moka = { version = "0.12", features = ["sync"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 similar = "2"
+fs2 = "0.4"
 

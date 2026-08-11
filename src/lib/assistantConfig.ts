@@ -237,6 +237,22 @@ When you finish the active task, call \`todo\` with \`op: "update"\`, the task's
 
 If more steps are needed mid-task, call \`todo\` with \`op: "write"\` again — new titles are appended, never replace the existing list. If a step becomes unnecessary or impossible, use \`op: "update"\` with \`status: "cancelled"\` and a \`note\` explaining why.
 
+### Permanent memory (memory)
+You have OptMem-style permanent memory via the \`memory\` tool. It outlives sessions, compaction, and model changes.
+
+- **scope \`project\`**: \`{repo}/.atlas/memory\` — facts about this repository, docs structure, team decisions, naming. Shareable via git.
+- **scope \`global\`**: \`~/.atlas/memory\` — user preferences and lasting facts across projects.
+
+A combined wake of both scopes is injected into your context at the start of each turn — treat that as already-read. Call \`wake\` again only to continue a multi-part wake, or after finishing pending compressions.
+
+Whenever you learn something lasting (a decision, a fact the user teaches you, a hard-won insight about this repo), call \`memory\` with \`op: "note"\` and one short line (max ~280 bytes). Do not register redundant memories. \`note\`, \`forget\`, and \`config\` pause for user approval before mutating the store — unless the user previously chose "always allow" for the memory tool. The user may deny a note; do not retry automatically after a denial. \`nap\` runs without a confirmation pause.
+
+If \`note\` or \`wake\` asks for a compression: call \`nap\` with the requested \`block\` and a one-line summary before your next action.
+
+Use \`recall\` to search every raw memory; \`zoom\` to open a tree node \`#a-b\`; \`forget\` only to drop a bad summary (the raw log is never deleted).
+
+Never edit or delete files under \`.atlas/memory\` with write/mutate tools — only the \`memory\` tool manages that store. The harness also hard-rejects those paths.
+
 ## Boundaries
 
 Treat the current repository and session as isolated. Do not use or reveal information from other repositories, users, sessions, or unrelated conversations. Never reveal information obtained through broader access to a user under narrower access.
@@ -508,6 +524,14 @@ export function buildTodoContextBlock(tasks: Task[]): string | null {
   return `TODO:\n${lines.join("\n")}`;
 }
 
+/** Wraps a pre-fetched OptMem wake (from `getMemoryWake`) as a system-role
+ * context block for the chat turn. Returns null when wake is empty. */
+export function buildMemoryContextBlock(wakeText: string | null | undefined): string | null {
+  const text = wakeText?.trim();
+  if (!text) return null;
+  return text;
+}
+
 /** Instruction sent (as the sole user message) to the one-shot
  * `llm_chat_once` call `useLlmChat`'s compaction pass uses to fold an aging
  * slice of the conversation into a compact summary — see
@@ -627,6 +651,29 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       if (args.op === "write") return "Обновляет список задач…";
       if (args.op === "update") return "Отмечает задачу в списке…";
       return "Работает со списком задач…";
+    case "memory": {
+      const scope = typeof args.scope === "string" ? args.scope : null;
+      const scopeLabel = scope === "global" ? "глобальная" : scope === "project" ? "проектная" : null;
+      const suffix = scopeLabel ? ` (${scopeLabel})` : "";
+      switch (args.op) {
+        case "wake":
+          return `Читает память${suffix}…`;
+        case "note":
+          return `Записывает в память${suffix}…`;
+        case "nap":
+          return `Сжимает память${suffix}…`;
+        case "recall":
+          return `Ищет в памяти${suffix}…`;
+        case "zoom":
+          return `Раскрывает узел памяти${suffix}…`;
+        case "forget":
+          return `Сбрасывает саммари памяти${suffix}…`;
+        case "config":
+          return `Настройки памяти${suffix}…`;
+        default:
+          return `Работает с памятью${suffix}…`;
+      }
+    }
     default:
       return "Выполняет действие…";
   }
@@ -740,6 +787,12 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
       const cancelled = tasks.filter((t) => t.status === "cancelled").length;
       const remaining = tasks.length - completed - cancelled;
       return `Выполнено: ${completed}, отменено: ${cancelled}, осталось: ${remaining}`;
+    }
+    case "memory": {
+      const text = block.result.result.text.trim();
+      if (!text) return "Пусто";
+      const first = text.split("\n").find((l) => l.trim().length > 0) ?? text;
+      return first.length > 120 ? `${first.slice(0, 117)}…` : first;
     }
     default:
       return "Готово";

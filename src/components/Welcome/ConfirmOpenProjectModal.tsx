@@ -1,10 +1,8 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { addGitignoreEntry } from "../../lib/project";
+import { ensureAtlasGitignore } from "../../lib/project";
 import type { DocsCandidate, ProbeResult } from "../../lib/project";
 import "./CloneRepoModal.css";
-
-const ATLAS_GITIGNORE_ENTRY = ".atlas";
 
 type ConfirmOpenProjectModalProps = {
   probe: ProbeResult;
@@ -96,7 +94,8 @@ export function ConfirmOpenProjectModal({
     }
     if (addToGitignore) {
       try {
-        await addGitignoreEntry(probe.root, ATLAS_GITIGNORE_ENTRY);
+        // OptMem-aware block: `.atlas/*` ignored, `!.atlas/memory/**` kept trackable.
+        await ensureAtlasGitignore(probe.root);
       } catch (e) {
         console.error("Failed to update .gitignore", e);
       }

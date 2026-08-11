@@ -4,11 +4,13 @@ import { getAllowedTools, getAutoApprovedTools, setToolAllowed, setToolAutoAppro
 import "./PermissionsTab.css";
 
 /** Static Russian labels for the tools an approval card's "Разрешать
- * всегда" button can apply to (`ToolName::requires_confirmation` in Rust —
- * `Todo` is never among them, see `AI_HARNESS.md`'s "Tool-calling loop").
- * Falls back to the raw wire name for anything unrecognized, so a future
- * tool never silently disappears from this list before this map is
- * updated. */
+ * всегда" button can apply to (`domain::ai_access::call_requires_confirmation`
+ * in Rust — `Todo` is never among them, see `AI_HARNESS.md`'s "Tool-calling
+ * loop"). `memory` pauses on `note`/`forget`/`config` (not `nap`/reads);
+ * trust is still granted per tool name, same as every other entry here, so
+ * trusting it once covers all future gated memory ops. Falls back to the
+ * raw wire name for anything unrecognized, so a future tool never silently
+ * disappears from this list before this map is updated. */
 const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
   writeFile: "Запись файлов (writeFile)",
   editFile: "Редактирование файлов (editFile)",
@@ -17,6 +19,7 @@ const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
   deleteDirectory: "Удаление папок (deleteDirectory)",
   move: "Перемещение / переименование (move)",
   requestFullRepoAccess: "Запрос доступа к репозиторию (requestFullRepoAccess)",
+  memory: "Изменение памяти (memory note/forget/config)",
 };
 
 /** Every `ToolName` variant (`src-tauri/src/domain/ai_access.rs`), in the
@@ -32,6 +35,7 @@ const ALLOWED_TOOL_LABELS: Record<string, string> = {
   check: "Проверка документации (check)",
   ...AUTO_APPROVABLE_TOOL_LABELS,
   todo: "Список задач (todo)",
+  memory: "Постоянная память агента (memory)",
 };
 
 const ALLOWED_TOOL_ORDER = [
@@ -50,6 +54,7 @@ const ALLOWED_TOOL_ORDER = [
   "move",
   "requestFullRepoAccess",
   "todo",
+  "memory",
 ];
 
 /** Per-project "always allow" list for the assistant's tool-calling loop

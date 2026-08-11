@@ -38,6 +38,7 @@ pub enum ToolName {
     Move,
     RequestFullRepoAccess,
     Todo,
+    Memory,
 }
 
 impl ToolName {
@@ -50,6 +51,12 @@ impl ToolName {
     /// see this before it happens" reasoning, even though an empty
     /// directory itself carries less risk than overwriting or deleting a
     /// file.
+    ///
+    /// `Memory` is *not* in this list even though `note`/`nap`/`forget` do
+    /// write to the on-disk OptMem store — its gate depends on which `op`
+    /// the call carries (only `note` needs approval), which this
+    /// per-`ToolName` bool can't express. See `call_requires_confirmation`,
+    /// the actual gate used by `commands::llm`.
     pub fn requires_confirmation(self) -> bool {
         matches!(
             self,
@@ -61,9 +68,9 @@ impl ToolName {
                 | ToolName::Move
                 | ToolName::RequestFullRepoAccess
         )
-        // `Todo`/`Grep`/`GitDiff`/`GitBlame`/`Check` are deliberately NOT in
-        // this list — in-memory or read-only, no real-world side effect, same
-        // bucket as `ListFiles`/`ReadFile`/`SemanticSearch`.
+        // `Todo`/`Grep`/`GitDiff`/`GitBlame`/`Check` are in-memory or
+        // read-only, no confirmation gate under any call. `Memory` is
+        // handled separately, see the doc comment above.
     }
 
     /// Maps the wire `LlmToolCall::name` string to a `ToolName`, independent
@@ -88,6 +95,7 @@ impl ToolName {
             "move" => Some(ToolName::Move),
             "requestFullRepoAccess" => Some(ToolName::RequestFullRepoAccess),
             "todo" => Some(ToolName::Todo),
+            "memory" => Some(ToolName::Memory),
             "check" => Some(ToolName::Check),
             _ => None,
         }
@@ -126,7 +134,50 @@ impl ToolName {
             ToolName::Move => 2,
             ToolName::RequestFullRepoAccess => 1,
             ToolName::Todo => 1,
+            ToolName::Memory => 1,
         }
+    }
+}
+
+/// The actual confirmation gate `commands::llm`'s tool-calling loop uses —
+/// unlike `ToolName::requires_confirmation`, this can see a call's raw
+/// (not yet validated) `arguments` JSON, which `Memory` needs: `op: "note"`
+/// writes a new, previously-unreviewed line; `forget` drops TREE summaries;
+/// `config` changes store knobs that affect auto-injected context size. Those
+/// three pause for approval (or are covered by the user's "always allow" trust
+/// for the `memory` tool). `nap` stays auto-executing — it only writes a
+/// compression summary the model was explicitly asked to produce earlier in
+/// the same turn. Reads (`wake`/`recall`/`zoom`) never pause.
+///
+/// A call whose `arguments` don't parse is never gated here — `false`, same
+/// as an unrecognized `name` — because `services::ai_tools::parse_tool_call`
+/// will reject the same malformed JSON before anything can execute, with or
+/// without a confirmation pause.
+pub fn call_requires_confirmation(name: &str, arguments: &str) -> bool {
+    match ToolName::from_wire_name(name) {
+        Some(ToolName::Memory) => memory_op_requires_confirmation(arguments),
+        Some(tool) => tool.requires_confirmation(),
+        None => false,
+    }
+}
+
+fn memory_op_requires_confirmation(arguments: &str) -> bool {
+    #[derive(Deserialize)]
+    struct OpFields {
+        op: Option<String>,
+        knob: Option<String>,
+    }
+    let Ok(parsed) = serde_json::from_str::<OpFields>(arguments) else {
+        return false;
+    };
+    match parsed.op.as_deref() {
+        Some("note" | "forget") => true,
+        // Read-only `config` (no knob) just prints sizes — no pause.
+        Some("config") => parsed
+            .knob
+            .as_deref()
+            .is_some_and(|k| !k.trim().is_empty()),
+        _ => false,
     }
 }
 
@@ -162,6 +213,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::Move,
         ToolName::RequestFullRepoAccess,
         ToolName::Todo,
+        ToolName::Memory,
     ]
     .into_iter()
     .collect()
@@ -188,6 +240,7 @@ mod tests {
         assert!(ToolName::Move.requires_confirmation());
         assert!(ToolName::RequestFullRepoAccess.requires_confirmation());
         assert!(!ToolName::Todo.requires_confirmation());
+        assert!(!ToolName::Memory.requires_confirmation());
     }
 
     #[test]
@@ -210,6 +263,7 @@ mod tests {
             Some(ToolName::RequestFullRepoAccess)
         );
         assert_eq!(ToolName::from_wire_name("todo"), Some(ToolName::Todo));
+        assert_eq!(ToolName::from_wire_name("memory"), Some(ToolName::Memory));
         assert_eq!(ToolName::from_wire_name("somethingElse"), None);
     }
 
@@ -230,12 +284,13 @@ mod tests {
         assert_eq!(ToolName::Check.loop_weight(), 2);
         assert_eq!(ToolName::SemanticSearch.loop_weight(), 4);
         assert_eq!(ToolName::Todo.loop_weight(), 1);
+        assert_eq!(ToolName::Memory.loop_weight(), 1);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_fifteen() {
+    fn default_allowed_tools_includes_all_sixteen() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 15);
+        assert_eq!(allowed.len(), 16);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
@@ -248,5 +303,80 @@ mod tests {
         assert!(allowed.contains(&ToolName::Move));
         assert!(allowed.contains(&ToolName::RequestFullRepoAccess));
         assert!(allowed.contains(&ToolName::Todo));
+        assert!(allowed.contains(&ToolName::Memory));
+    }
+
+    #[test]
+    fn call_requires_confirmation_gates_memory_on_mutating_ops() {
+        assert!(call_requires_confirmation(
+            "memory",
+            r#"{"op":"note","scope":"project","text":"a fact"}"#
+        ));
+        assert!(call_requires_confirmation(
+            "memory",
+            r#"{"op":"forget","scope":"project","block":"0-1"}"#
+        ));
+        assert!(call_requires_confirmation(
+            "memory",
+            r#"{"op":"config","scope":"project","knob":"WAKE_LINES=32"}"#
+        ));
+        assert!(!call_requires_confirmation(
+            "memory",
+            r#"{"op":"config","scope":"project"}"#
+        ));
+        assert!(!call_requires_confirmation(
+            "memory",
+            r#"{"op":"config","scope":"project","knob":null}"#
+        ));
+        for op in ["wake", "nap", "recall", "zoom"] {
+            let args = format!(r#"{{"op":"{op}","scope":"project"}}"#);
+            assert!(
+                !call_requires_confirmation("memory", &args),
+                "op {op} should not require confirmation"
+            );
+        }
+    }
+
+    #[test]
+    fn call_requires_confirmation_fails_closed_on_unparseable_or_missing_op() {
+        assert!(!call_requires_confirmation("memory", "not json"));
+        assert!(!call_requires_confirmation("memory", r#"{"scope":"project"}"#));
+    }
+
+    #[test]
+    fn call_requires_confirmation_matches_the_static_check_for_every_other_tool() {
+        for tool in [
+            ToolName::ListFiles,
+            ToolName::ReadFile,
+            ToolName::SemanticSearch,
+            ToolName::Grep,
+            ToolName::GitDiff,
+            ToolName::GitBlame,
+            ToolName::Check,
+            ToolName::WriteFile,
+            ToolName::EditFile,
+            ToolName::DeleteFile,
+            ToolName::CreateDirectory,
+            ToolName::DeleteDirectory,
+            ToolName::Move,
+            ToolName::RequestFullRepoAccess,
+            ToolName::Todo,
+        ] {
+            let name = serde_json::to_value(tool)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                call_requires_confirmation(&name, "{}"),
+                tool.requires_confirmation(),
+                "tool {name} disagreed"
+            );
+        }
+    }
+
+    #[test]
+    fn call_requires_confirmation_is_false_for_unknown_tool() {
+        assert!(!call_requires_confirmation("notATool", "{}"));
     }
 }

@@ -353,7 +353,7 @@ pub struct ChatDone {
 
 /// What one call to `commands::llm::llm_chat_stream`/`llm_chat_stream_resume`
 /// resolves with: either a final answer, a round that hit at least one tool
-/// call whose `domain::ai_access::ToolName::requires_confirmation` is true
+/// call `domain::ai_access::call_requires_confirmation` flags
 /// (nothing in that round has executed yet, and the caller must resolve
 /// `PendingApproval` via `llm_chat_stream_resume` before the conversation
 /// can continue), or the turn being stopped mid-flight by the user (see

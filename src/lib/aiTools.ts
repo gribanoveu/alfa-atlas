@@ -83,7 +83,20 @@ export type ToolCall =
   | { tool: "move"; args: { path: string; newPath: string } }
   | { tool: "requestFullRepoAccess"; args: { reason: string } }
   | { tool: "todoWrite"; args: { titles: string[] } }
-  | { tool: "todoUpdate"; args: { id: string; status: "completed" | "cancelled"; note: string | null } };
+  | { tool: "todoUpdate"; args: { id: string; status: "completed" | "cancelled"; note: string | null } }
+  | {
+      tool: "memory";
+      args: {
+        op: "wake" | "note" | "nap" | "recall" | "zoom" | "forget" | "config";
+        scope: "project" | "global";
+        text: string | null;
+        pattern: string | null;
+        block: string | null;
+        knob: string | null;
+        part: number | null;
+        snapshotT: number | null;
+      };
+    };
 
 // Mirrors Rust's `domain::ai_tools::FileDiffStats` — attached to a settled
 // `fileWritten`/`fileEdited`/`fileDeleted` result, computed once
@@ -138,7 +151,8 @@ export type ToolResult =
   | { tool: "moved"; result: { from: string; to: string; updatedFiles: UpdatedReference[] } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } }
   | { tool: "todoWritten"; result: Task[] }
-  | { tool: "todoUpdated"; result: Task[] };
+  | { tool: "todoUpdated"; result: Task[] }
+  | { tool: "memory"; result: { text: string } };
 
 /**
  * Runs one AI-harness tool call against whichever project is currently
@@ -185,6 +199,11 @@ export function getAllowedTools(): Promise<string[]> {
  * currently open project. */
 export function setToolAllowed(tool: string, allowed: boolean): Promise<void> {
   return invoke("ai_set_tool_allowed", { tool, allowed });
+}
+
+/** Combined OptMem wake for project + global stores (injected at chat start). */
+export function getMemoryWake(): Promise<string> {
+  return invoke<string>("ai_get_memory_wake");
 }
 
 // Mirrors `domain::llm::LlmToolDefinition` in `src-tauri/src/domain/llm.rs`

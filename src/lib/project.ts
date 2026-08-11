@@ -56,6 +56,11 @@ export function addGitignoreEntry(
   return invoke<void>("add_gitignore_entry", { root, entry });
 }
 
+/** Idempotent `.atlas/*` ignore + `!.atlas/memory/**` exception block. */
+export function ensureAtlasGitignore(root: string): Promise<void> {
+  return invoke<void>("ensure_atlas_gitignore", { root });
+}
+
 export function openCachedProject(root: string): Promise<OpenedProject> {
   return invoke<OpenedProject>("open_cached_project", { root });
 }

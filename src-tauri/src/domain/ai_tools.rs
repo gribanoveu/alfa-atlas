@@ -316,6 +316,34 @@ pub struct TodoUpdateArgs {
     pub note: Option<String>,
 }
 
+/// Permanent OptMem-style agent memory. One tool, multiple ops — see
+/// `services::agent_memory`. `scope` selects project
+/// (`{repo}/.atlas/memory`) or global (`~/.atlas/memory`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryArgs {
+    /// `wake` | `note` | `nap` | `recall` | `zoom` | `forget` | `config`
+    pub op: String,
+    /// `project` | `global`
+    pub scope: String,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub pattern: Option<String>,
+    /// Inclusive block id as wake prints it, e.g. `"0-15"`.
+    #[serde(default)]
+    pub block: Option<String>,
+    /// `NAME=VALUE` for `config` (empty value restores default).
+    #[serde(default)]
+    pub knob: Option<String>,
+    /// 1-based wake part index.
+    #[serde(default)]
+    pub part: Option<u32>,
+    /// Wake snapshot T (memory count) for multi-part continuation.
+    #[serde(default)]
+    pub snapshot_t: Option<u32>,
+}
+
 /// Which cascade tier produced a `ToolMatch` — scores are only comparable
 /// within the same source, never across tiers (see `ToolMatch::score`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -371,6 +399,7 @@ pub enum ToolCall {
     RequestFullRepoAccess(RequestFullRepoAccessArgs),
     TodoWrite(TodoWriteArgs),
     TodoUpdate(TodoUpdateArgs),
+    Memory(MemoryArgs),
 }
 
 impl ToolCall {
@@ -392,6 +421,7 @@ impl ToolCall {
             ToolCall::RequestFullRepoAccess(_) => ToolName::RequestFullRepoAccess,
             ToolCall::TodoWrite(_) => ToolName::Todo,
             ToolCall::TodoUpdate(_) => ToolName::Todo,
+            ToolCall::Memory(_) => ToolName::Memory,
         }
     }
 }
@@ -523,6 +553,9 @@ pub enum ToolResult {
     TodoWritten(Vec<Task>),
     /// Same shape/role as `TodoWritten`, after a `todo update`.
     TodoUpdated(Vec<Task>),
+    /// Settled `memory` — plain text OptMem output (wake/note/nap/…).
+    #[serde(rename_all = "camelCase")]
+    Memory { text: String },
 }
 
 #[derive(Debug, Error)]
@@ -615,6 +648,11 @@ pub enum ToolError {
     /// types into the tool boundary.
     #[error("git error: {0}")]
     Git(String),
+    /// OptMem / agent-memory failure — surfaced as a string so the model
+    /// sees the actionable message without pulling store types across the
+    /// tool boundary.
+    #[error("memory error: {0}")]
+    Memory(String),
 }
 
 impl From<EmbeddingError> for ToolError {

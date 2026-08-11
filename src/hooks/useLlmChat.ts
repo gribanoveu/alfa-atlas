@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getAutoApprovedTools, setToolAutoApproved, type AiAccessMode, type LlmToolDefinition, type Task } from "../lib/aiTools";
+import { getAutoApprovedTools, getMemoryWake, setToolAutoApproved, type AiAccessMode, type LlmToolDefinition, type Task } from "../lib/aiTools";
 import {
   buildAccessModeChangeNotice,
   buildAssistantSystemPrompt,
   buildCompactionSummaryBlock,
   buildHistoryCompactionPrompt,
   buildTodoContextBlock,
+  buildMemoryContextBlock,
   CONTEXT_COMPACTION_KEEP_LAST_MESSAGES,
   CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES,
   TOOL_APPROVAL_TIMEOUT_MS,
@@ -452,6 +453,22 @@ export function useLlmChat(
 
       const todoBlock = buildTodoContextBlock(todoListRef.current);
 
+      let memoryBlock: string | null = null;
+      try {
+        memoryBlock = buildMemoryContextBlock(await getMemoryWake());
+      } catch (e) {
+        // "No project open" is expected and not worth logging; anything
+        // else (a corrupt store, an I/O error, a bad hand-edited config
+        // knob) would otherwise degrade memory context for the rest of the
+        // session with zero trace — see the compaction catch above for the
+        // same reasoning.
+        const message = e instanceof Error ? e.message : String(e);
+        if (!message.includes("no project open")) {
+          console.error("Не удалось прочитать память ассистента", e);
+        }
+        memoryBlock = null;
+      }
+
       const wireMessages: LlmMessage[] = [
         {
           role: "system",
@@ -477,6 +494,7 @@ export function useLlmChat(
               },
             ]
           : []),
+        ...(memoryBlock ? [{ role: "system" as const, content: memoryBlock, toolCallId: null }] : []),
         ...(todoBlock ? [{ role: "system" as const, content: todoBlock, toolCallId: null }] : []),
         { role: "user", content: userText, toolCallId: null },
       ];

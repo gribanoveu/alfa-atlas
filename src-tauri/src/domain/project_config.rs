@@ -25,11 +25,11 @@ pub struct ProjectConfig {
     /// confirmation for on this project, via the approval card's "Разрешать
     /// всегда" button (see `services::ai_tools::set_tool_auto_approved`).
     /// `None`/missing (old `project.json` files) behaves like an empty set —
-    /// every `ToolName::requires_confirmation` tool still pauses for
-    /// approval. Unlike `ai_allowed_tools`, this never widens what a tool
-    /// can *do* — it only skips the per-call confirmation prompt for a tool
-    /// the user has already vetted on this repo, in this and every future
-    /// chat.
+    /// every call `domain::ai_access::call_requires_confirmation` flags
+    /// still pauses for approval. Unlike `ai_allowed_tools`, this never
+    /// widens what a tool can *do* — it only skips the per-call confirmation
+    /// prompt for a tool the user has already vetted on this repo, in this
+    /// and every future chat.
     #[serde(default)]
     pub ai_auto_approved_tools: Option<Vec<ToolName>>,
     /// Stable fallback identity for the global embeddings cache

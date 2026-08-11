@@ -19,8 +19,9 @@
 //! chronological entries in the message transcript (not transient status —
 //! see `src/lib/chatBlocks.ts` on the frontend side). The one case where a
 //! single turn spans more than one command call: a round containing a call
-//! whose `domain::ai_access::ToolName::requires_confirmation` is `true`
-//! resolves as `ChatStreamOutcome::PendingApproval` instead, with nothing in
+//! `domain::ai_access::call_requires_confirmation` flags (per tool identity
+//! for most tools, per-`op` for `memory`) resolves as
+//! `ChatStreamOutcome::PendingApproval` instead, with nothing in
 //! that round executed — the frontend collects a user decision and calls
 //! `llm_chat_stream_resume` to continue.
 //!
@@ -40,7 +41,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::commands::embeddings::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
-use crate::domain::ai_access::ToolName;
+use crate::domain::ai_access::{call_requires_confirmation, ToolName};
 use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
 use crate::domain::llm::{
     sanitize_tool_call_arguments, ChatDone, ChatRequest, ChatResponse, ChatStreamOutcome,
@@ -367,10 +368,10 @@ struct LoopCtx<'a> {
 ///
 /// Pauses (returns `ChatStreamOutcome::PendingApproval`) the instant a
 /// *fresh* round (never a resumed one — a resumed round's decisions are
-/// already known) contains any call whose `ToolName::requires_confirmation`
-/// is `true`. Nothing in that round executes — not even other, non-risky
-/// calls bundled into the same round — so there's no partial-round state to
-/// track across the stateless hop back to the frontend.
+/// already known) contains any call `call_requires_confirmation` flags.
+/// Nothing in that round executes — not even other, non-risky calls bundled
+/// into the same round — so there's no partial-round state to track across
+/// the stateless hop back to the frontend.
 ///
 /// Also resolves early, with `ChatStreamOutcome::Cancelled` instead of
 /// `Done`, if `ctx.cancel_flag` (set by `llm_cancel_chat`) reads `true` at
@@ -498,8 +499,7 @@ fn run_tool_loop(
                         id: call.id.clone(),
                         name: call.name.clone(),
                         arguments: call.arguments.clone(),
-                        requires_confirmation: ToolName::from_wire_name(&call.name)
-                            .is_some_and(ToolName::requires_confirmation),
+                        requires_confirmation: call_requires_confirmation(&call.name, &call.arguments),
                     })
                     .collect();
                 if pending.iter().any(|c| c.requires_confirmation) {
@@ -609,6 +609,9 @@ fn run_tool_loop(
                         .unwrap_or(".");
                     ai_tools::render_file_tree(entries, root_label)
                 }
+                // OptMem already formats wake/note/nap as agent-facing prose —
+                // wrapping it in JSON would only add noise and burn tokens.
+                Ok(ToolResult::Memory { text }) => text.clone(),
                 Ok(tool_result) => serde_json::to_string(tool_result)
                     .unwrap_or_else(|_| "Ошибка: не удалось сериализовать результат инструмента".to_string()),
                 Err(e) if e == "denied by user" => "Отклонено пользователем".to_string(),
@@ -798,7 +801,7 @@ pub async fn llm_chat_stream_resume(
 
         let expected: HashSet<&str> = calls
             .iter()
-            .filter(|c| ToolName::from_wire_name(&c.name).is_some_and(ToolName::requires_confirmation))
+            .filter(|c| call_requires_confirmation(&c.name, &c.arguments))
             .map(|c| c.id.as_str())
             .collect();
         let provided: HashSet<&str> = decisions.iter().map(|d| d.id.as_str()).collect();

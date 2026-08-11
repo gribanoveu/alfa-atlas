@@ -112,6 +112,7 @@ const KNOWN_TOOLS = [
   "move",
   "requestFullRepoAccess",
   "todo",
+  "memory",
 ];
 
 const TOOL_OPTIONS: LogSelectOption[] = [
