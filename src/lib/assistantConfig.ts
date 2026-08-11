@@ -668,6 +668,28 @@ export function buildTodoContextBlock(tasks: Task[]): string | null {
   return `TODO:\n${lines.join("\n")}`;
 }
 
+/** Builds a "currently open file" context block `useLlmChat` splices into
+ * every request as its own fresh `system` message, right before the user's
+ * new turn — same treatment as `buildTodoContextBlock`: recomputed on every
+ * `sendMessage` call from the live `activeFilePath` (never baked into the
+ * persisted conversation), so a later turn always reflects whichever file is
+ * open right now, not a stale one from when the chat started. Returns
+ * `null` when no editor tab is active, so a chat opened with nothing open
+ * sends no extra message at all.
+ *
+ * `path` is already docs-root-relative — same convention `writeFile`/
+ * `editFile`/`check`'s `path` argument use (see "## Path resolution" in the
+ * mode prompts) — so it can be used as a write-tool path directly, or
+ * prefixed with the documentation root for a read-tool path in Full-repo
+ * mode. Framed explicitly as a hint, not an instruction: it disambiguates
+ * "this file"/"here" without implying the open file is itself part of the
+ * request, and without the model treating it as something to read or act on
+ * unprompted. */
+export function buildActiveFileContextBlock(path: string | null): string | null {
+  if (!path) return null;
+  return `[Editor] The user currently has \`${path}\` open. Treat this only as a hint for resolving an unnamed reference ("this file", "here", "the current document") — not as an implicit request to read, explain, or modify it. If the user's message doesn't refer to a file at all, ignore this.`;
+}
+
 /** Wraps a pre-fetched OptMem wake (from `getMemoryWake`) as a system-role
  * context block for the chat turn. Returns null when wake is empty. */
 export function buildMemoryContextBlock(wakeText: string | null | undefined): string | null {

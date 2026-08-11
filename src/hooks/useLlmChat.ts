@@ -11,6 +11,7 @@ import {
 } from "../lib/aiTools";
 import {
   buildAccessModeChangeNotice,
+  buildActiveFileContextBlock,
   buildCompactionSummaryBlock,
   buildHistoryCompactionPrompt,
   buildModeChangeNotice,
@@ -501,6 +502,7 @@ export function useLlmChat(
       lastSentConversationModeRef.current = conversationMode;
 
       const todoBlock = buildTodoContextBlock(todoListRef.current);
+      const activeFileBlock = buildActiveFileContextBlock(activeFilePath);
 
       let memoryBlock: string | null = null;
       try {
@@ -553,6 +555,7 @@ export function useLlmChat(
           ? [{ role: "system" as const, content: buildModeChangeNotice(conversationMode), toolCallId: null }]
           : []),
         ...(memoryBlock ? [{ role: "system" as const, content: memoryBlock, toolCallId: null }] : []),
+        ...(activeFileBlock ? [{ role: "system" as const, content: activeFileBlock, toolCallId: null }] : []),
         ...(todoBlock ? [{ role: "system" as const, content: todoBlock, toolCallId: null }] : []),
         { role: "user", content: userText, toolCallId: null },
       ];
