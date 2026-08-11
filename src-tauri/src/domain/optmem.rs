@@ -9,15 +9,20 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 /// Fixed-width log record size (bytes), including the trailing newline.
-pub const LOG_REC: usize = 320;
+/// Wider than upstream OptMem's 320 so a one-line Russian note (~2 bytes
+/// per Cyrillic letter) can still hold a useful project fact without three
+/// compression retries.
+pub const LOG_REC: usize = 640;
 /// Fixed-width tree summary record size (bytes), including the trailing newline.
-pub const TREE_REC: usize = 288;
+pub const TREE_REC: usize = 608;
 /// Blocks up to this many raw memories compress from the raw log.
 pub const RAW_MAX: usize = 16;
 
 /// Default knobs — overridable per store via its `config` file.
 pub const DEFAULT_WAKE_LINES: usize = 96;
-pub const DEFAULT_ENTRY_CHARS: usize = 280;
+/// Default max UTF-8 **bytes** per note/nap line (not Unicode scalars).
+/// ~560 bytes ≈ 280 Latin chars or ~180 Cyrillic chars.
+pub const DEFAULT_ENTRY_CHARS: usize = 560;
 pub const DEFAULT_PART_CHARS: usize = 20_000;
 pub const DEFAULT_PART_LINES: usize = 500;
 
@@ -151,8 +156,15 @@ pub enum OptMemError {
     EmptyEntry,
     #[error("{0} lines. A memory is one line: merge them, or note them separately.")]
     MultiLine(usize),
-    #[error("too long: {bytes} bytes, limit {limit}. Accented characters cost 2+ bytes. Compress it further.")]
-    EntryTooLong { bytes: usize, limit: usize },
+    #[error(
+        "too long: {bytes} bytes, limit {limit} (~{cyrillic_budget} Cyrillic chars). \
+         UTF-8: accented/Cyrillic letters cost 2+ bytes each. Compress it further."
+    )]
+    EntryTooLong {
+        bytes: usize,
+        limit: usize,
+        cyrillic_budget: usize,
+    },
     #[error("'{0}' is not a block id. Copy it from the prompt.")]
     BadBlockId(String),
     #[error("{0} is not a block. Copy the id printed by wake, like 16-31.")]
@@ -183,6 +195,7 @@ pub fn check_entry(text: &str, entry_chars: usize) -> Result<String, OptMemError
         return Err(OptMemError::EntryTooLong {
             bytes: n,
             limit: entry_chars,
+            cyrillic_budget: entry_chars / 2,
         });
     }
     Ok(text.to_string())
@@ -342,9 +355,11 @@ pub fn plural(n: usize, word: &str) -> String {
 pub fn pad_record(text: &str, rec: usize) -> Result<Vec<u8>, OptMemError> {
     let b = text.as_bytes();
     if b.len() > rec - 1 {
+        let limit = rec - 1;
         return Err(OptMemError::EntryTooLong {
             bytes: b.len(),
-            limit: rec - 1,
+            limit,
+            cyrillic_budget: limit / 2,
         });
     }
     let mut out = Vec::with_capacity(rec);
@@ -441,20 +456,29 @@ mod tests {
 
     #[test]
     fn check_entry_enforces_byte_limit() {
-        assert!(check_entry("ok", 280).is_ok());
+        assert!(check_entry("ok", DEFAULT_ENTRY_CHARS).is_ok());
         assert!(matches!(
-            check_entry("", 280),
+            check_entry("", DEFAULT_ENTRY_CHARS),
             Err(OptMemError::EmptyEntry)
         ));
         assert!(matches!(
-            check_entry("a\nb", 280),
+            check_entry("a\nb", DEFAULT_ENTRY_CHARS),
             Err(OptMemError::MultiLine(_))
         ));
-        let long = "x".repeat(281);
+        let long = "x".repeat(DEFAULT_ENTRY_CHARS + 1);
         assert!(matches!(
-            check_entry(&long, 280),
+            check_entry(&long, DEFAULT_ENTRY_CHARS),
             Err(OptMemError::EntryTooLong { .. })
         ));
+        // A dense Russian one-liner that used to blow the 280-byte upstream
+        // default must fit the Cyrillic-friendly Atlas default.
+        let ru = "corp-wowtax-patent-notification-api: микросервис Альфа-Банка для уведомлений о патентном налоге (ПСН/wowtax). Java 21, Spring, MongoDB, Kafka; интеграции MKS, wowtax, corp-sign; PDF/XML через pdfbox. REST-доки в src/docs/asciidoc.";
+        assert!(
+            ru.len() > 280,
+            "fixture should exceed the old 280-byte cap (got {} bytes)",
+            ru.len()
+        );
+        assert!(check_entry(ru, DEFAULT_ENTRY_CHARS).is_ok());
     }
 
     #[test]

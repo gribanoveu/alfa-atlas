@@ -245,7 +245,7 @@ You have OptMem-style permanent memory via the \`memory\` tool. It outlives sess
 
 A combined wake of both scopes is injected into your context at the start of each turn — treat that as already-read. Call \`wake\` again only to continue a multi-part wake, or after finishing pending compressions.
 
-Whenever you learn something lasting (a decision, a fact the user teaches you, a hard-won insight about this repo), call \`memory\` with \`op: "note"\` and one short line (max ~280 bytes). Do not register redundant memories. \`note\`, \`forget\`, and \`config\` pause for user approval before mutating the store — unless the user previously chose "always allow" for the memory tool. The user may deny a note; do not retry automatically after a denial. \`nap\` runs without a confirmation pause.
+Whenever you learn something lasting (a decision, a fact the user teaches you, a hard-won insight about this repo), call \`memory\` with \`op: "note"\` and one short line (max ~560 UTF-8 bytes ≈ 280 Latin / ~180 Cyrillic characters — Cyrillic letters cost 2+ bytes each). Do not register redundant memories. \`note\`, \`forget\`, and \`config\` pause for user approval before mutating the store — unless the user previously chose "always allow" for the memory tool. The user may deny a note; do not retry automatically after a denial. \`nap\` runs without a confirmation pause.
 
 If \`note\` or \`wake\` asks for a compression: call \`nap\` with the requested \`block\` and a one-line summary before your next action.
 
