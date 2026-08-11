@@ -1017,6 +1017,46 @@
   margin-top: 1px;
 }
 
+.assistant-chat-error-retry {
+  margin-top: 2px;
+  padding: 3px 9px;
+  border: 1px solid var(--red-tag);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--red-tag);
+  font-size: var(--font-ui-xs);
+  cursor: pointer;
+}
+
+.assistant-chat-error-retry:hover {
+  background: color-mix(in srgb, var(--red-tag) 12%, transparent);
+}
+
+
+/* =========================================================
+   History-compaction notice — a display-only marker inserted when
+   `useLlmChat`'s proactive compaction pass folds an older slice of the
+   conversation into a summary (see `src/lib/contextCompaction.ts`). Styled
+   as a centered pill, deliberately unlike a chat bubble, so it reads as a
+   system event rather than something either party "said".
+   ========================================================= */
+
+.assistant-chat-compaction-notice {
+  display: flex;
+  justify-content: center;
+  margin: 2px 0;
+}
+
+.assistant-chat-compaction-notice span {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-size: var(--font-ui-xs);
+  line-height: 1.4;
+}
+
 
 /* =========================================================
    Streaming indicator

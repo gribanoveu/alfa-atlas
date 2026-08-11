@@ -43,9 +43,10 @@ use crate::commands::embeddings::{
 use crate::domain::ai_access::ToolName;
 use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
 use crate::domain::llm::{
-    sanitize_tool_call_arguments, ChatDone, ChatRequest, ChatStreamOutcome, ChatStreamResult,
-    LlmMessage, LlmModelInfo, LlmProvider, LlmProviderConfig, LlmRole, LlmSettings, LlmToolCall,
-    LlmToolDefinition, PendingApproval, PendingToolCall, ResolvedLlmProvider, ToolCallDecision,
+    sanitize_tool_call_arguments, ChatDone, ChatRequest, ChatResponse, ChatStreamOutcome,
+    ChatStreamResult, LlmMessage, LlmModelInfo, LlmProvider, LlmProviderConfig, LlmRole,
+    LlmSettings, LlmToolCall, LlmToolDefinition, PendingApproval, PendingToolCall,
+    ResolvedLlmProvider, ToolCallDecision,
 };
 use crate::domain::paths;
 use crate::domain::repo_index::FileId;
@@ -293,6 +294,37 @@ pub async fn llm_test_connection(
             0 => "Соединение установлено, но провайдер не вернул ни одной модели.".to_string(),
             n => format!("Соединение установлено. Доступно моделей: {n}."),
         })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// One non-streaming, tool-free completion — the backend surface
+/// `useLlmChat`'s proactive history-compaction pass (and its reactive
+/// "compact & retry" counterpart) use to ask the model to summarize an
+/// older slice of the conversation. Reuses `LlmProvider::chat`, already
+/// implemented by every provider but never exposed as a command until now,
+/// rather than `llm_chat_stream`'s `run_tool_loop` — a summarization call
+/// has no tools, needs no streaming deltas, and must never itself trigger
+/// the tool-calling machinery.
+#[tauri::command]
+pub async fn llm_chat_once(
+    provider_id: String,
+    messages: Vec<LlmMessage>,
+    llm_provider: State<'_, Arc<LlmProviderSlot>>,
+) -> Result<ChatResponse, String> {
+    let llm_provider = llm_provider.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<ChatResponse, String> {
+        let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
+        let resolved =
+            llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
+        let api_key = llm_credentials_store::get_api_key(&provider_id);
+        let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
+        let model = llm_config::effective_model(&resolved, provider.as_ref())
+            .map_err(|e| e.to_string())?;
+        provider
+            .chat(ChatRequest { messages, tools: Vec::new(), model })
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

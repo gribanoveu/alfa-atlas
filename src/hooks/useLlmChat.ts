@@ -3,7 +3,11 @@ import { getAutoApprovedTools, setToolAutoApproved, type AiAccessMode, type LlmT
 import {
   buildAccessModeChangeNotice,
   buildAssistantSystemPrompt,
+  buildCompactionSummaryBlock,
+  buildHistoryCompactionPrompt,
   buildTodoContextBlock,
+  CONTEXT_COMPACTION_KEEP_LAST_MESSAGES,
+  CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES,
   TOOL_APPROVAL_TIMEOUT_MS,
 } from "../lib/assistantConfig";
 import type { SpecsRepoInfo } from "../lib/openapi";
@@ -19,10 +23,21 @@ import {
   type ChatMessage,
 } from "../lib/chatBlocks";
 import {
+  describeMessageForCompaction,
+  formatCompactionNoticeText,
+  isCacheValid,
+  isContextLengthError,
+  planCompaction,
+  realMessages,
+  shouldCompact,
+  type CompactionCache,
+} from "../lib/contextCompaction";
+import {
   cancelLlmChat,
   listenLlmChatDelta,
   listenLlmToolCall,
   listenLlmToolResult,
+  llmChatOnce,
   streamLlmChat,
   streamLlmChatResume,
   type LlmMessage,
@@ -65,6 +80,7 @@ export type { ChatMessage, MessageBlock, TextBlock, ToolCallBlock, ToolCallStatu
  * lived in this hook's own `todoListRef`). */
 export function useLlmChat(
   providerId: string | null,
+  contextLimit: number | null,
   accessMode: AiAccessMode,
   specsRepoInfo: SpecsRepoInfo | null,
   toolDefinitions: LlmToolDefinition[],
@@ -156,6 +172,17 @@ export function useLlmChat(
   // each `streamLlmChatResume`, since `TOOL_CALL_EVENT`s for that call only
   // start arriving once it's in flight.
   const autoApprovedIdsRef = useRef<Set<string>>(new Set());
+
+  // The proactive history-compaction pass's cached summary + fold boundary
+  // (see `src/lib/contextCompaction.ts`) — in-memory only, never persisted,
+  // recomputed fresh whenever it's missing/invalid. Safe as a plain
+  // per-mount cache because `AssistantConversation` (this hook's caller) is
+  // rendered with `key={chatHistory.currentChatId}` in `AssistantPanel.tsx`,
+  // so React fully remounts on every chat switch — a stale cache from a
+  // different conversation can't survive that. `runTurn` double-checks via
+  // `isCacheValid` before every use regardless, so this stays correct even
+  // if that remount guarantee is ever weakened later.
+  const compactionCacheRef = useRef<CompactionCache | null>(null);
 
   /** Shows every call in `calls` inline in the transcript right away as a
    * `"pendingApproval"` card (see `AssistantToolCallBlock`), each counting
@@ -298,20 +325,122 @@ export function useLlmChat(
     };
   }, []);
 
-  const sendMessage = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!providerId || sending || !trimmed) return;
+  // Context-window usage so far. Every request resends the *entire* message
+  // history, so a completed turn's `usage.totalTokens` (prompt + completion,
+  // as the provider itself counted it) already is the authoritative total
+  // context size at that point — not just a per-turn stat. Once one exists,
+  // it anchors the count and only the messages after it (a new user message,
+  // or the still-streaming reply) fall back to `estimateTokenCount`. Before
+  // any turn has completed (a fresh conversation, or a provider that never
+  // reports usage), the whole thing is the character-count estimate, same
+  // as before. Expressed as a `forEach` scan (not `reduce`-then-reindex)
+  // since `usage` only exists on the assistant arm of `ChatMessage`'s
+  // discriminated union — carrying the found value along with the index in
+  // one pass avoids re-narrowing the role a second time.
+  //
+  // Declared before `runTurn` (not just before `sendMessage`, its own
+  // previous position) so `runTurn`'s `useCallback` body can close over the
+  // value — `const` bindings must be declared earlier in the function body
+  // to be visible at the point they're read, even though every hook call
+  // here still runs top-to-bottom on each render regardless of declaration
+  // order.
+  const contextTokens = useMemo(() => {
+    let lastUsageIndex = -1;
+    let lastUsageTotal: number | null = null;
+    messages.forEach((m, i) => {
+      if (m.role === "assistant" && m.usage) {
+        lastUsageIndex = i;
+        lastUsageTotal = m.usage.totalTokens;
+      }
+    });
+    if (lastUsageIndex === -1 || lastUsageTotal === null) {
+      return (
+        estimateTokenCount(
+          buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
+        ) + messages.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0)
+      );
+    }
+    const tail = messages
+      .slice(lastUsageIndex + 1)
+      .reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
+    return lastUsageTotal + tail;
+  }, [messages, accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
 
-      const priorTurns = messages;
-      const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
-      const assistantId = crypto.randomUUID();
-      setMessages((prev) => [
-        ...prev,
-        userMsg,
-        { id: assistantId, role: "assistant", blocks: [], streaming: true },
-      ]);
+  /** Runs one full turn: an optional proactive history-compaction pass,
+   * building `wireMessages` from `priorTurns` (replaying the cached
+   * compaction summary plus whatever's after its boundary, instead of the
+   * full history, when a valid cache exists), the `streamLlmChat`/
+   * `streamLlmChatResume` pending-approval loop, and the success/error/
+   * settle handling — everything `sendMessage` used to do inline. Shared by
+   * `sendMessage` (`opts.aggressiveCompaction: false`) and
+   * `retryWithCompaction` (`true`, and a smaller keep-tail) so the two
+   * paths can't drift apart. `priorTurns` is passed in rather than read
+   * from `messages` directly so a retry can supply a version with the
+   * failed turn already removed. */
+  const runTurn = useCallback(
+    async (userText: string, assistantId: string, priorTurns: ChatMessage[], opts: { aggressiveCompaction: boolean }) => {
+      if (!providerId) return;
       setSending(true);
+
+      // A cache surviving from a foreign/removed conversation (see
+      // `compactionCacheRef`'s doc comment) must never be used — drop it
+      // before either deciding whether to compact or building `wireMessages`.
+      if (!isCacheValid(compactionCacheRef.current, priorTurns)) {
+        compactionCacheRef.current = null;
+      }
+
+      const keepLast = opts.aggressiveCompaction
+        ? CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES
+        : CONTEXT_COMPACTION_KEEP_LAST_MESSAGES;
+
+      if (opts.aggressiveCompaction || shouldCompact(contextTokens, contextLimit, priorTurns)) {
+        try {
+          const plan = planCompaction(priorTurns, compactionCacheRef.current, keepLast, activeFilePath);
+          if (plan) {
+            const excerpt = plan.toSummarize.map(describeMessageForCompaction).join("\n\n");
+            const prompt = buildHistoryCompactionPrompt(compactionCacheRef.current?.summaryText ?? null, excerpt);
+            const response = await llmChatOnce(providerId, [{ role: "user", content: prompt, toolCallId: null }]);
+            const summaryText = response.content?.trim();
+            if (summaryText) {
+              const real = realMessages(priorTurns);
+              const fromOrdinal = real.findIndex((m) => m.id === plan.toSummarize[0]!.id) + 1;
+              const toOrdinal = real.findIndex((m) => m.id === plan.toSummarize[plan.toSummarize.length - 1]!.id) + 1;
+              compactionCacheRef.current = { summaryText, boundaryMessageId: plan.newBoundaryId };
+              const noticeMsg: ChatMessage = {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                blocks: [
+                  { type: "text", id: crypto.randomUUID(), content: formatCompactionNoticeText(fromOrdinal, toOrdinal) },
+                ],
+                streaming: false,
+                isCompactionNotice: true,
+              };
+              setMessages((prev) => [...prev, noticeMsg]);
+            }
+          }
+        } catch (e) {
+          // Never block the user's actual message over a failed
+          // summarization call — if history really is too large to send as
+          // it stands, `isContextLengthError`'s reactive net below (via a
+          // later `retryWithCompaction`) is the backstop, not this pass.
+          console.error("Не удалось сжать историю чата", e);
+        }
+      }
+
+      const real = realMessages(priorTurns);
+      let wireTail = real;
+      if (compactionCacheRef.current) {
+        const boundaryIndex = real.findIndex((m) => m.id === compactionCacheRef.current!.boundaryMessageId);
+        if (boundaryIndex === -1) {
+          // Stale cache slipped past the earlier `isCacheValid` check
+          // somehow (e.g. the boundary message was removed mid-turn) —
+          // fall back to full history rather than inject a summary that no
+          // longer corresponds to anything being sent.
+          compactionCacheRef.current = null;
+        } else {
+          wireTail = real.slice(boundaryIndex + 1);
+        }
+      }
 
       // Placed as its own message right before the new user turn (not just
       // folded into the system prompt above) so a mode switch is impossible
@@ -329,7 +458,16 @@ export function useLlmChat(
           content: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
           toolCallId: null,
         },
-        ...priorTurns.map((m): LlmMessage => ({ role: m.role, content: chatMessageToPlainText(m), toolCallId: null })),
+        ...(compactionCacheRef.current
+          ? [
+              {
+                role: "system" as const,
+                content: buildCompactionSummaryBlock(compactionCacheRef.current.summaryText),
+                toolCallId: null,
+              },
+            ]
+          : []),
+        ...wireTail.map((m): LlmMessage => ({ role: m.role, content: chatMessageToPlainText(m), toolCallId: null })),
         ...(modeChanged
           ? [
               {
@@ -340,7 +478,7 @@ export function useLlmChat(
             ]
           : []),
         ...(todoBlock ? [{ role: "system" as const, content: todoBlock, toolCallId: null }] : []),
-        { role: "user", content: trimmed, toolCallId: null },
+        { role: "user", content: userText, toolCallId: null },
       ];
 
       try {
@@ -413,6 +551,11 @@ export function useLlmChat(
         );
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
+        // Best-effort: drives the "Сжать историю и повторить" retry action
+        // (`retryWithCompaction`) rather than just showing raw error text —
+        // see `isContextLengthError`'s doc comment for why this can't be a
+        // reliable classification, only a heuristic.
+        const contextLengthExceeded = isContextLengthError(message);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId && m.role === "assistant"
@@ -422,6 +565,7 @@ export function useLlmChat(
                   streaming: false,
                   failed: true,
                   errorMessage: message,
+                  contextLengthExceeded,
                 }
               : m,
           ),
@@ -442,8 +586,8 @@ export function useLlmChat(
     },
     [
       providerId,
-      sending,
-      messages,
+      contextLimit,
+      contextTokens,
       accessMode,
       specsRepoInfo,
       toolDefinitions,
@@ -455,39 +599,54 @@ export function useLlmChat(
     ],
   );
 
-  // Context-window usage so far. Every request resends the *entire* message
-  // history, so a completed turn's `usage.totalTokens` (prompt + completion,
-  // as the provider itself counted it) already is the authoritative total
-  // context size at that point — not just a per-turn stat. Once one exists,
-  // it anchors the count and only the messages after it (a new user message,
-  // or the still-streaming reply) fall back to `estimateTokenCount`. Before
-  // any turn has completed (a fresh conversation, or a provider that never
-  // reports usage), the whole thing is the character-count estimate, same
-  // as before. Expressed as a `forEach` scan (not `reduce`-then-reindex)
-  // since `usage` only exists on the assistant arm of `ChatMessage`'s
-  // discriminated union — carrying the found value along with the index in
-  // one pass avoids re-narrowing the role a second time.
-  const contextTokens = useMemo(() => {
-    let lastUsageIndex = -1;
-    let lastUsageTotal: number | null = null;
-    messages.forEach((m, i) => {
-      if (m.role === "assistant" && m.usage) {
-        lastUsageIndex = i;
-        lastUsageTotal = m.usage.totalTokens;
-      }
-    });
-    if (lastUsageIndex === -1 || lastUsageTotal === null) {
-      return (
-        estimateTokenCount(
-          buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
-        ) + messages.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0)
-      );
-    }
-    const tail = messages
-      .slice(lastUsageIndex + 1)
-      .reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
-    return lastUsageTotal + tail;
-  }, [messages, accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
+  const sendMessage = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!providerId || sending || !trimmed) return;
+
+      const priorTurns = messages;
+      const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
+      const assistantId = crypto.randomUUID();
+      setMessages((prev) => [
+        ...prev,
+        userMsg,
+        { id: assistantId, role: "assistant", blocks: [], streaming: true },
+      ]);
+      await runTurn(trimmed, assistantId, priorTurns, { aggressiveCompaction: false });
+    },
+    [providerId, sending, messages, runTurn],
+  );
+
+  /** The "Сжать историю и повторить" action on a failed message whose
+   * `contextLengthExceeded` flag is set (see the catch block above). Drops
+   * the failed bubble, replays the same user text through `runTurn` with
+   * `aggressiveCompaction: true` (a smaller keep-tail, and a compaction pass
+   * that runs regardless of `shouldCompact`'s ratio check). This mitigates
+   * not just a normal cross-turn overflow but also the case where a single
+   * turn's own tool-calling loop (`run_tool_loop`, backend-side) grew
+   * `history` past the limit internally before erroring — the retry
+   * rebuilds `wireMessages` from this hook's own `messages` array, which
+   * never contained that transient, backend-only blowup, so it's inherently
+   * smaller regardless of what caused the original failure. */
+  const retryWithCompaction = useCallback(
+    (assistantMessageId: string) => {
+      if (!providerId || sending) return;
+      const failedIndex = messages.findIndex((m) => m.id === assistantMessageId);
+      const failedMsg = failedIndex === -1 ? undefined : messages[failedIndex];
+      if (!failedMsg || failedMsg.role !== "assistant" || !failedMsg.failed) return;
+      const userMsgToRetry = messages[failedIndex - 1];
+      if (!userMsgToRetry || userMsgToRetry.role !== "user") return;
+
+      const priorTurns = messages.slice(0, failedIndex - 1);
+      const newAssistantId = crypto.randomUUID();
+      setMessages((prev) => [
+        ...prev.filter((m) => m.id !== assistantMessageId),
+        { id: newAssistantId, role: "assistant", blocks: [], streaming: true },
+      ]);
+      void runTurn(userMsgToRetry.content, newAssistantId, priorTurns, { aggressiveCompaction: true });
+    },
+    [providerId, sending, messages, runTurn],
+  );
 
   /** Bulk version of what a model-driven `todo update` already does one
    * task at a time — marks every non-terminal task `cancelled`, same status,
@@ -507,6 +666,7 @@ export function useLlmChat(
     messages,
     sending,
     sendMessage,
+    retryWithCompaction,
     contextTokens,
     todos,
     clearTodos,

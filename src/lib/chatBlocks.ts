@@ -77,6 +77,22 @@ export type ChatMessage =
        * the final SSE chunk — only ever set on a completed assistant
        * message. */
       usage?: ChatUsage;
+      /** Set only on a synthetic, display-only marker inserted by
+       * `useLlmChat`'s history-compaction pass (see
+       * `src/lib/contextCompaction.ts`) — a normal assistant message
+       * (`blocks: [{type:"text", ...}]`, `streaming: false`) that renders as
+       * a distinct pill rather than a chat bubble in
+       * `AssistantConversation`, and that `realMessages`/`wireMessages`
+       * construction must filter out before replaying history back to the
+       * model (it describes the compaction event, it isn't part of the
+       * conversation itself). Persists via the normal `chat_store` path —
+       * no backend changes needed since it's just another JSON message. */
+      isCompactionNotice?: boolean;
+      /** Set alongside `failed`/`errorMessage` when `isContextLengthError`
+       * matches the raw error text — drives the "Сжать историю и
+       * повторить" retry action in `AssistantConversation` (see
+       * `useLlmChat`'s `retryWithCompaction`). */
+      contextLengthExceeded?: boolean;
     };
 
 // ---- Pure block-transition rules -------------------------------------

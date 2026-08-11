@@ -187,6 +187,22 @@ export function testLlmConnection(providerId: string): Promise<string> {
   return invoke<string>("llm_test_connection", { providerId });
 }
 
+// Mirrors `domain::llm::ChatResponse` — a one-shot, non-streaming, tool-free
+// completion. `toolCalls` is real on the wire (the type is shared with the
+// tool-calling response shape) but always empty here since `llmChatOnce`
+// never advertises any tools — omitted from this type as irrelevant to its
+// only caller (`useLlmChat`'s history-compaction pass).
+export type ChatOnceResponse = {
+  content: string | null;
+};
+
+/** One non-streaming, tool-free completion — used by the history-compaction
+ * summarization pass (see `src/lib/contextCompaction.ts`), never by the main
+ * chat turn loop (see `streamLlmChat` for that). */
+export function llmChatOnce(providerId: string, messages: LlmMessage[]): Promise<ChatOnceResponse> {
+  return invoke<ChatOnceResponse>("llm_chat_once", { providerId, messages });
+}
+
 /** A plain conversation turn, streamed. The caller owns building the full
  * message list (including any system prompt). Resolves with either the
  * final answer (authoritative full reply text, and real token usage if the

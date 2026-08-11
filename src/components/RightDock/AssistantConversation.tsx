@@ -193,8 +193,21 @@ export function AssistantConversation({
   loadModels,
   followUpSuggestionsEnabled,
 }: AssistantConversationProps) {
-  const { messages, sending, sendMessage, stopChat, contextTokens, decideToolCall, todos, clearTodos } = useLlmChat(
+  const contextLimit = activeProvider?.limit?.context ?? null;
+
+  const {
+    messages,
+    sending,
+    sendMessage,
+    retryWithCompaction,
+    stopChat,
+    contextTokens,
+    decideToolCall,
+    todos,
+    clearTodos,
+  } = useLlmChat(
     providerId,
+    contextLimit,
     accessMode,
     specsRepoInfo,
     toolDefinitions,
@@ -269,7 +282,6 @@ export function AssistantConversation({
     }
   }, [messages, refreshAccessMode, onFileWritten, onFileMoved]);
 
-  const contextLimit = activeProvider?.limit?.context ?? null;
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;
   const [draft, setDraft] = useState("");
   // The suggestion node the user most recently clicked (top-level or a
@@ -460,6 +472,13 @@ export function AssistantConversation({
           </div>
         ) : (
           messages.map((m) => {
+            if (m.role === "assistant" && m.isCompactionNotice) {
+              return (
+                <div key={m.id} className="assistant-chat-compaction-notice">
+                  <span>{m.blocks[0]?.type === "text" ? m.blocks[0].content : ""}</span>
+                </div>
+              );
+            }
             const failed = m.role === "assistant" && Boolean(m.failed);
             const stopped = m.role === "assistant" && Boolean(m.cancelled);
             return (
@@ -497,6 +516,15 @@ export function AssistantConversation({
                         <div className="assistant-chat-error-card">
                           <AlertCircle size={13} aria-hidden />
                           <span>{m.errorMessage ?? "Не удалось получить ответ"}</span>
+                          {m.contextLengthExceeded ? (
+                            <button
+                              type="button"
+                              className="assistant-chat-error-retry"
+                              onClick={() => retryWithCompaction(m.id)}
+                            >
+                              Сжать историю и повторить
+                            </button>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>

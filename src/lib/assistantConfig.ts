@@ -502,6 +502,49 @@ export function buildTodoContextBlock(tasks: Task[]): string | null {
   return `TODO:\n${lines.join("\n")}`;
 }
 
+/** Instruction sent (as the sole user message) to the one-shot
+ * `llm_chat_once` call `useLlmChat`'s compaction pass uses to fold an aging
+ * slice of the conversation into a compact summary — see
+ * `src/lib/contextCompaction.ts`'s `planCompaction`. `priorSummary`, when
+ * present, is the previous pass's output: the model is asked to *merge*, not
+ * append, so repeated compaction over a long conversation doesn't let the
+ * summary itself become a second unbounded-growth problem.
+ *
+ * Always instructs English output regardless of the conversation's own
+ * language (this app's chat is Russian) — the summary is never rendered to
+ * the user directly (only the short, template-generated notice pill is),
+ * so there's no UX cost, and English is measurably denser in tokens than
+ * Cyrillic. The fixed section structure (not free prose) keeps repeated
+ * merges reliable: the model can update one section without re-deriving the
+ * others from scratch. */
+export function buildHistoryCompactionPrompt(priorSummary: string | null, transcriptExcerpt: string): string {
+  const mergeInstruction = priorSummary
+    ? `Below is your previous summary of the earlier part of this conversation, followed by a new segment. Produce ONE updated summary that covers both — merge the new segment into the existing sections, don't just append a second copy.\n\nPREVIOUS SUMMARY:\n${priorSummary}\n\nNEW SEGMENT:\n${transcriptExcerpt}`
+    : `Summarize the following conversation segment.\n\nCONVERSATION:\n${transcriptExcerpt}`;
+
+  return `You are compacting an ongoing technical assistant conversation about a documentation/code repository into a compact summary that will be fed back to the assistant as its only memory of this part of the conversation.
+
+Write the summary in English no matter what language the conversation below is in — it is never shown to the user, only fed back to the model, so token density matters more than matching the conversation's language.
+
+Preserve, using exactly these section headers, each a short paragraph or bulleted list:
+GOAL: the user's overall objective and any explicit constraints they stated.
+DECISIONS: concrete conclusions or choices reached.
+FILES: files read/edited/created, by path, one line each.
+OPEN_QUESTIONS: unresolved ambiguities that were flagged but not settled.
+
+Omit a section entirely (just the header, no body) if it has nothing to report. Drop greetings, pleasantries, restated tool-call mechanics, and anything already superseded by a later decision in the same segment. Target well under 300 words total across all sections — do not let the summary grow without bound across repeated compactions.
+
+${mergeInstruction}`;
+}
+
+/** Wraps a cached compaction summary (`CompactionCache.summaryText`) as the
+ * system-role message `useLlmChat` injects into `wireMessages` in place of
+ * the messages it replaces — English, like the summary itself, since it's
+ * machine-to-machine content the user never sees. */
+export function buildCompactionSummaryBlock(summary: string): string {
+  return `[Compacted summary of earlier conversation]\n\n${summary}`;
+}
+
 // Docs-relative paths in tool-call labels/summaries can be arbitrarily deep
 // (e.g. `createEnsPaymentDocument/createEnsPaymentDocument.puml`) and these
 // strings render inline in a narrow dock panel — showing just the final
@@ -758,6 +801,33 @@ export const CHAT_INPUT_ROWS = 3;
 // The context-usage bar switches to its warning color once estimated usage
 // crosses this fraction of the active model's `limit.context`.
 export const CONTEXT_NEAR_LIMIT_RATIO = 0.9;
+
+// `useLlmChat`'s proactive history-compaction pass (see
+// `src/lib/contextCompaction.ts`) fires once estimated context usage crosses
+// this fraction of `limit.context` — below `CONTEXT_NEAR_LIMIT_RATIO` so
+// compaction has already run by the time the ring would go red, leaving
+// headroom for `estimateTokenCount`'s known underestimate on Cyrillic-heavy
+// text (see `tokens.ts`) plus whatever a turn's own tool-calling loop adds
+// on top before the next check.
+export const CONTEXT_COMPACTION_TRIGGER_RATIO = 0.8;
+
+// How many of the most recent real (non-notice) messages stay verbatim in
+// the wire history after a normal proactive compaction pass — everything
+// older (short of the relevance carve-out in `planCompaction`) is folded
+// into the cached summary instead.
+export const CONTEXT_COMPACTION_KEEP_LAST_MESSAGES = 12;
+
+// Smaller keep-tail used only by the *reactive* "Сжать историю и повторить"
+// retry (a real provider context-length error) — a real overflow means the
+// proactive pass either hasn't run yet or wasn't aggressive enough, so the
+// one-shot retry compacts harder rather than repeating the same ratio.
+export const CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES = 6;
+
+// Below this many real prior messages, compaction never runs even if the
+// ratio trigger fires — summarizing a short conversation has no benefit and
+// risks a wasted LLM call right as the user tries to send their next
+// message.
+export const CONTEXT_COMPACTION_MIN_MESSAGES = CONTEXT_COMPACTION_KEEP_LAST_MESSAGES + 6;
 
 // How long a `"pendingApproval"` tool-call card (see `AssistantToolCallBlock`)
 // waits for a manual Approve/Deny before `useLlmChat` treats it as denied
