@@ -26,6 +26,8 @@ type EditorTabsProps = {
   onCloseOthers: (id: string) => void;
   viewMode: EditorViewMode;
   onViewModeChange: (mode: EditorViewMode) => void;
+  /** Hide source/split/render switch (e.g. image preview tabs). */
+  hideViewMode?: boolean;
 };
 
 const VIEW_MODE_BUTTONS: {
@@ -56,6 +58,7 @@ export function EditorTabs({
   onCloseOthers,
   viewMode,
   onViewModeChange,
+  hideViewMode = false,
 }: EditorTabsProps) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -99,7 +102,9 @@ export function EditorTabs({
     return (
       <div className="tabs-bar">
         <div className="tabs tabs-empty" />
-        <ViewModeSwitch viewMode={viewMode} onViewModeChange={onViewModeChange} />
+        {hideViewMode ? null : (
+          <ViewModeSwitch viewMode={viewMode} onViewModeChange={onViewModeChange} />
+        )}
       </div>
     );
   }
@@ -195,7 +200,9 @@ export function EditorTabs({
           </div>
         ) : null}
       </div>
-      <ViewModeSwitch viewMode={viewMode} onViewModeChange={onViewModeChange} />
+      {hideViewMode ? null : (
+        <ViewModeSwitch viewMode={viewMode} onViewModeChange={onViewModeChange} />
+      )}
     </div>
   );
 }

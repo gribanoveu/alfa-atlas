@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { docsRootRelativeToRepo } from "../lib/paths";
+import { docsRootRelativeToRepo, resolveAssetTargetDocsRelative } from "../lib/paths";
 
 describe("docsRootRelativeToRepo", () => {
   test("nested docs root returns the relative path", () => {
@@ -24,5 +24,31 @@ describe("docsRootRelativeToRepo", () => {
 
   test("backslash-separated (Windows-style) input is normalized", () => {
     expect(docsRootRelativeToRepo("C:\\repo", "C:\\repo\\src\\docs")).toBe("src/docs");
+  });
+});
+
+describe("resolveAssetTargetDocsRelative", () => {
+  test("resolves bare filename against the document directory", () => {
+    expect(resolveAssetTargetDocsRelative("image.png", "api/doc.adoc")).toBe(
+      "api/image.png",
+    );
+  });
+
+  test("collapses document-relative ../ against the source file", () => {
+    expect(
+      resolveAssetTargetDocsRelative("../images/logo.png", "api/doc.adoc"),
+    ).toBe("images/logo.png");
+  });
+
+  test("collapses ./ against the source directory", () => {
+    expect(resolveAssetTargetDocsRelative("./shot.png", "api/doc.adoc")).toBe(
+      "api/shot.png",
+    );
+  });
+
+  test("keeps path as-is when source file is unknown", () => {
+    expect(resolveAssetTargetDocsRelative("images/logo.png", null)).toBe(
+      "images/logo.png",
+    );
   });
 });

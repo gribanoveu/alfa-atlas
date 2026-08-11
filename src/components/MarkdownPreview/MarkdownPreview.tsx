@@ -43,6 +43,7 @@ function fencedLang(className: string | undefined): string | null {
  */
 export function MarkdownPreview({
   content,
+  filePath,
   docsRoot,
   monaco,
   onOpenXref,
@@ -71,7 +72,9 @@ export function MarkdownPreview({
         );
       },
       img({ src, alt }) {
-        return <MdImage src={src} alt={alt} docsRoot={docsRoot} />;
+        return (
+          <MdImage src={src} alt={alt} docsRoot={docsRoot} filePath={filePath} />
+        );
       },
       code({ className, children, ...props }) {
         const inline = !className?.includes("language-");
@@ -103,7 +106,7 @@ export function MarkdownPreview({
         return <>{children}</>;
       },
     };
-  }, [docsRoot, monaco, onOpenXref]);
+  }, [docsRoot, filePath, monaco, onOpenXref]);
 
   if (!content.trim()) {
     return <div className="asc-preview asc-preview-empty">Нет содержимого</div>;

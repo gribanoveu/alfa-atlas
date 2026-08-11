@@ -1,20 +1,33 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::domain::asciidoc_templates::{AsciidocFileTemplate, SEQUENCE_DIAGRAM_TEMPLATE};
 use crate::domain::paths;
 use crate::domain::project_config::{ProjectError, TreeNode};
-use crate::domain::supported_files::is_supported_file;
+use crate::domain::supported_files::{is_docs_tree_file, is_image_asset, is_supported_file};
+use crate::infra::workspace_scanner;
 
-/// List a filtered tree of supported files under `docs_root`.
-/// Empty directories are included so newly created folders appear in the UI.
+/// Docs-root-relative image file for `image::` completions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageFileEntry {
+    pub relative_path: String,
+    pub file_name: String,
+}
+
+/// List a filtered tree of supported files **and image assets** under
+/// `docs_root` for the sidebar. Empty directories are included so newly
+/// created folders appear in the UI. AI Docs-only listing uses
+/// `list_docs_tree_scoped` instead (no images).
 pub fn list_docs_tree(docs_root: &str) -> Result<Vec<TreeNode>, ProjectError> {
     let root = PathBuf::from(docs_root);
     if !root.is_dir() {
         return Err(ProjectError::NotADirectory(docs_root.to_string()));
     }
     let root = root.canonicalize().map_err(ProjectError::Canonicalize)?;
-    build_dir_children(&root, &root, None)
+    build_dir_children(&root, &root, None, true)
 }
 
 /// Same walk as `list_docs_tree`, but starting at `dir` (which may be a
@@ -24,6 +37,8 @@ pub fn list_docs_tree(docs_root: &str) -> Result<Vec<TreeNode>, ProjectError> {
 /// not `dir` — used by `services::ai_tools::list_docs_only` so a scoped
 /// `listFiles` call still returns paths the caller can round-trip into
 /// `readFile`/`writeFile` unchanged.
+///
+/// Image assets are **excluded** here so the LLM does not see binary files.
 pub fn list_docs_tree_scoped(
     docs_root: &Path,
     dir: &Path,
@@ -34,13 +49,14 @@ pub fn list_docs_tree_scoped(
     if !dir.is_dir() {
         return Err(ProjectError::NotADirectory(dir.display().to_string()));
     }
-    build_dir_children(&docs_root, &dir, max_depth)
+    build_dir_children(&docs_root, &dir, max_depth, false)
 }
 
 fn build_dir_children(
     docs_root: &Path,
     dir: &Path,
     remaining_depth: Option<u32>,
+    include_images: bool,
 ) -> Result<Vec<TreeNode>, ProjectError> {
     if remaining_depth == Some(0) {
         return Ok(Vec::new());
@@ -74,7 +90,12 @@ fn build_dir_children(
         };
 
         if file_type.is_dir() {
-            let children = build_dir_children(docs_root, &path, remaining_depth.map(|d| d - 1))?;
+            let children = build_dir_children(
+                docs_root,
+                &path,
+                remaining_depth.map(|d| d - 1),
+                include_images,
+            )?;
             let rel = paths::relative_to(docs_root, &path)?;
             nodes.push(TreeNode {
                 name,
@@ -84,7 +105,12 @@ fn build_dir_children(
             });
         } else if file_type.is_file() {
             let path_str = path.to_string_lossy();
-            if !is_supported_file(&path_str) {
+            let visible = if include_images {
+                is_docs_tree_file(&path_str)
+            } else {
+                is_supported_file(&path_str)
+            };
+            if !visible {
                 continue;
             }
             let rel = paths::relative_to(docs_root, &path)?;
@@ -111,6 +137,37 @@ pub fn read_project_file(docs_root: &str, relative_path: &str) -> Result<String,
         return Err(ProjectError::UnsupportedFile(relative_path.to_string()));
     }
     fs::read_to_string(&canonical).map_err(ProjectError::Read)
+}
+
+/// List image assets under `docs_root` (gitignore-aware). Paths are
+/// docs-root-relative with `/` separators — suitable for `image::`
+/// completions after `relativizeToDocument` on the frontend.
+pub fn list_image_files(docs_root: &str) -> Result<Vec<ImageFileEntry>, ProjectError> {
+    let root = resolve_docs_root(docs_root)?;
+    let scanned = workspace_scanner::scan_all(&root).map_err(|e| match e {
+        crate::domain::workspace_index::WorkspaceIndexError::Io(err) => ProjectError::Read(err),
+        other => ProjectError::Message(other.to_string()),
+    })?;
+
+    let mut out = Vec::new();
+    for file in scanned {
+        let path_str = file.path.to_string_lossy();
+        if !is_image_asset(&path_str) {
+            continue;
+        }
+        let relative = paths::relative_to(&root, &file.path)?;
+        let file_name = file
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| relative.clone());
+        out.push(ImageFileEntry {
+            relative_path: relative,
+            file_name,
+        });
+    }
+    out.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    Ok(out)
 }
 
 /// Resolve an asset (e.g. image) referenced from a docs file into a
@@ -326,7 +383,7 @@ pub fn rename_project_file(
     }
     let to_joined = paths::join_relative(&root, to_relative)?;
     let to_canonical = paths::ensure_under(&root, &to_joined)?;
-    if !is_supported_file(&to_canonical.to_string_lossy()) {
+    if !is_docs_tree_file(&to_canonical.to_string_lossy()) {
         return Err(ProjectError::UnsupportedFile(to_relative.to_string()));
     }
     if to_canonical.exists() {
@@ -379,7 +436,7 @@ pub fn copy_project_file(
     }
     let to_joined = paths::join_relative(&root, to_relative)?;
     let to_canonical = paths::ensure_under(&root, &to_joined)?;
-    if !is_supported_file(&to_canonical.to_string_lossy()) {
+    if !is_docs_tree_file(&to_canonical.to_string_lossy()) {
         return Err(ProjectError::UnsupportedFile(to_relative.to_string()));
     }
     if to_canonical.exists() {
@@ -650,6 +707,58 @@ mod tests {
         // Directories are not valid assets.
         let err = resolve_asset_path(root.to_str().unwrap(), "img").unwrap_err();
         assert!(matches!(err, ProjectError::NotFound(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_image_files_returns_docs_relative_image_assets() {
+        let root = temp_dir();
+        create_project_dir(root.to_str().unwrap(), "img").unwrap();
+        create_project_dir(root.to_str().unwrap(), "img/icons").unwrap();
+        fs::write(root.join("img/logo.png"), b"png").unwrap();
+        fs::write(root.join("img/icons/a.SVG"), b"<svg/>").unwrap();
+        fs::write(root.join("readme.adoc"), "= Hi\n").unwrap();
+        fs::write(root.join("img/notes.txt"), "x").unwrap();
+
+        let listed = list_image_files(root.to_str().unwrap()).unwrap();
+        let paths: Vec<&str> = listed.iter().map(|e| e.relative_path.as_str()).collect();
+        assert_eq!(paths, vec!["img/icons/a.SVG", "img/logo.png"]);
+        assert_eq!(listed[1].file_name, "logo.png");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_docs_tree_includes_images_scoped_excludes_them() {
+        let root = temp_dir();
+        create_project_file(root.to_str().unwrap(), "note.adoc").unwrap();
+        fs::write(root.join("logo.png"), b"png").unwrap();
+
+        let ui = list_docs_tree(root.to_str().unwrap()).unwrap();
+        let ui_names: Vec<&str> = ui.iter().map(|n| n.name.as_str()).collect();
+        assert!(ui_names.contains(&"note.adoc"));
+        assert!(ui_names.contains(&"logo.png"));
+
+        let scoped = list_docs_tree_scoped(&root, &root, None).unwrap();
+        let scoped_names: Vec<&str> = scoped.iter().map(|n| n.name.as_str()).collect();
+        assert!(scoped_names.contains(&"note.adoc"));
+        assert!(!scoped_names.contains(&"logo.png"));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rename_and_copy_allow_image_destinations() {
+        let root = temp_dir();
+        fs::write(root.join("a.png"), b"png").unwrap();
+
+        rename_project_file(root.to_str().unwrap(), "a.png", "b.png").unwrap();
+        assert!(root.join("b.png").is_file());
+        assert!(!root.join("a.png").exists());
+
+        copy_project_file(root.to_str().unwrap(), "b.png", "c.png").unwrap();
+        assert!(root.join("c.png").is_file());
 
         fs::remove_dir_all(&root).ok();
     }

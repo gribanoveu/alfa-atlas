@@ -125,6 +125,25 @@ export function resolveRelativeToDocument(
 }
 
 /**
+ * Resolve an `image::` / Markdown image target to a docs-root-relative path
+ * suitable for `resolve_asset_path` (which rejects `..`).
+ *
+ * Matches include resolution in `useAsciiDocRender`: targets are relative to
+ * the current document's directory (so `image::image.png[]` next to the
+ * `.adoc` resolves), with `./`/`../` collapsed. Callers that also accept
+ * docs-root-relative legacy paths should try the raw target as a fallback.
+ */
+export function resolveAssetTargetDocsRelative(
+  target: string,
+  sourceDocsRelativePath: string | null,
+): string {
+  const norm = target.replace(/\\/g, "/");
+  if (!sourceDocsRelativePath) return norm;
+  if (norm.startsWith("/")) return norm.replace(/^\/+/, "");
+  return resolveRelativeToDocument(norm, sourceDocsRelativePath);
+}
+
+/**
  * Inverse of `resolveRelativeToDocument`: the shortest relative path from
  * the directory of `sourceDocsRelativePath` to `targetDocsRelativePath`
  * (both docs-root-relative) — used when inserting a new `include::`/

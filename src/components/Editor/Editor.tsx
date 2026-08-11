@@ -127,6 +127,10 @@ export function EditorPane({
   const highlightRef = useRef<string[]>([]);
   const lastHandledInsertIdRef = useRef(0);
   const knownTabIdsRef = useRef<Set<string>>(new Set());
+  const isImageTab = activeTab?.kind === "image";
+  // Image tabs do not mount Monaco — do not reuse the previous file's editor
+  // instance with the image path (gutter/spellcheck/diagnostics).
+  const textEditor = isImageTab ? null : editor;
 
   const handleMount: OnMount = useCallback(
     (editorInstance, monacoInstance) => {
@@ -194,20 +198,20 @@ export function EditorPane({
   // Если файл переименован в другое расширение уже после создания модели
   // (модель переиспользуется по `tab.id`, а не по пути), синхронизируем язык.
   useEffect(() => {
-    if (!monaco || !editor || !activeTab) return;
-    const model = editor.getModel();
+    if (!monaco || !textEditor || !activeTab || isImageTab) return;
+    const model = textEditor.getModel();
     if (model && model.getLanguageId() !== activeTab.language) {
       monaco.editor.setModelLanguage(model, activeTab.language);
     }
-  }, [monaco, editor, activeTab]);
+  }, [monaco, textEditor, activeTab, isImageTab]);
 
   useMonacoCompletions(monaco, completionsEnabled, docsRoot, gitGutter?.repoRoot ?? null);
   useMonacoOutline(monaco);
   useMonacoDefinitions(monaco, docsRoot, gitGutter?.repoRoot ?? null);
-  useMonacoDiagnostics(monaco, editor, diagnostics, activeTab?.path ?? null);
-  useMonacoSpellcheck(monaco, editor, activeTab, spellcheckConfig);
+  useMonacoDiagnostics(monaco, textEditor, diagnostics, activeTab?.path ?? null);
+  useMonacoSpellcheck(monaco, textEditor, isImageTab ? null : activeTab, spellcheckConfig);
   useMonacoErrorsWidget(
-    editor,
+    textEditor,
     diagnostics,
     activeTab?.path ?? null,
     onOpenProblems,
@@ -215,9 +219,9 @@ export function EditorPane({
 
   useGitGutter({
     monaco,
-    editor,
-    activeTab,
-    viewMode,
+    editor: textEditor,
+    activeTab: isImageTab ? null : activeTab,
+    viewMode: isImageTab ? "render" : viewMode,
     repoRoot: gitGutter?.repoRoot ?? null,
     docsRoot: gitGutter?.docsRoot ?? docsRoot,
     loadFileDiff:
@@ -357,7 +361,7 @@ export function EditorPane({
   // (и молча терять) новую. Модель, а вместе с ней стек undo/redo, курсор и
   // scroll — переживают переключение вкладок; закрывается она явно эффектом
   // выше, когда вкладка реально закрыта.
-  const monacoNode = activeTab ? (
+  const monacoNode = activeTab && !isImageTab ? (
     <Editor
       key={activeTab.id}
       path={activeTab.id}
@@ -393,23 +397,26 @@ export function EditorPane({
         onCloseOthers={onCloseOtherTabs}
         viewMode={viewMode}
         onViewModeChange={onViewModeChange}
+        hideViewMode={isImageTab}
       />
-      <div className={`editor-body editor-body-${viewMode}`}>
+      <div className={`editor-body editor-body-${isImageTab ? "render" : viewMode}`}>
         {activeKind === "openapi" ? (
           openApiExplorer
         ) : activeTab ? (
-          viewMode === "split" ? (
+          isImageTab || viewMode === "render" ? (
+            <>
+              {monacoNode ? (
+                <div className="editor-monaco-wrap" style={{ display: "none" }}>
+                  {monacoNode}
+                </div>
+              ) : null}
+              <div className="editor-preview-wrap">{previewNode}</div>
+            </>
+          ) : viewMode === "split" ? (
             <SplitLayout
               monacoNode={monacoNode}
               previewNode={previewNode}
             />
-          ) : viewMode === "render" ? (
-            <>
-              <div className="editor-monaco-wrap" style={{ display: "none" }}>
-                {monacoNode}
-              </div>
-              <div className="editor-preview-wrap">{previewNode}</div>
-            </>
           ) : (
             <div className="editor-monaco-wrap">{monacoNode}</div>
           )

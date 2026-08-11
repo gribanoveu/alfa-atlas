@@ -196,6 +196,7 @@ pub fn run() {
             commands::project::read_project_file,
             commands::project::read_project_file_or_none,
             commands::project::resolve_asset_path,
+            commands::project::list_image_files,
             commands::project::write_project_file,
             commands::project::create_project_file,
             commands::project::create_project_file_from_template,

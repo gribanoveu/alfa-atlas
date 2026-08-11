@@ -118,6 +118,17 @@ export function resolveAssetPath(
   return invoke<string>("resolve_asset_path", { docsRoot, relativePath });
 }
 
+/** Docs-root-relative image file for `image::` completions. */
+export type ImageFileEntry = {
+  relativePath: string;
+  fileName: string;
+};
+
+/** List image assets under docsRoot (gitignore-aware). */
+export function listImageFiles(docsRoot: string): Promise<ImageFileEntry[]> {
+  return invoke<ImageFileEntry[]>("list_image_files", { docsRoot });
+}
+
 export function writeProjectFile(
   docsRoot: string,
   relativePath: string,

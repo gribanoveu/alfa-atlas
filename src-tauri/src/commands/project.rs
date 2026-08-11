@@ -94,6 +94,11 @@ pub fn resolve_asset_path(docs_root: String, relative_path: String) -> Result<St
 }
 
 #[tauri::command]
+pub fn list_image_files(docs_root: String) -> Result<Vec<docs_fs::ImageFileEntry>, String> {
+    docs_fs::list_image_files(&docs_root).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn write_project_file(
     docs_root: String,
     relative_path: String,

@@ -1,12 +1,17 @@
 import type * as Monaco from "monaco-editor";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import type { IDisposable } from "monaco-editor";
 import {
   buildDocPathSuggestions,
+  documentsToPathEntries,
   INCLUDE_DOC_KINDS,
   XREF_DOC_KINDS,
+  type DocPathSuggestion,
 } from "../lib/docPathSuggestions";
+import { resolveRelativeToDocument } from "../lib/paths";
+import { listImageFiles, resolveAssetPath, type ImageFileEntry } from "../lib/project";
 import {
   findAnchors,
   getAttributes,
@@ -19,6 +24,43 @@ import {
 import { ASCIIDOC_LANGUAGE_ID } from "../monaco/asciidocLanguage";
 
 const ADOC_LANGUAGE = ASCIIDOC_LANGUAGE_ID;
+
+/** Max bytes for an `image::` completion preview (data URI). */
+const IMAGE_PREVIEW_MAX_BYTES = 512 * 1024;
+
+const RETRIGGER_SUGGEST_COMMAND = {
+  id: "editor.action.triggerSuggest",
+  title: "Re-trigger suggest",
+} as const;
+
+type AtlasImageCompletion = Monaco.languages.CompletionItem & {
+  atlasDocsRelative?: string;
+};
+
+async function blobToDataUri(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("FileReader failed"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function loadImagePreviewDataUri(
+  docsRoot: string,
+  docsRelativePath: string,
+): Promise<string | null> {
+  try {
+    const abs = await resolveAssetPath(docsRoot, docsRelativePath);
+    const res = await fetch(convertFileSrc(abs));
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (blob.size === 0 || blob.size > IMAGE_PREVIEW_MAX_BYTES) return null;
+    return await blobToDataUri(blob);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * `!`-command words mapped to AsciiDoc snippet templates. Every command
@@ -268,10 +310,12 @@ function findOpenMacroTarget(
  * `!`-triggered command menu (`!table`, `!request`, `!response`, ...) for
  * inserting AsciiDoc snippets.
  *
- * Path suggestions for `include::`/`xref:` are pre-filtered in
+ * Path suggestions for `include::`/`xref:`/`image::` are pre-filtered in
  * `buildDocPathSuggestions` (Monaco's word filter splits on `/` and would
- * otherwise empty the list mid-path). Document lists are cached and
- * invalidated on workspace-index events.
+ * otherwise empty the list mid-path). Folder items re-trigger suggest after
+ * accept. `image::` lists real assets via `list_image_files` and attaches a
+ * data-URI preview in `resolveCompletionItem`. Document/image lists are
+ * cached and invalidated on workspace-index events.
  */
 export function useMonacoCompletions(
   monaco: typeof Monaco | null,
@@ -285,6 +329,8 @@ export function useMonacoCompletions(
 
     let docsCache: Document[] | null = null;
     let docsInflight: Promise<Document[]> | null = null;
+    let imagesCache: ImageFileEntry[] | null = null;
+    let imagesInflight: Promise<ImageFileEntry[]> | null = null;
 
     const loadDocuments = async (): Promise<Document[]> => {
       if (docsCache) return docsCache;
@@ -301,8 +347,25 @@ export function useMonacoCompletions(
       return docsInflight;
     };
 
-    const invalidateDocsCache = () => {
+    const loadImages = async (): Promise<ImageFileEntry[]> => {
+      if (!docsRoot) return [];
+      if (imagesCache) return imagesCache;
+      if (!imagesInflight) {
+        imagesInflight = listImageFiles(docsRoot)
+          .then((images) => {
+            imagesCache = images;
+            return images;
+          })
+          .finally(() => {
+            imagesInflight = null;
+          });
+      }
+      return imagesInflight;
+    };
+
+    const invalidateCaches = () => {
       docsCache = null;
+      imagesCache = null;
     };
 
     let unlistenIndex: (() => void) | null = null;
@@ -315,14 +378,41 @@ export function useMonacoCompletions(
         kind === "indexBuildingFinished" ||
         kind === "indexBuildingStarted"
       ) {
-        invalidateDocsCache();
+        invalidateCaches();
       }
     }).then((fn) => {
       if (cancelled) fn();
       else unlistenIndex = fn;
     });
 
-    const pathSuggestions = (
+    const mapPathSuggestions = (
+      built: DocPathSuggestion[],
+      range: Monaco.IRange,
+      opts?: { imageDocsRelative?: (insertText: string) => string },
+    ): Monaco.languages.CompletionItem[] =>
+      built.map((s) => {
+        const base: Monaco.languages.CompletionItem = {
+          label: s.label,
+          detail: s.detail,
+          kind:
+            s.kind === "folder"
+              ? monaco.languages.CompletionItemKind.Folder
+              : monaco.languages.CompletionItemKind.File,
+          insertText: s.insertText,
+          filterText: s.filterText,
+          sortText: s.sortText,
+          range,
+          ...(s.kind === "folder" ? { command: { ...RETRIGGER_SUGGEST_COMMAND } } : {}),
+        };
+        if (s.kind === "file" && opts?.imageDocsRelative) {
+          (base as AtlasImageCompletion).atlasDocsRelative = opts.imageDocsRelative(
+            s.insertText,
+          );
+        }
+        return base;
+      });
+
+    const docPathSuggestions = (
       model: Monaco.editor.ITextModel,
       docs: Document[],
       partial: string,
@@ -330,23 +420,16 @@ export function useMonacoCompletions(
       kinds?: readonly DocumentType[],
     ) => {
       const built = buildDocPathSuggestions({
-        docs,
+        entries: documentsToPathEntries(docs),
         sourceDocsRelative: documentIdFromModel(model),
         docsRoot,
         repoRoot,
         partial,
         kinds,
         excludeSelf: true,
+        pathSpace: "repo",
       });
-      return built.map((s) => ({
-        label: s.label,
-        detail: s.detail,
-        kind: monaco.languages.CompletionItemKind.File,
-        insertText: s.insertText,
-        filterText: s.filterText,
-        sortText: s.sortText,
-        range,
-      }));
+      return mapPathSuggestions(built, range);
     };
 
     // 1. include:: — path list. `findOpenMacroTarget` keeps this alive across
@@ -359,7 +442,7 @@ export function useMonacoCompletions(
           if (!open) return null;
           const docs = await loadDocuments();
           return {
-            suggestions: pathSuggestions(
+            suggestions: docPathSuggestions(
               model,
               docs,
               open.partial,
@@ -383,7 +466,7 @@ export function useMonacoCompletions(
           if (hashIdx === -1) {
             const docs = await loadDocuments();
             return {
-              suggestions: pathSuggestions(
+              suggestions: docPathSuggestions(
                 model,
                 docs,
                 open.partial,
@@ -414,20 +497,47 @@ export function useMonacoCompletions(
       }),
     );
 
-    // 3. image:: — still lists indexed documents (no image-file API yet),
-    // but uses the same path filterText/partial handling so mid-path edits
-    // and `dir/` prefixes keep the widget populated.
+    // 3. image:: — real image files under docsRoot + folder prefixes;
+    // resolveCompletionItem attaches a data-URI preview for focused files.
     disposers.push(
       monaco.languages.registerCompletionItemProvider(ADOC_LANGUAGE, {
         triggerCharacters: [":", "/"],
         async provideCompletionItems(model, position) {
           const open = findOpenMacroTarget(model, position, "image::");
-          if (!open) return null;
-          const docs = await loadDocuments();
+          if (!open || !docsRoot) return null;
+          const images = await loadImages();
+          const sourceDocsRelative = documentIdFromModel(model);
+          const built = buildDocPathSuggestions({
+            entries: images.map((img) => ({
+              relativePath: img.relativePath,
+              fileName: img.fileName,
+            })),
+            sourceDocsRelative,
+            docsRoot,
+            repoRoot,
+            partial: open.partial,
+            pathSpace: "docs",
+            excludeSelf: false,
+          });
           return {
-            suggestions: pathSuggestions(model, docs, open.partial, open.range),
+            suggestions: mapPathSuggestions(built, open.range, {
+              imageDocsRelative: (insertText) =>
+                resolveRelativeToDocument(insertText, sourceDocsRelative),
+            }),
             incomplete: true,
           };
+        },
+        async resolveCompletionItem(item) {
+          const docsRel = (item as AtlasImageCompletion).atlasDocsRelative;
+          if (!docsRel || !docsRoot) return item;
+          const dataUri = await loadImagePreviewDataUri(docsRoot, docsRel);
+          if (!dataUri) return item;
+          const label =
+            typeof item.label === "string" ? item.label : item.label.label;
+          item.documentation = {
+            value: `![${label}](${dataUri})`,
+          };
+          return item;
         },
       }),
     );

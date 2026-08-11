@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GeneralPrefs } from "../lib/prefs";
 import { DEFAULT_GENERAL_PREFS } from "../lib/prefs";
 import { readProjectFile, writeProjectFile } from "../lib/project";
-import { monacoLanguageFor } from "../lib/supportedFiles";
+import { isImageAsset, monacoLanguageFor } from "../lib/supportedFiles";
+
+export type EditorTabKind = "text" | "image";
 
 export type EditorTab = {
   id: string;
@@ -12,6 +14,8 @@ export type EditorTab = {
   savedContent: string;
   language: string;
   dirty: boolean;
+  /** Image tabs are preview-only — never read/write text content. */
+  kind: EditorTabKind;
 };
 
 export type CursorPosition = {
@@ -26,6 +30,32 @@ export type EditorAutosavePrefs = Pick<
 
 function titleOf(relativePath: string): string {
   return relativePath.split(/[/\\]/).pop() ?? relativePath;
+}
+
+function makeImageTab(relativePath: string): EditorTab {
+  return {
+    id: relativePath,
+    path: relativePath,
+    title: titleOf(relativePath),
+    content: "",
+    savedContent: "",
+    language: "plaintext",
+    dirty: false,
+    kind: "image",
+  };
+}
+
+function makeTextTab(relativePath: string, content: string): EditorTab {
+  return {
+    id: relativePath,
+    path: relativePath,
+    title: titleOf(relativePath),
+    content,
+    savedContent: content,
+    language: monacoLanguageFor(relativePath),
+    dirty: false,
+    kind: "text",
+  };
 }
 
 function confirmCloseDirty(closing: EditorTab[]): boolean {
@@ -89,6 +119,7 @@ export function useEditorTabs(
     const root = docsRootRef.current;
     const tab = tabsRef.current.find((t) => t.id === id);
     if (!root || !tab) return false;
+    if (tab.kind === "image") return true;
     if (!tab.dirty) return true;
 
     const contentToSave = tab.content;
@@ -237,16 +268,12 @@ export function useEditorTabs(
         return;
       }
       try {
-        const content = await readProjectFile(docsRoot, relativePath);
-        const tab: EditorTab = {
-          id: relativePath,
-          path: relativePath,
-          title: titleOf(relativePath),
-          content,
-          savedContent: content,
-          language: monacoLanguageFor(relativePath),
-          dirty: false,
-        };
+        const tab = isImageAsset(relativePath)
+          ? makeImageTab(relativePath)
+          : makeTextTab(
+              relativePath,
+              await readProjectFile(docsRoot, relativePath),
+            );
         await flushDebounce();
         const currentId = activeTabIdRef.current;
         if (currentId && prefsRef.current.saveOnTabSwitch) {
@@ -329,16 +356,12 @@ export function useEditorTabs(
       const restored: EditorTab[] = [];
       for (const path of openTabs) {
         try {
+          if (isImageAsset(path)) {
+            restored.push(makeImageTab(path));
+            continue;
+          }
           const content = await readProjectFile(docsRoot, path);
-          restored.push({
-            id: path,
-            path,
-            title: titleOf(path),
-            content,
-            savedContent: content,
-            language: monacoLanguageFor(path),
-            dirty: false,
-          });
+          restored.push(makeTextTab(path, content));
         } catch {
           // Skip missing files.
         }
@@ -461,12 +484,17 @@ export function useEditorTabs(
           const remapped = remap(tab.path);
           if (!remapped) return tab;
           changed = true;
+          const kind: EditorTabKind = isImageAsset(remapped) ? "image" : "text";
           return {
             ...tab,
             id: remapped,
             path: remapped,
             title: titleOf(remapped),
             language: monacoLanguageFor(remapped),
+            kind,
+            ...(kind === "image"
+              ? { content: "", savedContent: "", dirty: false as const }
+              : {}),
           };
         });
         if (!changed) return prev;
@@ -485,6 +513,8 @@ export function useEditorTabs(
   const updateActiveContent = useCallback(
     (content: string) => {
       if (!activeTabId) return;
+      const active = tabsRef.current.find((t) => t.id === activeTabId);
+      if (!active || active.kind === "image") return;
       setTabs((prev) => {
         const next = prev.map((tab) =>
           tab.id === activeTabId
@@ -507,7 +537,7 @@ export function useEditorTabs(
         const id = activeTabIdRef.current;
         if (!id) return;
         const tab = tabsRef.current.find((t) => t.id === id);
-        if (!tab?.dirty) return;
+        if (!tab?.dirty || tab.kind === "image") return;
         void saveTab(id);
       }, delay);
     },
@@ -539,6 +569,7 @@ export function useEditorTabs(
       const root = docsRootRef.current;
       const tab = tabsRef.current.find((t) => t.path === relativePath);
       if (!root || !tab) return false;
+      if (tab.kind === "image") return true;
       try {
         const content = await readProjectFile(root, relativePath);
         setTabs((prev) => {
