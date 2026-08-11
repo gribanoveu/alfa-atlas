@@ -26,8 +26,10 @@ import type { SpecsRepoInfo } from "../lib/openapi";
 import {
   appendDeltaToBlocks,
   appendPendingApprovalBlock,
+  appendReasoningDeltaToBlocks,
   appendToolCallBlock,
   chatMessageToPlainText,
+  correctTrailingReasoning,
   correctTrailingText,
   markRunningToolCallsAsInterrupted,
   settleToolCallBlock,
@@ -47,6 +49,7 @@ import {
 import {
   cancelLlmChat,
   listenLlmChatDelta,
+  listenLlmChatReasoningDelta,
   listenLlmToolCall,
   listenLlmToolResult,
   llmChatOnce,
@@ -59,7 +62,7 @@ import {
 } from "../lib/llm";
 import { estimateTokenCount } from "../lib/tokens";
 
-export type { ChatMessage, MessageBlock, TextBlock, ToolCallBlock, ToolCallStatus } from "../lib/chatBlocks";
+export type { ChatMessage, MessageBlock, ReasoningBlock, TextBlock, ToolCallBlock, ToolCallStatus } from "../lib/chatBlocks";
 
 /** Owns one conversation's state for the assistant chat panel. The
  * tool-calling loop itself (ReadFile/ListFiles/SemanticSearch) runs
@@ -329,6 +332,25 @@ export function useLlmChat(
     let cancelled = false;
     void listenLlmChatDelta(({ delta }) => {
       setMessages((prev) => updateLastAssistantBlocks(prev, (blocks) => appendDeltaToBlocks(blocks, delta)));
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Live "thinking" deltas from a reasoning-capable model — same shape as
+  // the token-delta effect above, just routed into a `reasoning` block
+  // instead of `text`. Never fires for a provider/model that doesn't send
+  // `reasoning_content`.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenLlmChatReasoningDelta(({ delta }) => {
+      setMessages((prev) => updateLastAssistantBlocks(prev, (blocks) => appendReasoningDeltaToBlocks(blocks, delta)));
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -639,16 +661,19 @@ export function useLlmChat(
         // card `stopChat` auto-denied but that never got its settling
         // event, since `run_tool_loop` returned before reaching it.
         const stoppedByUser = outcome.status === "cancelled";
-        const { text, usage, todos: finalTodos } = outcome.value;
+        const { text, reasoning, usage, todos: finalTodos } = outcome.value;
         setTodos(finalTodos);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId && m.role === "assistant"
               ? {
                   ...m,
-                  blocks: stoppedByUser
-                    ? markRunningToolCallsAsInterrupted(correctTrailingText(m.blocks, text), "Остановлено пользователем")
-                    : correctTrailingText(m.blocks, text),
+                  blocks: (() => {
+                    const corrected = correctTrailingText(correctTrailingReasoning(m.blocks, reasoning ?? ""), text);
+                    return stoppedByUser
+                      ? markRunningToolCallsAsInterrupted(corrected, "Остановлено пользователем")
+                      : corrected;
+                  })(),
                   streaming: false,
                   usage: usage ?? undefined,
                   cancelled: stoppedByUser,

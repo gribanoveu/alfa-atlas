@@ -77,6 +77,14 @@ export type LlmChatStreamDelta = {
   delta: string;
 };
 
+// Mirrors `commands::llm::ChatStreamReasoningPayload` — same shape/lifecycle
+// as `LlmChatStreamDelta`, but for a reasoning-capable model's "thinking"
+// text, fired ahead of any `LlmChatStreamDelta` for that round. Never fires
+// at all for a provider/model that doesn't send `reasoning_content`.
+export type LlmChatStreamReasoningDelta = {
+  delta: string;
+};
+
 // Mirrors `domain::llm::ChatUsage` — real token accounting for one completed
 // turn, when the provider reports it (requested via `stream_options.
 // include_usage`; not every OpenAI-compatible server sends it).
@@ -91,6 +99,15 @@ export type ChatUsage = {
 // before `todos` existed).
 export type ChatStreamResult = {
   text: string;
+  /** Authoritative accumulated "thinking" text for the round, when the
+   * provider sent `reasoning_content` — the Rust side (`ChatStreamResult`)
+   * omits this key entirely (`skip_serializing_if = "String::is_empty"`)
+   * for a provider/model that never sends `reasoning_content`, hence
+   * optional here rather than `""`. Same safety-net role as `text`:
+   * corrects the trailing reasoning block against a dropped
+   * `llm:chat-stream-reasoning-delta` event, see `correctTrailingReasoning`
+   * in `chatBlocks.ts`. */
+  reasoning?: string;
   usage: ChatUsage | null;
   todos: Task[];
 };
@@ -286,6 +303,16 @@ export function listenLlmChatDelta(
   onDelta: (payload: LlmChatStreamDelta) => void,
 ): Promise<UnlistenFn> {
   return listen<LlmChatStreamDelta>("llm:chat-stream-delta", (event) => onDelta(event.payload));
+}
+
+/** Fires once per non-empty `reasoning_content` chunk while a
+ * `streamLlmChat()` call is in flight — ahead of any `listenLlmChatDelta`
+ * event for that round. Never fires for a provider/model that doesn't send
+ * `reasoning_content`. */
+export function listenLlmChatReasoningDelta(
+  onDelta: (payload: LlmChatStreamReasoningDelta) => void,
+): Promise<UnlistenFn> {
+  return listen<LlmChatStreamReasoningDelta>("llm:chat-stream-reasoning-delta", (event) => onDelta(event.payload));
 }
 
 // Mirrors `commands::llm::ToolCallEventPayload` — fired just before the

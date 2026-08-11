@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendDeltaToBlocks,
+  appendReasoningDeltaToBlocks,
   appendToolCallBlock,
   chatMessageToPlainText,
+  correctTrailingReasoning,
   correctTrailingText,
   flattenBlocksToText,
   markRunningToolCallsAsInterrupted,
@@ -38,6 +40,29 @@ describe("appendDeltaToBlocks", () => {
     expect(blocks).toHaveLength(2);
     expect(blocks[0]).toBe(toolCall);
     expect(blocks[1]).toMatchObject({ type: "text", content: "After the tool call" });
+  });
+});
+
+describe("appendReasoningDeltaToBlocks", () => {
+  test("opens a new reasoning block when there are no blocks yet", () => {
+    const blocks = appendReasoningDeltaToBlocks([], "Let me think");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: "reasoning", content: "Let me think" });
+  });
+
+  test("extends the trailing reasoning block", () => {
+    const first = appendReasoningDeltaToBlocks([], "Let me ");
+    const second = appendReasoningDeltaToBlocks(first, "think");
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ type: "reasoning", content: "Let me think" });
+  });
+
+  test("a subsequent text delta closes the reasoning block off and opens a new text block", () => {
+    const reasoning = appendReasoningDeltaToBlocks([], "thinking...");
+    const withText = appendDeltaToBlocks(reasoning, "the answer");
+    expect(withText).toHaveLength(2);
+    expect(withText[0]).toMatchObject({ type: "reasoning", content: "thinking..." });
+    expect(withText[1]).toMatchObject({ type: "text", content: "the answer" });
   });
 });
 
@@ -138,6 +163,25 @@ describe("correctTrailingText", () => {
     };
     const corrected = correctTrailingText([toolCall], "");
     expect(corrected).toEqual([toolCall]);
+  });
+});
+
+describe("correctTrailingReasoning", () => {
+  test("replaces a trailing reasoning block's content", () => {
+    const blocks: MessageBlock[] = [{ type: "reasoning", id: "r1", content: "partial thought" }];
+    const corrected = correctTrailingReasoning(blocks, "full authoritative reasoning");
+    expect(corrected).toHaveLength(1);
+    expect(corrected[0]).toMatchObject({ id: "r1", content: "full authoritative reasoning" });
+  });
+
+  test("is a no-op when trailing is not a reasoning block, even if reasoning text is non-empty", () => {
+    const text: MessageBlock = { type: "text", id: "t1", content: "the answer" };
+    const corrected = correctTrailingReasoning([text], "some reasoning that arrived late");
+    expect(corrected).toEqual([text]);
+  });
+
+  test("is a no-op on an empty blocks array", () => {
+    expect(correctTrailingReasoning([], "reasoning")).toEqual([]);
   });
 });
 

@@ -321,6 +321,13 @@ pub struct ChatUsage {
 #[serde(rename_all = "camelCase")]
 pub struct ChatStreamResult {
     pub text: String,
+    /// The reasoning-capable model's accumulated "thinking" text
+    /// (`reasoning_content` on the wire), same authoritative-final-value
+    /// role as `text` itself — a safety net against a dropped
+    /// `on_reasoning` event on the way to a frontend. Empty for every
+    /// provider/model that never sends `reasoning_content` at all.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reasoning: String,
     #[serde(default)]
     pub usage: Option<ChatUsage>,
     /// Non-empty when this round ended with the model requesting tool
@@ -459,6 +466,12 @@ pub trait LlmProvider: Send + Sync {
     /// callback calls. `&dyn Fn` (not a generic parameter) because this
     /// trait is used as a trait object (`Arc<dyn LlmProvider>`).
     ///
+    /// `on_reasoning` is the same kind of callback for a reasoning-capable
+    /// model's "thinking" text (`reasoning_content` on the wire) — fired
+    /// separately from `on_delta` since a chunk carries one or the other,
+    /// never both meaningfully at once. Most providers never call this at
+    /// all, which is fine: it's simply never invoked.
+    ///
     /// `cancelled` is polled between SSE chunks (see the implementation's
     /// own doc comment for exactly where) so a user-initiated stop
     /// (`commands::llm::llm_cancel_chat`) takes effect within roughly one
@@ -476,6 +489,7 @@ pub trait LlmProvider: Send + Sync {
         &self,
         request: ChatRequest,
         on_delta: &dyn Fn(&str),
+        on_reasoning: &dyn Fn(&str),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError>;
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError>;
@@ -602,6 +616,7 @@ mod tests {
     fn chat_stream_result_round_trips_tool_calls() {
         let result = ChatStreamResult {
             text: String::new(),
+            reasoning: String::new(),
             usage: None,
             tool_calls: vec![LlmToolCall {
                 id: "call_1".to_string(),
@@ -616,7 +631,8 @@ mod tests {
 
     #[test]
     fn chat_stream_result_omits_tool_calls_when_empty() {
-        let result = ChatStreamResult { text: "hi".to_string(), usage: None, tool_calls: vec![] };
+        let result =
+            ChatStreamResult { text: "hi".to_string(), reasoning: String::new(), usage: None, tool_calls: vec![] };
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("toolCalls"), "expected no toolCalls key in {json}");
     }

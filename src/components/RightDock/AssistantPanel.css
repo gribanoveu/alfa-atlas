@@ -1113,6 +1113,144 @@
 
 
 /* =========================================================
+   Reasoning block ("Модель думает…" / "Ход рассуждений")
+   — same collapsed-by-default container as a tool call, see
+   AssistantReasoningBlock.
+   ========================================================= */
+
+.assistant-reasoning {
+  display: flex;
+  flex-direction: column;
+  margin: 8px 0 2px;
+  padding: 6px 0 0;
+
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: 8px;
+
+  background: color-mix(in srgb, var(--accent) 3%, var(--bg-1));
+  color: var(--text-2);
+
+  overflow: hidden;
+
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.assistant-reasoning-thinking {
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-1));
+}
+
+.assistant-reasoning:has(.assistant-reasoning-detail) {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-1));
+}
+
+.assistant-reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+
+  padding: 4px 10px 7px;
+
+  border: none;
+  border-radius: 6px;
+
+  background: transparent;
+
+  font: inherit;
+  font-size: var(--font-ui-sm);
+  font-weight: 400;
+
+  color: var(--text-2);
+  text-align: left;
+
+  cursor: pointer;
+
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.assistant-reasoning-header:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.assistant-reasoning-chevron,
+.assistant-reasoning-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+
+.assistant-reasoning-chevron {
+  color: var(--text-2);
+  opacity: 0.75;
+}
+
+.assistant-reasoning-icon {
+  color: var(--text-2);
+  opacity: 0.85;
+}
+
+.assistant-reasoning-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* While thinking, the label shimmers — a gradient sweeping across the text
+   itself (background-clip: text), the "переливается" effect requested for
+   this indicator; a plain opacity pulse (see .assistant-chat-typing) reads
+   as "loading", this reads as "actively composing". */
+.assistant-reasoning-thinking .assistant-reasoning-label {
+  background: linear-gradient(
+    90deg,
+    var(--text-2) 0%,
+    var(--text-2) 35%,
+    var(--text-0) 50%,
+    var(--text-2) 65%,
+    var(--text-2) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: assistant-reasoning-shimmer 1.8s linear infinite;
+}
+
+@keyframes assistant-reasoning-shimmer {
+  0% {
+    background-position: 250% 0;
+  }
+  100% {
+    background-position: -250% 0;
+  }
+}
+
+.assistant-reasoning-thinking .assistant-reasoning-icon {
+  color: var(--accent);
+}
+
+.assistant-reasoning-detail {
+  margin-top: 2px;
+  padding: 8px 12px 12px 30px;
+
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+
+  font-size: calc(var(--font-ui-sm) * 0.95);
+  line-height: 1.55;
+
+  color: var(--text-2);
+}
+
+/* =========================================================
    Tool call
    ========================================================= */
 

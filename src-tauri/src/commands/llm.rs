@@ -66,6 +66,14 @@ use crate::services::workspace_index::WorkspaceIndex;
 /// threaded through.
 pub const CHAT_STREAM_DELTA_EVENT: &str = "llm:chat-stream-delta";
 
+/// Same shape/lifecycle as `CHAT_STREAM_DELTA_EVENT`, but for a
+/// reasoning-capable model's "thinking" text (`reasoning_content` on the
+/// wire, see `infra::llm_providers::openai_compatible::StreamDelta`) —
+/// fires while the model is still reasoning, ahead of any
+/// `CHAT_STREAM_DELTA_EVENT` for that round. Never fires at all for a
+/// provider/model that doesn't send `reasoning_content`.
+pub const CHAT_STREAM_REASONING_EVENT: &str = "llm:chat-stream-reasoning-delta";
+
 /// Fires immediately before executing one tool call in a `llm_chat_stream`
 /// round — before, not after, so the UI can show e.g. "reading
 /// docs/x.adoc…" while the (possibly slow — `SemanticSearch` can hit an
@@ -114,6 +122,12 @@ const MAX_TOOL_BUDGET: u32 = 250;
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatStreamDeltaPayload {
+    delta: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatStreamReasoningPayload {
     delta: String,
 }
 
@@ -429,7 +443,7 @@ fn run_tool_loop(
         // the same iteration.
         if ctx.cancel_flag.load(Ordering::SeqCst) {
             return Ok(ChatStreamOutcome::Cancelled(ChatDone {
-                result: ChatStreamResult { text: String::new(), usage: None, tool_calls: vec![] },
+                result: ChatStreamResult { text: String::new(), reasoning: String::new(), usage: None, tool_calls: vec![] },
                 todos,
             }));
         }
@@ -466,8 +480,14 @@ fn run_tool_loop(
                         ChatStreamDeltaPayload { delta: delta.to_string() },
                     );
                 };
+                let on_reasoning = |delta: &str| {
+                    let _ = ctx.app.emit(
+                        CHAT_STREAM_REASONING_EVENT,
+                        ChatStreamReasoningPayload { delta: delta.to_string() },
+                    );
+                };
                 let cancelled = || ctx.cancel_flag.load(Ordering::SeqCst);
-                let raw_result = ctx.provider.chat_stream(request, &on_delta, &cancelled);
+                let raw_result = ctx.provider.chat_stream(request, &on_delta, &on_reasoning, &cancelled);
                 llm_debug_log::log_response(ctx.settings.debug_logging, ctx.provider_id, round, &raw_result);
                 let result = raw_result.map_err(|e| e.to_string())?;
 

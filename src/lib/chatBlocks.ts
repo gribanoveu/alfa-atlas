@@ -19,6 +19,21 @@ export type TextBlock = {
   content: string;
 };
 
+/** A reasoning-capable model's "thinking" text (`reasoning_content` on the
+ * wire), streamed ahead of the model's actual answer. Always closed off by
+ * whatever follows it — the first `content` delta after some
+ * `reasoning_content` opens a fresh `TextBlock` rather than extending this
+ * one (see `appendDeltaToBlocks`), so "is this block still growing" is never
+ * stored on the block itself: it's derived the same way a trailing
+ * `TextBlock`'s own streaming cursor is, from the block's position (last in
+ * the array) plus the message's own `streaming` flag — see
+ * `AssistantConversation`. */
+export type ReasoningBlock = {
+  type: "reasoning";
+  id: string;
+  content: string;
+};
+
 export type ToolCallStatus = "pendingApproval" | "running" | "done" | "error";
 
 /** `id` is the model's own `LlmToolCall.id` off the wire (see
@@ -53,7 +68,7 @@ export type ToolCallBlock = {
   approvalGroupId?: string;
 };
 
-export type MessageBlock = TextBlock | ToolCallBlock;
+export type MessageBlock = TextBlock | ToolCallBlock | ReasoningBlock;
 
 /** A user turn stays a plain string — only an assistant turn's shape
  * changes, from flat `content` to an ordered `blocks` array. A
@@ -113,6 +128,21 @@ export function appendDeltaToBlocks(blocks: MessageBlock[], delta: string): Mess
     return [...blocks.slice(0, -1), { ...last, content: last.content + delta }];
   }
   return [...blocks, { type: "text", id: crypto.randomUUID(), content: delta }];
+}
+
+/** A `CHAT_STREAM_REASONING_EVENT` either extends the still-open trailing
+ * reasoning block, or opens a fresh one — same shape as `appendDeltaToBlocks`,
+ * for a reasoning-capable model's "thinking" text instead of its answer.
+ * Once a `content` delta arrives, `appendDeltaToBlocks` won't find a
+ * trailing `"text"` block here and opens a new one instead of extending
+ * this one — that's what closes a reasoning block off, no explicit
+ * transition needed on this side. */
+export function appendReasoningDeltaToBlocks(blocks: MessageBlock[], delta: string): MessageBlock[] {
+  const last = blocks[blocks.length - 1];
+  if (last && last.type === "reasoning") {
+    return [...blocks.slice(0, -1), { ...last, content: last.content + delta }];
+  }
+  return [...blocks, { type: "reasoning", id: crypto.randomUUID(), content: delta }];
 }
 
 /** A `TOOL_CALL_EVENT` normally pushes a brand-new `toolCall` block — this
@@ -214,6 +244,21 @@ export function correctTrailingText(blocks: MessageBlock[], text: string): Messa
     return [...blocks.slice(0, -1), { ...last, content: text }];
   }
   return text !== "" ? [...blocks, { type: "text", id: crypto.randomUUID(), content: text }] : blocks;
+}
+
+/** Same safety-net role as `correctTrailingText`, for `reasoning` instead
+ * of `text`. Only ever corrects an already-open trailing `reasoning` block
+ * (the round ended before any `content` arrived) — unlike
+ * `correctTrailingText`, it never appends a brand-new block when the
+ * trailing one isn't a reasoning block: reasoning always precedes the
+ * answer it led to, so a reasoning block can't correctly be tacked onto the
+ * *end* of blocks that already moved on to text/tool-calls; if every
+ * `CHAT_STREAM_REASONING_EVENT` for a round was somehow dropped, that
+ * round's reasoning is simply lost, same tradeoff this codebase already
+ * accepts for earlier, non-trailing blocks elsewhere. */
+export function correctTrailingReasoning(blocks: MessageBlock[], reasoning: string): MessageBlock[] {
+  const last = blocks[blocks.length - 1];
+  return last && last.type === "reasoning" ? [...blocks.slice(0, -1), { ...last, content: reasoning }] : blocks;
 }
 
 /** Called when the overall `streamLlmChat()` promise rejects (hit

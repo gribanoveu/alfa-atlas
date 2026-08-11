@@ -137,7 +137,8 @@ mod tests {
     #[test]
     fn append_response_entry_carries_the_result_payload() {
         let path = fixture_path();
-        let result = ChatStreamResult { text: "hello".to_string(), usage: None, tool_calls: vec![] };
+        let result =
+            ChatStreamResult { text: "hello".to_string(), reasoning: String::new(), usage: None, tool_calls: vec![] };
         append(&path, "alfagen", 1, "response", &result);
 
         let contents = std::fs::read_to_string(&path).unwrap();

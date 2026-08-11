@@ -50,9 +50,13 @@ function formatToolCallBlock(block: Extract<MessageBlock, { type: "toolCall" }>)
   ].join("\n");
 }
 
+/** Reasoning blocks are deliberately omitted — a model's "thinking" trace
+ * is scratch work, not part of the answer the export is meant to capture
+ * (the raw JSON export via `chatMessagesToJson` still includes it, since
+ * that serializes `ChatMessage[]` as-is). */
 function formatBlocks(blocks: MessageBlock[]): string {
   return blocks
-    .map((block) => (block.type === "text" ? block.content : formatToolCallBlock(block)))
+    .map((block) => (block.type === "text" ? block.content : block.type === "reasoning" ? "" : formatToolCallBlock(block)))
     .filter((part) => part !== "")
     .join("\n\n");
 }

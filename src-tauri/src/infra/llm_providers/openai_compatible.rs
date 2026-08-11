@@ -189,6 +189,14 @@ struct ModelsListDatum {
 struct StreamDelta {
     #[serde(default)]
     content: Option<String>,
+    /// A reasoning-capable model's "thinking" text, sent ahead of `content`
+    /// on the same wire shape by providers like DeepSeek's reasoner models —
+    /// no separate opt-in on the request is needed, it's just present or
+    /// absent per-provider/per-model. Absent (not just `null`) on every
+    /// other provider, hence `#[serde(default)]` rather than a required
+    /// field.
+    #[serde(default)]
+    reasoning_content: Option<String>,
     // See `WireResponseMessage.tool_calls`'s comment — a content-only delta
     // chunk commonly carries an explicit `"tool_calls":null` once `tools`
     // was offered on the request, which plain `#[serde(default)]` doesn't
@@ -277,12 +285,21 @@ enum SseLine {
     /// `delta.content` was present and non-null (`None` for e.g. a
     /// role-only first chunk, or the usage-only trailing chunk).  `usage` is
     /// `Some` only on that trailing chunk — a chunk can in principle carry
-    /// both, so these are independent, not an either/or. `tool_calls` is
+    /// both, so these are independent, not an either/or. `reasoning` is the
+    /// same kind of independent field for a reasoning-model's
+    /// `reasoning_content` — a chunk carries either `delta` or `reasoning`
+    /// while the model is still "thinking" (never both at once in practice,
+    /// but nothing here assumes that). `tool_calls` is
     /// the chunk's raw (unmerged) tool-call fragments, empty for a chunk
     /// that carries none — a chunk can carry both `delta` text and
     /// `tool_calls` fragments (the model can emit prose before invoking a
     /// tool in the same turn).
-    Chunk { delta: Option<String>, usage: Option<ChatUsage>, tool_calls: Vec<StreamToolCallDelta> },
+    Chunk {
+        delta: Option<String>,
+        reasoning: Option<String>,
+        usage: Option<ChatUsage>,
+        tool_calls: Vec<StreamToolCallDelta>,
+    },
     /// The terminal `data: [DONE]` line.
     Done,
     /// Not a `data:` line — a blank event-separator line, or (defensively)
@@ -310,11 +327,11 @@ fn parse_sse_line(line: &str) -> Result<SseLine, LlmError> {
     let chunk: StreamChunk =
         serde_json::from_str(data).map_err(|e| LlmError::Provider(e.to_string()))?;
     let usage = chunk.usage.map(ChatUsage::from);
-    let (delta, tool_calls) = match chunk.choices.into_iter().next() {
-        Some(choice) => (choice.delta.content, choice.delta.tool_calls),
-        None => (None, Vec::new()),
+    let (delta, reasoning, tool_calls) = match chunk.choices.into_iter().next() {
+        Some(choice) => (choice.delta.content, choice.delta.reasoning_content, choice.delta.tool_calls),
+        None => (None, None, Vec::new()),
     };
-    Ok(SseLine::Chunk { delta, usage, tool_calls })
+    Ok(SseLine::Chunk { delta, reasoning, usage, tool_calls })
 }
 
 /// Accumulates fragmented `delta.tool_calls` entries across an SSE stream,
@@ -462,7 +479,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
     /// surfaces on the working wire shape. Deltas are discarded here; only
     /// the final accumulated text/`tool_calls` matter to these callers.
     fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
-        let result = self.chat_stream(request, &|_delta| {}, &|| false)?;
+        let result = self.chat_stream(request, &|_delta| {}, &|_reasoning| {}, &|| false)?;
         Ok(ChatResponse {
             content: if result.text.is_empty() {
                 None
@@ -477,6 +494,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         &self,
         request: ChatRequest,
         on_delta: &dyn Fn(&str),
+        on_reasoning: &dyn Fn(&str),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError> {
         let body = self.build_body(&request, true);
@@ -491,6 +509,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
 
         let reader = std::io::BufReader::new(response.into_body().into_reader());
         let mut full = String::new();
+        let mut reasoning_full = String::new();
         let mut usage = None;
         let mut tool_calls_acc = ToolCallAccumulator::default();
         for line in std::io::BufRead::lines(reader) {
@@ -508,10 +527,14 @@ impl LlmProvider for OpenAiCompatibleProvider {
             }
             let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
             match parse_sse_line(&line)? {
-                SseLine::Chunk { delta, usage: chunk_usage, tool_calls } => {
+                SseLine::Chunk { delta, reasoning, usage: chunk_usage, tool_calls } => {
                     if let Some(text) = delta {
                         on_delta(&text);
                         full.push_str(&text);
+                    }
+                    if let Some(text) = reasoning {
+                        on_reasoning(&text);
+                        reasoning_full.push_str(&text);
                     }
                     // Only the trailing usage-only chunk is expected to
                     // carry this, but take whichever chunk has it rather
@@ -525,7 +548,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 SseLine::Done => break,
             }
         }
-        Ok(ChatStreamResult { text: full, usage, tool_calls: tool_calls_acc.finish() })
+        Ok(ChatStreamResult { text: full, reasoning: reasoning_full, usage, tool_calls: tool_calls_acc.finish() })
     }
 
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
@@ -743,14 +766,17 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#;
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: Some("Hel".to_string()), usage: None, tool_calls: vec![] }
+            SseLine::Chunk { delta: Some("Hel".to_string()), reasoning: None, usage: None, tool_calls: vec![] }
         );
     }
 
     #[test]
     fn parse_sse_line_treats_missing_content_as_no_delta() {
         let line = r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#;
-        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Chunk { delta: None, usage: None, tool_calls: vec![] });
+        assert_eq!(
+            parse_sse_line(line).unwrap(),
+            SseLine::Chunk { delta: None, reasoning: None, usage: None, tool_calls: vec![] }
+        );
     }
 
     #[test]
@@ -760,6 +786,7 @@ mod tests {
             parse_sse_line(line).unwrap(),
             SseLine::Chunk {
                 delta: None,
+                reasoning: None,
                 usage: Some(ChatUsage { prompt_tokens: 67, completion_tokens: 2, total_tokens: 69 }),
                 tool_calls: vec![],
             }
@@ -769,7 +796,30 @@ mod tests {
     #[test]
     fn parse_sse_line_handles_a_chunk_with_neither_delta_nor_usage() {
         let line = r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
-        assert_eq!(parse_sse_line(line).unwrap(), SseLine::Chunk { delta: None, usage: None, tool_calls: vec![] });
+        assert_eq!(
+            parse_sse_line(line).unwrap(),
+            SseLine::Chunk { delta: None, reasoning: None, usage: None, tool_calls: vec![] }
+        );
+    }
+
+    #[test]
+    fn parse_sse_line_extracts_reasoning_content() {
+        // DeepSeek-style reasoning model: `reasoning_content` streams ahead
+        // of `content`, `content` staying `null` until reasoning finishes.
+        let line = r#"data: {"choices":[{"delta":{"role":null,"content":null,"reasoning_content":" one"}}]}"#;
+        assert_eq!(
+            parse_sse_line(line).unwrap(),
+            SseLine::Chunk { delta: None, reasoning: Some(" one".to_string()), usage: None, tool_calls: vec![] }
+        );
+    }
+
+    #[test]
+    fn parse_sse_line_treats_missing_reasoning_content_as_none() {
+        let line = r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#;
+        let SseLine::Chunk { reasoning, .. } = parse_sse_line(line).unwrap() else {
+            panic!("expected a Chunk");
+        };
+        assert_eq!(reasoning, None);
     }
 
     #[test]
@@ -798,7 +848,7 @@ mod tests {
         let line = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r";
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: Some("hi".to_string()), usage: None, tool_calls: vec![] }
+            SseLine::Chunk { delta: Some("hi".to_string()), reasoning: None, usage: None, tool_calls: vec![] }
         );
     }
 
@@ -810,6 +860,7 @@ mod tests {
             parsed,
             SseLine::Chunk {
                 delta: None,
+                reasoning: None,
                 usage: None,
                 tool_calls: vec![StreamToolCallDelta {
                     index: Some(0),
@@ -834,7 +885,7 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"content":"Hello","tool_calls":null}}]}"#;
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: Some("Hello".to_string()), usage: None, tool_calls: vec![] }
+            SseLine::Chunk { delta: Some("Hello".to_string()), reasoning: None, usage: None, tool_calls: vec![] }
         );
     }
 

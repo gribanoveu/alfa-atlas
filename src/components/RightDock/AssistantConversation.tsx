@@ -16,6 +16,7 @@ import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AssistantAskUserCard } from "./AssistantAskUserCard";
+import { AssistantReasoningBlock } from "./AssistantReasoningBlock";
 import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import { TodoProgressWidget } from "./TodoProgressWidget";
@@ -580,6 +581,12 @@ export function AssistantConversation({
                             blocks={item.blocks}
                             docsRoot={docsRoot}
                             onDecide={decideToolCall}
+                          />
+                        ) : item.block.type === "reasoning" ? (
+                          <AssistantReasoningBlock
+                            key={item.block.id}
+                            block={item.block}
+                            thinking={Boolean(m.streaming) && i === arr.length - 1}
                           />
                         ) : item.block.type === "text" ? (
                           <AssistantMarkdown
