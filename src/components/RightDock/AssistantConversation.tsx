@@ -363,6 +363,9 @@ export function AssistantConversation({
   // suggestion `text` values are meant to be appended to rather than sent
   // verbatim.
   const [activeSuggestion, setActiveSuggestion] = useState<AssistantSuggestion | null>(null);
+  const followUpSuggestions = activeSuggestion?.followUps;
+  const showFollowUpBar =
+    followUpSuggestionsEnabled && messages.length > 0 && Boolean(followUpSuggestions?.length);
 
   const messagesRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
@@ -495,34 +498,6 @@ export function AssistantConversation({
   return (
     <>
       <TodoProgressWidget tasks={todos} onClearAll={sending ? undefined : clearTodos} />
-      {followUpSuggestionsEnabled && messages.length > 0 && activeSuggestion?.followUps?.length ? (
-        <div className="assistant-followup-bar">
-          <div className="assistant-followup-bar-header">
-            <span className="assistant-followup-bar-label">Похожие предложения</span>
-            <button
-              type="button"
-              className="assistant-followup-bar-close"
-              aria-label="Скрыть"
-              onClick={() => setActiveSuggestion(null)}
-            >
-              <X size={13} aria-hidden />
-            </button>
-          </div>
-          <div className="assistant-chat-suggestions">
-            {activeSuggestion.followUps.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className="assistant-suggestion-chip"
-                disabled={sending}
-                onClick={() => handleSuggestionClick(s)}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
       <div className="assistant-chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 ? (
           <div className="assistant-chat-placeholder">
@@ -716,7 +691,33 @@ export function AssistantConversation({
           </div>
         ) : null}
       </div>
-      <div className="assistant-chat-input-row">
+      {showFollowUpBar && followUpSuggestions ? (
+        <div className="assistant-followup-bar" role="group" aria-label="Похожие предложения">
+          <Sparkles className="assistant-followup-bar-icon" size={12} strokeWidth={1.75} aria-hidden />
+          <div className="assistant-followup-bar-chips">
+            {followUpSuggestions.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className="assistant-followup-chip"
+                disabled={sending}
+                onClick={() => handleSuggestionClick(s)}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="assistant-followup-bar-dismiss"
+            aria-label="Скрыть предложения"
+            onClick={() => setActiveSuggestion(null)}
+          >
+            <X size={12} aria-hidden />
+          </button>
+        </div>
+      ) : null}
+      <div className={`assistant-chat-input-row${showFollowUpBar ? " has-followups" : ""}`}>
         <div className="assistant-chat-input-wrap">
           <textarea
             ref={chatInputRef}
