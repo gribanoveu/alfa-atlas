@@ -91,6 +91,15 @@ pub struct LlmSettings {
     /// the exact payload that produced it.
     #[serde(default)]
     pub debug_logging: bool,
+    /// When `true`, hides the follow-up suggestion chips the frontend shows
+    /// above the chat transcript after the user picks a branching
+    /// suggestion (see `AssistantConversation`'s `activeSuggestion` state).
+    /// Never affects the initial suggestion chips shown in a brand-new,
+    /// empty conversation — those always render regardless of this flag.
+    /// Named so the derived `Default` (`false`) matches the desired
+    /// "follow-ups on by default" behavior, same shape as `debug_logging`.
+    #[serde(default)]
+    pub follow_up_suggestions_disabled: bool,
 }
 
 /// One entry from the compiled-in provider manifest (see

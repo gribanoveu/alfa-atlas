@@ -118,6 +118,24 @@ export function useLlmSetup() {
     [settings],
   );
 
+  const setFollowUpSuggestionsDisabled = useCallback(
+    async (disabled: boolean) => {
+      if (!settings) return;
+      const next = { ...settings, followUpSuggestionsDisabled: disabled };
+      setSettingsState(next);
+      setBusy(true);
+      try {
+        await setLlmSettings(next);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [settings],
+  );
+
   const removeProvider = useCallback(
     async (providerId: string) => {
       setBusy(true);
@@ -167,6 +185,7 @@ export function useLlmSetup() {
     selectActiveProvider,
     updateProviderConfig,
     setDebugLogging,
+    setFollowUpSuggestionsDisabled,
     removeProvider,
     saveApiKey,
     loadModels,

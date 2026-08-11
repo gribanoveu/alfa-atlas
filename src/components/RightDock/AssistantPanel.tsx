@@ -331,6 +331,7 @@ export function AssistantPanel({
                 activeProvider={activeProvider}
                 updateProviderConfig={updateProviderConfig}
                 loadModels={loadModels}
+                followUpSuggestionsEnabled={!(settings?.followUpSuggestionsDisabled ?? false)}
               />
             )}
           </>

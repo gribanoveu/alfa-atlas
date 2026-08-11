@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, ChevronUp, Send, Sparkles, Square } from "lucide-react";
+import { AlertCircle, ArrowDown, ChevronUp, Send, Sparkles, Square, X } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import {
   ASSISTANT_SUGGESTIONS,
@@ -8,6 +8,7 @@ import {
   CHAT_INPUT_ROWS,
   CONTEXT_NEAR_LIMIT_RATIO,
 } from "../../lib/assistantConfig";
+import type { AssistantSuggestion } from "../../lib/assistantConfig";
 import type { AiAccessMode, LlmToolDefinition, Task } from "../../lib/aiTools";
 import type { ChatMessage } from "../../lib/chatBlocks";
 import type { LlmModelInfo, LlmProviderConfig, ResolvedLlmProvider } from "../../lib/llm";
@@ -158,6 +159,11 @@ type AssistantConversationProps = {
   activeProvider: ResolvedLlmProvider | null;
   updateProviderConfig: (providerId: string, patch: Partial<Omit<LlmProviderConfig, "id">>) => Promise<void>;
   loadModels: (providerId: string) => Promise<LlmModelInfo[]>;
+  /** Settings-tab toggle (`LlmSettings.followUpSuggestionsDisabled`,
+   * inverted) — gates only the follow-up chip bar shown above the
+   * transcript once a branch is picked. Never affects the empty-state
+   * chip row, which always renders regardless of this flag. */
+  followUpSuggestionsEnabled: boolean;
 };
 
 /** The actual per-conversation surface: message transcript, model picker,
@@ -185,6 +191,7 @@ export function AssistantConversation({
   activeProvider,
   updateProviderConfig,
   loadModels,
+  followUpSuggestionsEnabled,
 }: AssistantConversationProps) {
   const { messages, sending, sendMessage, stopChat, contextTokens, decideToolCall, todos, clearTodos } = useLlmChat(
     providerId,
@@ -265,6 +272,13 @@ export function AssistantConversation({
   const contextLimit = activeProvider?.limit?.context ?? null;
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;
   const [draft, setDraft] = useState("");
+  // The suggestion node the user most recently clicked (top-level or a
+  // follow-up) — drives which `followUps` row (if any) shows above the
+  // transcript. Tracking the node itself (not matching on message text)
+  // survives the user editing the draft before sending, since some
+  // suggestion `text` values are meant to be appended to rather than sent
+  // verbatim.
+  const [activeSuggestion, setActiveSuggestion] = useState<AssistantSuggestion | null>(null);
 
   const messagesRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
@@ -372,8 +386,9 @@ export function AssistantConversation({
     void updateProviderConfig(providerId, { model: value === AUTO_MODEL_VALUE ? null : value });
   };
 
-  const handleSuggestionClick = (text: string) => {
-    setDraft(text);
+  const handleSuggestionClick = (suggestion: AssistantSuggestion) => {
+    setDraft(suggestion.text);
+    setActiveSuggestion(suggestion);
     requestAnimationFrame(() => {
       const el = chatInputRef.current;
       if (!el) return;
@@ -396,6 +411,34 @@ export function AssistantConversation({
   return (
     <>
       <TodoProgressWidget tasks={todos} onClearAll={sending ? undefined : clearTodos} />
+      {followUpSuggestionsEnabled && messages.length > 0 && activeSuggestion?.followUps?.length ? (
+        <div className="assistant-followup-bar">
+          <div className="assistant-followup-bar-header">
+            <span className="assistant-followup-bar-label">Похожие предложения</span>
+            <button
+              type="button"
+              className="assistant-followup-bar-close"
+              aria-label="Скрыть"
+              onClick={() => setActiveSuggestion(null)}
+            >
+              <X size={13} aria-hidden />
+            </button>
+          </div>
+          <div className="assistant-chat-suggestions">
+            {activeSuggestion.followUps.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className="assistant-suggestion-chip"
+                disabled={sending}
+                onClick={() => handleSuggestionClick(s)}
+              >
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="assistant-chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 ? (
           <div className="assistant-chat-placeholder">
@@ -405,10 +448,10 @@ export function AssistantConversation({
             <div className="assistant-chat-suggestions">
               {ASSISTANT_SUGGESTIONS.map((s) => (
                 <button
-                  key={s.label}
+                  key={s.id}
                   type="button"
                   className="assistant-suggestion-chip"
-                  onClick={() => handleSuggestionClick(s.text)}
+                  onClick={() => handleSuggestionClick(s)}
                 >
                   {s.label}
                 </button>

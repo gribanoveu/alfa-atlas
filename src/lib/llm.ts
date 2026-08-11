@@ -33,6 +33,11 @@ export type LlmSettings = {
    * `~/.atlas/logs/llm.jsonl` — see `infra::llm_debug_log` on the Rust
    * side. Toggled from the LLM settings tab. */
   debugLogging: boolean;
+  /** When true, hides the follow-up suggestion chips shown above the chat
+   * after picking a branching suggestion. Never affects the initial
+   * suggestion chips in a brand-new, empty conversation. Toggled from the
+   * LLM settings tab. */
+  followUpSuggestionsDisabled: boolean;
 };
 
 // Mirrors `domain::llm::ResolvedLlmProvider` — the merged, ready-to-use

@@ -502,6 +502,61 @@
 
 
 /* =========================================================
+   Follow-up suggestion bar (branching chips)
+   ========================================================= */
+
+/* Same "floating card above the transcript" recipe as
+   `.assistant-todo-widget` — flex:none sibling directly above
+   `.assistant-chat-messages`. */
+.assistant-followup-bar {
+  flex: none;
+  margin: 8px 10px 0;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+
+  background: var(--bg-1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+  padding: 7px 8px 8px 10px;
+}
+
+.assistant-followup-bar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.assistant-followup-bar-label {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.assistant-followup-bar-close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+
+  cursor: pointer;
+}
+
+.assistant-followup-bar-close:hover {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+
+/* =========================================================
    Message list
    ========================================================= */
 
@@ -616,6 +671,11 @@
 
 .assistant-suggestion-chip:hover {
   background: var(--bg-2);
+}
+
+.assistant-suggestion-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 

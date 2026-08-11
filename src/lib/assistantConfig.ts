@@ -771,14 +771,60 @@ export const TOOL_APPROVAL_TIMEOUT_MS = 30_000;
 // fills the compose box via `setDraft` without sending — the user can still
 // edit before submitting. Add, remove, or reorder entries here; nothing
 // else needs to change for the chip row to reflect it.
+//
+// `followUps` makes this a (recursive, arbitrarily-deep) tree rather than a
+// flat list: once the user picks a branch and sends that first message,
+// `AssistantConversation` shows that node's `followUps` (if any) as a new
+// chip row above the transcript — picking one of those advances to *that*
+// node, so a node with its own `followUps` chains further, and a leaf node
+// (no `followUps`) simply makes the row disappear. `id` must stay unique
+// and stable (used as the React key and to track which node is "active" —
+// matching by `label`/`text` alone would break the moment a suggestion's
+// text is edited or extended, since some entries are deliberately meant to
+// be appended to rather than sent verbatim).
 export interface AssistantSuggestion {
+  id: string;
   label: string;
   text: string;
+  followUps?: AssistantSuggestion[];
 }
 
 export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
-  { label: "Документация на новый метод", text: "Создай в разделе документации новую папку с названием метода, используя тул для создания папок с шаблоном «документация на REST метод» (метод.adoc, request.adoc, response.adoc и диаграмма последовательности). Заполнять содержимое не нужно — достаточно создать заготовку. Название метода - " },
-  { label: "Найти пробелы в документации", text: "Проверь документацию проекта и найди, где не хватает описания. Считай проблемой пустые секции, заголовки-заглушки, TODO-комментарии и отсутствующие у REST-метода файлы request.adoc/response.adoc. Проходы: check → listFiles → grep → readFile. Дай список из 3–5 мест с путём и причинами, ничего не правь." },
-  { label: "Обновить раздел документации", text: "Помоги обновить раздел документации" },
-  { label: "Объяснить как работает фича", text: "Объясни, как работает фича, главным источником истины должен быть код — разбирай реализацию по файлам и сигнатурам, а не по названиям и структуре. Документацию используй только для сверки терминов и поиска расхождений, но финальный вывод строй на фактах из кода. В ответе опиши поток выполнения, сошлиcь на конкретные файлы и код, а если документация и код расходятся — явно покажи оба варианта и отметь, какой фактический. Не выдумывай поведение, которого нет в коде, и отдельно помечай, что осталось предположением. Запроси переключение в режим для доступа к коду если ты находишься в Docs-only. Фича это - " },
+  {
+    id: "new-method-doc",
+    label: "Документация на новый метод",
+    text: "Создай в разделе документации новую папку с названием метода, используя тул для создания папок с шаблоном «документация на REST метод» (метод.adoc, request.adoc, response.adoc и диаграмма последовательности). Заполнять содержимое не нужно — достаточно создать заготовку. Название метода - ",
+    followUps: [
+      {
+        id: "new-method-doc.from-curl",
+        label: "Описание запроса из curl",
+        text: "Сформируй описание входящего запроса в request.adoc на основе следующего curl-запроса: ",
+      },
+      {
+        id: "new-method-doc.response-example",
+        label: "Добавить пример ответа",
+        text: "Добавь в response.adoc пример успешного и ошибочного ответа для метода ",
+      },
+      {
+        id: "new-method-doc.sequence-diagram",
+        label: "Диаграмма последовательности",
+        text: "Заполни диаграмму последовательности (PlantUML) для метода ",
+      },
+    ],
+  },
+  {
+    id: "find-gaps",
+    label: "Найти пробелы в документации",
+    text: "Проверь документацию проекта и найди, где не хватает описания. Считай проблемой пустые секции, заголовки-заглушки, TODO-комментарии и отсутствующие у REST-метода файлы request.adoc/response.adoc. Проходы: check → listFiles → grep → readFile. Дай список из 3–5 мест с путём и причинами, ничего не правь.",
+  },
+  {
+    id: "update-section",
+    label: "Обновить раздел документации",
+    text: "Помоги обновить раздел документации",
+  },
+  {
+    id: "explain-feature",
+    label: "Объяснить как работает фича",
+    text: "Объясни, как работает фича, главным источником истины должен быть код — разбирай реализацию по файлам и сигнатурам, а не по названиям и структуре. Документацию используй только для сверки терминов и поиска расхождений, но финальный вывод строй на фактах из кода. В ответе опиши поток выполнения, сошлиcь на конкретные файлы и код, а если документация и код расходятся — явно покажи оба варианта и отметь, какой фактический. Не выдумывай поведение, которого нет в коде, и отдельно помечай, что осталось предположением. Запроси переключение в режим для доступа к коду если ты находишься в Docs-only. Фича это - ",
+  },
 ];
