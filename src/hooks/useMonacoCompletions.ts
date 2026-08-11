@@ -6,7 +6,7 @@ import {
   getAttributes,
   getDocuments,
 } from "../lib/workspaceIndex";
-import { relativizeToDocument, toDocsRelativePath } from "../lib/paths";
+import { isUnderDocsRoot, relativizeToDocument, toDocsRelativePath } from "../lib/paths";
 import { ASCIIDOC_LANGUAGE_ID } from "../monaco/asciidocLanguage";
 
 const ADOC_LANGUAGE = ASCIIDOC_LANGUAGE_ID;
@@ -197,15 +197,6 @@ function documentIdFromModel(model: Monaco.editor.ITextModel): string {
   return model.uri.path.replace(/^\//, "");
 }
 
-function zeroWidthRange(position: Monaco.Position): Monaco.IRange {
-  return {
-    startLineNumber: position.lineNumber,
-    startColumn: position.column,
-    endLineNumber: position.lineNumber,
-    endColumn: position.column,
-  };
-}
-
 function lineUpToCursor(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
@@ -216,6 +207,49 @@ function lineUpToCursor(
     endLineNumber: position.lineNumber,
     endColumn: position.column,
   });
+}
+
+/**
+ * Finds an in-progress `include::`/`image::`/`xref:` target the cursor is
+ * currently sitting inside of, by looking for the *last* occurrence of
+ * `keyword` before the cursor (not requiring it to sit immediately next to
+ * the cursor) and returning everything typed since — `null` once whitespace
+ * or `[` shows up, since that ends the path/target portion of the macro.
+ *
+ * This is what actually makes the suggestion survive edits, unlike a plain
+ * `lineUpToCursor(...).endsWith(keyword)` check: `lastIndexOf` still finds
+ * `keyword` no matter how much has been typed or deleted after it, so the
+ * provider keeps firing (and Monaco keeps calling it, since `quickSuggestions`
+ * re-queries providers on every keystroke, not just `triggerCharacters`) on
+ * every forward *and* backward edit — including backspacing mid-path, which
+ * is exactly where the old exact-match version went permanently blank (no
+ * more `:` gets typed to re-trigger it via `triggerCharacters`).
+ *
+ * The returned `range` spans the whole in-progress target (from right after
+ * `keyword` to the cursor), not a zero-width point at the cursor — so
+ * accepting a suggestion *replaces* what's already been typed instead of
+ * inserting next to it, which is what let a stale/duplicated path survive
+ * before.
+ */
+function findOpenMacroTarget(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  keyword: string,
+): { partial: string; range: Monaco.IRange } | null {
+  const before = lineUpToCursor(model, position);
+  const idx = before.lastIndexOf(keyword);
+  if (idx === -1) return null;
+  const partial = before.slice(idx + keyword.length);
+  if (/[\s[]/.test(partial)) return null;
+  return {
+    partial,
+    range: {
+      startLineNumber: position.lineNumber,
+      startColumn: position.column - partial.length,
+      endLineNumber: position.lineNumber,
+      endColumn: position.column,
+    },
+  };
 }
 
 /**
@@ -241,39 +275,46 @@ export function useMonacoCompletions(
 
     // Suggestions insert a path relative to the *current* file's directory
     // — matching how every include::/image::/xref: target in this codebase
-    // is actually authored — not the index's repo-relative key.
+    // is actually authored — not the index's repo-relative key. The index
+    // itself covers the whole repository (`WorkspaceIndex::build` scans
+    // from `repoRoot`), so it holds plenty of documents outside `docsRoot`
+    // too — those can never actually be reached by one of these macros
+    // (always resolved relative to `docsRoot`), so `isUnderDocsRoot` drops
+    // them before they're ever offered as a completion.
     const docSuggestions = (
       model: Monaco.editor.ITextModel,
       docs: { relativePath: string }[],
       range: Monaco.IRange,
     ) => {
       const sourceDocsRelative = documentIdFromModel(model);
-      return docs.map((d) => {
-        const docsRelative =
-          docsRoot && repoRoot
-            ? toDocsRelativePath(d.relativePath, repoRoot, docsRoot)
-            : d.relativePath;
-        const insertText = relativizeToDocument(docsRelative, sourceDocsRelative);
-        return {
-          label: insertText,
-          kind: monaco.languages.CompletionItemKind.File,
-          insertText,
-          range,
-        };
-      });
+      return docs
+        .filter((d) => !docsRoot || !repoRoot || isUnderDocsRoot(d.relativePath, repoRoot, docsRoot))
+        .map((d) => {
+          const docsRelative =
+            docsRoot && repoRoot
+              ? toDocsRelativePath(d.relativePath, repoRoot, docsRoot)
+              : d.relativePath;
+          const insertText = relativizeToDocument(docsRelative, sourceDocsRelative);
+          return {
+            label: insertText,
+            kind: monaco.languages.CompletionItemKind.File,
+            insertText,
+            range,
+          };
+        });
     };
 
-    // 1. include:: — list all documents.
+    // 1. include:: — list all documents. `findOpenMacroTarget` (not a plain
+    // `endsWith` check) is what keeps this alive across edits — see its own
+    // doc comment.
     disposers.push(
       monaco.languages.registerCompletionItemProvider(ADOC_LANGUAGE, {
         triggerCharacters: [":"],
         async provideCompletionItems(model, position) {
-          if (!lineUpToCursor(model, position).endsWith("include::")) {
-            return null;
-          }
+          const open = findOpenMacroTarget(model, position, "include::");
+          if (!open) return null;
           const docs = await getDocuments();
-          const range = zeroWidthRange(position);
-          return { suggestions: docSuggestions(model, docs, range) };
+          return { suggestions: docSuggestions(model, docs, open.range) };
         },
       }),
     );
@@ -283,25 +324,28 @@ export function useMonacoCompletions(
       monaco.languages.registerCompletionItemProvider(ADOC_LANGUAGE, {
         triggerCharacters: [":", "#"],
         async provideCompletionItems(model, position) {
-          const line = lineUpToCursor(model, position);
-          const xrefIdx = line.lastIndexOf("xref:");
-          if (xrefIdx === -1) return null;
-          const after = line.slice(xrefIdx + "xref:".length);
-          const hashIdx = after.indexOf("#");
-          const range = zeroWidthRange(position);
+          const open = findOpenMacroTarget(model, position, "xref:");
+          if (!open) return null;
+          const hashIdx = open.partial.indexOf("#");
           if (hashIdx === -1) {
             const docs = await getDocuments();
-            return { suggestions: docSuggestions(model, docs, range) };
+            return { suggestions: docSuggestions(model, docs, open.range) };
           }
-          const docId = after.slice(0, hashIdx);
+          const docId = open.partial.slice(0, hashIdx);
           if (!docId) return null;
+          const anchorRange: Monaco.IRange = {
+            startLineNumber: position.lineNumber,
+            startColumn: open.range.startColumn + hashIdx + 1,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          };
           const anchors = await findAnchors(docId);
           return {
             suggestions: anchors.map((a) => ({
               label: a.id,
               kind: monaco.languages.CompletionItemKind.Reference,
               insertText: a.id,
-              range,
+              range: anchorRange,
             })),
           };
         },
@@ -313,12 +357,10 @@ export function useMonacoCompletions(
       monaco.languages.registerCompletionItemProvider(ADOC_LANGUAGE, {
         triggerCharacters: [":"],
         async provideCompletionItems(model, position) {
-          if (!lineUpToCursor(model, position).endsWith("image::")) {
-            return null;
-          }
+          const open = findOpenMacroTarget(model, position, "image::");
+          if (!open) return null;
           const docs = await getDocuments();
-          const range = zeroWidthRange(position);
-          return { suggestions: docSuggestions(model, docs, range) };
+          return { suggestions: docSuggestions(model, docs, open.range) };
         },
       }),
     );
@@ -328,17 +370,19 @@ export function useMonacoCompletions(
       monaco.languages.registerCompletionItemProvider(ADOC_LANGUAGE, {
         triggerCharacters: ["{"],
         async provideCompletionItems(model, position) {
-          if (!lineUpToCursor(model, position).endsWith("{")) return null;
+          const open = findOpenMacroTarget(model, position, "{");
+          // `}` closes the attribute reference — same as `[` for
+          // include::/image::, past that point this isn't the name anymore.
+          if (!open || open.partial.includes("}")) return null;
           const docId = documentIdFromModel(model);
           const attrs = await getAttributes(docId);
-          const range = zeroWidthRange(position);
           return {
             suggestions: attrs.map((a) => ({
               label: a.name,
               kind: monaco.languages.CompletionItemKind.Variable,
               insertText: a.name,
               detail: a.value || undefined,
-              range,
+              range: open.range,
             })),
           };
         },

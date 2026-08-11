@@ -54,6 +54,31 @@ export function toDocsRelativePath(
   return documentId;
 }
 
+/**
+ * Whether `documentRepoRelative` (a repo-relative index key, e.g.
+ * `"src/docs/asciidoc/foo.adoc"`) actually falls under `docsRoot` — the
+ * workspace index covers the whole repository (`WorkspaceIndex::build`
+ * scans from `repoRoot`, not `docsRoot`), so it routinely holds documents
+ * outside the docs tree too (READMEs, source-adjacent `.json`/`.yaml`,
+ * ...). `include::`/`image::`/`xref:` targets are always resolved relative
+ * to `docsRoot` and can never actually reach a file outside it (same rule
+ * the assistant's own tool descriptions state), so anything outside it
+ * should never be offered as a completion for one of those macros — see
+ * `useMonacoCompletions.ts`. `true` when either root is missing (nothing to
+ * filter against) or `docsRoot` equals `repoRoot` (every indexed document
+ * already counts).
+ */
+export function isUnderDocsRoot(
+  documentRepoRelative: string,
+  repoRoot: string,
+  docsRoot: string,
+): boolean {
+  if (!repoRoot || !docsRoot) return true;
+  const suffix = docsSuffix(repoRoot, docsRoot);
+  if (!suffix) return true;
+  return normPath(documentRepoRelative).startsWith(suffix + "/");
+}
+
 /** Inverse of `toDocsRelativePath`: docs-relative → repo-relative index key. */
 export function toRepoRelativePath(
   docsRelativePath: string,
