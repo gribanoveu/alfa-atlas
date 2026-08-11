@@ -9,7 +9,7 @@ import {
   CONTEXT_NEAR_LIMIT_RATIO,
 } from "../../lib/assistantConfig";
 import type { AssistantSuggestion } from "../../lib/assistantConfig";
-import type { AiAccessMode, LlmToolDefinition, Task } from "../../lib/aiTools";
+import type { AiAccessMode, ConversationMode, LlmToolDefinition, Task } from "../../lib/aiTools";
 import { groupBlocksForRender, type ChatMessage } from "../../lib/chatBlocks";
 import type { LlmModelInfo, LlmProviderConfig, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
@@ -19,20 +19,41 @@ import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import { TodoProgressWidget } from "./TodoProgressWidget";
 
-type ChatMode = "agent" | "plan" | "question";
-
-const CHAT_MODE_OPTIONS: { value: ChatMode; label: string }[] = [
-  { value: "agent", label: "Агент" },
-  { value: "plan", label: "План" },
-  { value: "question", label: "Вопрос" },
+const CHAT_MODE_OPTIONS: { value: ConversationMode; label: string; title: string }[] = [
+  { value: "agent", label: "Агент", title: "Полный набор инструментов — исследует и вносит изменения." },
+  { value: "plan", label: "План", title: "Только чтение — исследует и предлагает план, без изменений." },
+  { value: "question", label: "Вопрос", title: "Лёгкий режим для точечных вопросов, без изменений." },
 ];
 
-/** Purely visual mode picker for the chat composer — selecting an option
- * doesn't change how a message is sent yet, nothing downstream reads
- * `mode`. Placeholder for future agent/plan/question behaviors; the
- * "скоро" badge in the menu makes that explicit to the user. */
-function ChatModeSelect() {
-  const [mode, setMode] = useState<ChatMode>("agent");
+/** Ids of already-settled `requestModeSwitch` tool calls in a transcript —
+ * used to seed `handledModeSwitchIdsRef` so restoring / remounting a chat
+ * does not re-apply a historical mode onto the session-scoped picker. */
+function collectSettledModeSwitchIds(messages: ChatMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const block of message.blocks) {
+      if (block.type === "toolCall" && block.name === "requestModeSwitch" && block.status === "done") {
+        ids.add(block.id);
+      }
+    }
+  }
+  return ids;
+}
+
+/** Chat-composer mode picker — controlled by the parent (`conversationMode`/
+ * `onConversationModeChange` on `AssistantConversationProps`), so both a
+ * manual click here and an approved `requestModeSwitch` tool call (see the
+ * settled-block watcher below) converge on the exact same state. */
+function ChatModeSelect({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: ConversationMode;
+  onChange: (mode: ConversationMode) => void;
+  disabled: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -52,7 +73,7 @@ function ChatModeSelect() {
     };
   }, [open]);
 
-  const activeLabel = CHAT_MODE_OPTIONS.find((o) => o.value === mode)?.label ?? "";
+  const active = CHAT_MODE_OPTIONS.find((o) => o.value === mode);
 
   return (
     <div className="assistant-mode-select" ref={ref}>
@@ -61,10 +82,11 @@ function ChatModeSelect() {
         className={`assistant-mode-trigger${open ? " is-open" : ""}`}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title="Режим ассистента (пока не влияет на поведение)"
+        title={active?.title ?? "Режим ассистента"}
+        disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
-        <span>{activeLabel}</span>
+        <span>{active?.label ?? ""}</span>
         <ChevronUp className="assistant-mode-chevron" size={12} aria-hidden />
       </button>
       {open ? (
@@ -75,14 +97,14 @@ function ChatModeSelect() {
               type="button"
               role="option"
               aria-selected={mode === option.value}
+              title={option.title}
               className={`assistant-mode-option${mode === option.value ? " is-active" : ""}`}
               onClick={() => {
-                setMode(option.value);
+                onChange(option.value);
                 setOpen(false);
               }}
             >
               <span>{option.label}</span>
-              <span className="assistant-mode-option-soon">скоро</span>
             </button>
           ))}
         </div>
@@ -129,6 +151,13 @@ type AssistantConversationProps = {
   onSendingChange: (sending: boolean) => void;
   providerId: string | null;
   accessMode: AiAccessMode;
+  /** The chat composer's Агент/План/Вопрос mode — a session-scoped setting
+   * owned by `AssistantPanel` (not reset on chat switch, not persisted per
+   * chat, mirroring `accessMode`'s own lifetime), lifted here so both a
+   * manual `ChatModeSelect` click and an approved `requestModeSwitch` tool
+   * call converge on the same state. */
+  conversationMode: ConversationMode;
+  onConversationModeChange: (mode: ConversationMode) => void;
   specsRepoInfo: SpecsRepoInfo | null;
   toolDefinitions: LlmToolDefinition[];
   /** The documentation root's path relative to the repository root (e.g.
@@ -181,6 +210,8 @@ export function AssistantConversation({
   onSendingChange,
   providerId,
   accessMode,
+  conversationMode,
+  onConversationModeChange,
   specsRepoInfo,
   toolDefinitions,
   docsRootRelativeToRepo,
@@ -210,6 +241,7 @@ export function AssistantConversation({
     providerId,
     contextLimit,
     accessMode,
+    conversationMode,
     specsRepoInfo,
     toolDefinitions,
     docsRootRelativeToRepo,
@@ -237,7 +269,16 @@ export function AssistantConversation({
   // on the assistant's behalf. Restoring a chat whose last message already
   // ends in a settled block like this re-fires these once on mount — both
   // are idempotent refreshes, so that's wasted work, not a correctness bug.
+  //
+  // `requestModeSwitch` is the exception: `ConversationMode` is session-
+  // scoped (not per-chat), so replaying a historical switch on remount
+  // would overwrite the user's current picker. Seed handled ids from
+  // `initialMessages`, and only queue a live switch (applied when the turn
+  // ends — see `pendingModeSwitchRef`) so the picker stays aligned with
+  // the backend's per-turn pin.
   const handledAccessGrantIdsRef = useRef<Set<string>>(new Set());
+  const handledModeSwitchIdsRef = useRef<Set<string>>(collectSettledModeSwitchIds(initialMessages));
+  const pendingModeSwitchRef = useRef<ConversationMode | null>(null);
   const handledFileWriteIdsRef = useRef<Set<string>>(new Set());
   const handledMoveIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -248,6 +289,22 @@ export function AssistantConversation({
       if (block.name === "requestFullRepoAccess" && !handledAccessGrantIdsRef.current.has(block.id)) {
         handledAccessGrantIdsRef.current.add(block.id);
         void refreshAccessMode();
+      }
+      // Queue while the turn is in flight; apply immediately if somehow
+      // already idle (keeps picker in sync if settle and `sending=false`
+      // land in awkward orders). The flush effect below covers the normal
+      // path: settle mid-turn → `sending` flips false → apply.
+      if (block.name === "requestModeSwitch" && !handledModeSwitchIdsRef.current.has(block.id)) {
+        handledModeSwitchIdsRef.current.add(block.id);
+        if (block.result && block.result.tool === "modeSwitchRequested") {
+          const nextMode = block.result.result.mode;
+          if (sending) {
+            pendingModeSwitchRef.current = nextMode;
+          } else {
+            pendingModeSwitchRef.current = null;
+            onConversationModeChange(nextMode);
+          }
+        }
       }
       if (
         (block.name === "writeFile" ||
@@ -281,7 +338,18 @@ export function AssistantConversation({
         }
       }
     }
-  }, [messages, refreshAccessMode, onFileWritten, onFileMoved]);
+  }, [messages, sending, refreshAccessMode, onConversationModeChange, onFileWritten, onFileMoved]);
+
+  // Flush a queued `requestModeSwitch` onto the session picker only after
+  // the turn that approved it has fully finished — mirrors
+  // `LoopCtx::conversation_mode` staying pinned for one `run_tool_loop`.
+  useEffect(() => {
+    if (sending) return;
+    const pending = pendingModeSwitchRef.current;
+    if (pending === null) return;
+    pendingModeSwitchRef.current = null;
+    onConversationModeChange(pending);
+  }, [sending, onConversationModeChange]);
 
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;
   const [draft, setDraft] = useState("");
@@ -551,7 +619,7 @@ export function AssistantConversation({
         ) : null}
       </div>
       <div className="assistant-model-bar">
-        <ChatModeSelect />
+        <ChatModeSelect mode={conversationMode} onChange={onConversationModeChange} disabled={sending} />
         <div className="clone-select assistant-model-select" ref={modelSelectRef}>
           <button
             type="button"

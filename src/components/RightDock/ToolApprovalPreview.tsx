@@ -147,6 +147,11 @@ export function ToolApprovalPreview({
       <div className="assistant-tool-call-detail-label">Причина</div>
       <div className="assistant-tool-approval-reason">{args.reason}</div>
     </div>
+  ) : block.name === "requestModeSwitch" && typeof args.reason === "string" ? (
+    <div className="assistant-tool-call-detail-section">
+      <div className="assistant-tool-call-detail-label">Причина</div>
+      <div className="assistant-tool-approval-reason">{args.reason}</div>
+    </div>
   ) : block.name === "memory" && args.op === "note" && typeof args.text === "string" ? (
     <div className="assistant-tool-call-detail-section">
       <div className="assistant-tool-call-detail-label">

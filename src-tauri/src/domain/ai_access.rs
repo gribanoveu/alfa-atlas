@@ -39,6 +39,7 @@ pub enum ToolName {
     RequestFullRepoAccess,
     Todo,
     Memory,
+    RequestModeSwitch,
 }
 
 impl ToolName {
@@ -57,6 +58,11 @@ impl ToolName {
     /// the call carries (only `note` needs approval), which this
     /// per-`ToolName` bool can't express. See `call_requires_confirmation`,
     /// the actual gate used by `commands::llm`.
+    ///
+    /// `RequestModeSwitch` is gated the same way as `RequestFullRepoAccess`
+    /// — it doesn't mutate anything itself, but it's a model-initiated
+    /// change to how the rest of the conversation behaves (system prompt,
+    /// tool set), so the user should see it before it takes effect.
     pub fn requires_confirmation(self) -> bool {
         matches!(
             self,
@@ -67,6 +73,7 @@ impl ToolName {
                 | ToolName::DeleteDirectory
                 | ToolName::Move
                 | ToolName::RequestFullRepoAccess
+                | ToolName::RequestModeSwitch
         )
         // `Todo`/`Grep`/`GitDiff`/`GitBlame`/`Check` are in-memory or
         // read-only, no confirmation gate under any call. `Memory` is
@@ -97,6 +104,7 @@ impl ToolName {
             "todo" => Some(ToolName::Todo),
             "memory" => Some(ToolName::Memory),
             "check" => Some(ToolName::Check),
+            "requestModeSwitch" => Some(ToolName::RequestModeSwitch),
             _ => None,
         }
     }
@@ -135,6 +143,7 @@ impl ToolName {
             ToolName::RequestFullRepoAccess => 1,
             ToolName::Todo => 1,
             ToolName::Memory => 1,
+            ToolName::RequestModeSwitch => 1,
         }
     }
 }
@@ -214,6 +223,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::RequestFullRepoAccess,
         ToolName::Todo,
         ToolName::Memory,
+        ToolName::RequestModeSwitch,
     ]
     .into_iter()
     .collect()
@@ -241,6 +251,7 @@ mod tests {
         assert!(ToolName::RequestFullRepoAccess.requires_confirmation());
         assert!(!ToolName::Todo.requires_confirmation());
         assert!(!ToolName::Memory.requires_confirmation());
+        assert!(ToolName::RequestModeSwitch.requires_confirmation());
     }
 
     #[test]
@@ -264,6 +275,10 @@ mod tests {
         );
         assert_eq!(ToolName::from_wire_name("todo"), Some(ToolName::Todo));
         assert_eq!(ToolName::from_wire_name("memory"), Some(ToolName::Memory));
+        assert_eq!(
+            ToolName::from_wire_name("requestModeSwitch"),
+            Some(ToolName::RequestModeSwitch)
+        );
         assert_eq!(ToolName::from_wire_name("somethingElse"), None);
     }
 
@@ -285,12 +300,13 @@ mod tests {
         assert_eq!(ToolName::SemanticSearch.loop_weight(), 4);
         assert_eq!(ToolName::Todo.loop_weight(), 1);
         assert_eq!(ToolName::Memory.loop_weight(), 1);
+        assert_eq!(ToolName::RequestModeSwitch.loop_weight(), 1);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_sixteen() {
+    fn default_allowed_tools_includes_all_seventeen() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 16);
+        assert_eq!(allowed.len(), 17);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
@@ -304,6 +320,7 @@ mod tests {
         assert!(allowed.contains(&ToolName::RequestFullRepoAccess));
         assert!(allowed.contains(&ToolName::Todo));
         assert!(allowed.contains(&ToolName::Memory));
+        assert!(allowed.contains(&ToolName::RequestModeSwitch));
     }
 
     #[test]
@@ -361,6 +378,7 @@ mod tests {
             ToolName::Move,
             ToolName::RequestFullRepoAccess,
             ToolName::Todo,
+            ToolName::RequestModeSwitch,
         ] {
             let name = serde_json::to_value(tool)
                 .unwrap()

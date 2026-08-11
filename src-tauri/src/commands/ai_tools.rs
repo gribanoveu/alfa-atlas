@@ -7,6 +7,7 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{AiAccessMode, ToolName};
 use crate::domain::ai_tools::{Task, ToolCall, ToolResult};
+use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::project_config::ProjectConfig;
 use crate::infra::project_store;
@@ -95,11 +96,15 @@ pub fn ai_get_access_mode() -> Result<AiAccessMode, String> {
 /// actually advertised to the model for function-calling in
 /// `commands::llm::llm_chat_stream` — exposed here so the frontend can
 /// render its "available tools" prompt text from the same source instead of
-/// hand-duplicating it.
+/// hand-duplicating it. `conversation_mode` must match whatever the caller
+/// intends to actually chat in (see `domain::conversation_mode`) — this
+/// endpoint has no chat turn of its own to infer it from.
 #[tauri::command]
-pub fn ai_get_tool_definitions() -> Result<Vec<LlmToolDefinition>, String> {
+pub fn ai_get_tool_definitions(
+    conversation_mode: ConversationMode,
+) -> Result<Vec<LlmToolDefinition>, String> {
     let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
-    Ok(ai_tools::llm_tool_definitions(&scope))
+    Ok(ai_tools::llm_tool_definitions(&scope, conversation_mode))
 }
 
 /// Persists a new `AiAccessMode` for the currently open project — thin

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Task, ToolResult } from "./aiTools";
+import type { ConversationMode, Task, ToolResult } from "./aiTools";
 
 // Mirrors `domain::llm::LlmProviderConfig`. Every field but `id` is
 // nullable — for a system provider id this is an *override* (`null` means
@@ -214,8 +214,15 @@ export function streamLlmChat(
   messages: LlmMessage[],
   todos: Task[],
   activeFilePath: string | null,
+  conversationMode: ConversationMode,
 ): Promise<ChatStreamOutcome> {
-  return invoke<ChatStreamOutcome>("llm_chat_stream", { providerId, messages, todos, activeFilePath });
+  return invoke<ChatStreamOutcome>("llm_chat_stream", {
+    providerId,
+    messages,
+    todos,
+    activeFilePath,
+    conversationMode,
+  });
 }
 
 /** Continues a conversation paused by a `{status: "pendingApproval"}`
@@ -224,7 +231,9 @@ export function streamLlmChat(
  * `round`/`budgetUsed` must be exactly what that outcome carried, sent
  * back unmodified — the backend keeps no server-side session state
  * between calls. `decisions` must cover exactly the ids of that round's
- * calls whose `requiresConfirmation` was `true`. */
+ * calls whose `requiresConfirmation` was `true`. `conversationMode` must
+ * likewise be exactly what the round paused with — the mode a live picker
+ * shows *right now* may have moved on since. */
 export function streamLlmChatResume(
   providerId: string,
   history: LlmMessage[],
@@ -233,6 +242,7 @@ export function streamLlmChatResume(
   decisions: ToolCallDecision[],
   todos: Task[],
   activeFilePath: string | null,
+  conversationMode: ConversationMode,
 ): Promise<ChatStreamOutcome> {
   return invoke<ChatStreamOutcome>("llm_chat_stream_resume", {
     providerId,
@@ -242,6 +252,7 @@ export function streamLlmChatResume(
     decisions,
     todos,
     activeFilePath,
+    conversationMode,
   });
 }
 

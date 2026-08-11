@@ -5,14 +5,16 @@ import {
   onAutoApprovedToolsChange,
   setToolAutoApproved,
   type AiAccessMode,
+  type ConversationMode,
   type LlmToolDefinition,
   type Task,
 } from "../lib/aiTools";
 import {
   buildAccessModeChangeNotice,
-  buildAssistantSystemPrompt,
   buildCompactionSummaryBlock,
   buildHistoryCompactionPrompt,
+  buildModeChangeNotice,
+  buildSystemPromptForConversationMode,
   buildTodoContextBlock,
   buildMemoryContextBlock,
   CONTEXT_COMPACTION_KEEP_LAST_MESSAGES,
@@ -91,6 +93,7 @@ export function useLlmChat(
   providerId: string | null,
   contextLimit: number | null,
   accessMode: AiAccessMode,
+  conversationMode: ConversationMode,
   specsRepoInfo: SpecsRepoInfo | null,
   toolDefinitions: LlmToolDefinition[],
   docsRootRelativeToRepo: string | null,
@@ -108,6 +111,12 @@ export function useLlmChat(
   // correctly for a fresh conversation; the notice exists only for a
   // mid-conversation switch, see `buildAccessModeChangeNotice`).
   const lastSentModeRef = useRef<AiAccessMode | null>(null);
+
+  // Same "did it change since the last turn we actually sent" diff, for
+  // `conversationMode` — see `buildModeChangeNotice`. Independent of
+  // `lastSentModeRef` above: an access-mode switch and a conversation-mode
+  // switch are unrelated axes and can happen on the same turn or separately.
+  const lastSentConversationModeRef = useRef<ConversationMode | null>(null);
 
   // Tool names (e.g. `"writeFile"`) the user has ticked "don't ask again"
   // for — checked before ever showing an approval card for a later round.
@@ -384,7 +393,13 @@ export function useLlmChat(
     if (lastUsageIndex === -1 || lastUsageTotal === null) {
       return (
         estimateTokenCount(
-          buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
+          buildSystemPromptForConversationMode(
+            conversationMode,
+            accessMode,
+            specsRepoInfo,
+            toolDefinitions,
+            docsRootRelativeToRepo,
+          ),
         ) + messages.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0)
       );
     }
@@ -392,7 +407,7 @@ export function useLlmChat(
       .slice(lastUsageIndex + 1)
       .reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
     return lastUsageTotal + tail;
-  }, [messages, accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
+  }, [messages, accessMode, conversationMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
 
   /** Runs one full turn: an optional proactive history-compaction pass,
    * building `wireMessages` from `priorTurns` (replaying the cached
@@ -478,6 +493,13 @@ export function useLlmChat(
       const modeChanged = lastSentModeRef.current !== null && lastSentModeRef.current !== accessMode;
       lastSentModeRef.current = accessMode;
 
+      // Same "own message, not just a rebuilt system-prompt line" treatment
+      // for a conversation-mode switch — see `buildModeChangeNotice`.
+      const conversationModeChanged =
+        lastSentConversationModeRef.current !== null &&
+        lastSentConversationModeRef.current !== conversationMode;
+      lastSentConversationModeRef.current = conversationMode;
+
       const todoBlock = buildTodoContextBlock(todoListRef.current);
 
       let memoryBlock: string | null = null;
@@ -499,7 +521,13 @@ export function useLlmChat(
       const wireMessages: LlmMessage[] = [
         {
           role: "system",
-          content: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
+          content: buildSystemPromptForConversationMode(
+            conversationMode,
+            accessMode,
+            specsRepoInfo,
+            toolDefinitions,
+            docsRootRelativeToRepo,
+          ),
           toolCallId: null,
         },
         ...(compactionCacheRef.current
@@ -521,6 +549,9 @@ export function useLlmChat(
               },
             ]
           : []),
+        ...(conversationModeChanged
+          ? [{ role: "system" as const, content: buildModeChangeNotice(conversationMode), toolCallId: null }]
+          : []),
         ...(memoryBlock ? [{ role: "system" as const, content: memoryBlock, toolCallId: null }] : []),
         ...(todoBlock ? [{ role: "system" as const, content: todoBlock, toolCallId: null }] : []),
         { role: "user", content: userText, toolCallId: null },
@@ -534,7 +565,13 @@ export function useLlmChat(
         // card entirely for tool names already trusted, whether from this
         // chat or persisted from an earlier one on this project) before
         // resuming, potentially several times if later rounds pause again.
-        let outcome = await streamLlmChat(providerId, wireMessages, todoListRef.current, activeFilePath);
+        let outcome = await streamLlmChat(
+          providerId,
+          wireMessages,
+          todoListRef.current,
+          activeFilePath,
+          conversationMode,
+        );
         while (outcome.status === "pendingApproval") {
           const { history, round, budgetUsed, calls, todos: updatedTodos } = outcome.value;
           setTodos(updatedTodos);
@@ -565,6 +602,7 @@ export function useLlmChat(
             decisions,
             todoListRef.current,
             activeFilePath,
+            conversationMode,
           );
         }
 
@@ -634,6 +672,7 @@ export function useLlmChat(
       contextLimit,
       contextTokens,
       accessMode,
+      conversationMode,
       specsRepoInfo,
       toolDefinitions,
       docsRootRelativeToRepo,
@@ -715,7 +754,13 @@ export function useLlmChat(
     contextTokens,
     todos,
     clearTodos,
-    systemPrompt: buildAssistantSystemPrompt(accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo),
+    systemPrompt: buildSystemPromptForConversationMode(
+      conversationMode,
+      accessMode,
+      specsRepoInfo,
+      toolDefinitions,
+      docsRootRelativeToRepo,
+    ),
     decideToolCall,
     stopChat,
   };

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
+use super::conversation_mode::ConversationMode;
 use super::embeddings::EmbeddingError;
 use super::paths;
 use super::project_config::ProjectError;
@@ -182,6 +183,17 @@ pub struct MoveArgs {
 pub struct RequestFullRepoAccessArgs {
     /// Required, not optional — forces the model to self-justify the
     /// request; shown verbatim in the user-facing approval prompt.
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestModeSwitchArgs {
+    /// The conversation mode being requested.
+    pub mode: ConversationMode,
+    /// Required, not optional — same self-justification rule as
+    /// `RequestFullRepoAccessArgs::reason`, shown verbatim in the approval
+    /// prompt.
     pub reason: String,
 }
 
@@ -400,6 +412,7 @@ pub enum ToolCall {
     TodoWrite(TodoWriteArgs),
     TodoUpdate(TodoUpdateArgs),
     Memory(MemoryArgs),
+    RequestModeSwitch(RequestModeSwitchArgs),
 }
 
 impl ToolCall {
@@ -422,6 +435,7 @@ impl ToolCall {
             ToolCall::TodoWrite(_) => ToolName::Todo,
             ToolCall::TodoUpdate(_) => ToolName::Todo,
             ToolCall::Memory(_) => ToolName::Memory,
+            ToolCall::RequestModeSwitch(_) => ToolName::RequestModeSwitch,
         }
     }
 }
@@ -556,6 +570,13 @@ pub enum ToolResult {
     /// Settled `memory` — plain text OptMem output (wake/note/nap/…).
     #[serde(rename_all = "camelCase")]
     Memory { text: String },
+    /// Settled `requestModeSwitch` — a pure acknowledgement, no state
+    /// mutated server-side (`ConversationMode` isn't persisted, see
+    /// `domain::conversation_mode`). The frontend applies `mode` to its own
+    /// lifted chat-mode state once this result settles; `reason` is echoed
+    /// back mainly so the model's own tool-call history stays legible.
+    #[serde(rename_all = "camelCase")]
+    ModeSwitchRequested { mode: ConversationMode, reason: String },
 }
 
 #[derive(Debug, Error)]

@@ -8,6 +8,13 @@ import type { Diagnostic } from "./workspaceIndex";
 // on the enum variants).
 export type AiAccessMode = "docsOnly" | "fullRepo";
 
+// Mirrors `domain::conversation_mode::ConversationMode`. Distinct from
+// `AiAccessMode` above — this is the chat's behavioral mode (which system
+// prompt, which tool subset), not a filesystem-access boundary. Not
+// persisted anywhere server-side; the frontend threads it into every
+// `llm_chat_stream`/`llm_chat_stream_resume`/`ai_get_tool_definitions` call.
+export type ConversationMode = "agent" | "plan" | "question";
+
 /**
  * Mirrors `domain::ai_tools::CheckKind`. `"problems"` = workspace
  * diagnostics (Problems panel). `"standards"` = the API-documentation
@@ -82,6 +89,7 @@ export type ToolCall =
   | { tool: "deleteDirectory"; args: { path: string; recursive: boolean | null } }
   | { tool: "move"; args: { path: string; newPath: string } }
   | { tool: "requestFullRepoAccess"; args: { reason: string } }
+  | { tool: "requestModeSwitch"; args: { mode: ConversationMode; reason: string } }
   | { tool: "todoWrite"; args: { titles: string[] } }
   | { tool: "todoUpdate"; args: { id: string; status: "completed" | "cancelled"; note: string | null } }
   | {
@@ -150,6 +158,7 @@ export type ToolResult =
   | { tool: "directoryDeleted"; result: { path: string } }
   | { tool: "moved"; result: { from: string; to: string; updatedFiles: UpdatedReference[] } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } }
+  | { tool: "modeSwitchRequested"; result: { mode: ConversationMode; reason: string } }
   | { tool: "todoWritten"; result: Task[] }
   | { tool: "todoUpdated"; result: Task[] }
   | { tool: "memory"; result: { text: string } };
@@ -235,8 +244,9 @@ export type LlmToolDefinition = {
 };
 
 /** The tools currently allowed for the open project's persisted access
- * mode/allowlist — the same source `llm_chat_stream` uses for real
- * function-calling (`services::ai_tools::llm_tool_definitions`). */
-export function getToolDefinitions(): Promise<LlmToolDefinition[]> {
-  return invoke<LlmToolDefinition[]>("ai_get_tool_definitions");
+ * mode/allowlist, intersected with `conversationMode`'s own tool subset —
+ * the same source `llm_chat_stream` uses for real function-calling
+ * (`services::ai_tools::llm_tool_definitions`). */
+export function getToolDefinitions(conversationMode: ConversationMode): Promise<LlmToolDefinition[]> {
+  return invoke<LlmToolDefinition[]>("ai_get_tool_definitions", { conversationMode });
 }

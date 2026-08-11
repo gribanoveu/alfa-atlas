@@ -43,6 +43,7 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{call_requires_confirmation, ToolName};
 use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
+use crate::domain::conversation_mode::{mode_tools, ConversationMode};
 use crate::domain::llm::{
     sanitize_tool_call_arguments, ChatDone, ChatRequest, ChatResponse, ChatStreamOutcome,
     ChatStreamResult, LlmMessage, LlmModelInfo, LlmProvider, LlmProviderConfig, LlmRole,
@@ -356,6 +357,13 @@ struct LoopCtx<'a> {
     settings: &'a LlmSettings,
     deps: &'a EmbeddingDeps,
     cancel_flag: &'a ChatCancelFlag,
+    /// Pinned for the whole call — unlike `scope`/`tools` (which
+    /// `RequestFullRepoAccess` widens mid-loop), a `RequestModeSwitch`
+    /// deliberately does *not* take effect within the same turn (see
+    /// `domain::conversation_mode`'s doc comment and `services::ai_tools::
+    /// execute_tool`'s `RequestModeSwitch` arm) — so this never changes for
+    /// the lifetime of one `run_tool_loop` call.
+    conversation_mode: ConversationMode,
 }
 
 /// The shared tool-calling loop both `llm_chat_stream` (fresh start,
@@ -549,9 +557,23 @@ fn run_tool_loop(
             let outcome: Result<ToolResult, String> = if denied {
                 Err("denied by user".to_string())
             } else {
-                ai_tools::parse_tool_call(call)
-                    .and_then(|parsed| ai_tools::execute_tool_logged(&scope, parsed, ctx.deps, &todos, &log_ctx))
-                    .map_err(|e| e.to_string())
+                ai_tools::parse_tool_call(call).map_err(|e| e.to_string()).and_then(|parsed| {
+                    // Defense in depth alongside `llm_tool_definitions`'s own
+                    // mode-aware filtering (see `commands::ai_tools::
+                    // ai_get_tool_definitions`/this function's `tools`
+                    // param) — the model shouldn't be *offered* a tool
+                    // outside `ctx.conversation_mode`, but this catches it
+                    // regardless (a hallucinated name, or a call queued
+                    // before a since-changed mode).
+                    if !mode_tools(ctx.conversation_mode).contains(&parsed.name()) {
+                        return Err(format!(
+                            "tool '{}' is not available in the current conversation mode",
+                            call.name
+                        ));
+                    }
+                    ai_tools::execute_tool_logged(&scope, parsed, ctx.deps, &todos, &log_ctx)
+                        .map_err(|e| e.to_string())
+                })
             };
 
             let _ = ctx.app.emit(
@@ -568,7 +590,7 @@ fn run_tool_loop(
             // see this function's doc comment.
             if let Ok(ToolResult::AccessModeChanged { .. }) = &outcome {
                 if let Ok(new_scope) = ai_tools::current_scope() {
-                    tools = ai_tools::llm_tool_definitions(&new_scope);
+                    tools = ai_tools::llm_tool_definitions(&new_scope, ctx.conversation_mode);
                     scope = new_scope;
                 }
             }
@@ -656,6 +678,7 @@ pub async fn llm_chat_stream(
     messages: Vec<LlmMessage>,
     todos: Vec<Task>,
     active_file_path: Option<String>,
+    conversation_mode: ConversationMode,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
     cancel_flag: State<'_, Arc<ChatCancelFlag>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
@@ -705,7 +728,7 @@ pub async fn llm_chat_stream(
         // `ai_execute_tool` does for the same condition.
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
         deps.active_file = resolve_active_file(&scope, active_file_path);
-        let tools = ai_tools::llm_tool_definitions(&scope);
+        let tools = ai_tools::llm_tool_definitions(&scope, conversation_mode);
 
         let ctx = LoopCtx {
             app: &app,
@@ -715,6 +738,7 @@ pub async fn llm_chat_stream(
             settings: &settings,
             deps: &deps,
             cancel_flag: &cancel_flag,
+            conversation_mode,
         };
         run_tool_loop(&ctx, scope, tools, messages, 0, 0, None, todos)
     })
@@ -743,6 +767,11 @@ pub async fn llm_chat_stream_resume(
     decisions: Vec<ToolCallDecision>,
     todos: Vec<Task>,
     active_file_path: Option<String>,
+    // The exact mode the paused round started with — the frontend must echo
+    // back whatever it sent to the `llm_chat_stream`/prior-resume call that
+    // produced this `PendingApproval`, not read a possibly-since-changed
+    // live value. See `LoopCtx::conversation_mode`'s doc comment.
+    conversation_mode: ConversationMode,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
     cancel_flag: State<'_, Arc<ChatCancelFlag>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
@@ -787,7 +816,7 @@ pub async fn llm_chat_stream_resume(
 
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
         deps.active_file = resolve_active_file(&scope, active_file_path);
-        let tools = ai_tools::llm_tool_definitions(&scope);
+        let tools = ai_tools::llm_tool_definitions(&scope, conversation_mode);
 
         let last = history
             .last()
@@ -819,6 +848,7 @@ pub async fn llm_chat_stream_resume(
             settings: &settings,
             deps: &deps,
             cancel_flag: &cancel_flag,
+            conversation_mode,
         };
         run_tool_loop(&ctx, scope, tools, history, round, budget_used, Some((calls, decisions)), todos)
     })

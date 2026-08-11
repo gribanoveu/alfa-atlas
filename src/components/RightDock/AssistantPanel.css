@@ -2183,14 +2183,6 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   background: var(--accent-dim);
 }
 
-.assistant-mode-option-soon {
-  flex: none;
-  font-size: calc(var(--font-ui-sm) * 0.85);
-  color: var(--text-2);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
 
 /* =========================================================
    Setup prompt

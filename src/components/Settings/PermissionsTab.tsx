@@ -37,6 +37,7 @@ const ALLOWED_TOOL_ORDER = [
   "requestFullRepoAccess",
   "todo",
   "memory",
+  "requestModeSwitch",
 ];
 
 /** Per-project "always allow" list for the assistant's tool-calling loop

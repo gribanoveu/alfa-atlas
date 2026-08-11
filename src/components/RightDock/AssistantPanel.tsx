@@ -7,7 +7,7 @@ import { useChatHistory } from "../../hooks/useChatHistory";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
 import { useToolDefinitions } from "../../hooks/useToolDefinitions";
-import type { AiAccessMode } from "../../lib/aiTools";
+import type { AiAccessMode, ConversationMode } from "../../lib/aiTools";
 import type { ChatExportFormat } from "../../lib/chatExport";
 import { chatMessagesToJson, chatMessagesToMarkdown, sanitizeFilename, writeExportFile } from "../../lib/chatExport";
 import { deriveChatTitle } from "../../lib/chatHistory";
@@ -109,7 +109,13 @@ export function AssistantPanel({
     refresh: refreshAccessMode,
   } = useAiAccessMode();
   const { settings, providers, hasApiKeyMap, updateProviderConfig, loadModels } = useLlmSetup();
-  const { definitions: toolDefinitions } = useToolDefinitions(accessMode ?? "docsOnly");
+  // Session-scoped, like `accessMode`: survives switching between chats but
+  // isn't persisted per chat or to disk — resets only on app restart. A
+  // manual `ChatModeSelect` click and an approved `requestModeSwitch` tool
+  // call both flow through this one setter, see `AssistantConversation`'s
+  // `onConversationModeChange` doc comment.
+  const [conversationMode, setConversationMode] = useState<ConversationMode>("agent");
+  const { definitions: toolDefinitions } = useToolDefinitions(accessMode ?? "docsOnly", conversationMode);
 
   const activeProviderId = settings?.activeProviderId ?? providers[0]?.id ?? null;
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;
@@ -320,6 +326,8 @@ export function AssistantPanel({
                 onSendingChange={setConversationSending}
                 providerId={activeProviderId}
                 accessMode={accessMode ?? "docsOnly"}
+                conversationMode={conversationMode}
+                onConversationModeChange={setConversationMode}
                 specsRepoInfo={specsRepoInfo}
                 toolDefinitions={toolDefinitions}
                 docsRootRelativeToRepo={docsRootPrefix}

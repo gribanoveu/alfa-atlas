@@ -18,11 +18,13 @@ use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
     CheckArgs, CheckKind, CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs,
     FileDiffStats, FileEdit, GitBlameArgs, GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs,
-    MatchSource, MemoryArgs, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs, SemanticSearchArgs,
-    Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError,
-    ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
+    MatchSource, MemoryArgs, MoveArgs, ReadFileArgs, RequestFullRepoAccessArgs,
+    RequestModeSwitchArgs, SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus,
+    TodoWriteArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope,
+    WriteFileArgs,
 };
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
+use crate::domain::conversation_mode::{mode_tools, ConversationMode};
 use crate::domain::git::GitDiffScope;
 use crate::domain::llm::{
     ChatRequest, LlmMessage, LlmProvider, LlmRole, LlmToolCall, LlmToolDefinition,
@@ -199,6 +201,15 @@ pub fn execute_tool(
         ToolCall::TodoWrite(args) => todo_write(todos, args).map(ToolResult::TodoWritten),
         ToolCall::TodoUpdate(args) => todo_update(todos, args).map(ToolResult::TodoUpdated),
         ToolCall::Memory(args) => memory(scope, args).map(|text| ToolResult::Memory { text }),
+        // No state to mutate — `ConversationMode` isn't persisted anywhere
+        // server-side (see `domain::conversation_mode`'s doc comment); this
+        // is a pure acknowledgement the frontend reacts to once the call
+        // settles, same as `commands::llm::run_tool_loop` deliberately does
+        // *not* re-scope mid-round for this tool the way it does for
+        // `RequestFullRepoAccess`.
+        ToolCall::RequestModeSwitch(args) => {
+            Ok(ToolResult::ModeSwitchRequested { mode: args.mode, reason: args.reason })
+        }
     }
 }
 
@@ -520,6 +531,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "memory" => lenient_json_object::<MemoryArgs>(&call.arguments)
             .map(ToolCall::Memory)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "requestModeSwitch" => lenient_json_object::<RequestModeSwitchArgs>(&call.arguments)
+            .map(ToolCall::RequestModeSwitch)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
 }
@@ -632,9 +646,17 @@ fn lenient_json_object<T: serde::de::DeserializeOwned>(input: &str) -> Result<T,
 /// hand-kept in sync with `ToolCall`/`ReadFileArgs`/`ListFilesArgs`/
 /// `SemanticSearchArgs` — see this module's schema round-trip test, which
 /// catches drift between the two.
-pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
+pub fn llm_tool_definitions(
+    scope: &ToolScope,
+    conversation_mode: ConversationMode,
+) -> Vec<LlmToolDefinition> {
+    // A tool reaches the model only if it clears *both* independent axes:
+    // the project's own allowlist (`scope`, persisted, "does this project
+    // permit this tool at all") and the current conversation mode
+    // (`mode_tools`, per-session, "does this task-type need it right now").
+    let visible = |tool: ToolName| scope.allows(tool) && mode_tools(conversation_mode).contains(&tool);
     let mut defs = Vec::new();
-    if scope.allows(ToolName::ListFiles) {
+    if visible(ToolName::ListFiles) {
         defs.push(LlmToolDefinition {
             name: "listFiles".to_string(),
             description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use this tool to discover files, locate files, or inspect directories. Returns an indented ASCII tree (directories end with `/`), not a flat list. The tree's first line is a display-only label for the current root (in Full-repo mode it may be the repository folder name); it is not part of any path argument. Child entries are relative to the current access-mode root. Do not manually prepend a documentation-root or repository-root segment to `path` — it is already relative to the current root. In Docs-only mode the listing includes only text documentation types (AsciiDoc, Markdown, JSON/YAML, PlantUML, Mermaid, plain text) — image binaries (.png/.svg/…) under the docs tree are intentionally omitted even when they exist on disk and are valid `image::` targets; do not treat their absence from this listing as a missing or dangling link (use check kind \"problems\" for missingImage). In Full-repo mode image files may appear; they are assets, not text to readFile."
@@ -660,7 +682,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::ReadFile) {
+    if visible(ToolName::ReadFile) {
         defs.push(LlmToolDefinition {
             name: "readFile".to_string(),
             description: "Read the text content of one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details. Prefer a line range for a large file when only part of it is relevant. Paths returned by grep, and paths constructed from listFiles entries (excluding the tree's display-only root label), are already correctly rooted — pass them here as-is, with no manual prefix added or stripped."
@@ -687,7 +709,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::SemanticSearch) {
+    if visible(ToolName::SemanticSearch) {
         defs.push(LlmToolDefinition {
             name: "semanticSearch".to_string(),
             description:
@@ -710,7 +732,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::Grep) {
+    if visible(ToolName::Grep) {
         defs.push(LlmToolDefinition {
             name: "grep".to_string(),
             description:
@@ -745,7 +767,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::GitDiff) {
+    if visible(ToolName::GitDiff) {
         defs.push(LlmToolDefinition {
             name: "gitDiff".to_string(),
             description:
@@ -772,7 +794,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::GitBlame) {
+    if visible(ToolName::GitBlame) {
         defs.push(LlmToolDefinition {
             name: "gitBlame".to_string(),
             description:
@@ -800,7 +822,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::Check) {
+    if visible(ToolName::Check) {
         defs.push(LlmToolDefinition {
             name: "check".to_string(),
             description:
@@ -823,7 +845,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::WriteFile) {
+    if visible(ToolName::WriteFile) {
         defs.push(LlmToolDefinition {
             name: "writeFile".to_string(),
             description:
@@ -845,7 +867,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::EditFile) {
+    if visible(ToolName::EditFile) {
         defs.push(LlmToolDefinition {
             name: "editFile".to_string(),
             description:
@@ -882,7 +904,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::DeleteFile) {
+    if visible(ToolName::DeleteFile) {
         defs.push(LlmToolDefinition {
             name: "deleteFile".to_string(),
             description:
@@ -900,7 +922,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::CreateDirectory) {
+    if visible(ToolName::CreateDirectory) {
         defs.push(LlmToolDefinition {
             name: "createDirectory".to_string(),
             description:
@@ -923,7 +945,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::DeleteDirectory) {
+    if visible(ToolName::DeleteDirectory) {
         defs.push(LlmToolDefinition {
             name: "deleteDirectory".to_string(),
             description:
@@ -945,7 +967,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::Move) {
+    if visible(ToolName::Move) {
         defs.push(LlmToolDefinition {
             name: "move".to_string(),
             description:
@@ -967,7 +989,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::RequestFullRepoAccess) {
+    if visible(ToolName::RequestFullRepoAccess) {
         defs.push(LlmToolDefinition {
             name: "requestFullRepoAccess".to_string(),
             description:
@@ -985,7 +1007,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::Todo) {
+    if visible(ToolName::Todo) {
         defs.push(LlmToolDefinition {
             name: "todo".to_string(),
             description: "Manage your working task checklist for a multi-step request (3+ steps). One tool, two operations selected via `op`. `op: \"write\"` adds new task titles (`tasks`, an array of short imperative strings, 3-7 words each) to the end of the checklist; the runtime assigns each an id and, if the checklist was empty before this call, marks the first of the new tasks in_progress automatically (the rest start pending) — calling `write` again later appends more titles to the end, it never replaces or clears the existing list. `op: \"update\"` changes one existing task, named by `id` exactly as shown in your current checklist, to `status: \"completed\"` or `status: \"cancelled\"` (optionally with a short `note`: a brief result for a completed task, or the reason for a cancelled one) — these are the ONLY two status values you may set; you can never set `pending` or `in_progress` yourself, the runtime handles those transitions automatically, including auto-activating the next pending task the instant the current one is completed or cancelled. There is no `read` operation: your current checklist, with the active task marked, is always shown to you at the top of your context — never call this tool just to see the list. Do not use this tool for a task with only 1-2 steps, that is a wasted call. At most 20 tasks total in one checklist."
@@ -1021,7 +1043,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
             }),
         });
     }
-    if scope.allows(ToolName::Memory) {
+    if visible(ToolName::Memory) {
         defs.push(LlmToolDefinition {
             name: "memory".to_string(),
             description: "Permanent OptMem-style agent memory that outlives sessions and compaction. Two scopes: \"project\" (`{repo}/.atlas/memory`, shareable via git) for repo/docs facts and decisions; \"global\" (`~/.atlas/memory`) for user preferences across projects. Ops: \"wake\" reads the compressed context (also auto-injected at the start of each turn when this tool is allowed — call again only to continue a multi-part wake or after finishing pending naps); \"note\" appends one lasting fact as a dense telegram-style line (prefer ≤ ~120 UTF-8 bytes / ~60 Cyrillic chars; hard cap ~560 bytes) — never a paragraph or stack dump; split multiple facts into multiple notes; do not note redundant memories; pauses for user approval unless the user previously chose \"always allow\" for memory, and the user may deny a note (do not retry automatically after a denial); \"nap\" saves a compression summary the previous note/wake asked for (`block` like \"0-15\" and `text` = the one-line summary) and runs without a confirmation pause; \"recall\" searches every raw memory with a regex; \"zoom\" opens a tree node `#a-b` into its two halves; \"forget\" drops a bad summary so the next nap rebuilds it (the raw log is never deleted) — requires approval like note; \"config\" shows sizes, or sets WAKE_LINES/ENTRY_CHARS/PART_CHARS/PART_LINES via `knob` \"NAME=VALUE\" (setting a knob requires approval). If note/wake asks for a compression, do nap before your next action.".to_string(),
@@ -1064,6 +1086,29 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
                     }
                 },
                 "required": ["op", "scope"]
+            }),
+        });
+    }
+    if visible(ToolName::RequestModeSwitch) {
+        defs.push(LlmToolDefinition {
+            name: "requestModeSwitch".to_string(),
+            description:
+                "Request switching the conversation to a different mode (\"agent\", \"plan\", or \"question\") when the current mode structurally cannot do what the user is asking. In Plan mode, when asked to actually implement/apply something: request \"agent\". In Question mode, when a request needs a multi-step plan: request \"plan\"; when it needs actual file changes: request \"agent\". In Agent mode, when the request is really just a question with no changes needed: request \"question\"; when it clearly needs a plan drafted first: request \"plan\". Requires a stated reason, and always requires explicit user approval — the user may deny it. Do not call this speculatively; only when the current mode is genuinely the wrong fit for the request. An approved switch does not change the toolset mid-turn: the new mode applies starting with the next user message — after approval, confirm briefly and stop; do not attempt tools that only the new mode would allow."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["agent", "plan", "question"],
+                        "description": "The mode being requested."
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the current mode doesn't fit the current request."
+                    }
+                },
+                "required": ["mode", "reason"]
             }),
         });
     }
@@ -5056,6 +5101,51 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_request_mode_switch_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "requestModeSwitch".to_string(),
+            arguments: r#"{"mode":"agent","reason":"user asked to implement the change"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::RequestModeSwitch(RequestModeSwitchArgs {
+                mode: ConversationMode::Agent,
+                reason: "user asked to implement the change".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn execute_tool_acknowledges_a_mode_switch_request_without_mutating_anything() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps::empty();
+
+        let result = execute_tool(
+            &scope,
+            ToolCall::RequestModeSwitch(RequestModeSwitchArgs {
+                mode: ConversationMode::Plan,
+                reason: "just drafting a plan first".to_string(),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            ToolResult::ModeSwitchRequested {
+                mode: ConversationMode::Plan,
+                reason: "just drafting a plan first".to_string(),
+            }
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn parse_tool_call_rejects_unknown_tool_name() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -5147,11 +5237,11 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_sixteen_by_default() {
+    fn llm_tool_definitions_includes_all_seventeen_in_agent_mode_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
-        let defs = llm_tool_definitions(&scope);
+        let defs = llm_tool_definitions(&scope, ConversationMode::Agent);
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(
             names,
@@ -5171,7 +5261,8 @@ mod tests {
                 "move",
                 "requestFullRepoAccess",
                 "todo",
-                "memory"
+                "memory",
+                "requestModeSwitch"
             ]
         );
 
@@ -5184,9 +5275,34 @@ mod tests {
         let only_list: HashSet<ToolName> = [ToolName::ListFiles].into_iter().collect();
         let scope = ToolScope::new(&repo, &docs, AiAccessMode::DocsOnly, only_list);
 
-        let defs = llm_tool_definitions(&scope);
+        let defs = llm_tool_definitions(&scope, ConversationMode::Agent);
         let names: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, vec!["listFiles"]);
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn llm_tool_definitions_excludes_mutation_tools_in_plan_and_question_mode() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let plan_names: HashSet<String> = llm_tool_definitions(&scope, ConversationMode::Plan)
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert!(!plan_names.contains("writeFile"));
+        assert!(!plan_names.contains("todo"));
+        assert!(plan_names.contains("requestFullRepoAccess"));
+        assert!(plan_names.contains("requestModeSwitch"));
+
+        let question_names: HashSet<String> = llm_tool_definitions(&scope, ConversationMode::Question)
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+        assert!(!question_names.contains("writeFile"));
+        assert!(!question_names.contains("requestFullRepoAccess"));
+        assert!(question_names.contains("requestModeSwitch"));
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -5195,7 +5311,7 @@ mod tests {
     fn llm_tool_definitions_parameters_round_trip_a_realistic_arguments_payload() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
-        let defs = llm_tool_definitions(&scope);
+        let defs = llm_tool_definitions(&scope, ConversationMode::Agent);
 
         let read_file = defs.iter().find(|d| d.name == "readFile").unwrap();
         assert_eq!(read_file.parameters["required"], serde_json::json!(["path"]));
