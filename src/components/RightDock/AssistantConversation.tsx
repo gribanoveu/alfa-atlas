@@ -10,11 +10,12 @@ import {
 } from "../../lib/assistantConfig";
 import type { AssistantSuggestion } from "../../lib/assistantConfig";
 import type { AiAccessMode, LlmToolDefinition, Task } from "../../lib/aiTools";
-import type { ChatMessage } from "../../lib/chatBlocks";
+import { groupBlocksForRender, type ChatMessage } from "../../lib/chatBlocks";
 import type { LlmModelInfo, LlmProviderConfig, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
+import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import { TodoProgressWidget } from "./TodoProgressWidget";
 
@@ -495,20 +496,22 @@ export function AssistantConversation({
                     </span>
                   ) : (
                     <div className="assistant-chat-blocks">
-                      {m.blocks.map((block, i) =>
-                        block.type === "text" ? (
-                          <AssistantMarkdown
-                            key={block.id}
-                            content={block.content}
-                            streaming={Boolean(m.streaming) && i === m.blocks.length - 1}
-                          />
-                        ) : (
-                          <AssistantToolCallBlock
-                            key={block.id}
-                            block={block}
+                      {groupBlocksForRender(m.blocks).map((item, i, arr) =>
+                        item.kind === "approvalGroup" ? (
+                          <AssistantToolApprovalGroup
+                            key={item.blocks[0]!.id}
+                            blocks={item.blocks}
                             docsRoot={docsRoot}
                             onDecide={decideToolCall}
                           />
+                        ) : item.block.type === "text" ? (
+                          <AssistantMarkdown
+                            key={item.block.id}
+                            content={item.block.content}
+                            streaming={Boolean(m.streaming) && i === arr.length - 1}
+                          />
+                        ) : (
+                          <AssistantToolCallBlock key={item.block.id} block={item.block} />
                         ),
                       )}
                       {stopped ? <div className="assistant-chat-cancelled-note">Остановлено пользователем</div> : null}

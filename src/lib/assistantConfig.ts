@@ -895,6 +895,28 @@ export const CONTEXT_COMPACTION_MIN_MESSAGES = CONTEXT_COMPACTION_KEEP_LAST_MESS
 // actually fires.
 export const TOOL_APPROVAL_TIMEOUT_MS = 30_000;
 
+/** Static Russian labels for the tools a pending-approval card's "не
+ * спрашивать больше"/"Разрешать всегда" controls can apply to
+ * (`domain::ai_access::call_requires_confirmation` in Rust — `Todo` is never
+ * among them, see `AI_HARNESS.md`'s "Tool-calling loop"). `memory` pauses on
+ * `note`/`forget`/`config` (not `nap`/reads); trust is still granted per
+ * tool name, same as every other entry here, so trusting it once covers all
+ * future gated memory ops. Falls back to the raw wire name for anything
+ * unrecognized, so a future tool never silently disappears from this list
+ * before this map is updated. Shared by `PermissionsTab` (revoking) and
+ * `AssistantToolApprovalGroup` (granting) so both show the exact same
+ * copy. */
+export const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
+  writeFile: "Запись файлов (writeFile)",
+  editFile: "Редактирование файлов (editFile)",
+  deleteFile: "Удаление файлов (deleteFile)",
+  createDirectory: "Создание папок (createDirectory)",
+  deleteDirectory: "Удаление папок (deleteDirectory)",
+  move: "Перемещение / переименование (move)",
+  requestFullRepoAccess: "Запрос доступа к репозиторию (requestFullRepoAccess)",
+  memory: "Изменение памяти (memory note/forget/config)",
+};
+
 // Suggestion chips shown in the assistant panel's empty-state placeholder
 // (`AssistantConversation`) before the first message is sent. Clicking one
 // fills the compose box via `setDraft` without sending — the user can still

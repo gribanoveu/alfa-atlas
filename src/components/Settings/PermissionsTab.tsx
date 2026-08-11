@@ -1,26 +1,8 @@
 import { ShieldOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { getAllowedTools, getAutoApprovedTools, setToolAllowed, setToolAutoApproved } from "../../lib/aiTools";
+import { AUTO_APPROVABLE_TOOL_LABELS } from "../../lib/assistantConfig";
 import "./PermissionsTab.css";
-
-/** Static Russian labels for the tools an approval card's "Разрешать
- * всегда" button can apply to (`domain::ai_access::call_requires_confirmation`
- * in Rust — `Todo` is never among them, see `AI_HARNESS.md`'s "Tool-calling
- * loop"). `memory` pauses on `note`/`forget`/`config` (not `nap`/reads);
- * trust is still granted per tool name, same as every other entry here, so
- * trusting it once covers all future gated memory ops. Falls back to the
- * raw wire name for anything unrecognized, so a future tool never silently
- * disappears from this list before this map is updated. */
-const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
-  writeFile: "Запись файлов (writeFile)",
-  editFile: "Редактирование файлов (editFile)",
-  deleteFile: "Удаление файлов (deleteFile)",
-  createDirectory: "Создание папок (createDirectory)",
-  deleteDirectory: "Удаление папок (deleteDirectory)",
-  move: "Перемещение / переименование (move)",
-  requestFullRepoAccess: "Запрос доступа к репозиторию (requestFullRepoAccess)",
-  memory: "Изменение памяти (memory note/forget/config)",
-};
 
 /** Every `ToolName` variant (`src-tauri/src/domain/ai_access.rs`), in the
  * same order the Rust enum declares them — reuses `AUTO_APPROVABLE_TOOL_LABELS`

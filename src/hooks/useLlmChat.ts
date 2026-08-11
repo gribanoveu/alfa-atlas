@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getAutoApprovedTools, getMemoryWake, setToolAutoApproved, type AiAccessMode, type LlmToolDefinition, type Task } from "../lib/aiTools";
+import {
+  getAutoApprovedTools,
+  getMemoryWake,
+  onAutoApprovedToolsChange,
+  setToolAutoApproved,
+  type AiAccessMode,
+  type LlmToolDefinition,
+  type Task,
+} from "../lib/aiTools";
 import {
   buildAccessModeChangeNotice,
   buildAssistantSystemPrompt,
@@ -118,14 +126,26 @@ export function useLlmChat(
   // всегда" in this chat. Runs once per mount, matching `trustedToolsRef`'s
   // own per-chat-mount lifetime; a project switch remounts this hook (new
   // `providerId`/chat) so there's no stale cross-project leak to guard.
+  //
+  // Also subscribes to every later `setToolAutoApproved` call for as long as
+  // this hook stays mounted — in particular a revoke from `PermissionsTab`
+  // while this exact chat panel is already open. Without this, revoking a
+  // tool only updates the persisted project config; this panel's
+  // `trustedToolsRef` would keep the stale entry and go on silently
+  // auto-approving that "revoked" tool for the rest of its mounted lifetime.
   useEffect(() => {
     let cancelled = false;
     void getAutoApprovedTools().then((tools) => {
       if (cancelled) return;
       for (const tool of tools) trustedToolsRef.current.add(tool);
     });
+    const unsubscribe = onAutoApprovedToolsChange(({ tool, autoApproved }) => {
+      if (autoApproved) trustedToolsRef.current.add(tool);
+      else trustedToolsRef.current.delete(tool);
+    });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, []);
 
@@ -197,6 +217,7 @@ export function useLlmChat(
       const decided = new Map<string, boolean>();
       const timers = new Map<string, ReturnType<typeof setTimeout>>();
       const deadlineAt = Date.now() + TOOL_APPROVAL_TIMEOUT_MS;
+      const approvalGroupId = crypto.randomUUID();
 
       const decide = (id: string, approved: boolean, trust: boolean) => {
         if (decided.has(id) || !calls.some((c) => c.id === id)) return;
@@ -229,7 +250,13 @@ export function useLlmChat(
         updateLastAssistantBlocks(prev, (blocks) =>
           calls.reduce(
             (acc, c) =>
-              appendPendingApprovalBlock(acc, { id: c.id, name: c.name, argumentsJson: c.arguments, deadlineAt }),
+              appendPendingApprovalBlock(acc, {
+                id: c.id,
+                name: c.name,
+                argumentsJson: c.arguments,
+                deadlineAt,
+                approvalGroupId,
+              }),
             blocks,
           ),
         ),

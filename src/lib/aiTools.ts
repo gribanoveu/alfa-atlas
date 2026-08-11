@@ -182,10 +182,29 @@ export function getAutoApprovedTools(): Promise<string[]> {
   return invoke<string[]>("ai_get_auto_approved_tools");
 }
 
+type AutoApprovedToolsChange = { tool: string; autoApproved: boolean };
+
+const autoApprovedToolsListeners = new Set<(change: AutoApprovedToolsChange) => void>();
+
+/** Live-subscribes to every successful `setToolAutoApproved` call, from
+ * *any* caller — an approval card's "Разрешать всегда", or a revoke in
+ * `PermissionsTab`. `useLlmChat`'s `trustedToolsRef` is only ever loaded
+ * once per chat-panel mount (see its own doc comment); without this, a
+ * revoke made in Settings while a chat panel is already open would never
+ * reach that panel's in-memory trust set, and it would keep silently
+ * auto-approving the "revoked" tool for the rest of its mounted lifetime.
+ * Returns an unsubscribe function. */
+export function onAutoApprovedToolsChange(listener: (change: AutoApprovedToolsChange) => void): () => void {
+  autoApprovedToolsListeners.add(listener);
+  return () => autoApprovedToolsListeners.delete(listener);
+}
+
 /** Persists (or revokes) one tool's "always allow" status for the currently
- * open project. */
-export function setToolAutoApproved(tool: string, autoApproved: boolean): Promise<void> {
-  return invoke("ai_set_tool_auto_approved", { tool, autoApproved });
+ * open project, then notifies every `onAutoApprovedToolsChange` listener —
+ * see that function's doc comment for why the notification matters. */
+export async function setToolAutoApproved(tool: string, autoApproved: boolean): Promise<void> {
+  await invoke("ai_set_tool_auto_approved", { tool, autoApproved });
+  for (const listener of autoApprovedToolsListeners) listener({ tool, autoApproved });
 }
 
 /** Tool names the currently open project actually allows right now — the

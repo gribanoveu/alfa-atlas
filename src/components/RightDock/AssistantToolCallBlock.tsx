@@ -1,19 +1,8 @@
 import { AlertCircle, Bot, Check, ChevronDown, ChevronRight, Clock, File, Folder, Loader2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import {
-  basename,
-  describeMatchSource,
-  describeToolActivity,
-  describeToolResult,
-  formatToolArguments,
-  TOOL_APPROVAL_TIMEOUT_MS,
-} from "../../lib/assistantConfig";
-import type { FileDiffStats, FileEdit, Task, ToolResult, TodoStatus } from "../../lib/aiTools";
+import { useState } from "react";
+import { describeMatchSource, describeToolActivity, describeToolResult, formatToolArguments } from "../../lib/assistantConfig";
+import type { FileDiffStats, Task, ToolResult, TodoStatus } from "../../lib/aiTools";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
-import { DeleteDirectoryReview } from "./DeleteDirectoryReview";
-import { DeleteFileReview } from "./DeleteFileReview";
-import { EditFileDiffReview } from "./EditFileDiffReview";
-import { WriteFileDiffReview } from "./WriteFileDiffReview";
 
 /** A file's content can be arbitrarily large — this caps how much of it the
  * expanded detail view renders, purely as a rendering safeguard (the model
@@ -24,46 +13,6 @@ const MAX_DETAIL_CHARS = 4000;
 function truncateForDisplay(text: string): { text: string; truncated: boolean } {
   if (text.length <= MAX_DETAIL_CHARS) return { text, truncated: false };
   return { text: text.slice(0, MAX_DETAIL_CHARS), truncated: true };
-}
-
-function parseArgs(argumentsJson: string): Record<string, unknown> {
-  try {
-    const parsed: unknown = JSON.parse(argumentsJson);
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
-/** Docs-relative paths the REST-method folder scaffold will create — mirrors
- * `services::ai_tools::rest_endpoint_created_files` / `docs_fs::create_rest_endpoint_folder`. */
-function restEndpointPreviewFiles(folderPath: string): string[] {
-  const parts = folderPath.split("/").filter(Boolean);
-  const methodName = parts.length > 0 ? parts[parts.length - 1]! : folderPath;
-  const child = (name: string) =>
-    folderPath === "" || folderPath === "." ? name : `${folderPath}/${name}`;
-  return [
-    child(`${methodName}.adoc`),
-    child("request.adoc"),
-    child("response.adoc"),
-    child(`${methodName}.puml`),
-  ];
-}
-
-/** Guards a pending `editFile` call's `args.edits` before handing it to
- * `EditFileDiffReview` — `parseArgs` only guarantees valid JSON, not this
- * shape. */
-function isFileEditArray(value: unknown): value is FileEdit[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (e) =>
-        e !== null &&
-        typeof e === "object" &&
-        typeof (e as FileEdit).old === "string" &&
-        typeof (e as FileEdit).new === "string",
-    )
-  );
 }
 
 /** `diff` for a settled `writeFile`/`editFile`/`deleteFile` call, or `null`
@@ -140,12 +89,6 @@ function DiffLines({ diff }: { diff: FileDiffStats }) {
 
 type AssistantToolCallBlockProps = {
   block: ToolCallBlock;
-  /** The open project's docs root — needed by the `writeFile` approval
-   * card's diff preview to fetch the file's current content. */
-  docsRoot: string;
-  /** Called from a `"pendingApproval"` card's Approve/Deny buttons — see
-   * `useLlmChat`'s `decideToolCall`. Unused for every other block status. */
-  onDecide: (id: string, approved: boolean, trust: boolean) => void;
 };
 
 /** One permanent, chronological entry for a single tool invocation inside
@@ -155,20 +98,17 @@ type AssistantToolCallBlockProps = {
  * Never disappears once appended, unlike the old transient `toolActivity`
  * list it replaces — see `useLlmChat`'s `MessageBlock` model.
  *
- * A `"pendingApproval"` block (`writeFile`/`requestFullRepoAccess` awaiting
- * a decision) additionally renders `ToolApprovalCard` right below the
- * header, always visible regardless of `expanded` — the user needs to see
- * and act on it immediately, not hunt for a collapsed row. It disappears on
- * its own once the block transitions away from `"pendingApproval"` (the
- * real `TOOL_CALL_EVENT`, fired once the round actually resumes with a
- * decision — manual or timed out — for every call in it).
+ * A `"pendingApproval"` block never reaches this component —
+ * `groupBlocksForRender` (`src/lib/chatBlocks.ts`) diverts every call still
+ * awaiting a decision into `AssistantToolApprovalGroup` instead; this
+ * component only ever renders `"running"`/`"done"`/`"error"`.
  *
  * Clicking the header expands a detail view — the raw arguments plus,
  * once settled, the full result (file content / file list / search
  * matches) or the full error — for inspecting exactly what happened,
  * beyond the one-line summary. Collapsed by default, matching Cursor/
  * Claude Code's own collapsed-by-default tool-call display. */
-export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantToolCallBlockProps) {
+export function AssistantToolCallBlock({ block }: AssistantToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const diff = diffStatsFor(block);
@@ -207,10 +147,6 @@ export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantT
 
       {summary ? <div className="assistant-tool-call-summary">{summary}</div> : null}
 
-      {block.status === "pendingApproval" ? (
-        <ToolApprovalCard block={block} docsRoot={docsRoot} onDecide={onDecide} />
-      ) : null}
-
       {expanded ? (
         <div className="assistant-tool-call-detail">
           {summary ? <div className="assistant-tool-call-detail-summary">{summary}</div> : null}
@@ -232,239 +168,6 @@ export function AssistantToolCallBlock({ block, docsRoot, onDecide }: AssistantT
           ) : null}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-/** Body of a `"pendingApproval"` card: whatever context helps the user
- * judge the action (a diff for `writeFile`, the stated reason for
- * `requestFullRepoAccess`), the countdown strip, a "don't ask again" button
- * that persists per-tool, per-project (`useLlmChat`'s `getAutoApprovedTools`/
- * `setToolAutoApproved`), and Approve/Deny. Disables itself the instant
- * either button is clicked — `useLlmChat`'s own timeout can still beat a
- * slow click to the punch, but this at least prevents a double decision
- * from this card itself. */
-function ToolApprovalCard({
-  block,
-  docsRoot,
-  onDecide,
-}: {
-  block: ToolCallBlock;
-  docsRoot: string;
-  onDecide: (id: string, approved: boolean, trust: boolean) => void;
-}) {
-  const [decided, setDecided] = useState(false);
-  const [showDiff, setShowDiff] = useState(false);
-  const args = useMemo(() => parseArgs(block.argumentsJson), [block.argumentsJson]);
-
-  const handleDecide = (approved: boolean, trust = false) => {
-    if (decided) return;
-    setDecided(true);
-    onDecide(block.id, approved, trust);
-  };
-
-  return (
-    <div className="assistant-tool-approval-card">
-      {block.name === "writeFile" && typeof args.path === "string" && typeof args.content === "string" ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Файл</div>
-          <button
-            type="button"
-            className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
-            aria-expanded={showDiff}
-            title={args.path}
-            onClick={() => setShowDiff((v) => !v)}
-          >
-            {showDiff ? (
-              <ChevronDown className="assistant-tool-call-chevron" size={12} aria-hidden />
-            ) : (
-              <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
-            )}
-            <span>{basename(args.path)}</span>
-          </button>
-          {showDiff ? <WriteFileDiffReview docsRoot={docsRoot} path={args.path} content={args.content} /> : null}
-        </div>
-      ) : block.name === "editFile" && typeof args.path === "string" && isFileEditArray(args.edits) ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Файл</div>
-          <button
-            type="button"
-            className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
-            aria-expanded={showDiff}
-            title={args.path}
-            onClick={() => setShowDiff((v) => !v)}
-          >
-            {showDiff ? (
-              <ChevronDown className="assistant-tool-call-chevron" size={12} aria-hidden />
-            ) : (
-              <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
-            )}
-            <span>{basename(args.path)}</span>
-            <span className="assistant-tool-approval-edit-count">Правок: {args.edits.length}</span>
-          </button>
-          {showDiff ? <EditFileDiffReview docsRoot={docsRoot} path={args.path} edits={args.edits} /> : null}
-        </div>
-      ) : block.name === "createDirectory" && typeof args.path === "string" ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Папка</div>
-          <div className="assistant-tool-approval-path" title={args.path}>
-            {basename(args.path)}
-          </div>
-          {args.template === "restEndpoint" ? (
-            <>
-              <div className="assistant-tool-call-detail-label">Шаблон</div>
-              <div className="assistant-tool-approval-path">Документация на REST метод</div>
-              <div className="assistant-tool-call-detail-label">Будут созданы файлы</div>
-              <ul className="assistant-tool-call-detail-list">
-                {restEndpointPreviewFiles(args.path).map((file) => (
-                  <li key={file} title={file}>
-                    <File className="assistant-tool-call-detail-icon" size={12} aria-hidden />
-                    <span>{basename(file)}</span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-        </div>
-      ) : block.name === "deleteFile" && typeof args.path === "string" ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Файл будет удалён</div>
-          <button
-            type="button"
-            className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
-            aria-expanded={showDiff}
-            title={args.path}
-            onClick={() => setShowDiff((v) => !v)}
-          >
-            {showDiff ? (
-              <ChevronDown className="assistant-tool-call-chevron" size={12} aria-hidden />
-            ) : (
-              <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
-            )}
-            <span>{basename(args.path)}</span>
-          </button>
-          {showDiff ? <DeleteFileReview docsRoot={docsRoot} path={args.path} /> : null}
-        </div>
-      ) : block.name === "deleteDirectory" && typeof args.path === "string" ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Папка будет удалена</div>
-          <button
-            type="button"
-            className="assistant-tool-approval-path assistant-tool-approval-path-toggle"
-            aria-expanded={showDiff}
-            title={args.path}
-            onClick={() => setShowDiff((v) => !v)}
-          >
-            {showDiff ? (
-              <ChevronDown className="assistant-tool-call-chevron" size={12} aria-hidden />
-            ) : (
-              <ChevronRight className="assistant-tool-call-chevron" size={12} aria-hidden />
-            )}
-            <span>{basename(args.path)}</span>
-          </button>
-          {showDiff ? <DeleteDirectoryReview docsRoot={docsRoot} path={args.path} /> : null}
-        </div>
-      ) : block.name === "move" && typeof args.path === "string" && typeof args.newPath === "string" ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Перемещение</div>
-          <div className="assistant-tool-approval-path" title={`${args.path} → ${args.newPath}`}>
-            {basename(args.path)} → {basename(args.newPath)}
-          </div>
-          <div className="assistant-tool-approval-reason">
-            Ссылки на файл в других документах будут обновлены автоматически.
-          </div>
-        </div>
-      ) : block.name === "requestFullRepoAccess" && typeof args.reason === "string" ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">Причина</div>
-          <div className="assistant-tool-approval-reason">{args.reason}</div>
-        </div>
-      ) : block.name === "memory" && args.op === "note" && typeof args.text === "string" ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">
-            Новая запись в памяти
-            {args.scope === "global" ? " (глобальная)" : args.scope === "project" ? " (проектная)" : ""}
-          </div>
-          <div className="assistant-tool-approval-reason">{args.text}</div>
-        </div>
-      ) : block.name === "memory" && args.op === "forget" ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">
-            Забыть summary
-            {args.scope === "global" ? " (глобальная)" : args.scope === "project" ? " (проектная)" : ""}
-          </div>
-          <div className="assistant-tool-approval-reason">
-            {typeof args.block === "string" ? `Блок ${args.block}` : "Блок не указан"}
-          </div>
-        </div>
-      ) : block.name === "memory" && args.op === "config" ? (
-        <div className="assistant-tool-call-detail-section">
-          <div className="assistant-tool-call-detail-label">
-            Настройка памяти
-            {args.scope === "global" ? " (глобальная)" : args.scope === "project" ? " (проектная)" : ""}
-          </div>
-          <div className="assistant-tool-approval-reason">
-            {typeof args.knob === "string" && args.knob.trim()
-              ? args.knob
-              : "Изменение размеров памяти"}
-          </div>
-        </div>
-      ) : null}
-
-      <div className="assistant-tool-approval-actions">
-        <div className="assistant-tool-approval-buttons">
-          <button type="button" className="assistant-btn" disabled={decided} onClick={() => handleDecide(false)}>
-            Отклонить
-          </button>
-          <button
-            type="button"
-            className="assistant-btn"
-            disabled={decided}
-            title="Больше не спрашивать для этого инструмента в этом проекте"
-            onClick={() => handleDecide(true, true)}
-          >
-            Разрешать всегда
-          </button>
-          <button
-            type="button"
-            className="assistant-btn primary"
-            disabled={decided}
-            onClick={() => handleDecide(true)}
-          >
-            Одобрить
-          </button>
-        </div>
-      </div>
-
-      <ApprovalCountdown deadlineAt={block.deadlineAt} />
-    </div>
-  );
-}
-
-/** A strip that visually depletes from full to empty over the time
- * remaining until `deadlineAt` (`useLlmChat`'s `TOOL_APPROVAL_TIMEOUT_MS`
- * auto-deny deadline) — a single CSS `width` transition kicked off one
- * frame after mount, not a per-frame JS timer, so it stays smooth
- * regardless of render cadence. Purely visual: the actual auto-deny is a
- * real `setTimeout` in `useLlmChat`, independent of whether this component
- * is even mounted to show it. */
-function ApprovalCountdown({ deadlineAt }: { deadlineAt?: number }) {
-  const [durationMs] = useState(() =>
-    deadlineAt !== undefined ? Math.max(0, deadlineAt - Date.now()) : TOOL_APPROVAL_TIMEOUT_MS,
-  );
-  const [depleted, setDepleted] = useState(false);
-
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setDepleted(true));
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  return (
-    <div className="assistant-tool-approval-timer" aria-hidden="true">
-      <div
-        className="assistant-tool-approval-timer-fill"
-        style={{ transitionDuration: `${durationMs}ms`, width: depleted ? "0%" : "100%" }}
-      />
     </div>
   );
 }

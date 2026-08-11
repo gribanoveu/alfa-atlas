@@ -45,6 +45,12 @@ export type ToolCallBlock = {
    * the call once it passes without a manual decision. Only ever set while
    * `status === "pendingApproval"`. */
   deadlineAt?: number;
+  /** Set only while `status === "pendingApproval"` — every block created
+   * from one paused round's `collectDecisions()` call shares one generated
+   * id, letting `groupBlocksForRender` regroup them into a single combined
+   * approval card instead of one card per call. Cleared (like `deadlineAt`)
+   * once the block transitions away from `"pendingApproval"`. */
+  approvalGroupId?: string;
 };
 
 export type MessageBlock = TextBlock | ToolCallBlock;
@@ -126,7 +132,7 @@ export function appendToolCallBlock(
   if (existingIndex !== -1) {
     return blocks.map((b, i) =>
       i === existingIndex && b.type === "toolCall"
-        ? { ...b, status: "running", autoApproved: call.autoApproved, deadlineAt: undefined }
+        ? { ...b, status: "running", autoApproved: call.autoApproved, deadlineAt: undefined, approvalGroupId: undefined }
         : b,
     );
   }
@@ -152,7 +158,7 @@ export function appendToolCallBlock(
  * out. */
 export function appendPendingApprovalBlock(
   blocks: MessageBlock[],
-  call: { id: string; name: string; argumentsJson: string; deadlineAt: number },
+  call: { id: string; name: string; argumentsJson: string; deadlineAt: number; approvalGroupId: string },
 ): MessageBlock[] {
   return [
     ...blocks,
@@ -163,6 +169,7 @@ export function appendPendingApprovalBlock(
       argumentsJson: call.argumentsJson,
       status: "pendingApproval",
       deadlineAt: call.deadlineAt,
+      approvalGroupId: call.approvalGroupId,
     },
   ];
 }
@@ -225,7 +232,7 @@ export function markRunningToolCallsAsInterrupted(
 ): MessageBlock[] {
   return blocks.map((b): MessageBlock =>
     b.type === "toolCall" && (b.status === "running" || b.status === "pendingApproval")
-      ? { ...b, status: "error", errorMessage: reason, deadlineAt: undefined }
+      ? { ...b, status: "error", errorMessage: reason, deadlineAt: undefined, approvalGroupId: undefined }
       : b,
   );
 }
@@ -241,6 +248,41 @@ export function updateLastAssistantBlocks(
   const last = messages[messages.length - 1];
   if (!last || last.role !== "assistant" || !last.streaming) return messages;
   return [...messages.slice(0, -1), { ...last, blocks: updater(last.blocks) }];
+}
+
+// ---- Grouping pending approvals for render -----------------------------
+
+/** What `AssistantConversation` actually renders per entry: either one
+ * ordinary block, or a run of `"pendingApproval"` `toolCall` blocks from the
+ * same paused round collapsed into a single combined approval card. */
+export type RenderBlock =
+  | { kind: "single"; block: MessageBlock }
+  | { kind: "approvalGroup"; blocks: ToolCallBlock[] };
+
+/** Walks a message's flat `blocks`, merging any run of adjacent
+ * `"pendingApproval"` `toolCall` blocks that share one `approvalGroupId`
+ * into a single `"approvalGroup"` entry — including a run of length one, so
+ * `AssistantToolApprovalGroup` is the only card component regardless of how
+ * many calls a round paused on. Every other block passes through as
+ * `"single"` unchanged. Adjacency always holds because
+ * `appendPendingApprovalBlock` only ever appends a whole round's blocks
+ * together in one `setMessages` call (see `useLlmChat`'s
+ * `collectDecisions`). */
+export function groupBlocksForRender(blocks: MessageBlock[]): RenderBlock[] {
+  const result: RenderBlock[] = [];
+  for (const block of blocks) {
+    const groupId =
+      block.type === "toolCall" && block.status === "pendingApproval" ? block.approvalGroupId : undefined;
+    const last = result[result.length - 1];
+    if (groupId !== undefined && last?.kind === "approvalGroup" && last.blocks[0]?.approvalGroupId === groupId) {
+      last.blocks.push(block as ToolCallBlock);
+    } else if (groupId !== undefined) {
+      result.push({ kind: "approvalGroup", blocks: [block as ToolCallBlock] });
+    } else {
+      result.push({ kind: "single", block });
+    }
+  }
+  return result;
 }
 
 // ---- Flattening back to plain text (replay into future requests) ------

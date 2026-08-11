@@ -1298,13 +1298,150 @@
   background: var(--bg-1);
 }
 
-.assistant-tool-approval-card {
+/* =========================================================
+   Combined tool-approval group card (AssistantToolApprovalGroup)
+   ========================================================= */
+
+.assistant-tool-approval-group {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  margin: 2px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-1);
+  color: var(--text-2);
+}
+
+.assistant-tool-approval-group-header {
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.assistant-tool-approval-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin: 0;
-  padding: 10px 10px 10px;
-  border-top: 1px solid var(--border);
+  padding: 0;
+  list-style: none;
+}
+
+.assistant-tool-approval-group-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+}
+
+.assistant-tool-approval-group-item:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+}
+
+.assistant-tool-approval-group-item-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.assistant-tool-approval-group-item-checkbox {
+  flex: none;
+  accent-color: var(--accent);
+}
+
+/* Base look shared by the item title whether it's plain text (no
+ * expandable body — `move`, `requestFullRepoAccess`, …) or the button that
+ * toggles one open (`writeFile`'s diff, `deleteFile`'s content, …) — see
+ * `isExpandableToolCall`. The title itself is the click target for
+ * expanding, so nothing below it needs to say "Показать изменения". */
+.assistant-tool-approval-group-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-0);
+}
+
+.assistant-tool-approval-group-item-title span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.assistant-tool-approval-group-item-title-toggle {
+  padding: 2px 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+button.assistant-tool-approval-group-item-title-toggle:hover {
+  color: var(--accent);
+}
+
+.assistant-tool-approval-group-item-preview {
+  padding-left: 20px;
+}
+
+.assistant-tool-approval-group-item-preview:empty {
+  display: none;
+}
+
+/* Deliberately styled as a distinct, warning-tinted block (same
+ * `--yellow` used by admonitions/conflict banners elsewhere in the app,
+ * see `tokens.css`) rather than reusing the tiny, low-contrast
+ * `.assistant-tool-call-detail-label` style — granting persistent trust is
+ * a different kind of decision than a one-off approve, and needs to read
+ * that way instead of blending into the card. */
+.assistant-tool-approval-group-trust {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 32%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--yellow) 7%, transparent);
+}
+
+.assistant-tool-approval-group-trust-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.assistant-tool-approval-group-trust-heading svg {
+  flex: none;
+  color: var(--yellow);
+}
+
+.assistant-tool-approval-group-trust-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.assistant-tool-approval-group-trust-item:hover {
+  background: color-mix(in srgb, var(--yellow) 12%, transparent);
+  color: var(--text-0);
+}
+
+.assistant-tool-approval-group-trust-item input[type="checkbox"] {
+  accent-color: var(--yellow);
 }
 
 .assistant-tool-approval-path {
