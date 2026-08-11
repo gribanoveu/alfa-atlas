@@ -51,10 +51,19 @@ pub struct SpellcheckConfig {
     /// will almost always flag it.
     #[serde(default = "default_true")]
     pub skip_camel_case: bool,
+    /// When false, skip spellcheck for `.txt` files only. Other formats
+    /// (Markdown, AsciiDoc, JSON, YAML, diagrams, …) are unaffected.
+    /// Defaults to off.
+    #[serde(default = "default_false", alias = "checkPlain")]
+    pub check_txt: bool,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 impl Default for SpellcheckConfig {
@@ -63,6 +72,7 @@ impl Default for SpellcheckConfig {
             enabled: true,
             dictionaries: HashMap::new(),
             skip_camel_case: true,
+            check_txt: false,
         }
     }
 }
@@ -71,6 +81,22 @@ impl SpellcheckConfig {
     pub fn is_dictionary_enabled(&self, id: &str) -> bool {
         self.dictionaries.get(id).copied().unwrap_or(true)
     }
+
+    /// Whether spellcheck should run for this file path (master switch plus
+    /// the `.txt`-only override).
+    pub fn should_check_path(&self, path: &str) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        if is_txt_path(path) && !self.check_txt {
+            return false;
+        }
+        true
+    }
+}
+
+fn is_txt_path(path: &str) -> bool {
+    crate::domain::supported_files::extension_of(path) == ".txt"
 }
 
 /// The document "shape" driving how spellcheckable text is extracted, since
@@ -129,5 +155,28 @@ mod tests {
         assert!(config.enabled);
         assert!(config.dictionaries.is_empty());
         assert!(config.skip_camel_case);
+        assert!(!config.check_txt);
+    }
+
+    #[test]
+    fn deserializes_check_plain_alias_as_check_txt() {
+        let config: SpellcheckConfig =
+            serde_json::from_str(r#"{"checkPlain":true}"#).unwrap();
+        assert!(config.check_txt);
+    }
+
+    #[test]
+    fn should_check_path_respects_txt_only() {
+        let mut config = SpellcheckConfig::default();
+        assert!(!config.should_check_path("notes.txt"));
+        assert!(config.should_check_path("notes.md"));
+        assert!(config.should_check_path("data.json"));
+        assert!(config.should_check_path("diag.puml"));
+
+        config.check_txt = true;
+        assert!(config.should_check_path("notes.txt"));
+
+        config.enabled = false;
+        assert!(!config.should_check_path("notes.md"));
     }
 }

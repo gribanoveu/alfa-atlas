@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import {
   addCustomDictionaryWord,
   checkSpelling,
+  isTxtPath,
   spellcheckKindFor,
   suggestSpelling,
   type SpellcheckConfig,
@@ -52,7 +53,7 @@ export function useMonacoSpellcheck(
     let cancelled = false;
 
     const runCheck = async () => {
-      if (!config.enabled) {
+      if (!config.enabled || (isTxtPath(activeTab.path) && !config.checkTxt)) {
         issuesRef.current = [];
         monaco.editor.setModelMarkers(model, OWNER, []);
         return;
@@ -61,7 +62,7 @@ export function useMonacoSpellcheck(
       const kind = spellcheckKindFor(activeTab.path);
       let issues: SpellIssue[];
       try {
-        issues = await checkSpelling(text, kind);
+        issues = await checkSpelling(text, kind, activeTab.path);
       } catch {
         return;
       }

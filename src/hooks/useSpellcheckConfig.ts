@@ -8,6 +8,7 @@ const DEFAULT_SPELLCHECK_CONFIG: SpellcheckConfig = {
   enabled: true,
   dictionaries: {},
   skipCamelCase: true,
+  checkTxt: false,
 };
 
 export function useSpellcheckConfig() {

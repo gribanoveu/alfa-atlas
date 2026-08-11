@@ -111,6 +111,14 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
     [config, persistConfig],
   );
 
+  const toggleCheckTxt = useCallback(
+    (checkTxt: boolean) => {
+      if (!config) return;
+      void persistConfig({ ...config, checkTxt });
+    },
+    [config, persistConfig],
+  );
+
   const addWord = useCallback(async () => {
     const word = newWord.trim();
     if (!word) return;
@@ -173,6 +181,18 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
             onChange={(event) => toggleSkipCamelCase(event.target.checked)}
           />
           <span>Не проверять слова в camelCase (getUserInfo, isEnabled)</span>
+        </label>
+      </div>
+
+      <div className="settings-row">
+        <label className="settings-check">
+          <input
+            type="checkbox"
+            checked={config?.checkTxt ?? false}
+            disabled={!config || busy || !(config?.enabled ?? true)}
+            onChange={(event) => toggleCheckTxt(event.target.checked)}
+          />
+          <span>Проверять файлы .txt</span>
         </label>
       </div>
 
