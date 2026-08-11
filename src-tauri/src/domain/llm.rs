@@ -76,7 +76,7 @@ pub struct LlmProviderConfig {
 /// a `Vec`, not a `HashMap<String, _>`, so `settings.json` stays
 /// human-diffable and mirrors the manifest's own array shape; provider
 /// counts are always small enough that linear lookup by id is fine.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LlmSettings {
     #[serde(default)]
@@ -100,6 +100,34 @@ pub struct LlmSettings {
     /// "follow-ups on by default" behavior, same shape as `debug_logging`.
     #[serde(default)]
     pub follow_up_suggestions_disabled: bool,
+    /// On by default — unlike `debug_logging`, this never stores raw
+    /// document content (see `infra::tool_call_log::redact_args`/
+    /// `redact_result`), only structural/identifying fields (tool name,
+    /// path-shaped args, status, timing), so it's safe to leave on as an
+    /// always-available audit trail. When on, `services::ai_tools::
+    /// execute_tool_logged` (called from both the chat tool-calling loop
+    /// and the standalone `ai_execute_tool` command) writes one redacted
+    /// row per tool call to `~/.atlas/tool_calls.db` (see
+    /// `infra::tool_call_log`), browsable from Инструменты → Журнал
+    /// вызовов инструментов.
+    #[serde(default = "default_true")]
+    pub tool_call_logging: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self {
+            active_provider_id: None,
+            providers: Vec::new(),
+            debug_logging: false,
+            follow_up_suggestions_disabled: false,
+            tool_call_logging: true,
+        }
+    }
 }
 
 /// One entry from the compiled-in provider manifest (see

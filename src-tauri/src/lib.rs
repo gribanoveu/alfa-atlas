@@ -190,6 +190,8 @@ pub fn run() {
             commands::git_action_log::git_action_log_list,
             commands::git_action_log::git_action_log_append,
             commands::git_action_log::git_action_log_mark_undone,
+            commands::tool_call_log::tool_call_log_query,
+            commands::tool_call_log::tool_call_log_clear,
             commands::project::list_docs_tree,
             commands::project::read_project_file,
             commands::project::read_project_file_or_none,

@@ -23,6 +23,7 @@ pub mod parsers;
 pub mod project_store;
 pub mod repository_identity;
 pub mod settings_store;
+pub mod tool_call_log;
 pub mod vector_store;
 pub mod workspace_scanner;
 pub mod workspace_store;

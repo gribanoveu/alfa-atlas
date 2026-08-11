@@ -10,6 +10,7 @@ import type { SpellcheckConfig } from "../../lib/spellcheck";
 import { SettingsDialog } from "../Settings/SettingsDialog";
 import type { SectionId } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
+import { ToolCallLogModal } from "../ToolLog/ToolCallLogModal";
 import { AboutModal } from "./AboutModal";
 import { MenuBar } from "./MenuBar";
 import { RecentProjectsDropdown } from "./RecentProjectsDropdown";
@@ -92,6 +93,7 @@ export function TopBar({
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [toolLogOpen, setToolLogOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
   const standardsSignalRef = useRef(openStandardsSettingsSignal);
@@ -173,6 +175,9 @@ export function TopBar({
         case "tools.settings":
           setSettingsInitialSection(undefined);
           setSettingsOpen(true);
+          break;
+        case "tools.toolLog":
+          setToolLogOpen(true);
           break;
         case "help.about":
           setAboutOpen(true);
@@ -306,6 +311,7 @@ export function TopBar({
           initialSection={settingsInitialSection}
         />
       ) : null}
+      {toolLogOpen ? <ToolCallLogModal projectRoot={projectRoot} onClose={() => setToolLogOpen(false)} /> : null}
     </>
   );
 }

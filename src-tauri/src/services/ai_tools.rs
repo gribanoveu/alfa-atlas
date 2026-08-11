@@ -202,6 +202,61 @@ pub fn execute_tool(
     }
 }
 
+/// Correlation info available at a real (non-test) call site, threaded
+/// through to the persisted log row — see `domain::tool_call_log::
+/// ToolCallLogRow` for what each field means. Built fresh by each caller
+/// from whatever it already has on hand (`commands::ai_tools::
+/// ai_execute_tool` has no chat turn to draw `round`/`provider_id`/`model`
+/// from; `commands::llm::run_tool_loop` does).
+pub struct ToolCallLogContext {
+    pub enabled: bool,
+    pub source: &'static str,
+    pub round: Option<u32>,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+}
+
+/// `execute_tool`, plus a redacted entry written to the persisted tool-call
+/// log (`infra::tool_call_log`) once the call settles. Deliberately a thin
+/// wrapper rather than logging inside `execute_tool` itself: `execute_tool`
+/// has ~30 direct call sites in this module's own test suite, all of which
+/// exercise it as the pure, I/O-free function it already is — folding
+/// logging into it would force every one of those tests to also touch a
+/// SQLite file. The two real callers (`commands::ai_tools::ai_execute_tool`,
+/// `commands::llm::run_tool_loop`) call this instead.
+pub fn execute_tool_logged(
+    scope: &ToolScope,
+    call: ToolCall,
+    deps: &EmbeddingDeps,
+    todos: &[Task],
+    log_ctx: &ToolCallLogContext,
+) -> Result<ToolResult, ToolError> {
+    let tool = crate::infra::tool_call_log::tool_label(&call);
+    let args_json = crate::infra::tool_call_log::redact_args(&call);
+    let started = std::time::Instant::now();
+    let result = execute_tool(scope, call, deps, todos);
+    let duration_ms = started.elapsed().as_millis() as i64;
+
+    crate::infra::tool_call_log::log_call(
+        log_ctx.enabled,
+        crate::infra::tool_call_log::ToolCallLogEntry {
+            repo_root: scope.repo_root.display().to_string(),
+            source: log_ctx.source.to_string(),
+            round: log_ctx.round,
+            provider_id: log_ctx.provider_id.clone(),
+            model: log_ctx.model.clone(),
+            tool,
+            args_json,
+            status: if result.is_ok() { "ok" } else { "error" }.to_string(),
+            error_message: result.as_ref().err().map(ToString::to_string),
+            result_json: result.as_ref().ok().map(crate::infra::tool_call_log::redact_result),
+            duration_ms,
+        },
+    );
+
+    result
+}
+
 fn todo_write(todos: &[Task], args: TodoWriteArgs) -> Result<Vec<Task>, ToolError> {
     let adding = args.titles.len();
     if todos.len() + adding > MAX_TODO_TASKS {

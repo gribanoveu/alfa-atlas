@@ -39,6 +39,7 @@ export function LlmTab() {
     updateProviderConfig,
     setDebugLogging,
     setFollowUpSuggestionsDisabled,
+    setToolCallLogging,
     removeProvider,
     saveApiKey,
     loadModels,
@@ -215,6 +216,23 @@ export function LlmTab() {
       <p className="settings-hint" style={{ paddingLeft: 0 }}>
         Скрывает подсказки над перепиской, которые появляются после выбора одного из стартовых
         предложений в новом чате. Стартовые предложения в пустом чате остаются в любом случае.
+      </p>
+
+      <label className="credentials-checkbox-label">
+        <input
+          type="checkbox"
+          className="credentials-checkbox"
+          checked={settings?.toolCallLogging ?? true}
+          disabled={busy || !settings}
+          onChange={(event) => void setToolCallLogging(event.target.checked)}
+        />
+        <span>Логировать вызовы инструментов</span>
+      </label>
+      <p className="settings-hint" style={{ paddingLeft: 0 }}>
+        Записывает каждый вызов инструмента ассистента (путь, статус, длительность) в{" "}
+        <code>~/.atlas/tool_calls.db</code> — журнал можно посмотреть в Инструменты → Журнал
+        вызовов инструментов. Включено по умолчанию: содержимое документов не сохраняется,
+        только метаданные вызова.
       </p>
 
       <div className="llm-provider-list">

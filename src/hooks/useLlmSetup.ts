@@ -136,6 +136,24 @@ export function useLlmSetup() {
     [settings],
   );
 
+  const setToolCallLogging = useCallback(
+    async (enabled: boolean) => {
+      if (!settings) return;
+      const next = { ...settings, toolCallLogging: enabled };
+      setSettingsState(next);
+      setBusy(true);
+      try {
+        await setLlmSettings(next);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [settings],
+  );
+
   const removeProvider = useCallback(
     async (providerId: string) => {
       setBusy(true);
@@ -186,6 +204,7 @@ export function useLlmSetup() {
     updateProviderConfig,
     setDebugLogging,
     setFollowUpSuggestionsDisabled,
+    setToolCallLogging,
     removeProvider,
     saveApiKey,
     loadModels,

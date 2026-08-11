@@ -52,7 +52,7 @@ impl Default for WindowState {
     }
 }
 
-pub const MAX_RECENT_PROJECTS: usize = 10;
+pub const MAX_RECENT_PROJECTS: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProjectSettings {

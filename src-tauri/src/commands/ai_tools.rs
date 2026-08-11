@@ -11,7 +11,8 @@ use crate::domain::llm::LlmToolDefinition;
 use crate::domain::project_config::ProjectConfig;
 use crate::infra::project_store;
 use crate::services::ai_tools;
-use crate::services::ai_tools::EmbeddingDeps;
+use crate::services::ai_tools::{EmbeddingDeps, ToolCallLogContext};
+use crate::services::llm_config;
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::project_open;
 use crate::services::repo_index::RepositoryIndex;
@@ -65,7 +66,11 @@ pub async fn ai_execute_tool(
     };
     tauri::async_runtime::spawn_blocking(move || {
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
-        ai_tools::execute_tool(&scope, call, &deps, &todos).map_err(|e| e.to_string())
+        // Best-effort — an unreadable settings file must not block the tool
+        // call itself, only silently disable its log entry.
+        let enabled = llm_config::load_llm_settings().map(|s| s.tool_call_logging).unwrap_or(false);
+        let log_ctx = ToolCallLogContext { enabled, source: "standalone", round: None, provider_id: None, model: None };
+        ai_tools::execute_tool_logged(&scope, call, &deps, &todos, &log_ctx).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

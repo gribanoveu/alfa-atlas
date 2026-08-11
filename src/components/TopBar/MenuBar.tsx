@@ -19,6 +19,7 @@ import {
   RefreshCw,
   Save,
   Scissors,
+  ScrollText,
   Settings2,
   Undo2,
 } from "lucide-react";
@@ -155,6 +156,13 @@ const MENUS: MenuDef[] = [
         label: "Настройки…",
         action: "tools.settings",
         icon: Settings2,
+      },
+      {
+        type: "item",
+        id: "toolLog",
+        label: "Журнал вызовов инструментов…",
+        action: "tools.toolLog",
+        icon: ScrollText,
       },
     ],
   },

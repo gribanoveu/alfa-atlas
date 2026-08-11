@@ -38,6 +38,12 @@ export type LlmSettings = {
    * suggestion chips in a brand-new, empty conversation. Toggled from the
    * LLM settings tab. */
   followUpSuggestionsDisabled: boolean;
+  /** On by default — unlike `debugLogging`, never stores raw document
+   * content. When on, every AI-harness tool call gets one redacted row in
+   * `~/.atlas/tool_calls.db` (see `infra::tool_call_log` on the Rust side),
+   * browsable from Инструменты → Журнал вызовов инструментов. Toggled from
+   * the LLM settings tab. */
+  toolCallLogging: boolean;
 };
 
 // Mirrors `domain::llm::ResolvedLlmProvider` — the merged, ready-to-use

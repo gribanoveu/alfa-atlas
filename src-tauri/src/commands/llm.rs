@@ -50,7 +50,7 @@ use crate::domain::llm::{
 use crate::domain::paths;
 use crate::domain::repo_index::FileId;
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
-use crate::services::ai_tools::{self, EmbeddingDeps};
+use crate::services::ai_tools::{self, EmbeddingDeps, ToolCallLogContext};
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::llm_config;
 use crate::services::repo_index::RepositoryIndex;
@@ -483,6 +483,13 @@ fn run_tool_loop(
                 (result.tool_calls, Vec::new())
             };
 
+        let log_ctx = ToolCallLogContext {
+            enabled: ctx.settings.tool_call_logging,
+            source: "chat",
+            round: Some(round),
+            provider_id: Some(ctx.provider_id.to_string()),
+            model: Some(ctx.model.to_string()),
+        };
         for call in &tool_calls {
             // Checkpoint 1's "between individual tool calls" case — `break`
             // rather than returning directly so control falls through to
@@ -511,7 +518,7 @@ fn run_tool_loop(
                 Err("denied by user".to_string())
             } else {
                 ai_tools::parse_tool_call(call)
-                    .and_then(|parsed| ai_tools::execute_tool(&scope, parsed, ctx.deps, &todos))
+                    .and_then(|parsed| ai_tools::execute_tool_logged(&scope, parsed, ctx.deps, &todos, &log_ctx))
                     .map_err(|e| e.to_string())
             };
 
