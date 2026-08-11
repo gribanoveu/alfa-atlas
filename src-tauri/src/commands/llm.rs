@@ -83,7 +83,7 @@ pub const TOOL_RESULT_EVENT: &str = "llm:tool-result";
 /// a backstop alongside `MAX_TOOL_BUDGET` (a misconfigured/zero tool
 /// weight must never make the loop unstoppable), but `MAX_TOOL_BUDGET` is
 /// the more sensitive limit in practice — see its doc comment.
-const MAX_TOOL_ITERATIONS: usize = 20;
+const MAX_TOOL_ITERATIONS: usize = 50;
 
 /// Converts the frontend's docs-root-relative `EditorTab.path` (sent
 /// verbatim, same convention `embedding_set_priority_files` already
@@ -106,7 +106,7 @@ fn resolve_active_file(scope: &ToolScope, active_file_path: Option<String>) -> O
 /// `MAX_TOOL_ITERATIONS` (no regression there), while a
 /// `SemanticSearch`-heavy sequence now cuts off around 10 calls instead of
 /// 20.
-const MAX_TOOL_BUDGET: u32 = 100;
+const MAX_TOOL_BUDGET: u32 = 250;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -394,7 +394,7 @@ fn run_tool_loop(
         }
         if round >= MAX_TOOL_ITERATIONS as u32 || budget_used >= MAX_TOOL_BUDGET {
             return Err(format!(
-                "assistant did not produce a final answer within {MAX_TOOL_ITERATIONS} tool-call rounds (budget {budget_used}/{MAX_TOOL_BUDGET})"
+                "Ассистент не дал окончательный ответ за {MAX_TOOL_ITERATIONS} раундов обращения к инструментам (бюджет {budget_used}/{MAX_TOOL_BUDGET})"
             ));
         }
         round += 1;

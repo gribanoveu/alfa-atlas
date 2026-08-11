@@ -1,9 +1,13 @@
 use std::path::Path;
 
-use crate::domain::git::GitError;
+use crate::domain::git::{GitError, GitProgressEvent};
 use crate::infra::{git_credentials_store, git_repo, key_management};
 
-pub fn clone_repository(url: &str, destination: &str) -> Result<(), String> {
+pub fn clone_repository(
+    url: &str,
+    destination: &str,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
+) -> Result<(), String> {
     let dest = Path::new(destination);
 
     let url_trimmed = url.trim();
@@ -46,6 +50,7 @@ pub fn clone_repository(url: &str, destination: &str) -> Result<(), String> {
         &repo_config,
         &credentials,
         app_private_key.as_deref(),
+        on_progress,
     )
     .map_err(|e| e.to_string())?;
 
@@ -73,7 +78,7 @@ mod tests {
     fn clone_repository_empty_url_returns_error() {
         let dir = temp_dir("empty-url");
         let dest = dir.join("dest");
-        let err = clone_repository("", dest.to_str().unwrap()).unwrap_err();
+        let err = clone_repository("", dest.to_str().unwrap(), None).unwrap_err();
         assert!(
             err.contains("clone URL is empty"),
             "expected empty URL error, got: {err}"
@@ -85,7 +90,7 @@ mod tests {
     fn clone_repository_whitespace_only_url_returns_error() {
         let dir = temp_dir("ws-url");
         let dest = dir.join("dest");
-        let err = clone_repository("   ", dest.to_str().unwrap()).unwrap_err();
+        let err = clone_repository("   ", dest.to_str().unwrap(), None).unwrap_err();
         assert!(
             err.contains("clone URL is empty"),
             "expected empty URL error, got: {err}"
@@ -100,7 +105,7 @@ mod tests {
         fs::create_dir_all(&dest).unwrap();
         fs::write(dest.join("stale.txt"), "old\n").unwrap();
 
-        let err = clone_repository("ssh://git@bitbucket.company.com/repo.git", dest.to_str().unwrap()).unwrap_err();
+        let err = clone_repository("ssh://git@bitbucket.company.com/repo.git", dest.to_str().unwrap(), None).unwrap_err();
         assert!(
             err.contains("not empty"),
             "expected not empty error, got: {err}"
@@ -116,7 +121,7 @@ mod tests {
         let dir = temp_dir("noexist");
         let dest = dir.join("nonexistent");
         // dest does not exist
-        let err = clone_repository("ssh://invalid-host-that-does-not-resolve.invalid/repo.git", dest.to_str().unwrap()).unwrap_err();
+        let err = clone_repository("ssh://invalid-host-that-does-not-resolve.invalid/repo.git", dest.to_str().unwrap(), None).unwrap_err();
         // Should fail at the clone level, not service validation.
         assert!(
             !err.contains("clone URL is empty") && !err.contains("not empty"),

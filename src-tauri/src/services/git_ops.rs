@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use crate::domain::git::{
-    GitBlameHunk, GitBranchInfo, GitCommitSummary, GitConflictFile, GitDiffScope, GitError,
-    GitFileDiff, GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode,
+    CheckoutOutcome, GitBlameHunk, GitBranchInfo, GitCommitSummary, GitConflictFile, GitDiffScope,
+    GitError, GitFileDiff, GitFileStatus, GitProgressEvent, GitStashEntry, GitStashRestoreOutcome,
+    GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::infra::{git_credentials_store, git_repo, key_management};
 
@@ -33,11 +34,21 @@ pub fn log(repo_root: &str, limit: usize) -> Result<Vec<GitCommitSummary>, GitEr
     git_repo::log(Path::new(repo_root), limit)
 }
 
-pub fn pull(repo_root: &str, mode: PullMode) -> Result<(), GitError> {
+pub fn pull(
+    repo_root: &str,
+    mode: PullMode,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
+) -> Result<(), GitError> {
     let credentials = git_credentials_store::load()
         .map_err(|e| GitError::Message(e.to_string()))?;
     let app_private_key = key_management::get_decrypted_private_key();
-    git_repo::pull(Path::new(repo_root), mode, &credentials, app_private_key.as_deref())
+    git_repo::pull(
+        Path::new(repo_root),
+        mode,
+        &credentials,
+        app_private_key.as_deref(),
+        on_progress,
+    )
 }
 
 pub fn conflict_file_content(repo_root: &str, path: &str) -> Result<GitConflictFile, GitError> {
@@ -70,11 +81,19 @@ pub fn reset_to_remote(repo_root: &str) -> Result<(), GitError> {
     git_repo::reset_to_remote(Path::new(repo_root), &credentials, app_private_key.as_deref())
 }
 
-pub fn push(repo_root: &str) -> Result<(), GitError> {
+pub fn push(
+    repo_root: &str,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
+) -> Result<(), GitError> {
     let credentials = git_credentials_store::load()
         .map_err(|e| GitError::Message(e.to_string()))?;
     let app_private_key = key_management::get_decrypted_private_key();
-    git_repo::push(Path::new(repo_root), &credentials, app_private_key.as_deref())
+    git_repo::push(
+        Path::new(repo_root),
+        &credentials,
+        app_private_key.as_deref(),
+        on_progress,
+    )
 }
 
 pub fn file_diff(
@@ -123,11 +142,19 @@ pub fn list_branches(repo_root: &str) -> Result<Vec<GitBranchInfo>, GitError> {
     git_repo::list_branches(Path::new(repo_root))
 }
 
-pub fn fetch_branches(repo_root: &str) -> Result<(), GitError> {
+pub fn fetch_branches(
+    repo_root: &str,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
+) -> Result<(), GitError> {
     let credentials = git_credentials_store::load()
         .map_err(|e| GitError::Message(e.to_string()))?;
     let app_private_key = key_management::get_decrypted_private_key();
-    git_repo::fetch_branches(Path::new(repo_root), &credentials, app_private_key.as_deref())
+    git_repo::fetch_branches(
+        Path::new(repo_root),
+        &credentials,
+        app_private_key.as_deref(),
+        on_progress,
+    )
 }
 
 pub fn create_branch(
@@ -142,7 +169,7 @@ pub fn checkout_branch(
     repo_root: &str,
     name: &str,
     discard_changes: bool,
-) -> Result<(), GitError> {
+) -> Result<CheckoutOutcome, GitError> {
     git_repo::checkout_branch(Path::new(repo_root), name, discard_changes)
 }
 
@@ -154,6 +181,18 @@ pub fn checkout_remote_branch(
     repo_root: &str,
     name: &str,
     discard_changes: bool,
-) -> Result<(), GitError> {
+) -> Result<CheckoutOutcome, GitError> {
     git_repo::checkout_remote_branch(Path::new(repo_root), name, discard_changes)
+}
+
+pub fn stash_list(repo_root: &str) -> Result<Vec<GitStashEntry>, GitError> {
+    git_repo::list_stash_shelf(Path::new(repo_root))
+}
+
+pub fn stash_apply(repo_root: &str, stash_id: &str) -> Result<GitStashRestoreOutcome, GitError> {
+    git_repo::apply_stash_entry(Path::new(repo_root), stash_id)
+}
+
+pub fn stash_drop(repo_root: &str, stash_id: &str) -> Result<(), GitError> {
+    git_repo::drop_stash_entry(Path::new(repo_root), stash_id)
 }

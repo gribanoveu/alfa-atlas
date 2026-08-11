@@ -11,6 +11,7 @@ import type {
   GitBranchInfo,
   GitDiffScope,
   GitFileStatus,
+  GitStashEntry,
 } from "../../lib/git";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
@@ -84,6 +85,13 @@ export type GitPanelViewProps = {
   onAbortMerge: () => void;
   onFinishMerge: () => void;
   selectedDiff?: { path: string; scope: GitDiffScope } | null;
+  shelf: GitStashEntry[];
+  shelfBusy: boolean;
+  currentBranch: string | null;
+  pendingShelfConflictId?: string | null;
+  onRestoreShelfEntry: (entry: GitStashEntry) => void;
+  onDiscardShelfEntry: (entry: GitStashEntry) => void;
+  onPreviewShelfEntry: (entry: GitStashEntry) => void;
 };
 
 export type BranchesPanelViewProps = {
@@ -186,6 +194,13 @@ export function RightDock({
                 onAbortMerge={git.onAbortMerge}
                 onFinishMerge={git.onFinishMerge}
                 selectedDiff={git.selectedDiff}
+                shelf={git.shelf}
+                shelfBusy={git.shelfBusy}
+                currentBranch={git.currentBranch}
+                pendingShelfConflictId={git.pendingShelfConflictId}
+                onRestoreShelfEntry={git.onRestoreShelfEntry}
+                onDiscardShelfEntry={git.onDiscardShelfEntry}
+                onPreviewShelfEntry={git.onPreviewShelfEntry}
               />
             ) : activeTool === "asciidoc" && asciidoc ? (
               <AsciiDocPanel

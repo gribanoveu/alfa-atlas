@@ -12,6 +12,8 @@ import { PullUpdateModal } from "./components/Git/PullUpdateModal";
 import { PushConfirmModal } from "./components/Git/PushConfirmModal";
 import { ResetRemoteConfirmModal } from "./components/Git/ResetRemoteConfirmModal";
 import { DeleteBranchConfirmModal } from "./components/Git/DeleteBranchConfirmModal";
+import { DiscardStashConfirmModal } from "./components/Git/DiscardStashConfirmModal";
+import { GitStashPreviewModal } from "./components/Git/GitStashPreviewModal";
 import { RightDock } from "./components/RightDock/RightDock";
 import { NewFileModal } from "./components/Sidebar/NewFileModal";
 import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
@@ -22,10 +24,13 @@ import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
 import type {
+  CheckoutOutcome,
   GitBranchInfo,
   GitDiffScope,
   GitFileDiff,
   GitFileStatus,
+  GitStashEntry,
+  GitStashRestoreOutcome,
   PullMode,
 } from "./lib/git";
 import {
@@ -35,7 +40,9 @@ import {
   hasTrackedGitChanges,
   hasUnpushedCommits,
 } from "./lib/git";
+import { friendlyGitError } from "./lib/gitErrors";
 import { useBranches } from "./hooks/useBranches";
+import { useGitStash } from "./hooks/useGitStash";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useSpecsRepo } from "./hooks/useSpecsRepo";
@@ -291,6 +298,9 @@ function App() {
   const branches = useBranches(project.repoRoot, {
     active: Boolean(project.repoRoot),
   });
+  const stash = useGitStash(project.repoRoot, {
+    active: Boolean(project.repoRoot),
+  });
   const [folderError, setFolderError] = useState<string | null>(null);
   const [dismissedToastMessage, setDismissedToastMessage] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<{ id: number; message: string } | null>(null);
@@ -327,15 +337,21 @@ function App() {
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [resetRemoteConfirmOpen, setResetRemoteConfirmOpen] = useState(false);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
+  // Checking out an existing branch no longer blocks on uncommitted changes
+  // (see performCheckout/handleCheckoutOutcome — those changes get
+  // auto-stashed instead), so this only ever fires for "create branch",
+  // where there's no destination tree to stash-restore into.
   const [branchSwitchBlocked, setBranchSwitchBlocked] = useState<{
-    kind: "checkout" | "create";
     branchName: string;
-    isRemote?: boolean;
   } | null>(null);
   const [gitAlert, setGitAlert] = useState<{
     message: string;
     title?: string;
     variant?: "error" | "info";
+  } | null>(null);
+  const [pendingStashConflict, setPendingStashConflict] = useState<{
+    id: string;
+    branch: string;
   } | null>(null);
   const [gitDiffTarget, setGitDiffTarget] = useState<{
     file: GitFileStatus;
@@ -346,6 +362,8 @@ function App() {
     commitHash: string;
     file: GitFileStatus;
   } | null>(null);
+  const [stashPreviewTarget, setStashPreviewTarget] = useState<GitStashEntry | null>(null);
+  const [stashDiscardTarget, setStashDiscardTarget] = useState<GitStashEntry | null>(null);
   const [revealRequest, setRevealRequest] = useState<{
     id: number;
     line: number;
@@ -493,6 +511,20 @@ function App() {
     }
     prevConflictCount.current = count;
   }, [git.status.conflicted.length, layout]);
+
+  // Once a stash-restore conflict (pendingStashConflict) has been fully
+  // resolved through the normal conflict UI, the shelved entry is redundant
+  // — its content is already merged into the working tree — so drop it
+  // quietly. Skipped while a real merge is also in progress so we don't
+  // misfire on an unrelated, coincidentally-simultaneous conflict.
+  useEffect(() => {
+    if (!pendingStashConflict) return;
+    if (git.status.conflicted.length > 0) return;
+    if (git.status.mergeInProgress) return;
+    const id = pendingStashConflict.id;
+    setPendingStashConflict(null);
+    void stash.discard(id);
+  }, [pendingStashConflict, git.status.conflicted.length, git.status.mergeInProgress, stash]);
 
   const cursorLabel = hasProject
     ? `Ln ${editor.cursor.line}, Col ${editor.cursor.column}`
@@ -655,16 +687,107 @@ function App() {
     ]);
   }, [editor.reloadAllOpenTabs, git, project.refreshBranch, tree]);
 
+  // Shared by the auto-restore-on-checkout path and the shelf's manual
+  // "Восстановить" button. `conflict`/`blocked`/`skipped` are all
+  // guaranteed by the backend to leave the shelf entry intact — never
+  // silently dropped — so none of these branches need a fallback recovery
+  // path, only messaging pointing at where the entry still lives.
+  const handleStashRestoreOutcome = useCallback((restore: GitStashRestoreOutcome) => {
+    if (restore.outcome === "applied") {
+      successToastCounter.current += 1;
+      setSuccessToast({
+        id: successToastCounter.current,
+        message: "Отложенные изменения ветки восстановлены",
+      });
+    } else if (restore.outcome === "conflict") {
+      setPendingStashConflict({ id: restore.entry.id, branch: restore.entry.branch });
+    } else if (restore.outcome === "blocked") {
+      setGitAlert({
+        title: "Отложенные изменения не восстановлены",
+        message: `Не удалось автоматически восстановить отложенные изменения для ветки «${restore.entry.branch}» — ${restore.reason}. Изменения сохранены и доступны в панели Git → «Отложенные изменения».`,
+        variant: "info",
+      });
+    } else if (restore.outcome === "skipped") {
+      setGitAlert({
+        title: "Отложенные изменения не восстановлены",
+        message:
+          "Для этой ветки в панели Git → «Отложенные изменения» сохранено несколько наборов изменений — выберите нужный вручную.",
+        variant: "info",
+      });
+    }
+  }, []);
+
+  // Surfaces what happened as a side effect of a checkout: tracked changes
+  // shelved on the branch we left, and/or a shelf entry restored (or not)
+  // on the branch we arrived at. See useBranches.checkoutBranch and the
+  // backend's checkout_branch/auto_stash_tracked_changes for how this is
+  // produced.
+  const handleCheckoutOutcome = useCallback(
+    (outcome: CheckoutOutcome) => {
+      if (outcome.shelved) {
+        successToastCounter.current += 1;
+        setSuccessToast({
+          id: successToastCounter.current,
+          message: `Незакоммиченные изменения ветки «${outcome.shelved.branch}» отложены — вернитесь на неё, чтобы восстановить.`,
+        });
+      }
+      if (outcome.restore) handleStashRestoreOutcome(outcome.restore);
+    },
+    [handleStashRestoreOutcome],
+  );
+
   const performCheckout = useCallback(
     async (name: string, discardChanges: boolean, isRemote: boolean) => {
-      const ok = isRemote
+      const outcome = isRemote
         ? await branches.checkoutRemoteBranch(name, discardChanges)
         : await branches.checkoutBranch(name, discardChanges);
-      if (!ok) return;
+      if (!outcome) return;
       project.setBranchFromGit(isRemote ? localNameFromRemoteBranch(name) : name);
       await refreshAfterBranchChange();
+      await stash.refresh();
+      handleCheckoutOutcome(outcome);
     },
-    [branches, project.setBranchFromGit, refreshAfterBranchChange],
+    [branches, project.setBranchFromGit, refreshAfterBranchChange, stash, handleCheckoutOutcome],
+  );
+
+  const onRestoreShelfEntry = useCallback(
+    async (entry: GitStashEntry) => {
+      const restore = await stash.restore(entry.id);
+      if (!restore) {
+        if (stash.error) setGitAlert({ message: stash.error });
+        return;
+      }
+      await refreshAfterBranchChange();
+      handleStashRestoreOutcome(restore);
+    },
+    [stash, refreshAfterBranchChange, handleStashRestoreOutcome],
+  );
+
+  const onDiscardShelfEntry = useCallback((entry: GitStashEntry) => {
+    setStashDiscardTarget(entry);
+  }, []);
+
+  const onConfirmDiscardShelfEntry = useCallback(async () => {
+    if (!stashDiscardTarget) return;
+    const ok = await stash.discard(stashDiscardTarget.id);
+    setStashDiscardTarget(null);
+    if (!ok && stash.error) setGitAlert({ message: stash.error });
+  }, [stash, stashDiscardTarget]);
+
+  const onPreviewShelfEntry = useCallback((entry: GitStashEntry) => {
+    setStashPreviewTarget(entry);
+  }, []);
+
+  const loadStashFiles = useCallback(
+    async (stashId: string): Promise<GitFileStatus[] | null> => {
+      if (!project.repoRoot) return null;
+      try {
+        return await gitCommitFiles(project.repoRoot, stashId);
+      } catch {
+        return null;
+      }
+    },
+    [project.repoRoot],
   );
 
   const performCreateBranch = useCallback(
@@ -677,6 +800,10 @@ function App() {
     [branches, project.setBranchFromGit, refreshAfterBranchChange],
   );
 
+  // Checking out an existing branch is never blocked on uncommitted
+  // changes anymore — performCheckout auto-stashes them (see
+  // handleCheckoutOutcome above) instead of forcing a commit-or-discard
+  // choice up front.
   const handleCheckoutBranch = useCallback(
     async (branch: GitBranchInfo) => {
       const saved = await editor.saveAllDirtyTabs();
@@ -686,17 +813,9 @@ function App() {
         });
         return;
       }
-      if (hasTrackedGitChanges(git.status)) {
-        setBranchSwitchBlocked({
-          kind: "checkout",
-          branchName: branch.name,
-          isRemote: branch.isRemote,
-        });
-        return;
-      }
       await performCheckout(branch.name, false, branch.isRemote);
     },
-    [editor.saveAllDirtyTabs, git.status, performCheckout],
+    [editor.saveAllDirtyTabs, performCheckout],
   );
 
   const handleCreateBranch = useCallback(
@@ -709,7 +828,7 @@ function App() {
         return;
       }
       if (hasTrackedGitChanges(git.status)) {
-        setBranchSwitchBlocked({ kind: "create", branchName: name });
+        setBranchSwitchBlocked({ branchName: name });
         return;
       }
       await performCreateBranch(name, false);
@@ -719,14 +838,10 @@ function App() {
 
   const handleDiscardAndSwitchBranch = useCallback(async () => {
     if (!branchSwitchBlocked) return;
-    const { kind, branchName, isRemote } = branchSwitchBlocked;
+    const { branchName } = branchSwitchBlocked;
     setBranchSwitchBlocked(null);
-    if (kind === "checkout") {
-      await performCheckout(branchName, true, isRemote ?? false);
-    } else {
-      await performCreateBranch(branchName, true);
-    }
-  }, [branchSwitchBlocked, performCheckout, performCreateBranch]);
+    await performCreateBranch(branchName, true);
+  }, [branchSwitchBlocked, performCreateBranch]);
 
   const openGitFileDiff = useCallback(
     (path: string, scope: GitDiffScope) => {
@@ -762,19 +877,30 @@ function App() {
   );
 
   const onAbortMerge = useCallback(async () => {
+    // A stash-restore conflict looks identical to a merge conflict from
+    // git's perspective (conflicted index entries, no MERGE_HEAD) — same
+    // abort machinery, different messaging so the user knows their shelved
+    // changes aren't gone, just still sitting in the shelf unapplied.
+    const isStashAbort = pendingStashConflict !== null;
     const confirmed = window.confirm(
-      "Отменить слияние? Файлы вернутся к состоянию до обновления, изменения с сервера будут отброшены.",
+      isStashAbort
+        ? "Отменить восстановление отложенных изменений? Рабочая копия вернётся к состоянию до восстановления — сами изменения останутся в разделе «Отложенные изменения»."
+        : "Отменить слияние? Файлы вернутся к состоянию до обновления, изменения с сервера будут отброшены.",
     );
     if (!confirmed) return;
+    // Clear before the conflict count can reach zero so the auto-drop
+    // effect doesn't mistake this abort for a resolved conflict and drop
+    // the shelf entry the user chose to keep.
+    setPendingStashConflict(null);
     const ok = await git.abortMerge();
     if (ok) {
       successToastCounter.current += 1;
       setSuccessToast({
         id: successToastCounter.current,
-        message: "Слияние отменено",
+        message: isStashAbort ? "Восстановление отменено" : "Слияние отменено",
       });
     }
-  }, [git]);
+  }, [git, pendingStashConflict]);
 
   const onFinishMergeRetry = useCallback(async () => {
     const ok = await git.finishMerge();
@@ -1399,6 +1525,13 @@ function App() {
                           scope: gitDiffTarget.scope,
                         }
                       : null,
+                    shelf: stash.entries,
+                    shelfBusy: stash.busy,
+                    currentBranch: git.status.branch,
+                    pendingShelfConflictId: pendingStashConflict?.id ?? null,
+                    onRestoreShelfEntry: (entry) => void onRestoreShelfEntry(entry),
+                    onDiscardShelfEntry,
+                    onPreviewShelfEntry,
                   }
                 : null
             }
@@ -1618,7 +1751,7 @@ function App() {
       {branchSwitchBlocked ? (
         <CheckoutBlockedModal
           branchName={branchSwitchBlocked.branchName}
-          mode={branchSwitchBlocked.kind}
+          mode="create"
           busy={branches.busy || git.busy}
           onCancel={() => setBranchSwitchBlocked(null)}
           onOpenCommit={() => {
@@ -1662,10 +1795,32 @@ function App() {
         />
       ) : null}
 
+      {stashPreviewTarget ? (
+        <GitStashPreviewModal
+          entry={stashPreviewTarget}
+          onClose={() => setStashPreviewTarget(null)}
+          onLoadFiles={loadStashFiles}
+          onOpenFile={(file) => {
+            const commitHash = stashPreviewTarget.id;
+            setStashPreviewTarget(null);
+            openCommitFileDiff(commitHash, file);
+          }}
+        />
+      ) : null}
+
+      {stashDiscardTarget ? (
+        <DiscardStashConfirmModal
+          branchName={stashDiscardTarget.branch}
+          busy={stash.busy}
+          onCancel={() => setStashDiscardTarget(null)}
+          onConfirm={() => void onConfirmDiscardShelfEntry()}
+        />
+      ) : null}
+
       {gitAlert ? (
         <AlertOkModal
           title={gitAlert.title}
-          message={gitAlert.message}
+          message={friendlyGitError(gitAlert.message)}
           variant={gitAlert.variant}
           onClose={() => setGitAlert(null)}
         />

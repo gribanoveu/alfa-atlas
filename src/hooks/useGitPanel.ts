@@ -1,4 +1,6 @@
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { INDEX_EVENT_CHANNEL, type IndexEvent } from "../lib/workspaceIndex";
 import {
   gitAbortMerge,
   gitApplyDiffContent,
@@ -118,6 +120,34 @@ export function useGitPanel(
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
     };
   }, []);
+
+  // The workspace file watcher (services/file_watcher.rs) already emits
+  // indexUpdated whenever a tracked document changes on disk — including
+  // edits made outside the app (another editor, a `git checkout` run in a
+  // terminal). Piggyback on that existing channel instead of adding a
+  // second watcher: it's the same "did a tracked file change" signal the
+  // git panel needs, just not wired to it previously. Known limitation:
+  // indexUpdated only fires for supported document extensions (see
+  // is_supported_file in file_watcher.rs), so external edits to other
+  // tracked files (e.g. .gitignore) won't trigger this.
+  useEffect(() => {
+    if (!active || !repoRoot) return;
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listen<IndexEvent>(INDEX_EVENT_CHANNEL, (event) => {
+      if (cancelled) return;
+      if (event.payload.kind === "indexUpdated") {
+        scheduleRefresh();
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [active, repoRoot, scheduleRefresh]);
 
   const stage = useCallback(
     async (paths: string[]) => {

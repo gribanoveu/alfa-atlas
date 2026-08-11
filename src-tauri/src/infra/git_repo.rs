@@ -3,13 +3,15 @@ use std::path::{Path, PathBuf};
 use git2::{
     build::CheckoutBuilder, AnnotatedCommit, BlameOptions, Branch, BranchType, Cred, CredentialType,
     Delta, DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions,
-    RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, Status, StatusOptions,
-    StatusShow,
+    RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashApplyOptions, Status,
+    StatusOptions, StatusShow,
 };
 
 use crate::domain::git::{
-    GitBlameHunk, GitBranchInfo, GitCommitSummary, GitConflictFile, GitCredentials, GitDiffScope,
-    GitError, GitFileDiff, GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode, SshKeySource,
+    CheckoutOutcome, GitBlameHunk, GitBranchInfo, GitCommitSummary, GitConflictFile,
+    GitCredentials, GitDiffScope, GitError, GitFileDiff, GitFileStatus, GitProgressEvent,
+    GitStashEntry, GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
+    SshKeySource,
 };
 
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
@@ -666,6 +668,44 @@ fn configure_ssh_transport(callbacks: &mut RemoteCallbacks<'_>, trust_all: bool)
     }
 }
 
+/// Wires `on_progress` into `callbacks.transfer_progress`, used by
+/// fetch/pull/clone. Emits one `GitProgressEvent::Transfer` per libgit2
+/// progress tick — the caller (`commands/git.rs`) is responsible for
+/// throttling before turning these into UI updates.
+fn configure_transfer_progress<'cb>(
+    callbacks: &mut RemoteCallbacks<'cb>,
+    op: String,
+    on_progress: &'cb mut dyn FnMut(GitProgressEvent),
+) {
+    callbacks.transfer_progress(move |progress| {
+        on_progress(GitProgressEvent::Transfer {
+            op: op.clone(),
+            received_objects: progress.received_objects(),
+            total_objects: progress.total_objects(),
+            received_bytes: progress.received_bytes(),
+            indexed_deltas: progress.indexed_deltas(),
+            total_deltas: progress.total_deltas(),
+        });
+        true
+    });
+}
+
+/// Wires `on_progress` into `callbacks.push_transfer_progress`, used by push.
+fn configure_push_progress<'cb>(
+    callbacks: &mut RemoteCallbacks<'cb>,
+    op: String,
+    on_progress: &'cb mut dyn FnMut(GitProgressEvent),
+) {
+    callbacks.push_transfer_progress(move |current, total, bytes| {
+        on_progress(GitProgressEvent::Push {
+            op: op.clone(),
+            current,
+            total,
+            bytes,
+        });
+    });
+}
+
 struct UpstreamRef {
     remote_name: String,
     /// Remote-tracking ref name, e.g. `refs/remotes/origin/main`.
@@ -717,11 +757,15 @@ fn fetch_upstream<'repo>(
     upstream: &UpstreamRef,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<AnnotatedCommit<'repo>, GitError> {
     let config = repo.config().map_err(GitError::Operation)?;
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, &config, credentials, app_private_key);
     configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
+    if let Some(cb) = on_progress {
+        configure_transfer_progress(&mut callbacks, "fetch".to_string(), cb);
+    }
 
     let mut fetch_opts = FetchOptions::new(); // fetch_upstream
     fetch_opts.remote_callbacks(callbacks);
@@ -868,10 +912,11 @@ pub fn pull(
     mode: PullMode,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let upstream = upstream_of_head(&repo)?;
-    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key, on_progress)?;
     match mode {
         PullMode::Merge => do_merge(&repo, &theirs),
         PullMode::Rebase => do_rebase(&repo, &theirs),
@@ -1045,7 +1090,7 @@ pub fn sync_status(
         Err(GitError::NoUpstream) => return Ok(GitSyncStatus { ahead: 0, behind: 0 }),
         Err(e) => return Err(e),
     };
-    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key, None)?;
     let local = repo
         .head()
         .map_err(GitError::Operation)?
@@ -1064,7 +1109,7 @@ pub fn reset_to_remote(
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let upstream = upstream_of_head(&repo)?;
-    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key, None)?;
     let commit = repo
         .find_object(theirs.id(), Some(git2::ObjectType::Commit))
         .map_err(GitError::Operation)?;
@@ -1418,11 +1463,15 @@ fn push_refspec(
     remote_branch: &str,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let config = repo.config().map_err(GitError::Operation)?;
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, &config, credentials, app_private_key);
     configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
+    if let Some(cb) = on_progress {
+        configure_push_progress(&mut callbacks, "push".to_string(), cb);
+    }
 
     let mut push_opts = PushOptions::new();
     push_opts.remote_callbacks(callbacks);
@@ -1438,6 +1487,7 @@ pub fn push(
     repo_root: &Path,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let head = repo.head().map_err(GitError::Operation)?;
@@ -1459,6 +1509,7 @@ pub fn push(
             &upstream.remote_branch,
             credentials,
             app_private_key,
+            on_progress,
         ),
         // No upstream yet — push to a sensible default remote and start tracking it,
         // mirroring `git push -u origin <branch>`.
@@ -1471,6 +1522,7 @@ pub fn push(
                 &local_branch,
                 credentials,
                 app_private_key,
+                on_progress,
             )?;
             let mut branch = repo
                 .find_branch(&local_branch, BranchType::Local)
@@ -1537,6 +1589,218 @@ fn ensure_clean_or_discard(repo: &Repository, discard_changes: bool) -> Result<(
     } else {
         Err(GitError::CheckoutBlocked)
     }
+}
+
+/// Message prefix tagging stash entries this app creates automatically when
+/// switching branches with uncommitted tracked changes. Hand-made `git
+/// stash` entries created outside the app (which won't have this prefix)
+/// are filtered out everywhere below and never touched.
+const STASH_TAG_PREFIX: &str = "docflow-auto: ";
+
+fn stash_message_for_branch(branch: &str) -> String {
+    format!("{STASH_TAG_PREFIX}{branch}")
+}
+
+/// libgit2 doesn't store the message we pass to `stash_save2` verbatim — it
+/// wraps it as `"On <branch>: <our message>\n"` (see `stash.c`'s
+/// `prepare_worktree_commit_message`, which splices in the branch name
+/// itself before the colon). So the tag is searched for as a substring
+/// rather than matched as a strict prefix.
+fn parse_stash_branch(message: &str) -> Option<&str> {
+    let idx = message.find(STASH_TAG_PREFIX)?;
+    let rest = &message[idx + STASH_TAG_PREFIX.len()..];
+    Some(rest.trim_end())
+}
+
+fn stash_entry_metadata(
+    repo: &Repository,
+    branch: String,
+    oid: git2::Oid,
+) -> Result<GitStashEntry, GitError> {
+    let commit = repo.find_commit(oid).map_err(GitError::Operation)?;
+    let files_changed = commit
+        .parent(0)
+        .ok()
+        .and_then(|parent| parent.tree().ok())
+        .and_then(|parent_tree| commit.tree().ok().map(|tree| (parent_tree, tree)))
+        .and_then(|(parent_tree, tree)| {
+            repo.diff_tree_to_tree(Some(&parent_tree), Some(&tree), None)
+                .ok()
+        })
+        .map(|diff| diff.deltas().len())
+        .unwrap_or(0);
+    Ok(GitStashEntry {
+        id: oid.to_string(),
+        branch,
+        created_at: commit.time().seconds(),
+        files_changed,
+    })
+}
+
+/// Stash all tracked, uncommitted changes (staged + unstaged) under a
+/// `docflow-auto: <branch>` message tying the entry back to `branch`.
+/// Untracked files are deliberately left alone, matching the pre-existing
+/// checkout-blocking behavior. No-op if nothing tracked is dirty.
+fn auto_stash_tracked_changes(
+    repo: &mut Repository,
+    branch: &str,
+) -> Result<Option<GitStashEntry>, GitError> {
+    if !has_tracked_uncommitted_changes(repo)? {
+        return Ok(None);
+    }
+    let sig = commit_signature(repo)?;
+    let oid = repo
+        .stash_save2(&sig, Some(&stash_message_for_branch(branch)), None)
+        .map_err(GitError::Operation)?;
+    Ok(Some(stash_entry_metadata(repo, branch.to_string(), oid)?))
+}
+
+/// Re-resolves a shelf entry's *current* positional stash index from its
+/// stable oid. Must be called fresh, immediately before `stash_apply`/
+/// `stash_drop` — the index shifts every time any stash is pushed or
+/// dropped, so it is never cached across calls.
+fn find_stash_index_by_id(repo: &mut Repository, stash_id: &str) -> Result<usize, GitError> {
+    let target = git2::Oid::from_str(stash_id)
+        .map_err(|_| GitError::StashNotFound(stash_id.to_string()))?;
+    let mut found = None;
+    repo.stash_foreach(|index, message, oid| {
+        if *oid == target && parse_stash_branch(message).is_some() {
+            found = Some(index);
+            return false;
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+    found.ok_or_else(|| GitError::StashNotFound(stash_id.to_string()))
+}
+
+fn find_stash_branch_for_oid(
+    repo: &mut Repository,
+    target: git2::Oid,
+) -> Result<String, GitError> {
+    let mut found = None;
+    repo.stash_foreach(|_index, message, oid| {
+        if *oid == target {
+            found = parse_stash_branch(message).map(|b| b.to_string());
+            return false;
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+    found.ok_or_else(|| GitError::StashNotFound(target.to_string()))
+}
+
+/// Applies one shelf entry by its stable stash-commit oid.
+///
+/// CRITICAL: uses `stash_apply`, never `stash_pop`. libgit2's `stash_pop` is
+/// `stash_apply` followed by an *unconditional* `stash_drop` on success —
+/// and `stash_apply` itself returns `Ok` even when the restore produced
+/// conflicts (the final checkout runs without `ALLOW_CONFLICTS`, writing
+/// conflict markers into the working tree and leaving the index conflicted,
+/// exactly like this codebase's own `do_merge` already does for ordinary
+/// merges). Using `stash_pop` here would silently drop the entry the moment
+/// a restore conflicts — the exact data-loss trap this feature exists to
+/// avoid. So conflicts are detected explicitly via `index.has_conflicts()`
+/// after `stash_apply`, and `stash_drop` is only ever called from this
+/// function, only on the fully-clean path.
+fn do_stash_apply(
+    repo: &mut Repository,
+    stash_id: &str,
+    entry: GitStashEntry,
+) -> Result<GitStashRestoreOutcome, GitError> {
+    let index = find_stash_index_by_id(repo, stash_id)?;
+    match repo.stash_apply(index, Some(&mut StashApplyOptions::new())) {
+        Ok(()) => {
+            let has_conflicts = repo.index().map_err(GitError::Operation)?.has_conflicts();
+            if has_conflicts {
+                Ok(GitStashRestoreOutcome::Conflict { entry })
+            } else {
+                let drop_index = find_stash_index_by_id(repo, stash_id)?;
+                repo.stash_drop(drop_index).map_err(GitError::Operation)?;
+                Ok(GitStashRestoreOutcome::Applied { entry })
+            }
+        }
+        Err(e) if e.code() == git2::ErrorCode::Uncommitted => Ok(GitStashRestoreOutcome::Blocked {
+            entry,
+            reason: "на этой ветке уже есть добавленные в индекс изменения".into(),
+        }),
+        Err(e) => Err(GitError::Operation(e)),
+    }
+}
+
+/// Looks for docflow-managed shelf entries tagged for `branch`. Auto-restore
+/// only happens when exactly one exists (unambiguous); with zero it's a
+/// no-op, with two or more it's left for a manual pick in the shelf list
+/// rather than guessing which one to apply.
+fn maybe_auto_restore(
+    repo: &mut Repository,
+    branch: &str,
+) -> Result<Option<GitStashRestoreOutcome>, GitError> {
+    let mut raw = Vec::new();
+    repo.stash_foreach(|_index, message, oid| {
+        if parse_stash_branch(message) == Some(branch) {
+            raw.push(*oid);
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+
+    match raw.len() {
+        0 => Ok(None),
+        1 => {
+            let oid = raw[0];
+            let entry = stash_entry_metadata(repo, branch.to_string(), oid)?;
+            Ok(Some(do_stash_apply(repo, &oid.to_string(), entry)?))
+        }
+        n => Ok(Some(GitStashRestoreOutcome::Skipped { count: n })),
+    }
+}
+
+/// List every docflow-managed shelf entry, newest first.
+pub fn list_stash_shelf(repo_root: &Path) -> Result<Vec<GitStashEntry>, GitError> {
+    let mut repo = open_repo(repo_root)?;
+    let mut raw: Vec<(String, git2::Oid)> = Vec::new();
+    repo.stash_foreach(|_index, message, oid| {
+        if let Some(branch) = parse_stash_branch(message) {
+            raw.push((branch.to_string(), *oid));
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+
+    let mut entries = raw
+        .into_iter()
+        .map(|(branch, oid)| stash_entry_metadata(&repo, branch, oid))
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(entries)
+}
+
+/// Manually apply a shelf entry (the "Восстановить" action in the shelf
+/// UI). Requires the caller to already be on the branch the entry was
+/// captured from — applying branch X's shelved edits onto branch Y's tree
+/// is refused rather than guessed at.
+pub fn apply_stash_entry(repo_root: &Path, stash_id: &str) -> Result<GitStashRestoreOutcome, GitError> {
+    let mut repo = open_repo(repo_root)?;
+    let oid = git2::Oid::from_str(stash_id)
+        .map_err(|_| GitError::StashNotFound(stash_id.to_string()))?;
+    let branch = find_stash_branch_for_oid(&mut repo, oid)?;
+    let entry = stash_entry_metadata(&repo, branch.clone(), oid)?;
+
+    if branch_name(&repo).as_deref() != Some(branch.as_str()) {
+        return Err(GitError::Message(format!(
+            "эти изменения относятся к ветке «{branch}» — переключитесь на неё, чтобы восстановить"
+        )));
+    }
+    do_stash_apply(&mut repo, stash_id, entry)
+}
+
+/// Permanently delete a shelf entry (the "Удалить" action in the shelf UI —
+/// the one genuinely destructive operation in the whole feature).
+pub fn drop_stash_entry(repo_root: &Path, stash_id: &str) -> Result<(), GitError> {
+    let mut repo = open_repo(repo_root)?;
+    let index = find_stash_index_by_id(&mut repo, stash_id)?;
+    repo.stash_drop(index).map_err(GitError::Operation)
 }
 
 fn switch_to_branch(repo: &Repository, branch_name: &str) -> Result<(), GitError> {
@@ -1625,6 +1889,7 @@ pub fn fetch_branches(
     repo_root: &Path,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    mut on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let config = repo.config().map_err(GitError::Operation)?;
@@ -1635,6 +1900,9 @@ pub fn fetch_branches(
         let mut callbacks = RemoteCallbacks::new();
         configure_credentials(&mut callbacks, &config, credentials, app_private_key);
         configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
+        if let Some(cb) = on_progress.as_deref_mut() {
+            configure_transfer_progress(&mut callbacks, format!("fetch:{name}"), cb);
+        }
 
         let mut fetch_opts = FetchOptions::new();
         fetch_opts.remote_callbacks(callbacks);
@@ -1673,39 +1941,69 @@ pub fn delete_branch(repo_root: &Path, name: &str) -> Result<(), GitError> {
     branch.delete().map_err(GitError::Operation)
 }
 
+/// Checks out `name`. If there are uncommitted tracked changes, they are
+/// auto-stashed (tagged to the source branch) instead of blocking the
+/// switch, and any unambiguous shelf entry for the destination branch is
+/// auto-restored — see `auto_stash_tracked_changes`/`maybe_auto_restore`
+/// and `do_stash_apply`'s doc comment for why this never silently drops
+/// changes, even on conflict. `discard_changes` remains a hard-discard
+/// escape hatch at the API level but is no longer driven by the checkout
+/// UI, which always prefers stashing.
 pub fn checkout_branch(
     repo_root: &Path,
     name: &str,
     discard_changes: bool,
-) -> Result<(), GitError> {
+) -> Result<CheckoutOutcome, GitError> {
     let name = validate_branch_name(name)?;
-    let repo = open_repo(repo_root)?;
+    let mut repo = open_repo(repo_root)?;
     if repo.find_branch(name, BranchType::Local).is_err() {
         return Err(GitError::BranchNotFound(name.to_string()));
     }
 
     let current = branch_name(&repo);
     if current.as_deref() == Some(name) {
-        return Ok(());
+        return Ok(CheckoutOutcome {
+            shelved: None,
+            restore: None,
+        });
     }
 
-    ensure_clean_or_discard(&repo, discard_changes)?;
-    switch_to_branch(&repo, name)
+    let shelved = if discard_changes {
+        discard_tracked_changes(&repo)?;
+        None
+    } else {
+        let source = current.unwrap_or_else(|| "detached".to_string());
+        auto_stash_tracked_changes(&mut repo, &source)?
+    };
+
+    switch_to_branch(&repo, name)?;
+    let restore = maybe_auto_restore(&mut repo, name)?;
+    Ok(CheckoutOutcome { shelved, restore })
 }
 
 /// Check out a remote-tracking branch (e.g. `origin/feature-x`). If a local
 /// branch with the same short name (`feature-x`) doesn't exist yet, it is
 /// created tracking the remote branch; otherwise the existing local branch
 /// is checked out as-is (mirrors `git checkout <remote-shorthand>`).
+/// Auto-stash/auto-restore behavior mirrors `checkout_branch`.
 pub fn checkout_remote_branch(
     repo_root: &Path,
     remote_branch_name: &str,
     discard_changes: bool,
-) -> Result<(), GitError> {
-    let repo = open_repo(repo_root)?;
-    let remote_branch = repo
-        .find_branch(remote_branch_name, BranchType::Remote)
-        .map_err(|_| GitError::BranchNotFound(remote_branch_name.to_string()))?;
+) -> Result<CheckoutOutcome, GitError> {
+    let mut repo = open_repo(repo_root)?;
+    // Scoped so the immutable borrow `remote_branch` holds on `repo` ends
+    // before the mutable borrows needed for auto-stashing below.
+    let remote_commit_oid = {
+        let remote_branch = repo
+            .find_branch(remote_branch_name, BranchType::Remote)
+            .map_err(|_| GitError::BranchNotFound(remote_branch_name.to_string()))?;
+        remote_branch
+            .get()
+            .peel_to_commit()
+            .map_err(GitError::Operation)?
+            .id()
+    };
 
     let local_name = remote_branch_name
         .split_once('/')
@@ -1715,15 +2013,23 @@ pub fn checkout_remote_branch(
 
     let current = branch_name(&repo);
     if current.as_deref() == Some(local_name.as_str()) {
-        return Ok(());
+        return Ok(CheckoutOutcome {
+            shelved: None,
+            restore: None,
+        });
     }
 
-    ensure_clean_or_discard(&repo, discard_changes)?;
+    let shelved = if discard_changes {
+        discard_tracked_changes(&repo)?;
+        None
+    } else {
+        let source = current.unwrap_or_else(|| "detached".to_string());
+        auto_stash_tracked_changes(&mut repo, &source)?
+    };
 
     if repo.find_branch(&local_name, BranchType::Local).is_err() {
-        let commit = remote_branch
-            .get()
-            .peel_to_commit()
+        let commit = repo
+            .find_commit(remote_commit_oid)
             .map_err(GitError::Operation)?;
         let mut local_branch = repo
             .branch(&local_name, &commit, false)
@@ -1733,7 +2039,9 @@ pub fn checkout_remote_branch(
             .map_err(GitError::Operation)?;
     }
 
-    switch_to_branch(&repo, &local_name)
+    switch_to_branch(&repo, &local_name)?;
+    let restore = maybe_auto_restore(&mut repo, &local_name)?;
+    Ok(CheckoutOutcome { shelved, restore })
 }
 
 pub fn clone_repo(
@@ -1742,6 +2050,7 @@ pub fn clone_repo(
     repo_config: &git2::Config,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<Repository, GitError> {
     if destination.exists() {
         return Err(GitError::DestinationExists(
@@ -1752,6 +2061,9 @@ pub fn clone_repo(
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, repo_config, credentials, app_private_key);
     configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
+    if let Some(cb) = on_progress {
+        configure_transfer_progress(&mut callbacks, "clone".to_string(), cb);
+    }
 
     let mut fetch_opts = FetchOptions::new(); // clone
     fetch_opts.remote_callbacks(callbacks);
@@ -1985,7 +2297,7 @@ mod tests {
 
         let config = git2::Config::open_default().unwrap();
         let creds = GitCredentials::default();
-        let result = clone_repo("https://example.com/repo.git", &dest, &config, &creds, None);
+        let result = clone_repo("https://example.com/repo.git", &dest, &config, &creds, None, None);
         assert!(
             matches!(result, Err(GitError::DestinationExists(_))),
             "expected DestinationExists, but got a different result"
@@ -2001,7 +2313,7 @@ mod tests {
 
         let config = git2::Config::open_default().unwrap();
         let creds = GitCredentials::default();
-        let result = clone_repo("not-a-valid-url", &dest, &config, &creds, None);
+        let result = clone_repo("not-a-valid-url", &dest, &config, &creds, None, None);
         assert!(
             result.is_err(),
             "expected error for invalid URL, but clone succeeded"
@@ -2057,7 +2369,7 @@ mod tests {
 
         let config = git2::Config::open_default().unwrap();
         let creds = GitCredentials::default();
-        let repo = clone_repo(remote.to_str().unwrap(), &dest, &config, &creds, None).unwrap();
+        let repo = clone_repo(remote.to_str().unwrap(), &dest, &config, &creds, None, None).unwrap();
         assert!(dest.join("README.md").exists());
         assert!(!repo.is_bare());
 
@@ -2099,7 +2411,7 @@ mod tests {
         ));
 
         let creds = GitCredentials::default();
-        push(&local, &creds, None).unwrap();
+        push(&local, &creds, None, None).unwrap();
 
         let branch = repo.find_branch("main", BranchType::Local).ok().or_else(|| {
             let name = branch_name(&repo)?;
@@ -2321,7 +2633,7 @@ mod tests {
         }
         commit_file(&repo, "a.txt", "one", "first");
         repo.remote("origin", remote.to_str().unwrap()).unwrap();
-        push(&local, &GitCredentials::default(), None).unwrap();
+        push(&local, &GitCredentials::default(), None, None).unwrap();
 
         // In sync right after the initial push.
         let status = unpushed_status(&repo);
@@ -2538,7 +2850,7 @@ mod tests {
         commit_file(&repo_a, "a.txt", "base\n", "init");
         repo_a.remote("origin", remote.to_str().unwrap()).unwrap();
         let creds = GitCredentials::default();
-        push(&local_a, &creds, None).unwrap();
+        push(&local_a, &creds, None, None).unwrap();
 
         let repo_b = Repository::clone(remote.to_str().unwrap(), &local_b).unwrap();
         {
@@ -2549,12 +2861,12 @@ mod tests {
 
         // A changes a.txt and pushes.
         commit_file(&repo_a, "a.txt", "from A\n", "A change");
-        push(&local_a, &creds, None).unwrap();
+        push(&local_a, &creds, None, None).unwrap();
 
         // B changes the same line locally without pulling first, then pulls.
         commit_file(&repo_b, "a.txt", "from B\n", "B change");
 
-        let err = pull(&local_b, PullMode::Merge, &creds, None).unwrap_err();
+        let err = pull(&local_b, PullMode::Merge, &creds, None, None).unwrap_err();
         assert!(matches!(err, GitError::MergeConflict), "expected MergeConflict, got {err:?}");
 
         assert_eq!(repo_b.state(), RepositoryState::Merge);
@@ -2575,5 +2887,155 @@ mod tests {
         assert!(!after.merge_in_progress);
 
         fs::remove_dir_all(&base).ok();
+    }
+
+    fn init_repo_with_identity(dir: &Path) -> Repository {
+        let repo = Repository::init(dir).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@test.com").unwrap();
+        repo
+    }
+
+    #[test]
+    fn checkout_branch_auto_stashes_and_restores_cleanly_on_return() {
+        let dir = temp_dir("stash-roundtrip");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "f.txt", "line1\n", "init");
+        let base_name = branch_name(&repo).unwrap();
+
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &head_commit, false).unwrap();
+
+        // Uncommitted tracked edit on the source branch — this is what
+        // should get shelved instead of blocking the switch.
+        fs::write(dir.join("f.txt"), "line1\nlocal-edit\n").unwrap();
+
+        let outcome = checkout_branch(&dir, "feature", false).unwrap();
+        assert!(outcome.shelved.is_some(), "expected the edit to be auto-stashed");
+        assert!(outcome.restore.is_none(), "no shelf entry existed for 'feature' yet");
+        assert_eq!(branch_name(&repo).as_deref(), Some("feature"));
+        assert_eq!(
+            fs::read_to_string(dir.join("f.txt")).unwrap(),
+            "line1\n",
+            "feature's working tree should be clean, not carrying the stashed edit"
+        );
+
+        let shelf = list_stash_shelf(&dir).unwrap();
+        assert_eq!(shelf.len(), 1);
+        assert_eq!(shelf[0].branch, base_name);
+
+        let outcome = checkout_branch(&dir, &base_name, false).unwrap();
+        assert!(outcome.shelved.is_none(), "feature had no uncommitted changes to shelve");
+        match outcome.restore {
+            Some(GitStashRestoreOutcome::Applied { .. }) => {}
+            other => panic!("expected a clean Applied restore, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read_to_string(dir.join("f.txt")).unwrap(),
+            "line1\nlocal-edit\n",
+            "the shelved edit should have been restored"
+        );
+        assert!(
+            list_stash_shelf(&dir).unwrap().is_empty(),
+            "the shelf entry should be dropped after a clean apply"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn checkout_branch_restore_conflict_keeps_shelf_entry_intact() {
+        // Reproduces the scenario the auto-stash feature exists to protect
+        // against: the destination branch advances (e.g. via a pull that
+        // happened while the user was away on another branch) in a way that
+        // overlaps the shelved edit. The restore must NOT silently drop the
+        // stash — it has to stay in the shelf, visible and recoverable.
+        let dir = temp_dir("stash-conflict");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "f.txt", "line1\n", "init");
+        let base_name = branch_name(&repo).unwrap();
+        let base_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &base_commit, false).unwrap();
+
+        // Shelve an uncommitted edit on the base branch by switching away.
+        fs::write(dir.join("f.txt"), "line1\nlocal-edit\n").unwrap();
+        let outcome = checkout_branch(&dir, "feature", false).unwrap();
+        assert!(outcome.shelved.is_some());
+        assert_eq!(branch_name(&repo).as_deref(), Some("feature"));
+
+        // Simulate the base branch advancing without us being checked out
+        // on it (e.g. a background pull performed via another tool),
+        // touching the exact same insertion point as the shelved edit.
+        let new_blob = repo.blob(b"line1\nremote-edit\n").unwrap();
+        let mut treebuilder = repo
+            .treebuilder(Some(&base_commit.tree().unwrap()))
+            .unwrap();
+        treebuilder.insert("f.txt", new_blob, 0o100644).unwrap();
+        let new_tree_oid = treebuilder.write().unwrap();
+        let new_tree = repo.find_tree(new_tree_oid).unwrap();
+        let sig = commit_signature(&repo).unwrap();
+        let new_commit_oid = repo
+            .commit(None, &sig, &sig, "simulated remote update", &new_tree, &[&base_commit])
+            .unwrap();
+        let mut base_branch = repo.find_branch(&base_name, BranchType::Local).unwrap();
+        base_branch
+            .get_mut()
+            .set_target(new_commit_oid, "simulated remote update")
+            .unwrap();
+
+        // feature is clean, so switching back to base only exercises the
+        // restore path, not another auto-stash.
+        let outcome = checkout_branch(&dir, &base_name, false).unwrap();
+        assert!(outcome.shelved.is_none());
+        let entry = match outcome.restore {
+            Some(GitStashRestoreOutcome::Conflict { entry }) => entry,
+            other => panic!("expected a Conflict restore outcome, got {other:?}"),
+        };
+        assert_eq!(entry.branch, base_name);
+
+        // The shelf entry must still be there — nothing was silently lost.
+        let shelf = list_stash_shelf(&dir).unwrap();
+        assert_eq!(shelf.len(), 1, "conflicted restore must not drop the stash entry");
+        assert_eq!(shelf[0].id, entry.id);
+
+        // And the conflict is visible through the normal status surface.
+        let snapshot = status(&dir).unwrap();
+        assert_eq!(snapshot.conflicted.len(), 1);
+        assert_eq!(snapshot.conflicted[0].path, "f.txt");
+
+        // Resolving the conflict and manually dropping the (now redundant)
+        // shelf entry should work via the same public API the shelf UI uses.
+        resolve_conflict(&dir, "f.txt", "line1\nresolved\n").unwrap();
+        drop_stash_entry(&dir, &entry.id).unwrap();
+        assert!(list_stash_shelf(&dir).unwrap().is_empty());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn apply_stash_entry_refuses_when_not_on_the_shelved_branch() {
+        let dir = temp_dir("stash-wrong-branch");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "f.txt", "line1\n", "init");
+        let base_name = branch_name(&repo).unwrap();
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &head_commit, false).unwrap();
+
+        fs::write(dir.join("f.txt"), "line1\nlocal-edit\n").unwrap();
+        checkout_branch(&dir, "feature", false).unwrap();
+
+        let shelf = list_stash_shelf(&dir).unwrap();
+        assert_eq!(shelf.len(), 1);
+        assert_eq!(shelf[0].branch, base_name);
+
+        // Still on 'feature' — applying the base branch's shelf entry
+        // directly (the manual "Восстановить" action) must be refused
+        // rather than silently applied onto the wrong branch's tree.
+        let err = apply_stash_entry(&dir, &shelf[0].id).unwrap_err();
+        assert!(matches!(err, GitError::Message(_)));
+        assert_eq!(list_stash_shelf(&dir).unwrap().len(), 1);
+
+        fs::remove_dir_all(&dir).ok();
     }
 }

@@ -70,6 +70,41 @@ export type GitSyncStatus = {
   behind: number;
 };
 
+/** One shelved (auto-stashed) set of tracked working-tree changes. */
+export type GitStashEntry = {
+  id: string;
+  branch: string;
+  createdAt: number;
+  filesChanged: number;
+};
+
+export type GitStashRestoreOutcome =
+  | { outcome: "applied"; entry: GitStashEntry }
+  | { outcome: "conflict"; entry: GitStashEntry }
+  | { outcome: "blocked"; entry: GitStashEntry; reason: string }
+  | { outcome: "skipped"; count: number };
+
+export type CheckoutOutcome = {
+  shelved: GitStashEntry | null;
+  restore: GitStashRestoreOutcome | null;
+};
+
+export type GitProgressEvent =
+  | { kind: "started"; op: string }
+  | {
+      kind: "transfer";
+      op: string;
+      receivedObjects: number;
+      totalObjects: number;
+      receivedBytes: number;
+      indexedDeltas: number;
+      totalDeltas: number;
+    }
+  | { kind: "push"; op: string; current: number; total: number; bytes: number }
+  | { kind: "finished"; op: string };
+
+export const GIT_PROGRESS_EVENT = "git://progress";
+
 export type SshKeySource =
   | { kind: "keyContent"; privateKey: string }
   | { kind: "keyFile"; path: string };
@@ -221,8 +256,8 @@ export function gitCheckoutBranch(
   repoRoot: string,
   name: string,
   discardChanges = false,
-): Promise<void> {
-  return invoke<void>("git_checkout_branch", { repoRoot, name, discardChanges });
+): Promise<CheckoutOutcome> {
+  return invoke<CheckoutOutcome>("git_checkout_branch", { repoRoot, name, discardChanges });
 }
 
 export function gitDeleteBranch(
@@ -236,12 +271,27 @@ export function gitCheckoutRemoteBranch(
   repoRoot: string,
   name: string,
   discardChanges = false,
-): Promise<void> {
-  return invoke<void>("git_checkout_remote_branch", {
+): Promise<CheckoutOutcome> {
+  return invoke<CheckoutOutcome>("git_checkout_remote_branch", {
     repoRoot,
     name,
     discardChanges,
   });
+}
+
+export function gitStashList(repoRoot: string): Promise<GitStashEntry[]> {
+  return invoke<GitStashEntry[]>("git_stash_list", { repoRoot });
+}
+
+export function gitStashApply(
+  repoRoot: string,
+  stashId: string,
+): Promise<GitStashRestoreOutcome> {
+  return invoke<GitStashRestoreOutcome>("git_stash_apply", { repoRoot, stashId });
+}
+
+export function gitStashDrop(repoRoot: string, stashId: string): Promise<void> {
+  return invoke<void>("git_stash_drop", { repoRoot, stashId });
 }
 
 export function gitGetCredentials(): Promise<GitCredentials> {
