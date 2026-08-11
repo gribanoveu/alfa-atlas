@@ -1,12 +1,21 @@
 import type * as Monaco from "monaco-editor";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import type { IDisposable } from "monaco-editor";
+import {
+  buildDocPathSuggestions,
+  INCLUDE_DOC_KINDS,
+  XREF_DOC_KINDS,
+} from "../lib/docPathSuggestions";
 import {
   findAnchors,
   getAttributes,
   getDocuments,
+  INDEX_EVENT_CHANNEL,
+  type Document,
+  type DocumentType,
+  type IndexEvent,
 } from "../lib/workspaceIndex";
-import { isUnderDocsRoot, relativizeToDocument, toDocsRelativePath } from "../lib/paths";
 import { ASCIIDOC_LANGUAGE_ID } from "../monaco/asciidocLanguage";
 
 const ADOC_LANGUAGE = ASCIIDOC_LANGUAGE_ID;
@@ -259,9 +268,10 @@ function findOpenMacroTarget(
  * `!`-triggered command menu (`!table`, `!request`, `!response`, ...) for
  * inserting AsciiDoc snippets.
  *
- * Each provider fetches fresh data from the index on trigger — O(1) lookups
- * per spec. `provideCompletionItems` may return a Promise, so async `invoke`
- * calls work natively.
+ * Path suggestions for `include::`/`xref:` are pre-filtered in
+ * `buildDocPathSuggestions` (Monaco's word filter splits on `/` and would
+ * otherwise empty the list mid-path). Document lists are cached and
+ * invalidated on workspace-index events.
  */
 export function useMonacoCompletions(
   monaco: typeof Monaco | null,
@@ -273,48 +283,91 @@ export function useMonacoCompletions(
     if (!monaco || !enabled) return;
     const disposers: IDisposable[] = [];
 
-    // Suggestions insert a path relative to the *current* file's directory
-    // — matching how every include::/image::/xref: target in this codebase
-    // is actually authored — not the index's repo-relative key. The index
-    // itself covers the whole repository (`WorkspaceIndex::build` scans
-    // from `repoRoot`), so it holds plenty of documents outside `docsRoot`
-    // too — those can never actually be reached by one of these macros
-    // (always resolved relative to `docsRoot`), so `isUnderDocsRoot` drops
-    // them before they're ever offered as a completion.
-    const docSuggestions = (
-      model: Monaco.editor.ITextModel,
-      docs: { relativePath: string }[],
-      range: Monaco.IRange,
-    ) => {
-      const sourceDocsRelative = documentIdFromModel(model);
-      return docs
-        .filter((d) => !docsRoot || !repoRoot || isUnderDocsRoot(d.relativePath, repoRoot, docsRoot))
-        .map((d) => {
-          const docsRelative =
-            docsRoot && repoRoot
-              ? toDocsRelativePath(d.relativePath, repoRoot, docsRoot)
-              : d.relativePath;
-          const insertText = relativizeToDocument(docsRelative, sourceDocsRelative);
-          return {
-            label: insertText,
-            kind: monaco.languages.CompletionItemKind.File,
-            insertText,
-            range,
-          };
-        });
+    let docsCache: Document[] | null = null;
+    let docsInflight: Promise<Document[]> | null = null;
+
+    const loadDocuments = async (): Promise<Document[]> => {
+      if (docsCache) return docsCache;
+      if (!docsInflight) {
+        docsInflight = getDocuments()
+          .then((docs) => {
+            docsCache = docs;
+            return docs;
+          })
+          .finally(() => {
+            docsInflight = null;
+          });
+      }
+      return docsInflight;
     };
 
-    // 1. include:: — list all documents. `findOpenMacroTarget` (not a plain
-    // `endsWith` check) is what keeps this alive across edits — see its own
-    // doc comment.
+    const invalidateDocsCache = () => {
+      docsCache = null;
+    };
+
+    let unlistenIndex: (() => void) | null = null;
+    let cancelled = false;
+    void listen<IndexEvent>(INDEX_EVENT_CHANNEL, (event) => {
+      if (cancelled) return;
+      const kind = event.payload.kind;
+      if (
+        kind === "indexUpdated" ||
+        kind === "indexBuildingFinished" ||
+        kind === "indexBuildingStarted"
+      ) {
+        invalidateDocsCache();
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenIndex = fn;
+    });
+
+    const pathSuggestions = (
+      model: Monaco.editor.ITextModel,
+      docs: Document[],
+      partial: string,
+      range: Monaco.IRange,
+      kinds?: readonly DocumentType[],
+    ) => {
+      const built = buildDocPathSuggestions({
+        docs,
+        sourceDocsRelative: documentIdFromModel(model),
+        docsRoot,
+        repoRoot,
+        partial,
+        kinds,
+        excludeSelf: true,
+      });
+      return built.map((s) => ({
+        label: s.label,
+        detail: s.detail,
+        kind: monaco.languages.CompletionItemKind.File,
+        insertText: s.insertText,
+        filterText: s.filterText,
+        sortText: s.sortText,
+        range,
+      }));
+    };
+
+    // 1. include:: — path list. `findOpenMacroTarget` keeps this alive across
+    // edits; `/` is a trigger so directory prefixes re-open the widget.
     disposers.push(
       monaco.languages.registerCompletionItemProvider(ADOC_LANGUAGE, {
-        triggerCharacters: [":"],
+        triggerCharacters: [":", "/"],
         async provideCompletionItems(model, position) {
           const open = findOpenMacroTarget(model, position, "include::");
           if (!open) return null;
-          const docs = await getDocuments();
-          return { suggestions: docSuggestions(model, docs, open.range) };
+          const docs = await loadDocuments();
+          return {
+            suggestions: pathSuggestions(
+              model,
+              docs,
+              open.partial,
+              open.range,
+              INCLUDE_DOC_KINDS,
+            ),
+            incomplete: true,
+          };
         },
       }),
     );
@@ -322,14 +375,23 @@ export function useMonacoCompletions(
     // 2. xref: — documents; after `doc#` — anchors of that doc.
     disposers.push(
       monaco.languages.registerCompletionItemProvider(ADOC_LANGUAGE, {
-        triggerCharacters: [":", "#"],
+        triggerCharacters: [":", "/", "#"],
         async provideCompletionItems(model, position) {
           const open = findOpenMacroTarget(model, position, "xref:");
           if (!open) return null;
           const hashIdx = open.partial.indexOf("#");
           if (hashIdx === -1) {
-            const docs = await getDocuments();
-            return { suggestions: docSuggestions(model, docs, open.range) };
+            const docs = await loadDocuments();
+            return {
+              suggestions: pathSuggestions(
+                model,
+                docs,
+                open.partial,
+                open.range,
+                XREF_DOC_KINDS,
+              ),
+              incomplete: true,
+            };
           }
           const docId = open.partial.slice(0, hashIdx);
           if (!docId) return null;
@@ -352,15 +414,20 @@ export function useMonacoCompletions(
       }),
     );
 
-    // 3. image:: — list documents (images live alongside docs in the index).
+    // 3. image:: — still lists indexed documents (no image-file API yet),
+    // but uses the same path filterText/partial handling so mid-path edits
+    // and `dir/` prefixes keep the widget populated.
     disposers.push(
       monaco.languages.registerCompletionItemProvider(ADOC_LANGUAGE, {
-        triggerCharacters: [":"],
+        triggerCharacters: [":", "/"],
         async provideCompletionItems(model, position) {
           const open = findOpenMacroTarget(model, position, "image::");
           if (!open) return null;
-          const docs = await getDocuments();
-          return { suggestions: docSuggestions(model, docs, open.range) };
+          const docs = await loadDocuments();
+          return {
+            suggestions: pathSuggestions(model, docs, open.partial, open.range),
+            incomplete: true,
+          };
         },
       }),
     );
@@ -424,6 +491,10 @@ export function useMonacoCompletions(
       }),
     );
 
-    return () => disposers.forEach((d) => d.dispose());
-  }, [monaco, enabled]);
+    return () => {
+      cancelled = true;
+      if (unlistenIndex) unlistenIndex();
+      disposers.forEach((d) => d.dispose());
+    };
+  }, [monaco, enabled, docsRoot, repoRoot]);
 }

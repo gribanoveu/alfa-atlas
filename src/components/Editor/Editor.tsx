@@ -338,6 +338,10 @@ export function EditorPane({
     wordWrap: "on",
     glyphMargin: true,
     lineDecorationsWidth: 11,
+    // Off so `include::`/`xref:` path completions are not drowned out by
+    // document-word suggestions after mid-path edits (Monaco's default word
+    // pattern splits on `/`, so path providers lose the filter fight).
+    wordBasedSuggestions: "off",
     // On by default in Monaco already — set explicitly so the intent is
     // visible here rather than relying on an unstated library default.
     // Only actually pins anything for AsciiDoc, fed by useMonacoOutline's
