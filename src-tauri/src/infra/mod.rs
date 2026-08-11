@@ -6,6 +6,7 @@ pub mod dictionary_assets;
 pub mod embedding_credentials_store;
 pub mod embedding_provider_manifest;
 pub mod embedding_providers;
+pub mod git_action_log_store;
 pub mod git_credentials_store;
 pub mod git_repo;
 pub mod http_agent;

@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use git2::{
     build::CheckoutBuilder, AnnotatedCommit, BlameOptions, Branch, BranchType, Cred, CredentialType,
     Delta, DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions,
-    RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashApplyOptions, Status,
-    StatusOptions, StatusShow,
+    RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashApplyOptions,
+    StashSaveOptions, Status, StatusOptions, StatusShow,
 };
 
 use crate::domain::git::{
@@ -362,6 +362,32 @@ pub fn commit(repo_root: &Path, message: &str) -> Result<String, GitError> {
 
     let full = oid.to_string();
     Ok(full[..7.min(full.len())].to_string())
+}
+
+/// Undoes a `commit()`/`finish_merge()` call by soft-resetting HEAD to the
+/// commit's first parent — index and working tree are left untouched, so
+/// this is a clean, low-risk undo (staged files go right back to staged).
+/// Refuses if HEAD no longer points at `commit_hash` (something else was
+/// committed since) rather than guessing which history to rewrite.
+/// `commit_hash` is compared against the short (7-char) form, matching
+/// what `commit()`/`finish_merge()` already return and what the frontend
+/// action log stores.
+pub fn undo_commit(repo_root: &Path, commit_hash: &str) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let head = repo
+        .head()
+        .map_err(GitError::Operation)?
+        .peel_to_commit()
+        .map_err(GitError::Operation)?;
+    if short_oid(head.id()) != commit_hash {
+        return Err(GitError::Message(
+            "HEAD изменился с момента коммита — отмена невозможна".into(),
+        ));
+    }
+    let parent = head.parent(0).map_err(GitError::Operation)?;
+    repo.reset(parent.as_object(), ResetType::Soft, None)
+        .map_err(GitError::Operation)?;
+    Ok(())
 }
 
 pub fn log(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitError> {
@@ -1122,6 +1148,38 @@ pub fn reset_to_remote(
     Ok(())
 }
 
+/// Current HEAD commit oid (hex) — used by the frontend action log to
+/// capture a "before" snapshot ahead of a destructive operation (currently
+/// just reset-to-remote) so it can be undone via `reset_to_oid`.
+pub fn head_oid(repo_root: &Path) -> Result<String, GitError> {
+    let repo = open_repo(repo_root)?;
+    let commit = repo
+        .head()
+        .map_err(GitError::Operation)?
+        .peel_to_commit()
+        .map_err(GitError::Operation)?;
+    Ok(commit.id().to_string())
+}
+
+/// Undoes `reset_to_remote()` (or any other hard-reset) by hard-resetting
+/// back to a previously captured oid. Mirrors the hard-reset pattern
+/// already used by `reset_to_remote`/`discard_tracked_changes`/`abort_merge`.
+pub fn reset_to_oid(repo_root: &Path, oid: &str) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let oid = git2::Oid::from_str(oid)
+        .map_err(|_| GitError::Message(format!("invalid commit id: {oid}")))?;
+    let commit = repo
+        .find_object(oid, Some(git2::ObjectType::Commit))
+        .map_err(GitError::Operation)?;
+    repo.reset(
+        &commit,
+        ResetType::Hard,
+        Some(CheckoutBuilder::default().force()),
+    )
+    .map_err(GitError::Operation)?;
+    Ok(())
+}
+
 /// Number of leading bytes inspected when sniffing for binary content —
 /// mirrors git's own "first 8000 bytes" heuristic instead of scanning the
 /// entire (potentially large) blob for a single NUL byte.
@@ -1384,14 +1442,91 @@ pub fn apply_diff_content(
     Ok(())
 }
 
-pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError> {
+/// Discards `path`'s uncommitted changes (staged + unstaged, or deletes an
+/// untracked file/dir). Unlike the old implementation, this takes a backup
+/// first via a pathspec-scoped stash, so the discard is undoable — see
+/// `restore_discard_backup`. Returns `Some(backup_id)` (the stash oid) if
+/// there was anything to discard, `None` if the path had no changes at all
+/// (matches the previous no-op behavior — nothing to undo either).
+///
+/// Exception: on a brand-new repo with no commits yet (`repo.head()` fails
+/// with `UnbornBranch`), libgit2's stash has nothing to diff against, so
+/// this falls back to the old no-backup behavior for that narrow edge case
+/// — discard remains non-undoable only when there is no history at all.
+pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<Option<String>, GitError> {
     let rel = validate_relative_path(path)?;
-    let repo = open_repo(repo_root)?;
+    let mut repo = open_repo(repo_root)?;
     let workdir = repo
         .workdir()
-        .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
+        .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?
+        .to_path_buf();
 
+    let mut check_opts = StatusOptions::new();
+    check_opts
+        .pathspec(path)
+        .include_untracked(true)
+        .recurse_untracked_dirs(true);
+    let has_changes = !repo
+        .statuses(Some(&mut check_opts))
+        .map_err(GitError::Operation)?
+        .is_empty();
+    if !has_changes {
+        return Ok(None);
+    }
+
+    // Untracked file: back up its raw content as a git blob and delete it.
+    // (Empirically, restoring an untracked-only pathspec-scoped stash via
+    // `stash_apply` fails with libgit2's "1 conflict prevents checkout" —
+    // a checkout-safety rejection, not a real content conflict, and not
+    // worth chasing through libgit2's checkout-action internals when a
+    // blob is simpler and more direct anyway: there's no tracked content
+    // to 3-way-merge against, just bytes to put back.) Whole untracked
+    // directories are a documented exception: a single blob can't capture
+    // a directory's contents, so they're deleted with no backup, same as
+    // the pre-existing behavior.
+    if repo.head().is_err() {
+        return discard_on_unborn_branch(&repo, &workdir, rel, path);
+    }
     if path_is_untracked(&repo, path)? {
+        let full = workdir.join(rel);
+        if full.is_dir() {
+            std::fs::remove_dir_all(&full)
+                .map_err(|e| GitError::Message(format!("failed to remove directory: {e}")))?;
+            return Ok(None);
+        }
+        if !full.is_file() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&full)
+            .map_err(|e| GitError::Message(format!("failed to read file: {e}")))?;
+        let blob_oid = repo.blob(&bytes).map_err(GitError::Operation)?;
+        std::fs::remove_file(&full)
+            .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
+        return Ok(Some(format!("{UNTRACKED_BACKUP_PREFIX}{blob_oid}:{path}")));
+    }
+
+    let sig = commit_signature(&repo)?;
+    let mut save_opts = StashSaveOptions::new(sig);
+    save_opts.pathspec(rel);
+    let oid = repo
+        .stash_save_ext(Some(&mut save_opts))
+        .map_err(GitError::Operation)?;
+    Ok(Some(oid.to_string()))
+}
+
+/// No commit exists yet (brand-new repo before the first commit) — neither
+/// the stash backup nor the blob backup used above make sense to keep
+/// consistent with libgit2's own requirements (stash needs a HEAD commit
+/// to diff against), so this narrow edge case falls back to the original
+/// no-backup behavior: discard remains non-undoable only when there is no
+/// history at all yet.
+fn discard_on_unborn_branch(
+    repo: &Repository,
+    workdir: &Path,
+    rel: &Path,
+    path: &str,
+) -> Result<Option<String>, GitError> {
+    if path_is_untracked(repo, path)? {
         let full = workdir.join(rel);
         if full.is_dir() {
             std::fs::remove_dir_all(&full)
@@ -1400,24 +1535,6 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError
             std::fs::remove_file(&full)
                 .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
         }
-        return Ok(());
-    }
-
-    if repo.head().is_ok() {
-        let head_obj = repo
-            .head()
-            .map_err(GitError::Operation)?
-            .peel_to_commit()
-            .map_err(GitError::Operation)?
-            .into_object();
-        let tree = head_obj.peel_to_tree().map_err(GitError::Operation)?;
-        let tree_obj = tree.as_object();
-        let mut checkout = CheckoutBuilder::new();
-        checkout.force().path(rel);
-        repo.checkout_tree(tree_obj, Some(&mut checkout))
-            .map_err(GitError::Operation)?;
-        repo.reset_default(Some(&head_obj), std::iter::once(rel))
-            .map_err(GitError::Operation)?;
     } else {
         let mut index = repo.index().map_err(GitError::Operation)?;
         let _ = index.remove_path(rel);
@@ -1431,6 +1548,85 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError
                 .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
         }
     }
+    Ok(None)
+}
+
+/// Prefix tagging a discard-backup id as a raw blob capture (untracked
+/// file) rather than a stash oid (tracked file) — see `discard_file_changes`.
+/// Format: `blob:<oid>:<repo-relative path>`. The oid is a fixed-length hex
+/// SHA and never contains `:`, so splitting on the first `:` correctly
+/// recovers the path even if the path itself contains one.
+const UNTRACKED_BACKUP_PREFIX: &str = "blob:";
+
+/// Positional stash index lookup by oid alone, no message-tag check —
+/// unlike `find_stash_index_by_id` (which only matches `docflow-auto: `
+/// branch-shelf entries), discard-backup stashes carry libgit2's default
+/// "WIP on <branch>: ..." message (StashSaveOptions has no message setter
+/// in this git2 version), so the caller already has the exact oid in hand
+/// from `discard_file_changes`'s return value and doesn't need tag matching.
+fn find_stash_index_by_oid_only(repo: &mut Repository, target: git2::Oid) -> Result<usize, GitError> {
+    let mut found = None;
+    repo.stash_foreach(|index, _message, oid| {
+        if *oid == target {
+            found = Some(index);
+            return false;
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+    found.ok_or_else(|| GitError::StashNotFound(target.to_string()))
+}
+
+/// Restores a discard-backup — the "Undo" action for a discardFileChanges
+/// log entry. Two forms, see `discard_file_changes`/`UNTRACKED_BACKUP_PREFIX`:
+/// a `blob:<oid>:<path>` id writes the backed-up bytes straight back to
+/// disk (untracked-file case); anything else is treated as a stash oid
+/// (tracked-file case), applied via `stash_apply` — never `stash_pop`,
+/// matching `do_stash_apply`'s conflict-safety discipline. A stash conflict
+/// means the file was touched again since the discard; that's surfaced as
+/// a plain error and the backup is left in place rather than inventing a
+/// dedicated conflict-recovery UI for this single-path case.
+pub fn restore_discard_backup(repo_root: &Path, backup_id: &str) -> Result<(), GitError> {
+    if let Some(rest) = backup_id.strip_prefix(UNTRACKED_BACKUP_PREFIX) {
+        let (oid_str, path) = rest
+            .split_once(':')
+            .ok_or_else(|| GitError::Message("некорректный идентификатор резервной копии".into()))?;
+        let repo = open_repo(repo_root)?;
+        let oid = git2::Oid::from_str(oid_str)
+            .map_err(|_| GitError::StashNotFound(backup_id.to_string()))?;
+        let blob = repo.find_blob(oid).map_err(GitError::Operation)?;
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
+        let rel = validate_relative_path(path)?;
+        let full = workdir.join(rel);
+        if full.exists() {
+            return Err(GitError::Message(
+                "не удалось восстановить — по этому пути уже есть файл".into(),
+            ));
+        }
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| GitError::Message(format!("failed to create directory: {e}")))?;
+        }
+        std::fs::write(&full, blob.content())
+            .map_err(|e| GitError::Message(format!("failed to write file: {e}")))?;
+        return Ok(());
+    }
+
+    let mut repo = open_repo(repo_root)?;
+    let target = git2::Oid::from_str(backup_id)
+        .map_err(|_| GitError::StashNotFound(backup_id.to_string()))?;
+    let index = find_stash_index_by_oid_only(&mut repo, target)?;
+    repo.stash_apply(index, Some(&mut StashApplyOptions::new()))
+        .map_err(GitError::Operation)?;
+    if repo.index().map_err(GitError::Operation)?.has_conflicts() {
+        return Err(GitError::Message(
+            "не удалось восстановить — файл был изменён после отмены".into(),
+        ));
+    }
+    let drop_index = find_stash_index_by_oid_only(&mut repo, target)?;
+    repo.stash_drop(drop_index).map_err(GitError::Operation)?;
     Ok(())
 }
 
@@ -1837,10 +2033,12 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
             .ok_or_else(|| GitError::Message("branch has invalid name".into()))?
             .to_string();
         let behind = branch_behind_count(&repo, &branch);
+        let tip_oid = branch.get().target().map(|oid| oid.to_string());
         out.push(GitBranchInfo {
             is_current: current.as_deref() == Some(name.as_str()),
             is_remote: false,
             behind,
+            tip_oid,
             name,
         });
     }
@@ -1861,6 +2059,7 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
             is_current: false,
             is_remote: true,
             behind: None,
+            tip_oid: branch.get().target().map(|oid| oid.to_string()),
         });
     }
 
@@ -1939,6 +2138,26 @@ pub fn delete_branch(repo_root: &Path, name: &str) -> Result<(), GitError> {
         .find_branch(name, BranchType::Local)
         .map_err(|_| GitError::BranchNotFound(name.to_string()))?;
     branch.delete().map_err(GitError::Operation)
+}
+
+/// Undoes `delete_branch()` by recreating a local branch at an explicit
+/// commit oid captured by the caller before the delete — unlike
+/// `create_branch`, which only branches from current HEAD. Doesn't check
+/// out the new branch (delete_branch never switches either) and doesn't
+/// restore upstream tracking (libgit2 discards that on delete, along with
+/// the branch itself — an accepted, documented limitation of this undo).
+pub fn create_branch_at_oid(repo_root: &Path, name: &str, oid: &str) -> Result<(), GitError> {
+    let name = validate_branch_name(name)?;
+    let repo = open_repo(repo_root)?;
+    if repo.find_branch(name, BranchType::Local).is_ok() {
+        return Err(GitError::BranchAlreadyExists(name.to_string()));
+    }
+    let oid = git2::Oid::from_str(oid)
+        .map_err(|_| GitError::Message(format!("invalid commit id: {oid}")))?;
+    let commit = repo.find_commit(oid).map_err(GitError::Operation)?;
+    repo.branch(name, &commit, false)
+        .map_err(GitError::Operation)?;
+    Ok(())
 }
 
 /// Checks out `name`. If there are uncommitted tracked changes, they are
@@ -3035,6 +3254,184 @@ mod tests {
         let err = apply_stash_entry(&dir, &shelf[0].id).unwrap_err();
         assert!(matches!(err, GitError::Message(_)));
         assert_eq!(list_stash_shelf(&dir).unwrap().len(), 1);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn undo_commit_soft_resets_to_parent_and_keeps_index() {
+        let dir = temp_dir("undo-commit");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+
+        fs::write(dir.join("a.txt"), "two").unwrap();
+        stage_paths(&dir, &["a.txt".to_string()]).unwrap();
+        let hash = commit(&dir, "second").unwrap();
+
+        undo_commit(&dir, &hash).unwrap();
+
+        let history = log(&dir, 10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].message, "init");
+
+        let snapshot = status(&dir).unwrap();
+        assert_eq!(snapshot.staged.len(), 1);
+        assert_eq!(snapshot.staged[0].path, "a.txt");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn undo_commit_refuses_when_head_has_moved_on() {
+        let dir = temp_dir("undo-commit-stale");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+        let first_hash = commit_file_and_commit(&dir, "a.txt", "two", "second");
+        commit_file(&repo, "a.txt", "three", "third");
+
+        let err = undo_commit(&dir, &first_hash).unwrap_err();
+        assert!(matches!(err, GitError::Message(_)));
+
+        // History untouched — still three commits.
+        assert_eq!(log(&dir, 10).unwrap().len(), 3);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    fn commit_file_and_commit(dir: &Path, name: &str, content: &str, message: &str) -> String {
+        fs::write(dir.join(name), content).unwrap();
+        stage_paths(dir, &[name.to_string()]).unwrap();
+        commit(dir, message).unwrap()
+    }
+
+    #[test]
+    fn create_branch_at_oid_recreates_a_deleted_branch() {
+        let dir = temp_dir("create-branch-at-oid");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let tip_oid = head_commit.id().to_string();
+
+        repo.branch("feature", &head_commit, false).unwrap();
+        delete_branch(&dir, "feature").unwrap();
+        assert!(repo.find_branch("feature", BranchType::Local).is_err());
+
+        create_branch_at_oid(&dir, "feature", &tip_oid).unwrap();
+        let recreated = repo.find_branch("feature", BranchType::Local).unwrap();
+        assert_eq!(recreated.get().target().unwrap().to_string(), tip_oid);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn create_branch_at_oid_refuses_when_branch_already_exists() {
+        let dir = temp_dir("create-branch-at-oid-exists");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+        let oid = repo.head().unwrap().peel_to_commit().unwrap().id().to_string();
+
+        let err = create_branch_at_oid(&dir, &branch_name(&repo).unwrap(), &oid).unwrap_err();
+        assert!(matches!(err, GitError::BranchAlreadyExists(_)));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn head_oid_and_reset_to_oid_round_trip() {
+        let dir = temp_dir("reset-to-oid");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+        let before = head_oid(&dir).unwrap();
+
+        commit_file(&repo, "a.txt", "two", "second");
+        assert_ne!(head_oid(&dir).unwrap(), before);
+
+        reset_to_oid(&dir, &before).unwrap();
+        assert_eq!(head_oid(&dir).unwrap(), before);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn discard_file_changes_returns_none_when_nothing_to_discard() {
+        let dir = temp_dir("discard-noop");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+
+        assert_eq!(discard_file_changes(&dir, "a.txt").unwrap(), None);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn discard_tracked_edit_backs_up_and_restore_returns_it() {
+        let dir = temp_dir("discard-tracked");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one\n", "init");
+        fs::write(dir.join("a.txt"), "one\nlocal-edit\n").unwrap();
+
+        let backup_id = discard_file_changes(&dir, "a.txt").unwrap();
+        assert!(backup_id.is_some());
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one\n");
+
+        restore_discard_backup(&dir, &backup_id.unwrap()).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\nlocal-edit\n"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn discard_untracked_file_backs_up_and_restore_recreates_it() {
+        let dir = temp_dir("discard-untracked");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one\n", "init");
+        fs::write(dir.join("new.txt"), "brand new\n").unwrap();
+
+        let backup_id = discard_file_changes(&dir, "new.txt").unwrap();
+        assert!(backup_id.is_some(), "expected a backup for the untracked file");
+        assert!(
+            !dir.join("new.txt").exists(),
+            "discard should still delete the untracked file from disk"
+        );
+
+        restore_discard_backup(&dir, &backup_id.unwrap()).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("new.txt")).unwrap(),
+            "brand new\n",
+            "restore should recreate the untracked file with its original content"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restore_discard_backup_errors_without_dropping_when_file_changed_since() {
+        let dir = temp_dir("discard-restore-conflict");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one\n", "init");
+        fs::write(dir.join("a.txt"), "one\nlocal-edit\n").unwrap();
+
+        let backup_id = discard_file_changes(&dir, "a.txt").unwrap().unwrap();
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one\n");
+
+        // Something else happens to the same file after the discard —
+        // committed, so the stash's 3-way apply has to reconcile against a
+        // genuinely different base than what it captured.
+        commit_file(&repo, "a.txt", "one\nremote-edit\n", "unrelated update");
+
+        let err = restore_discard_backup(&dir, &backup_id).unwrap_err();
+        assert!(matches!(err, GitError::Message(_)));
+
+        // The backup must still be there — nothing silently lost.
+        let index = find_stash_index_by_oid_only(
+            &mut open_repo(&dir).unwrap(),
+            git2::Oid::from_str(&backup_id).unwrap(),
+        );
+        assert!(index.is_ok(), "backup stash entry should survive a failed restore");
 
         fs::remove_dir_all(&dir).ok();
     }

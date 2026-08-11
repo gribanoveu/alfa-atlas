@@ -34,15 +34,22 @@ import type {
   PullMode,
 } from "./lib/git";
 import {
+  deriveSyncPillState,
   gitCommitFileDiff,
   gitCommitFiles,
+  gitCreateBranchAtOid,
+  gitHeadOid,
+  gitResetToOid,
+  gitRestoreDiscardBackup,
   gitSyncStatus,
+  gitUndoCommit,
   hasTrackedGitChanges,
-  hasUnpushedCommits,
 } from "./lib/git";
 import { friendlyGitError } from "./lib/gitErrors";
 import { useBranches } from "./hooks/useBranches";
 import { useGitStash } from "./hooks/useGitStash";
+import { useGitActionLog } from "./hooks/useGitActionLog";
+import type { GitActionLogEntry } from "./lib/gitActionLog";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useSpecsRepo } from "./hooks/useSpecsRepo";
@@ -301,6 +308,9 @@ function App() {
   const stash = useGitStash(project.repoRoot, {
     active: Boolean(project.repoRoot),
   });
+  const actionLog = useGitActionLog(project.repoRoot, {
+    active: Boolean(project.repoRoot),
+  });
   const [folderError, setFolderError] = useState<string | null>(null);
   const [dismissedToastMessage, setDismissedToastMessage] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<{ id: number; message: string } | null>(null);
@@ -454,7 +464,6 @@ function App() {
     .join(" ");
 
   const hasProject = Boolean(project.docsRoot && project.repoRoot);
-  const hasUnpushedChanges = hasProject && hasUnpushedCommits(git.status);
   const workspaceIndex = useWorkspaceIndex(project.repoRoot, {
     active: hasProject,
   });
@@ -535,6 +544,21 @@ function App() {
     setPullModalOpen(true);
   }, [hasProject]);
 
+  const syncPillState = deriveSyncPillState({
+    status: git.status,
+    currentBranchBehind: branches.branches.find((b) => b.isCurrent)?.behind ?? null,
+    hasPendingStashConflict: pendingStashConflict !== null,
+  });
+  const handleSyncPillClick = useCallback(() => {
+    if (syncPillState === "unpushed") {
+      setPushConfirmOpen(true);
+    } else if (syncPillState === "behind") {
+      openPullModal();
+    } else {
+      layout.setRightTool("git");
+    }
+  }, [syncPillState, openPullModal, layout]);
+
   function behindCommitsMessage(count: number): string {
     const mod10 = count % 10;
     const mod100 = count % 100;
@@ -570,13 +594,19 @@ function App() {
           id: successToastCounter.current,
           message: "Изменения отправлены на сервер",
         });
+        actionLog.record({
+          kind: "push",
+          summary: "Изменения отправлены на сервер",
+          undoable: false,
+          payload: { kind: "push" },
+        });
       }
     } catch (e) {
       setGitAlert({
         message: e instanceof Error ? e.message : String(e),
       });
     }
-  }, [git, hasProject, project.repoRoot]);
+  }, [git, hasProject, project.repoRoot, actionLog]);
 
   const onPullConfirm = useCallback(
     async (mode: PullMode) => {
@@ -598,18 +628,42 @@ function App() {
   );
 
   const onResetToRemoteConfirm = useCallback(async () => {
+    const preResetOid = project.repoRoot
+      ? await gitHeadOid(project.repoRoot).catch(() => null)
+      : null;
     const err = await git.resetToRemote();
     setResetRemoteConfirmOpen(false);
     setPullModalOpen(false);
-    if (err) setGitAlert({ message: err });
-  }, [git]);
+    if (err) {
+      setGitAlert({ message: err });
+    } else if (preResetOid) {
+      actionLog.record({
+        kind: "resetToRemote",
+        summary: "Ветка сброшена к версии на сервере",
+        undoable: true,
+        payload: { kind: "resetToRemote", preResetOid },
+      });
+    }
+  }, [git, project.repoRoot, actionLog]);
 
   const onDeleteBranchConfirm = useCallback(async () => {
     if (!deleteBranchTarget) return;
-    const ok = await branches.deleteBranch(deleteBranchTarget.name);
+    const { name, tipOid } = deleteBranchTarget;
+    const ok = await branches.deleteBranch(name);
     setDeleteBranchTarget(null);
-    if (!ok && branches.error) setGitAlert({ message: branches.error });
-  }, [branches, deleteBranchTarget]);
+    if (!ok) {
+      if (branches.error) setGitAlert({ message: branches.error });
+      return;
+    }
+    if (tipOid) {
+      actionLog.record({
+        kind: "deleteBranch",
+        summary: `Удалена ветка «${name}»`,
+        undoable: true,
+        payload: { kind: "deleteBranch", name, tipOid },
+      });
+    }
+  }, [branches, deleteBranchTarget, actionLog]);
 
   const onPushConfirm = useCallback(async () => {
     setPushConfirmOpen(false);
@@ -697,19 +751,19 @@ function App() {
       successToastCounter.current += 1;
       setSuccessToast({
         id: successToastCounter.current,
-        message: "Отложенные изменения ветки восстановлены",
+        message: "Изменения ветки восстановлены",
       });
     } else if (restore.outcome === "conflict") {
       setPendingStashConflict({ id: restore.entry.id, branch: restore.entry.branch });
     } else if (restore.outcome === "blocked") {
       setGitAlert({
-        title: "Отложенные изменения не восстановлены",
+        title: "Изменения не восстановлены",
         message: `Не удалось автоматически восстановить отложенные изменения для ветки «${restore.entry.branch}» — ${restore.reason}. Изменения сохранены и доступны в панели Git → «Отложенные изменения».`,
         variant: "info",
       });
     } else if (restore.outcome === "skipped") {
       setGitAlert({
-        title: "Отложенные изменения не восстановлены",
+        title: "Изменения не восстановлены",
         message:
           "Для этой ветки в панели Git → «Отложенные изменения» сохранено несколько наборов изменений — выберите нужный вручную.",
         variant: "info",
@@ -738,16 +792,26 @@ function App() {
 
   const performCheckout = useCallback(
     async (name: string, discardChanges: boolean, isRemote: boolean) => {
+      const fromBranch = git.status.branch;
       const outcome = isRemote
         ? await branches.checkoutRemoteBranch(name, discardChanges)
         : await branches.checkoutBranch(name, discardChanges);
       if (!outcome) return;
-      project.setBranchFromGit(isRemote ? localNameFromRemoteBranch(name) : name);
+      const toBranch = isRemote ? localNameFromRemoteBranch(name) : name;
+      project.setBranchFromGit(toBranch);
       await refreshAfterBranchChange();
       await stash.refresh();
       handleCheckoutOutcome(outcome);
+      // Informational only — checkout is already safe by design (auto-stash
+      // shelf), so this entry never carries an undo button.
+      actionLog.record({
+        kind: "checkout",
+        summary: fromBranch ? `Переключение: ${fromBranch} → ${toBranch}` : `Переключение на ${toBranch}`,
+        undoable: false,
+        payload: { kind: "checkout", from: fromBranch ?? "", to: toBranch },
+      });
     },
-    [branches, project.setBranchFromGit, refreshAfterBranchChange, stash, handleCheckoutOutcome],
+    [branches, project.setBranchFromGit, refreshAfterBranchChange, stash, handleCheckoutOutcome, git.status.branch, actionLog],
   );
 
   const onRestoreShelfEntry = useCallback(
@@ -769,10 +833,20 @@ function App() {
 
   const onConfirmDiscardShelfEntry = useCallback(async () => {
     if (!stashDiscardTarget) return;
+    const { branch } = stashDiscardTarget;
     const ok = await stash.discard(stashDiscardTarget.id);
     setStashDiscardTarget(null);
-    if (!ok && stash.error) setGitAlert({ message: stash.error });
-  }, [stash, stashDiscardTarget]);
+    if (!ok) {
+      if (stash.error) setGitAlert({ message: stash.error });
+      return;
+    }
+    actionLog.record({
+      kind: "stashDrop",
+      summary: `Отложенные изменения ветки «${branch}» удалены`,
+      undoable: false,
+      payload: { kind: "stashDrop", branch },
+    });
+  }, [stash, stashDiscardTarget, actionLog]);
 
   const onPreviewShelfEntry = useCallback((entry: GitStashEntry) => {
     setStashPreviewTarget(entry);
@@ -788,6 +862,49 @@ function App() {
       }
     },
     [project.repoRoot],
+  );
+
+  // Dispatches an action-log entry's "Отменить" button to the matching
+  // backend undo primitive. Never called for `entry.undoable === false`
+  // entries (push/stashDrop, or a discard with nothing backed up) — the UI
+  // doesn't render an undo button for those in the first place.
+  const handleUndoAction = useCallback(
+    async (entry: GitActionLogEntry) => {
+      if (!project.repoRoot || !entry.undoable) return;
+      const repoRoot = project.repoRoot;
+      try {
+        switch (entry.payload.kind) {
+          case "stage":
+            await git.unstage(entry.payload.paths);
+            break;
+          case "unstage":
+            await git.stage(entry.payload.paths);
+            break;
+          case "commit":
+          case "mergeCommit":
+            await gitUndoCommit(repoRoot, entry.payload.oid);
+            break;
+          case "deleteBranch":
+            await gitCreateBranchAtOid(repoRoot, entry.payload.name, entry.payload.tipOid);
+            break;
+          case "resetToRemote":
+            await gitResetToOid(repoRoot, entry.payload.preResetOid);
+            break;
+          case "discardFileChanges":
+            if (entry.payload.backupStashId) {
+              await gitRestoreDiscardBackup(repoRoot, entry.payload.backupStashId);
+            }
+            break;
+          default:
+            return;
+        }
+        actionLog.markUndone(entry.id);
+        await Promise.all([git.refresh(), branches.refresh(), stash.refresh()]);
+      } catch (e) {
+        setGitAlert({ message: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [project.repoRoot, actionLog, git, branches, stash],
   );
 
   const performCreateBranch = useCallback(
@@ -913,6 +1030,50 @@ function App() {
     }
   }, [git]);
 
+  // Thin wrappers around useGitPanel's stage/unstage/commit that additionally
+  // record the action log entry — bound directly into <RightDock git={{...}}>
+  // below instead of git.stage/git.unstage/git.commit themselves, since
+  // those raw hook methods don't know about the log.
+  const handleStage = useCallback(
+    (paths: string[]) => {
+      if (paths.length === 0) return;
+      void git.stage(paths);
+      actionLog.record({
+        kind: "stage",
+        summary: paths.length === 1 ? `В индекс добавлен ${paths[0]}` : `В индекс добавлено файлов: ${paths.length}`,
+        undoable: true,
+        payload: { kind: "stage", paths },
+      });
+    },
+    [git, actionLog],
+  );
+
+  const handleUnstage = useCallback(
+    (paths: string[]) => {
+      if (paths.length === 0) return;
+      void git.unstage(paths);
+      actionLog.record({
+        kind: "unstage",
+        summary: paths.length === 1 ? `Из индекса убран ${paths[0]}` : `Из индекса убрано файлов: ${paths.length}`,
+        undoable: true,
+        payload: { kind: "unstage", paths },
+      });
+    },
+    [git, actionLog],
+  );
+
+  const handleCommit = useCallback(() => {
+    void git.commit().then((hash) => {
+      if (!hash) return;
+      actionLog.record({
+        kind: "commit",
+        summary: `Создан коммит ${hash}`,
+        undoable: true,
+        payload: { kind: "commit", oid: hash },
+      });
+    });
+  }, [git, actionLog]);
+
   const openCommitFileDiff = useCallback(
     (commitHash: string, file: GitFileStatus) => {
       setCommitFileDiffTarget({ commitHash, file });
@@ -1019,13 +1180,23 @@ function App() {
 
   const handleGitDiscard = useCallback(
     async (repoRelativePath: string) => {
-      const ok = await git.discardFileChanges(repoRelativePath);
-      if (!ok) return false;
+      const result = await git.discardFileChanges(repoRelativePath);
+      if (!result.ok) return false;
       await syncEditorAfterGitDiscard(repoRelativePath);
       setGitDiffTarget(null);
+      actionLog.record({
+        kind: "discardFileChanges",
+        summary: `Отменены изменения в ${repoRelativePath}`,
+        undoable: result.backupId !== null,
+        payload: {
+          kind: "discardFileChanges",
+          path: repoRelativePath,
+          backupStashId: result.backupId,
+        },
+      });
       return true;
     },
-    [git, syncEditorAfterGitDiscard],
+    [git, syncEditorAfterGitDiscard, actionLog],
   );
 
   const handleGitSaveContent = useCallback(
@@ -1330,8 +1501,8 @@ function App() {
         onGoForward={() => void editor.goForward()}
         canGoBack={editor.canGoBack}
         canGoForward={editor.canGoForward}
-        hasUnpushedChanges={hasUnpushedChanges}
-        onOpenPushConfirm={() => setPushConfirmOpen(true)}
+        syncPillState={syncPillState}
+        onSyncPillClick={handleSyncPillClick}
         onSelectProject={async (root) => {
           await closeProject();
           try {
@@ -1508,12 +1679,12 @@ function App() {
                     canCommit: git.canCommit,
                     busy: git.busy,
                     error: git.error,
-                    onStage: (path) => void git.stage([path]),
-                    onUnstage: (path) => void git.unstage([path]),
-                    onStageAll: (paths) => void git.stage(paths),
+                    onStage: (path) => handleStage([path]),
+                    onUnstage: (path) => handleUnstage([path]),
+                    onStageAll: (paths) => handleStage(paths),
                     onUnstageAll: () =>
-                      void git.unstage(git.status.staged.map((f) => f.path)),
-                    onCommit: () => void git.commit(),
+                      handleUnstage(git.status.staged.map((f) => f.path)),
+                    onCommit: handleCommit,
                     onRefresh: () => void git.refresh(),
                     onOpenFileDiff: openGitFileDiff,
                     onOpenConflict: openConflict,
@@ -1567,6 +1738,15 @@ function App() {
               repoRoot: project.repoRoot,
               activeFilePath: editor.activeTab?.path ?? null,
             }}
+            gitActionLog={
+              hasProject
+                ? {
+                    entries: actionLog.entries,
+                    busy: git.busy || branches.busy || stash.busy,
+                    onUndo: (entry) => void handleUndoAction(entry),
+                  }
+                : null
+            }
           />
         </div>
         <BottomDock

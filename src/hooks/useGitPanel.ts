@@ -181,20 +181,22 @@ export function useGitPanel(
     [refresh, repoRoot],
   );
 
-  const commit = useCallback(async () => {
-    if (!repoRoot) return false;
+  /** Returns the new commit's short hash, or null if nothing was committed
+   * (no repo, no message, nothing staged) or the commit failed. */
+  const commit = useCallback(async (): Promise<string | null> => {
+    if (!repoRoot) return null;
     const formatted = formatDocCommitMessage(jiraKey, description);
-    if (!formatted || status.staged.length === 0) return false;
+    if (!formatted || status.staged.length === 0) return null;
     setBusy(true);
     try {
-      await gitCommit(repoRoot, formatted);
+      const hash = await gitCommit(repoRoot, formatted);
       setJiraKey("");
       setDescription("");
       await refresh();
-      return true;
+      return hash;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      return false;
+      return null;
     } finally {
       setBusy(false);
     }
@@ -356,17 +358,17 @@ export function useGitPanel(
   );
 
   const discardFileChanges = useCallback(
-    async (path: string): Promise<boolean> => {
-      if (!repoRoot) return false;
+    async (path: string): Promise<{ ok: true; backupId: string | null } | { ok: false }> => {
+      if (!repoRoot) return { ok: false };
       setBusy(true);
       try {
-        await gitDiscardFileChanges(repoRoot, path);
+        const backupId = await gitDiscardFileChanges(repoRoot, path);
         await refresh();
         setError(null);
-        return true;
+        return { ok: true, backupId };
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
-        return false;
+        return { ok: false };
       } finally {
         setBusy(false);
       }

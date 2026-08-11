@@ -101,6 +101,11 @@ pub struct GitBranchInfo {
     /// Commits present on the branch's upstream but not yet pulled locally.
     /// `None` when the branch has no upstream (or is itself a remote branch).
     pub behind: Option<usize>,
+    /// The branch's tip commit oid (hex) — captured so a "delete branch" UI
+    /// action can offer an undo (recreate at this oid) after the branch ref
+    /// itself is gone. `None` only if the branch's target couldn't be
+    /// resolved (e.g. a symbolic ref with no direct target).
+    pub tip_oid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

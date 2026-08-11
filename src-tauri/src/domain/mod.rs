@@ -6,6 +6,7 @@ pub mod chat;
 pub mod chunk_index;
 pub mod embeddings;
 pub mod git;
+pub mod git_action_log;
 pub mod layout;
 pub mod llm;
 pub mod onboarding;

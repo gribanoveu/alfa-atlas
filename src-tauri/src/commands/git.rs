@@ -164,8 +164,33 @@ pub fn git_commit_file_diff(
 }
 
 #[tauri::command]
-pub fn git_discard_file_changes(repo_root: String, path: String) -> Result<(), String> {
+pub fn git_discard_file_changes(repo_root: String, path: String) -> Result<Option<String>, String> {
     git_ops::discard_file_changes(&repo_root, &path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_restore_discard_backup(repo_root: String, backup_id: String) -> Result<(), String> {
+    git_ops::restore_discard_backup(&repo_root, &backup_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_undo_commit(repo_root: String, commit_hash: String) -> Result<(), String> {
+    git_ops::undo_commit(&repo_root, &commit_hash).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_create_branch_at_oid(repo_root: String, name: String, oid: String) -> Result<(), String> {
+    git_ops::create_branch_at_oid(&repo_root, &name, &oid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_reset_to_oid(repo_root: String, oid: String) -> Result<(), String> {
+    git_ops::reset_to_oid(&repo_root, &oid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_head_oid(repo_root: String) -> Result<String, String> {
+    git_ops::head_oid(&repo_root).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

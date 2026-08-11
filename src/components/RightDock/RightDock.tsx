@@ -13,6 +13,7 @@ import type {
   GitFileStatus,
   GitStashEntry,
 } from "../../lib/git";
+import type { GitActionLogEntry } from "../../lib/gitActionLog";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
@@ -127,6 +128,11 @@ type RightDockProps = {
     repoRoot: string | null;
     activeFilePath: string | null;
   } | null;
+  gitActionLog?: {
+    entries: GitActionLogEntry[];
+    busy: boolean;
+    onUndo: (entry: GitActionLogEntry) => void;
+  } | null;
 };
 
 export function RightDock({
@@ -139,6 +145,7 @@ export function RightDock({
   branches,
   asciidoc,
   assistant,
+  gitActionLog,
 }: RightDockProps) {
   const open = Boolean(activeTool);
   const active = activeTool ? TOOL_DEFS[activeTool] : undefined;
@@ -220,7 +227,7 @@ export function RightDock({
                 onDelete={branches.onDelete}
               />
             ) : activeTool === "suggestions" ? (
-              <NotificationsPanel />
+              <NotificationsPanel gitActionLog={gitActionLog ?? undefined} />
             ) : activeTool === "assistant" && assistant ? (
               <AssistantPanel
                 onOpenSettings={assistant.onOpenSettings}

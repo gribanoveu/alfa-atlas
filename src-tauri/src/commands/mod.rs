@@ -4,6 +4,7 @@ pub mod chat_history;
 pub mod embeddings;
 pub mod export;
 pub mod git;
+pub mod git_action_log;
 pub mod layout;
 pub mod llm;
 pub mod onboarding;

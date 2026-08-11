@@ -128,20 +128,40 @@
   cursor: default;
 }
 
-.unpushed-indicator-btn {
+.sync-pill {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
+  gap: 5px;
+  font-size: var(--font-ui-sm);
+  padding: 4px 10px;
   margin-left: 6px;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  color: var(--orange);
+  background: var(--bg-1);
+  color: var(--text-1);
+  white-space: nowrap;
   -webkit-app-region: no-drag;
 }
 
-.unpushed-indicator-btn:hover {
+.sync-pill:hover {
   background: var(--bg-2);
+}
+
+.sync-pill-synced {
+  color: var(--text-2);
+}
+
+.sync-pill-unpushed {
+  color: var(--orange);
+}
+
+.sync-pill-behind,
+.sync-pill-merging {
+  color: #d9a441;
+}
+
+.sync-pill-conflict {
+  color: #e5534b;
 }
 
 .repo-chip {

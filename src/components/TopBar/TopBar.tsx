@@ -1,11 +1,11 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronLeft, ChevronRight, CloudUpload, FolderOpen } from "lucide-react";
+import { ChevronLeft, ChevronRight, FolderOpen } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
 import type { GeneralPrefs } from "../../lib/prefs";
-import type { ProbeResult } from "../../lib/git";
+import type { ProbeResult, SyncPillState } from "../../lib/git";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
 import { SettingsDialog } from "../Settings/SettingsDialog";
 import type { SectionId } from "../Settings/SettingsDialog";
@@ -13,6 +13,7 @@ import { CloneRepoModal } from "../Welcome/CloneRepoModal";
 import { AboutModal } from "./AboutModal";
 import { MenuBar } from "./MenuBar";
 import { RecentProjectsDropdown } from "./RecentProjectsDropdown";
+import { SyncStatusPill } from "./SyncStatusPill";
 import "./TopBar.css";
 
 type TopBarProps = {
@@ -43,8 +44,8 @@ type TopBarProps = {
   onGoForward?: () => void;
   canGoBack?: boolean;
   canGoForward?: boolean;
-  hasUnpushedChanges?: boolean;
-  onOpenPushConfirm?: () => void;
+  syncPillState: SyncPillState;
+  onSyncPillClick: () => void;
   onSelectProject?: (root: string) => void;
   onCloneProject?: (probe: ProbeResult) => Promise<void>;
   /** Bump this (e.g. `n => n + 1`) to open Settings on the "standards" tab. */
@@ -81,8 +82,8 @@ export function TopBar({
   onGoForward,
   canGoBack = false,
   canGoForward = false,
-  hasUnpushedChanges = false,
-  onOpenPushConfirm,
+  syncPillState,
+  onSyncPillClick,
   onSelectProject,
   onCloneProject,
   openStandardsSettingsSignal,
@@ -237,16 +238,8 @@ export function TopBar({
               <ChevronRight size={16} />
             </button>
           </div>
-          {hasUnpushedChanges ? (
-            <button
-              type="button"
-              className="unpushed-indicator-btn"
-              title="Есть неотправленные изменения — отправить на сервер"
-              aria-label="Есть неотправленные изменения — отправить на сервер"
-              onClick={onOpenPushConfirm}
-            >
-              <CloudUpload size={16} />
-            </button>
+          {hasProject ? (
+            <SyncStatusPill state={syncPillState} onClick={onSyncPillClick} />
           ) : null}
           <div className="repo-chip-wrapper">
             <button

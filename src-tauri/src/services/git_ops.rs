@@ -125,8 +125,28 @@ pub fn blame(
     git_repo::blame(Path::new(repo_root), path, start_line, end_line)
 }
 
-pub fn discard_file_changes(repo_root: &str, path: &str) -> Result<(), GitError> {
+pub fn discard_file_changes(repo_root: &str, path: &str) -> Result<Option<String>, GitError> {
     git_repo::discard_file_changes(Path::new(repo_root), path)
+}
+
+pub fn restore_discard_backup(repo_root: &str, backup_id: &str) -> Result<(), GitError> {
+    git_repo::restore_discard_backup(Path::new(repo_root), backup_id)
+}
+
+pub fn undo_commit(repo_root: &str, commit_hash: &str) -> Result<(), GitError> {
+    git_repo::undo_commit(Path::new(repo_root), commit_hash)
+}
+
+pub fn create_branch_at_oid(repo_root: &str, name: &str, oid: &str) -> Result<(), GitError> {
+    git_repo::create_branch_at_oid(Path::new(repo_root), name, oid)
+}
+
+pub fn reset_to_oid(repo_root: &str, oid: &str) -> Result<(), GitError> {
+    git_repo::reset_to_oid(Path::new(repo_root), oid)
+}
+
+pub fn head_oid(repo_root: &str) -> Result<String, GitError> {
+    git_repo::head_oid(Path::new(repo_root))
 }
 
 pub fn apply_diff_content(
