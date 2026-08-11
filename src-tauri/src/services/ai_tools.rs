@@ -19,7 +19,7 @@ use crate::domain::ai_tools::{
     AsciidocTemplateEntry, CheckArgs, CheckKind, CreateDirectoryArgs, DeleteDirectoryArgs,
     DeleteFileArgs, EditFileArgs, FileDiffStats, FileEdit, GetAsciidocTemplatesArgs, GitBlameArgs,
     GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs, MatchSource, MemoryArgs, MoveArgs,
-    ReadFileArgs, RequestFullRepoAccessArgs, RequestModeSwitchArgs, SemanticSearchArgs, Task,
+    ReadFileArgs, RequestFullRepoAccessArgs, RequestModeSwitchArgs, AskUserArgs, SemanticSearchArgs, Task,
     TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError,
     ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
 };
@@ -214,6 +214,14 @@ pub fn execute_tool(
             Ok(ToolResult::ModeSwitchRequested { mode: args.mode, reason: args.reason })
         }
         ToolCall::GetAsciidocTemplates(args) => Ok(get_asciidoc_templates(args)),
+        // Never produced here — answers come from `ToolCallDecision::answer`
+        // on `llm_chat_stream_resume`. Calling via bare `ai_execute_tool`
+        // without a user answer is a programming error, not a model recovery
+        // case (the model never sees this path for a well-formed pause).
+        ToolCall::AskUser(_) => Err(ToolError::InvalidArguments {
+            tool: "askUser".to_string(),
+            reason: "askUser must be answered via resume, not execute_tool".to_string(),
+        }),
     }
 }
 
@@ -560,8 +568,61 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "getAsciidocTemplates" => lenient_json_object::<GetAsciidocTemplatesArgs>(&call.arguments)
             .map(ToolCall::GetAsciidocTemplates)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "askUser" => lenient_json_object::<AskUserArgs>(&call.arguments)
+            .and_then(|args| validate_ask_user_args(args).map_err(|reason| reason))
+            .map(ToolCall::AskUser)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
+}
+
+const ASK_USER_MAX_QUESTIONS: usize = 4;
+const ASK_USER_MIN_OPTIONS: usize = 2;
+const ASK_USER_MAX_OPTIONS: usize = 6;
+
+/// Structural limits for `askUser` — keeps the mid-turn card usable and
+/// stops the model dumping an unbounded questionnaire into one pause.
+fn validate_ask_user_args(args: AskUserArgs) -> Result<AskUserArgs, String> {
+    let n = args.questions.len();
+    if n == 0 || n > ASK_USER_MAX_QUESTIONS {
+        return Err(format!(
+            "questions must have between 1 and {ASK_USER_MAX_QUESTIONS} items, got {n}"
+        ));
+    }
+    let mut seen_q = HashSet::new();
+    for (i, q) in args.questions.iter().enumerate() {
+        if q.id.trim().is_empty() {
+            return Err(format!("questions[{i}].id must be non-empty"));
+        }
+        if !seen_q.insert(q.id.clone()) {
+            return Err(format!("duplicate question id: {}", q.id));
+        }
+        if q.prompt.trim().is_empty() {
+            return Err(format!("questions[{i}].prompt must be non-empty"));
+        }
+        let opt_n = q.options.len();
+        if opt_n < ASK_USER_MIN_OPTIONS || opt_n > ASK_USER_MAX_OPTIONS {
+            return Err(format!(
+                "questions[{i}].options must have between {ASK_USER_MIN_OPTIONS} and {ASK_USER_MAX_OPTIONS} items, got {opt_n}"
+            ));
+        }
+        let mut seen_o = HashSet::new();
+        for (j, o) in q.options.iter().enumerate() {
+            if o.id.trim().is_empty() {
+                return Err(format!("questions[{i}].options[{j}].id must be non-empty"));
+            }
+            if o.label.trim().is_empty() {
+                return Err(format!("questions[{i}].options[{j}].label must be non-empty"));
+            }
+            if !seen_o.insert(o.id.clone()) {
+                return Err(format!(
+                    "questions[{i}] has duplicate option id: {}",
+                    o.id
+                ));
+            }
+        }
+    }
+    Ok(args)
 }
 
 /// `todo` is the first tool whose wire name doesn't map 1:1 to a single
@@ -1156,6 +1217,64 @@ pub fn llm_tool_definitions(
                     }
                 },
                 "required": ["ids"]
+            }),
+        });
+    }
+    if visible(ToolName::AskUser) {
+        defs.push(LlmToolDefinition {
+            name: "askUser".to_string(),
+            description:
+                "Ask the user one or more structured clarifying questions mid-turn and wait for their answers before continuing. Use when you genuinely cannot proceed without a choice (blocking fork, conflicting requirements, equally valid alternatives). Do NOT use for rhetorical questions, anything already visible in the repo, or when a reasonable default can be chosen and briefly mentioned. Prefer calling this alone in its own tool round — do not bundle with write/edit/delete. Do not also write the same question as plain chat text in the same turn. Keep 1–4 questions; options should be concrete and mutually exclusive unless allowMultiple is true. Available in every conversation mode (agent, plan, question)."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": ["string", "null"],
+                        "description": "Optional short card title shown above the questions."
+                    },
+                    "questions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 4,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "Stable id for this question (returned in the answer payload)."
+                                },
+                                "prompt": {
+                                    "type": "string",
+                                    "description": "The question text shown to the user."
+                                },
+                                "options": {
+                                    "type": "array",
+                                    "minItems": 2,
+                                    "maxItems": 6,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "id": { "type": "string" },
+                                            "label": { "type": "string" }
+                                        },
+                                        "required": ["id", "label"]
+                                    }
+                                },
+                                "allowMultiple": {
+                                    "type": "boolean",
+                                    "description": "If true, the user may select more than one option (checkboxes). Default false (radio)."
+                                },
+                                "allowCustom": {
+                                    "type": "boolean",
+                                    "description": "If true, the user may also type a free-text answer. Default false."
+                                }
+                            },
+                            "required": ["id", "prompt", "options"]
+                        }
+                    }
+                },
+                "required": ["questions"]
             }),
         });
     }
@@ -5222,6 +5341,73 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_ask_user_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "askUser".to_string(),
+            arguments: r#"{"title":"Format","questions":[{"id":"fmt","prompt":"Which format?","options":[{"id":"adoc","label":"AsciiDoc"},{"id":"md","label":"Markdown"}],"allowMultiple":false,"allowCustom":true}]}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        match parsed {
+            ToolCall::AskUser(args) => {
+                assert_eq!(args.title.as_deref(), Some("Format"));
+                assert_eq!(args.questions.len(), 1);
+                assert_eq!(args.questions[0].id, "fmt");
+                assert_eq!(args.questions[0].options.len(), 2);
+                assert!(args.questions[0].allow_custom);
+            }
+            other => panic!("expected AskUser, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_ask_user_with_too_few_options() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "askUser".to_string(),
+            arguments: r#"{"questions":[{"id":"q","prompt":"Only one?","options":[{"id":"a","label":"A"}]}]}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "askUser"));
+    }
+
+    #[test]
+    fn execute_tool_rejects_bare_ask_user_without_resume_answer() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps::empty();
+
+        let err = execute_tool(
+            &scope,
+            ToolCall::AskUser(AskUserArgs {
+                title: None,
+                questions: vec![crate::domain::ai_tools::AskUserQuestion {
+                    id: "q".to_string(),
+                    prompt: "Pick one".to_string(),
+                    options: vec![
+                        crate::domain::ai_tools::AskUserOption {
+                            id: "a".to_string(),
+                            label: "A".to_string(),
+                        },
+                        crate::domain::ai_tools::AskUserOption {
+                            id: "b".to_string(),
+                            label: "B".to_string(),
+                        },
+                    ],
+                    allow_multiple: false,
+                    allow_custom: false,
+                }],
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "askUser"));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn parse_tool_call_rejects_unknown_tool_name() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -5313,7 +5499,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_eighteen_in_agent_mode_by_default() {
+    fn llm_tool_definitions_includes_all_nineteen_in_agent_mode_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -5339,7 +5525,8 @@ mod tests {
                 "todo",
                 "memory",
                 "requestModeSwitch",
-                "getAsciidocTemplates"
+                "getAsciidocTemplates",
+                "askUser",
             ]
         );
 
@@ -5373,6 +5560,7 @@ mod tests {
         assert!(plan_names.contains("requestFullRepoAccess"));
         assert!(plan_names.contains("requestModeSwitch"));
         assert!(plan_names.contains("getAsciidocTemplates"));
+        assert!(plan_names.contains("askUser"));
 
         let question_names: HashSet<String> = llm_tool_definitions(&scope, ConversationMode::Question)
             .into_iter()
@@ -5382,6 +5570,7 @@ mod tests {
         assert!(!question_names.contains("requestFullRepoAccess"));
         assert!(question_names.contains("requestModeSwitch"));
         assert!(question_names.contains("getAsciidocTemplates"));
+        assert!(question_names.contains("askUser"));
 
         fs::remove_dir_all(&repo).ok();
     }

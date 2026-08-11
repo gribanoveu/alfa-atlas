@@ -15,6 +15,7 @@ import type { LlmModelInfo, LlmProviderConfig, ResolvedLlmProvider } from "../..
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
+import { AssistantAskUserCard } from "./AssistantAskUserCard";
 import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import { TodoProgressWidget } from "./TodoProgressWidget";
@@ -235,6 +236,7 @@ export function AssistantConversation({
     stopChat,
     contextTokens,
     decideToolCall,
+    answerAskUser,
     todos,
     clearTodos,
   } = useLlmChat(
@@ -565,7 +567,14 @@ export function AssistantConversation({
                   ) : (
                     <div className="assistant-chat-blocks">
                       {groupBlocksForRender(m.blocks).map((item, i, arr) =>
-                        item.kind === "approvalGroup" ? (
+                        item.kind === "askGroup" ? (
+                          <AssistantAskUserCard
+                            key={item.blocks[0]!.id}
+                            blocks={item.blocks}
+                            onAnswer={answerAskUser}
+                            onSkip={(id) => decideToolCall(id, false, false)}
+                          />
+                        ) : item.kind === "approvalGroup" ? (
                           <AssistantToolApprovalGroup
                             key={item.blocks[0]!.id}
                             blocks={item.blocks}

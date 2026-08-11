@@ -16,6 +16,7 @@ const ALLOWED_TOOL_LABELS: Record<string, string> = {
   gitBlame: "Отслеживание изменений в файлах (gitBlame)",
   check: "Проверка документации (check)",
   getAsciidocTemplates: "Шаблоны элементов AsciiDoc (getAsciidocTemplates)",
+  askUser: "Уточняющие вопросы (askUser)",
   ...AUTO_APPROVABLE_TOOL_LABELS,
   todo: "Список задач (todo)",
   memory: "Постоянная память агента (memory)",
@@ -40,6 +41,7 @@ const ALLOWED_TOOL_ORDER = [
   "memory",
   "requestModeSwitch",
   "getAsciidocTemplates",
+  "askUser",
 ];
 
 /** Per-project "always allow" list for the assistant's tool-calling loop

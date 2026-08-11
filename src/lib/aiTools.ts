@@ -91,6 +91,19 @@ export type ToolCall =
   | { tool: "requestFullRepoAccess"; args: { reason: string } }
   | { tool: "requestModeSwitch"; args: { mode: ConversationMode; reason: string } }
   | { tool: "getAsciidocTemplates"; args: { ids: string[] } }
+  | {
+      tool: "askUser";
+      args: {
+        title: string | null;
+        questions: Array<{
+          id: string;
+          prompt: string;
+          options: Array<{ id: string; label: string }>;
+          allowMultiple: boolean;
+          allowCustom: boolean;
+        }>;
+      };
+    }
   | { tool: "todoWrite"; args: { titles: string[] } }
   | { tool: "todoUpdate"; args: { id: string; status: "completed" | "cancelled"; note: string | null } }
   | {
@@ -175,7 +188,18 @@ export type ToolResult =
     }
   | { tool: "todoWritten"; result: Task[] }
   | { tool: "todoUpdated"; result: Task[] }
-  | { tool: "memory"; result: { text: string } };
+  | { tool: "memory"; result: { text: string } }
+  | {
+      tool: "askUser";
+      result: {
+        answers: Array<{
+          questionId: string;
+          selectedOptionIds: string[];
+          selectedLabels: string[];
+          customText: string | null;
+        }>;
+      };
+    };
 
 /**
  * Runs one AI-harness tool call against whichever project is currently

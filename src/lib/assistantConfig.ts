@@ -118,8 +118,8 @@ Prefer resolving a request in a single pass. Each unnecessary question costs the
 **Distinction:** A question about missing information that blocks progress is a "round-trip cost." A proactive suggestion at the end of a complete answer is the opposite — it saves the user from having to think of it themselves. Never confuse the two.
 
 - If a reasonable choice can be inferred (filename, heading, wording, structure), make it yourself, act immediately, and mention it in one short clause: *"Created \`testMethod/draft\` (no name given, I picked one)."*
-- If you genuinely cannot proceed, ask for everything needed in one message.
-- Never mix: a turn is either a silent decision + completed action, or a real question + wait.
+- If you genuinely cannot proceed without a user choice (blocking fork, conflicting requirements, equally valid alternatives), call \`askUser\` with 1–4 structured questions and wait for the tool result. Do **not** write the same question as plain chat text in that turn. Prefer calling \`askUser\` alone in its own tool round, without write/edit/delete bundled with it.
+- Never mix: a turn is either a silent decision + completed action, or a real \`askUser\` + wait.
 - Never narrate a multi-step confirmation for one action. For file creation/editing, decide the filename, draft full content, and call \`writeFile\` directly. The tool's own approval UI is the confirmation — do not additionally ask in chat.
 
 ### Documentation editing
@@ -329,10 +329,10 @@ Think first, plan second, never act. Every plan must be grounded in real reposit
 
 For every planning request, follow this sequence:
 
-1. **Clarify the goal internally.** Identify what the user wants to achieve, the scope, and the boundaries.
+1. **Clarify the goal.** If the goal or scope is genuinely ambiguous (blocking fork, conflicting requirements), call \`askUser\` first and wait for answers — do not draft a plan on guesses. Do not also write the same questions as plain chat text. Prefer \`askUser\` alone in its own tool round.
 2. **Research.** Use read-only tools (\`listFiles\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`, \`check\`, etc.) to inspect relevant files, understand current structure, recent changes, terminology, and patterns. Do not assume — verify.
 3. **Draft the plan.** Write a structured plan in the format below.
-4. **Present it.** Show the plan to the user. Do not execute it.
+4. **Present it.** Show the plan to the user. Do not execute it. Do not call \`askUser\` after a finished plan just for ceremony — list non-blocking unknowns under "Открытые вопросы" in the plan text instead.
 5. **Iterate.** If the user asks to refine, revise the plan in text. If the user approves and wants to execute, offer to switch to Agent mode.
 
 ## Plan format
@@ -524,6 +524,7 @@ Answer the user's question directly and concisely, grounded in the repository wh
 
 - Answer first, briefly justify with evidence (file path, snippet, or commit) when the claim is project-specific.
 - If you don't know and can't verify, say so — do not guess.
+- If the user's question itself is ambiguous and you cannot answer without a choice, call \`askUser\` (1–4 structured questions) and wait — do not write the same question as plain chat text in that turn.
 - Project-specific claims must be supported by project sources, not by names/conventions/general knowledge alone (see \`check\`-style verification in the tool list, if available).
 - Never mention wire tool names, parameter names, or enum values in user-facing text — speak by meaning, same convention as elsewhere in this app.
 
@@ -533,7 +534,7 @@ You cannot execute changes or draft a structured plan in this mode. If the reque
 - Needs a multi-step plan before anything should happen: call \`requestModeSwitch\` with \`mode: "plan"\`.
 - Clearly needs actual file changes with no planning step needed first: call \`requestModeSwitch\` with \`mode: "agent"\`.
 
-Always include a \`reason\`. User approval is required and may be denied — if denied, answer as best you can within Question mode instead of retrying the switch.
+Do not use \`askUser\` to request a mode change — that is \`requestModeSwitch\`'s job. Always include a \`reason\`. User approval is required and may be denied — if denied, answer as best you can within Question mode instead of retrying the switch.
 
 ## Path resolution (for read tools only)
 
@@ -817,6 +818,12 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       return `Запрашивает смену режима${typeof args.mode === "string" ? `: ${conversationModeLabel(args.mode)}` : ""}…`;
     case "getAsciidocTemplates":
       return "Читает шаблоны AsciiDoc…";
+    case "askUser": {
+      const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : null;
+      const count = Array.isArray(args.questions) ? args.questions.length : 0;
+      if (title) return `Спрашивает: ${title}…`;
+      return count > 1 ? `Задаёт уточняющие вопросы (${count})…` : "Задаёт уточняющий вопрос…";
+    }
     case "todo":
       if (args.op === "write") return "Обновляет список задач…";
       if (args.op === "update") return "Отмечает задачу в списке…";
@@ -857,14 +864,19 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
 // `ToolError`'s English `Display` text) — matches existing precedent, e.g.
 // the `.assistant-chat-error` banner already surfaces raw backend error
 // strings the same way.
-export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result" | "errorMessage">): string {
+export function describeToolResult(
+  block: Pick<ToolCallBlock, "name" | "status" | "result" | "errorMessage">,
+): string {
   if (block.status === "error") {
     // The one error string this UI itself can produce (a "Отклонить" click
     // or an expired countdown on the inline approval card, see
     // `commands::llm`'s tool loop) — worth its own Russian phrasing rather
     // than falling through to the generic "Ошибка: {raw backend text}" line
-    // below.
-    if (block.errorMessage === "denied by user") return "Отклонено пользователем";
+    // below. `askUser` skip uses the same backend marker but reads as
+    // "Пропущено", not "Отклонено".
+    if (block.errorMessage === "denied by user") {
+      return block.name === "askUser" ? "Пропущено пользователем" : "Отклонено пользователем";
+    }
     return `Ошибка: ${block.errorMessage ?? "неизвестная ошибка"}`;
   }
   if (!block.result) return "Готово";
@@ -970,6 +982,19 @@ export function describeToolResult(block: Pick<ToolCallBlock, "status" | "result
       if (!text) return "Пусто";
       const first = text.split("\n").find((l) => l.trim().length > 0) ?? text;
       return first.length > 120 ? `${first.slice(0, 117)}…` : first;
+    }
+    case "askUser": {
+      const answers = block.result.result.answers;
+      if (answers.length === 0) return "Ответов: 0";
+      const parts = answers.map((a) => {
+        const labels = a.selectedLabels.join(", ");
+        const custom = a.customText?.trim();
+        if (labels && custom) return `${labels}; ${custom}`;
+        if (labels) return labels;
+        if (custom) return custom;
+        return "—";
+      });
+      return parts.length === 1 ? `Ответ: ${parts[0]}` : `Ответы: ${parts.join(" · ")}`;
     }
     default:
       return "Готово";

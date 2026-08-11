@@ -1511,6 +1511,230 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
 
 
 /* =========================================================
+   Ask-user clarifying questions card
+   ========================================================= */
+
+.assistant-ask-user-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  transition: opacity 0.15s ease;
+}
+
+.assistant-ask-user-card.is-decided {
+  opacity: 0.72;
+}
+
+.assistant-ask-user-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.assistant-ask-user-card-eyebrow {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.assistant-ask-user-card-title {
+  font-size: calc(var(--font-ui) * 1.08);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-0);
+}
+
+.assistant-ask-user-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.assistant-ask-user-card-section + .assistant-ask-user-card-section {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-ask-user-card-section-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.assistant-ask-user-card-error {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--red-tag);
+}
+
+.assistant-ask-user-card-questions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.assistant-ask-user-card-question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assistant-ask-user-card-prompt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-ui);
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text-0);
+}
+
+.assistant-ask-user-card-prompt-index {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: calc(var(--font-ui-sm) * 0.85);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.assistant-ask-user-card-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.assistant-ask-user-card-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-0);
+  font-size: var(--font-ui);
+  line-height: 1.4;
+  color: var(--text-1);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.assistant-ask-user-card-option:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text-0);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-0));
+}
+
+.assistant-ask-user-card-option.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-0));
+  color: var(--text-0);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.assistant-ask-user-card-option:has(input:disabled) {
+  cursor: default;
+}
+
+.assistant-ask-user-card-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.assistant-ask-user-card-option-mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1.5px solid var(--text-2);
+  border-radius: 999px;
+  background: transparent;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.assistant-ask-user-card-option input[type="checkbox"] + .assistant-ask-user-card-option-mark {
+  border-radius: 4px;
+}
+
+.assistant-ask-user-card-option.is-selected .assistant-ask-user-card-option-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--bg-0);
+}
+
+.assistant-ask-user-card-option-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-ask-user-card-custom {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font: inherit;
+  font-size: var(--font-ui);
+  line-height: 1.45;
+  transition: border-color 0.12s ease;
+}
+
+.assistant-ask-user-card-custom::placeholder {
+  color: var(--text-2);
+}
+
+.assistant-ask-user-card-custom:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.assistant-ask-user-card-custom:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.assistant-ask-user-card-custom:disabled {
+  opacity: 0.6;
+}
+
+.assistant-ask-user-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+
+/* =========================================================
    Spinner
    ========================================================= */
 

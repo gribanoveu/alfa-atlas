@@ -553,9 +553,28 @@ fn run_tool_loop(
             // always recoverable-by-the-model, never a hard failure of the
             // whole turn — same for a user-denied call, which is just
             // another kind of "this didn't happen, react accordingly."
-            let denied = decisions.iter().any(|d| d.id == call.id && !d.approved);
+            //
+            // `askUser` is special: answers come from `ToolCallDecision::
+            // answer`, not from `execute_tool` (which would reject a bare
+            // call). Skip → same denial path as Approve/Deny tools.
+            let decision = decisions.iter().find(|d| d.id == call.id);
+            let denied = decision.map(|d| !d.approved).unwrap_or(false);
             let outcome: Result<ToolResult, String> = if denied {
                 Err("denied by user".to_string())
+            } else if call.name == "askUser" {
+                if !mode_tools(ctx.conversation_mode).contains(&ToolName::AskUser) {
+                    Err(format!(
+                        "tool '{}' is not available in the current conversation mode",
+                        call.name
+                    ))
+                } else {
+                    match decision.and_then(|d| d.answer.as_ref()) {
+                        Some(payload) => Ok(ToolResult::AskUser {
+                            answers: payload.answers.clone(),
+                        }),
+                        None => Err("denied by user".to_string()),
+                    }
+                }
             } else {
                 ai_tools::parse_tool_call(call).map_err(|e| e.to_string()).and_then(|parsed| {
                     // Defense in depth alongside `llm_tool_definitions`'s own
@@ -634,6 +653,11 @@ fn run_tool_loop(
                 // OptMem already formats wake/note/nap as agent-facing prose —
                 // wrapping it in JSON would only add noise and burn tokens.
                 Ok(ToolResult::Memory { text }) => text.clone(),
+                // Skip path for askUser — Russian, matching the deny message
+                // for mutating tools so the model continues in-language.
+                Err(e) if e == "denied by user" && call.name == "askUser" => {
+                    "Пропущено пользователем".to_string()
+                }
                 Ok(tool_result) => serde_json::to_string(tool_result)
                     .unwrap_or_else(|_| "Ошибка: не удалось сериализовать результат инструмента".to_string()),
                 Err(e) if e == "denied by user" => "Отклонено пользователем".to_string(),

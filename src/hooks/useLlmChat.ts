@@ -53,6 +53,7 @@ import {
   streamLlmChat,
   streamLlmChatResume,
   type LlmMessage,
+  type AskUserAnswerPayload,
   type PendingToolCall,
   type ToolCallDecision,
 } from "../lib/llm";
@@ -185,14 +186,15 @@ export function useLlmChat(
   }, []);
 
   // The in-flight batch of pending decisions, if any — `decide` is what
-  // `AssistantToolCallBlock`'s Approve/Deny buttons (via `decideToolCall`
-  // below) and each call's own `TOOL_APPROVAL_TIMEOUT_MS` timeout both
-  // funnel through, so a manual click and an expired timer settle a call
-  // through the exact same path. `denyAll` is `stopChat`'s hook into the
-  // same mechanism — see its own doc comment below. `null` whenever no
-  // round is currently paused awaiting decisions.
+  // `AssistantToolApprovalGroup`'s Approve/Deny buttons (via `decideToolCall`
+  // below) and each approval call's own `TOOL_APPROVAL_TIMEOUT_MS` timeout
+  // both funnel through. `answerAskUser` is `AssistantAskUserCard`'s submit
+  // path (no timeout — clarifying questions wait until answered or Stop).
+  // `denyAll` is `stopChat`'s hook. `null` whenever no round is currently
+  // paused awaiting decisions.
   const activeApprovalRef = useRef<{
     decide: (id: string, approved: boolean, trust: boolean) => void;
+    answerAskUser: (id: string, answer: AskUserAnswerPayload) => void;
     denyAll: () => void;
   } | null>(null);
 
@@ -215,41 +217,59 @@ export function useLlmChat(
   // if that remount guarantee is ever weakened later.
   const compactionCacheRef = useRef<CompactionCache | null>(null);
 
-  /** Shows every call in `calls` inline in the transcript right away as a
-   * `"pendingApproval"` card (see `AssistantToolCallBlock`), each counting
-   * down toward the same `deadlineAt`. Resolves once every call has a
-   * decision — a manual Approve/Deny via `decideToolCall`, or its own timer
-   * expiring first, whichever comes first, both funneled through the same
-   * `decide` closure so there's exactly one place that finalizes a call's
-   * outcome. */
+  /** Shows every call in `calls` inline in the transcript as a
+   * `"pendingApproval"` block. Resolves once every call has a decision —
+   * Approve/Deny (with timeout) for mutating/mode tools, or Submit/Skip
+   * (no timeout) for `askUser`. */
   const collectDecisions = useCallback((calls: PendingToolCall[]): Promise<ToolCallDecision[]> => {
     return new Promise((resolve) => {
-      const decided = new Map<string, boolean>();
+      type Entry = { approved: boolean; answer?: AskUserAnswerPayload };
+      const decided = new Map<string, Entry>();
       const timers = new Map<string, ReturnType<typeof setTimeout>>();
-      const deadlineAt = Date.now() + TOOL_APPROVAL_TIMEOUT_MS;
+      const approvalDeadlineAt = Date.now() + TOOL_APPROVAL_TIMEOUT_MS;
       const approvalGroupId = crypto.randomUUID();
+      const askGroupId = crypto.randomUUID();
 
-      const decide = (id: string, approved: boolean, trust: boolean) => {
+      const finalizeIfDone = () => {
+        if (decided.size !== calls.length) return;
+        activeApprovalRef.current = null;
+        resolve(
+          calls.map((c) => {
+            const entry = decided.get(c.id);
+            return {
+              id: c.id,
+              approved: entry?.approved ?? false,
+              ...(entry?.answer ? { answer: entry.answer } : {}),
+            };
+          }),
+        );
+      };
+
+      const decide = (id: string, approved: boolean, trust: boolean, answer?: AskUserAnswerPayload) => {
         if (decided.has(id) || !calls.some((c) => c.id === id)) return;
-        decided.set(id, approved);
+        decided.set(id, { approved, answer });
         const timer = timers.get(id);
         if (timer !== undefined) clearTimeout(timer);
         if (trust && approved) {
           const call = calls.find((c) => c.id === id);
-          if (call) {
+          // `askUser` is never auto-approvable — trust would skip the whole
+          // clarifying-question card on later turns.
+          if (call && call.name !== "askUser") {
             trustedToolsRef.current.add(call.name);
             void setToolAutoApproved(call.name, true);
           }
         }
-        if (decided.size === calls.length) {
-          activeApprovalRef.current = null;
-          resolve(calls.map((c) => ({ id: c.id, approved: decided.get(c.id) ?? false })));
-        }
+        finalizeIfDone();
       };
 
-      activeApprovalRef.current = { decide, denyAll: () => calls.forEach((c) => decide(c.id, false, false)) };
+      activeApprovalRef.current = {
+        decide: (id, approved, trust) => decide(id, approved, trust),
+        answerAskUser: (id, answer) => decide(id, true, false, answer),
+        denyAll: () => calls.forEach((c) => decide(c.id, false, false)),
+      };
 
-      calls.forEach((c) => {
+      const approvalCalls = calls.filter((c) => c.name !== "askUser");
+      approvalCalls.forEach((c) => {
         timers.set(
           c.id,
           setTimeout(() => decide(c.id, false, false), TOOL_APPROVAL_TIMEOUT_MS),
@@ -258,42 +278,40 @@ export function useLlmChat(
 
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) =>
-          calls.reduce(
-            (acc, c) =>
-              appendPendingApprovalBlock(acc, {
-                id: c.id,
-                name: c.name,
-                argumentsJson: c.arguments,
-                deadlineAt,
-                approvalGroupId,
-              }),
-            blocks,
-          ),
+          calls.reduce((acc, c) => {
+            const isAsk = c.name === "askUser";
+            return appendPendingApprovalBlock(acc, {
+              id: c.id,
+              name: c.name,
+              argumentsJson: c.arguments,
+              deadlineAt: isAsk ? undefined : approvalDeadlineAt,
+              approvalGroupId: isAsk ? askGroupId : approvalGroupId,
+            });
+          }, blocks),
         ),
       );
     });
   }, []);
 
-  /** Passed down to `AssistantToolCallBlock`'s Approve/Deny buttons for a
-   * `"pendingApproval"` card. A no-op once that call already has a decision
-   * (its own timeout fired first, or the button was somehow clicked twice)
-   * — `collectDecisions`'s `decide` already guards this, this is just the
-   * stable callback identity the UI holds onto. */
+  /** Passed down to `AssistantToolApprovalGroup`'s Approve/Deny buttons. */
   const decideToolCall = useCallback((id: string, approved: boolean, trust: boolean) => {
     activeApprovalRef.current?.decide(id, approved, trust);
   }, []);
 
+  /** Passed down to `AssistantAskUserCard`'s Submit button. */
+  const answerAskUser = useCallback((id: string, answer: AskUserAnswerPayload) => {
+    activeApprovalRef.current?.answerAskUser(id, answer);
+  }, []);
+
   /** Stops the in-flight turn, wherever it currently is: mid-stream,
-   * between tool-calling rounds, or waiting on a `"pendingApproval"` card.
-   * `cancelLlmChat()` sets the backend's cancel flag so the next checkpoint
-   * `run_tool_loop` hits resolves `{status: "cancelled"}` instead of
-   * continuing (see `commands::llm::run_tool_loop`'s doc comment on the
-   * Rust side for exactly where those checkpoints are) — but if a
-   * `"pendingApproval"` card is showing right now, nothing on the backend
-   * is actually running to reach one; `denyAll` unblocks `collectDecisions`'s
-   * pending promise immediately (bypassing the countdown) so `sendMessage`'s
-   * `while` loop proceeds straight to `streamLlmChatResume`, which then
-   * hits the very first checkpoint before executing any of those
+   * between tool-calling rounds, or waiting on a `"pendingApproval"` /
+   * ask-user card. `cancelLlmChat()` sets the backend's cancel flag so the
+   * next checkpoint `run_tool_loop` hits resolves `{status: "cancelled"}`
+   * instead of continuing — but if a pending card is showing right now,
+   * nothing on the backend is actually running to reach one; `denyAll`
+   * unblocks `collectDecisions`'s pending promise immediately so
+   * `sendMessage`'s `while` loop proceeds straight to `streamLlmChatResume`,
+   * which then hits the very first checkpoint before executing any of those
    * (already-denied) calls. Safe to call when nothing is in flight — both
    * calls are no-ops in that case. */
   const stopChat = useCallback(() => {
@@ -581,6 +599,9 @@ export function useLlmChat(
           const risky = calls.filter((c) => c.requiresConfirmation);
           const autoApprovedIds = new Set<string>();
           const needsDecision = risky.filter((c) => {
+            // Clarifying questions must always surface — never skip via
+            // "always allow" / session trust.
+            if (c.name === "askUser") return true;
             if (trustedToolsRef.current.has(c.name)) {
               autoApprovedIds.add(c.id);
               return false;
@@ -765,6 +786,7 @@ export function useLlmChat(
       docsRootRelativeToRepo,
     ),
     decideToolCall,
+    answerAskUser,
     stopChat,
   };
 }

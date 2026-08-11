@@ -158,7 +158,13 @@ export function appendToolCallBlock(
  * out. */
 export function appendPendingApprovalBlock(
   blocks: MessageBlock[],
-  call: { id: string; name: string; argumentsJson: string; deadlineAt: number; approvalGroupId: string },
+  call: {
+    id: string;
+    name: string;
+    argumentsJson: string;
+    deadlineAt?: number;
+    approvalGroupId: string;
+  },
 ): MessageBlock[] {
   return [
     ...blocks,
@@ -253,31 +259,30 @@ export function updateLastAssistantBlocks(
 // ---- Grouping pending approvals for render -----------------------------
 
 /** What `AssistantConversation` actually renders per entry: either one
- * ordinary block, or a run of `"pendingApproval"` `toolCall` blocks from the
- * same paused round collapsed into a single combined approval card. */
+ * ordinary block, a run of `"pendingApproval"` mutating/mode-switch calls
+ * collapsed into one approval card, or a run of pending `askUser` calls
+ * collapsed into one ask card. */
 export type RenderBlock =
   | { kind: "single"; block: MessageBlock }
-  | { kind: "approvalGroup"; blocks: ToolCallBlock[] };
+  | { kind: "approvalGroup"; blocks: ToolCallBlock[] }
+  | { kind: "askGroup"; blocks: ToolCallBlock[] };
 
 /** Walks a message's flat `blocks`, merging any run of adjacent
  * `"pendingApproval"` `toolCall` blocks that share one `approvalGroupId`
- * into a single `"approvalGroup"` entry — including a run of length one, so
- * `AssistantToolApprovalGroup` is the only card component regardless of how
- * many calls a round paused on. Every other block passes through as
- * `"single"` unchanged. Adjacency always holds because
- * `appendPendingApprovalBlock` only ever appends a whole round's blocks
- * together in one `setMessages` call (see `useLlmChat`'s
- * `collectDecisions`). */
+ * into a single group entry — `askGroup` when every block is `askUser`,
+ * otherwise `approvalGroup` (including a run of length one). Every other
+ * block passes through as `"single"` unchanged. */
 export function groupBlocksForRender(blocks: MessageBlock[]): RenderBlock[] {
   const result: RenderBlock[] = [];
   for (const block of blocks) {
     const groupId =
       block.type === "toolCall" && block.status === "pendingApproval" ? block.approvalGroupId : undefined;
     const last = result[result.length - 1];
-    if (groupId !== undefined && last?.kind === "approvalGroup" && last.blocks[0]?.approvalGroupId === groupId) {
+    if (groupId !== undefined && last && (last.kind === "approvalGroup" || last.kind === "askGroup") && last.blocks[0]?.approvalGroupId === groupId) {
       last.blocks.push(block as ToolCallBlock);
     } else if (groupId !== undefined) {
-      result.push({ kind: "approvalGroup", blocks: [block as ToolCallBlock] });
+      const kind = block.type === "toolCall" && block.name === "askUser" ? "askGroup" : "approvalGroup";
+      result.push({ kind, blocks: [block as ToolCallBlock] });
     } else {
       result.push({ kind: "single", block });
     }

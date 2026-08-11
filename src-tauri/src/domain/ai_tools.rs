@@ -197,6 +197,58 @@ pub struct RequestModeSwitchArgs {
     pub reason: String,
 }
 
+/// One selectable option inside an `AskUserQuestion`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskUserOption {
+    pub id: String,
+    pub label: String,
+}
+
+/// One structured question the model wants the user to answer mid-turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskUserQuestion {
+    pub id: String,
+    pub prompt: String,
+    pub options: Vec<AskUserOption>,
+    #[serde(default)]
+    pub allow_multiple: bool,
+    #[serde(default)]
+    pub allow_custom: bool,
+}
+
+/// Args for `askUser` — mid-turn clarifying questions (Cursor AskQuestion
+/// shape). Validated in `services::ai_tools::parse_tool_call` /
+/// `validate_ask_user_args`: 1–4 questions, each with 2–6 options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskUserArgs {
+    #[serde(default)]
+    pub title: Option<String>,
+    pub questions: Vec<AskUserQuestion>,
+}
+
+/// One answered question — attached to `ToolCallDecision::answer` on
+/// resume, and echoed back as `ToolResult::AskUser`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskUserAnswer {
+    pub question_id: String,
+    pub selected_option_ids: Vec<String>,
+    pub selected_labels: Vec<String>,
+    #[serde(default)]
+    pub custom_text: Option<String>,
+}
+
+/// Payload the frontend puts on `ToolCallDecision::answer` when the user
+/// submits an `askUser` card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskUserAnswerPayload {
+    pub answers: Vec<AskUserAnswer>,
+}
+
 /// Working-tree / index / commit file diff for the assistant — read-only.
 /// Paths are relative to the tool scope root (`docsRoot` in DocsOnly,
 /// `repoRoot` in FullRepo); the executor converts to a repo-relative path
@@ -423,6 +475,7 @@ pub enum ToolCall {
     Memory(MemoryArgs),
     RequestModeSwitch(RequestModeSwitchArgs),
     GetAsciidocTemplates(GetAsciidocTemplatesArgs),
+    AskUser(AskUserArgs),
 }
 
 impl ToolCall {
@@ -447,6 +500,7 @@ impl ToolCall {
             ToolCall::Memory(_) => ToolName::Memory,
             ToolCall::RequestModeSwitch(_) => ToolName::RequestModeSwitch,
             ToolCall::GetAsciidocTemplates(_) => ToolName::GetAsciidocTemplates,
+            ToolCall::AskUser(_) => ToolName::AskUser,
         }
     }
 }
@@ -599,6 +653,11 @@ pub enum ToolResult {
         templates: Vec<AsciidocTemplateEntry>,
         not_found: Vec<String>,
     },
+    /// Settled `askUser` — the user's structured answers collected by the
+    /// frontend card and threaded back through `ToolCallDecision::answer`
+    /// on resume (never produced by `execute_tool` itself).
+    #[serde(rename_all = "camelCase")]
+    AskUser { answers: Vec<AskUserAnswer> },
 }
 
 /// One catalog entry's wire shape for `ToolResult::AsciidocTemplates` — see

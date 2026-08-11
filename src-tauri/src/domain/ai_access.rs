@@ -41,6 +41,7 @@ pub enum ToolName {
     Memory,
     RequestModeSwitch,
     GetAsciidocTemplates,
+    AskUser,
 }
 
 impl ToolName {
@@ -64,6 +65,10 @@ impl ToolName {
     /// — it doesn't mutate anything itself, but it's a model-initiated
     /// change to how the rest of the conversation behaves (system prompt,
     /// tool set), so the user should see it before it takes effect.
+    ///
+    /// `AskUser` always pauses — it is not a side-effect tool, but the
+    /// whole point is to collect a structured answer from the user before
+    /// the turn continues (see `commands::llm`'s resume path).
     pub fn requires_confirmation(self) -> bool {
         matches!(
             self,
@@ -75,6 +80,7 @@ impl ToolName {
                 | ToolName::Move
                 | ToolName::RequestFullRepoAccess
                 | ToolName::RequestModeSwitch
+                | ToolName::AskUser
         )
         // `Todo`/`Grep`/`GitDiff`/`GitBlame`/`Check` are in-memory or
         // read-only, no confirmation gate under any call. `Memory` is
@@ -107,6 +113,7 @@ impl ToolName {
             "check" => Some(ToolName::Check),
             "requestModeSwitch" => Some(ToolName::RequestModeSwitch),
             "getAsciidocTemplates" => Some(ToolName::GetAsciidocTemplates),
+            "askUser" => Some(ToolName::AskUser),
             _ => None,
         }
     }
@@ -149,6 +156,7 @@ impl ToolName {
             // Pure in-memory lookup over a fixed static catalog — no I/O,
             // even cheaper than a bare filesystem read.
             ToolName::GetAsciidocTemplates => 1,
+            ToolName::AskUser => 1,
         }
     }
 }
@@ -230,6 +238,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::Memory,
         ToolName::RequestModeSwitch,
         ToolName::GetAsciidocTemplates,
+        ToolName::AskUser,
     ]
     .into_iter()
     .collect()
@@ -259,6 +268,7 @@ mod tests {
         assert!(!ToolName::Memory.requires_confirmation());
         assert!(ToolName::RequestModeSwitch.requires_confirmation());
         assert!(!ToolName::GetAsciidocTemplates.requires_confirmation());
+        assert!(ToolName::AskUser.requires_confirmation());
     }
 
     #[test]
@@ -290,6 +300,7 @@ mod tests {
             ToolName::from_wire_name("getAsciidocTemplates"),
             Some(ToolName::GetAsciidocTemplates)
         );
+        assert_eq!(ToolName::from_wire_name("askUser"), Some(ToolName::AskUser));
         assert_eq!(ToolName::from_wire_name("somethingElse"), None);
     }
 
@@ -313,12 +324,13 @@ mod tests {
         assert_eq!(ToolName::Memory.loop_weight(), 1);
         assert_eq!(ToolName::RequestModeSwitch.loop_weight(), 1);
         assert_eq!(ToolName::GetAsciidocTemplates.loop_weight(), 1);
+        assert_eq!(ToolName::AskUser.loop_weight(), 1);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_eighteen() {
+    fn default_allowed_tools_includes_all_nineteen() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 18);
+        assert_eq!(allowed.len(), 19);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
@@ -334,6 +346,7 @@ mod tests {
         assert!(allowed.contains(&ToolName::Memory));
         assert!(allowed.contains(&ToolName::RequestModeSwitch));
         assert!(allowed.contains(&ToolName::GetAsciidocTemplates));
+        assert!(allowed.contains(&ToolName::AskUser));
     }
 
     #[test]
@@ -393,6 +406,7 @@ mod tests {
             ToolName::Todo,
             ToolName::RequestModeSwitch,
             ToolName::GetAsciidocTemplates,
+            ToolName::AskUser,
         ] {
             let name = serde_json::to_value(tool)
                 .unwrap()

@@ -27,8 +27,9 @@ pub enum ConversationMode {
 }
 
 /// Tools offered in every mode — pure read/inspection tools plus
-/// `RequestModeSwitch` itself, which must always be reachable regardless of
-/// which mode the model is currently in.
+/// `RequestModeSwitch` / `AskUser`, which must always be reachable
+/// regardless of which mode the model is currently in (`AskUser` is the
+/// mid-turn clarifying-question pause; see `domain::ai_tools::AskUserArgs`).
 pub fn base_tools() -> HashSet<ToolName> {
     [
         ToolName::ListFiles,
@@ -45,6 +46,7 @@ pub fn base_tools() -> HashSet<ToolName> {
         // shape while planning a future edit, Question to answer "how do we
         // format X" without needing write access.
         ToolName::GetAsciidocTemplates,
+        ToolName::AskUser,
     ]
     .into_iter()
     .collect()
@@ -92,7 +94,7 @@ mod tests {
 
     #[test]
     fn agent_mode_has_every_tool() {
-        assert_eq!(mode_tools(ConversationMode::Agent).len(), 18);
+        assert_eq!(mode_tools(ConversationMode::Agent).len(), 19);
     }
 
     #[test]
@@ -111,6 +113,7 @@ mod tests {
         }
         assert!(tools.contains(&ToolName::RequestFullRepoAccess));
         assert!(tools.contains(&ToolName::RequestModeSwitch));
+        assert!(tools.contains(&ToolName::AskUser));
     }
 
     #[test]
@@ -122,6 +125,13 @@ mod tests {
     fn request_mode_switch_is_reachable_from_every_mode() {
         for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Question] {
             assert!(mode_tools(mode).contains(&ToolName::RequestModeSwitch));
+        }
+    }
+
+    #[test]
+    fn ask_user_is_reachable_from_every_mode() {
+        for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Question] {
+            assert!(mode_tools(mode).contains(&ToolName::AskUser));
         }
     }
 }

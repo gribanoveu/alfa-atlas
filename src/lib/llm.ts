@@ -133,10 +133,22 @@ export type ChatStreamOutcome =
 
 // Mirrors `domain::llm::ToolCallDecision` — one decision on one pending
 // call, required for every `PendingToolCall` whose `requiresConfirmation`
-// was `true` (validated server-side).
+// was `true` (validated server-side). For `askUser`, `approved: true` plus
+// `answer` carries the structured responses; `approved: false` (or missing
+// `answer`) means the user skipped / stopped.
+export type AskUserAnswerPayload = {
+  answers: Array<{
+    questionId: string;
+    selectedOptionIds: string[];
+    selectedLabels: string[];
+    customText: string | null;
+  }>;
+};
+
 export type ToolCallDecision = {
   id: string;
   approved: boolean;
+  answer?: AskUserAnswerPayload;
 };
 
 export function getLlmSettings(): Promise<LlmSettings> {

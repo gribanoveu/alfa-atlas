@@ -418,11 +418,17 @@ pub struct PendingToolCall {
 /// One decision on one pending call, supplied by the caller of
 /// `llm_chat_stream_resume` — required for every `PendingToolCall` whose
 /// `requires_confirmation` was `true` (validated server-side).
+///
+/// For `askUser`, `approved: true` plus `answer` carries the structured
+/// responses; `approved: false` (or missing `answer`) means the user
+/// skipped / stopped.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallDecision {
     pub id: String,
     pub approved: bool,
+    #[serde(default)]
+    pub answer: Option<crate::domain::ai_tools::AskUserAnswerPayload>,
 }
 
 #[derive(Debug, Error)]
