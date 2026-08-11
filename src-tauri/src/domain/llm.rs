@@ -112,6 +112,20 @@ pub struct LlmSettings {
     /// вызовов инструментов.
     #[serde(default = "default_true")]
     pub tool_call_logging: bool,
+    /// On by default. When on, the frontend plays a short chime after an
+    /// assistant turn finishes successfully (`ChatStreamOutcome::Done`)
+    /// and, if the main window is unfocused, also sends an OS notification.
+    /// Cancelled / errored turns stay silent. Frontend-only; the backend
+    /// never reads this flag.
+    #[serde(default = "default_true")]
+    pub task_done_sound_enabled: bool,
+    /// On by default. When on, the frontend plays a short chime when an
+    /// `askUser` clarifying-question card appears mid-turn and, if the
+    /// main window is unfocused, also sends an OS notification. Ordinary
+    /// tool-approval cards stay silent. Frontend-only; the backend never
+    /// reads this flag.
+    #[serde(default = "default_true")]
+    pub need_answer_sound_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -126,6 +140,8 @@ impl Default for LlmSettings {
             debug_logging: false,
             follow_up_suggestions_disabled: false,
             tool_call_logging: true,
+            task_done_sound_enabled: true,
+            need_answer_sound_enabled: true,
         }
     }
 }

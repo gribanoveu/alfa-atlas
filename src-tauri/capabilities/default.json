@@ -16,6 +16,7 @@
     },
     "dialog:default",
     "clipboard-manager:allow-write-text",
+    "notification:default",
     "mcp-bridge:default",
     {
       "identifier": "http:default",

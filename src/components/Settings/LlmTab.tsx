@@ -37,9 +37,6 @@ export function LlmTab() {
     error,
     selectActiveProvider,
     updateProviderConfig,
-    setDebugLogging,
-    setFollowUpSuggestionsDisabled,
-    setToolCallLogging,
     removeProvider,
     saveApiKey,
     loadModels,
@@ -185,54 +182,6 @@ export function LlmTab() {
         Провайдер языковой модели для будущего чата с ассистентом (отдельно от
         провайдера эмбеддингов). Встроенные провайдеры уже настроены — нужно
         только вставить API-ключ; можно также добавить свой.
-      </p>
-
-      <label className="credentials-checkbox-label">
-        <input
-          type="checkbox"
-          className="credentials-checkbox"
-          checked={settings?.debugLogging ?? false}
-          disabled={busy || !settings}
-          onChange={(event) => void setDebugLogging(event.target.checked)}
-        />
-        <span>Логировать запросы и ответы модели</span>
-      </label>
-      <p className="settings-hint" style={{ paddingLeft: 0 }}>
-        Записывает каждый запрос и ответ (включая промежуточные шаги вызова инструментов) в{" "}
-        <code>~/.atlas/logs/llm.jsonl</code> — полезно, чтобы разобраться в ошибке провайдера.
-        Выключено по умолчанию: переписка может содержать содержимое документов.
-      </p>
-
-      <label className="credentials-checkbox-label">
-        <input
-          type="checkbox"
-          className="credentials-checkbox"
-          checked={settings?.followUpSuggestionsDisabled ?? false}
-          disabled={busy || !settings}
-          onChange={(event) => void setFollowUpSuggestionsDisabled(event.target.checked)}
-        />
-        <span>Отключить подсказки после выбора сценария</span>
-      </label>
-      <p className="settings-hint" style={{ paddingLeft: 0 }}>
-        Скрывает подсказки над перепиской, которые появляются после выбора одного из стартовых
-        предложений в новом чате. Стартовые предложения в пустом чате остаются в любом случае.
-      </p>
-
-      <label className="credentials-checkbox-label">
-        <input
-          type="checkbox"
-          className="credentials-checkbox"
-          checked={settings?.toolCallLogging ?? true}
-          disabled={busy || !settings}
-          onChange={(event) => void setToolCallLogging(event.target.checked)}
-        />
-        <span>Логировать вызовы инструментов</span>
-      </label>
-      <p className="settings-hint" style={{ paddingLeft: 0 }}>
-        Записывает каждый вызов инструмента ассистента (путь, статус, длительность) в{" "}
-        <code>~/.atlas/tool_calls.db</code> — журнал можно посмотреть в Инструменты → Журнал
-        вызовов инструментов. Включено по умолчанию: содержимое документов не сохраняется,
-        только метаданные вызова.
       </p>
 
       <div className="llm-provider-list">

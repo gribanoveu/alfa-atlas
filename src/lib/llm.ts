@@ -44,6 +44,16 @@ export type LlmSettings = {
    * browsable from Инструменты → Журнал вызовов инструментов. Toggled from
    * the LLM settings tab. */
   toolCallLogging: boolean;
+  /** On by default. When on, the chat UI plays a short chime after an
+   * assistant turn finishes successfully and, if the window is unfocused,
+   * also sends an OS notification. Cancelled / errored turns stay silent.
+   * Toggled from the LLM settings tab. */
+  taskDoneSoundEnabled: boolean;
+  /** On by default. When on, the chat UI plays a short chime when an
+   * `askUser` clarifying-question card appears and, if the window is
+   * unfocused, also sends an OS notification. Ordinary tool-approval cards
+   * stay silent. Toggled from the LLM settings tab. */
+  needAnswerSoundEnabled: boolean;
 };
 
 // Mirrors `domain::llm::ResolvedLlmProvider` — the merged, ready-to-use

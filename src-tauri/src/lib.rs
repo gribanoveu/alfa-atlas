@@ -88,7 +88,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_http::init());
+        .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_notification::init());
 
     // MCP bridge plugin — debug-only, so the Cursor Tauri MCP server can
     // inspect the running app for diagnostics. No effect in production builds.

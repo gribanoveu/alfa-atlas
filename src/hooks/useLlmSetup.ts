@@ -154,6 +154,42 @@ export function useLlmSetup() {
     [settings],
   );
 
+  const setTaskDoneSoundEnabled = useCallback(
+    async (enabled: boolean) => {
+      if (!settings) return;
+      const next = { ...settings, taskDoneSoundEnabled: enabled };
+      setSettingsState(next);
+      setBusy(true);
+      try {
+        await setLlmSettings(next);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [settings],
+  );
+
+  const setNeedAnswerSoundEnabled = useCallback(
+    async (enabled: boolean) => {
+      if (!settings) return;
+      const next = { ...settings, needAnswerSoundEnabled: enabled };
+      setSettingsState(next);
+      setBusy(true);
+      try {
+        await setLlmSettings(next);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [settings],
+  );
+
   const removeProvider = useCallback(
     async (providerId: string) => {
       setBusy(true);
@@ -205,6 +241,8 @@ export function useLlmSetup() {
     setDebugLogging,
     setFollowUpSuggestionsDisabled,
     setToolCallLogging,
+    setTaskDoneSoundEnabled,
+    setNeedAnswerSoundEnabled,
     removeProvider,
     saveApiKey,
     loadModels,

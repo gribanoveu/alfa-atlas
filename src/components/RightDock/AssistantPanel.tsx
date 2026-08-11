@@ -340,6 +340,8 @@ export function AssistantPanel({
                 updateProviderConfig={updateProviderConfig}
                 loadModels={loadModels}
                 followUpSuggestionsEnabled={!(settings?.followUpSuggestionsDisabled ?? false)}
+                taskDoneSoundEnabled={settings?.taskDoneSoundEnabled ?? true}
+                needAnswerSoundEnabled={settings?.needAnswerSoundEnabled ?? true}
               />
             )}
           </>

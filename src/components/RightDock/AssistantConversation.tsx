@@ -196,6 +196,10 @@ type AssistantConversationProps = {
    * transcript once a branch is picked. Never affects the empty-state
    * chip row, which always renders regardless of this flag. */
   followUpSuggestionsEnabled: boolean;
+  /** Settings-tab toggle — play a chime when a turn finishes successfully. */
+  taskDoneSoundEnabled: boolean;
+  /** Settings-tab toggle — play a chime when an `askUser` card appears. */
+  needAnswerSoundEnabled: boolean;
 };
 
 /** The actual per-conversation surface: message transcript, model picker,
@@ -226,6 +230,8 @@ export function AssistantConversation({
   updateProviderConfig,
   loadModels,
   followUpSuggestionsEnabled,
+  taskDoneSoundEnabled,
+  needAnswerSoundEnabled,
 }: AssistantConversationProps) {
   const contextLimit = activeProvider?.limit?.context ?? null;
 
@@ -252,6 +258,8 @@ export function AssistantConversation({
     initialTodos,
     onTurnSettled,
     activeFilePath,
+    taskDoneSoundEnabled,
+    needAnswerSoundEnabled,
   );
 
   useEffect(() => {

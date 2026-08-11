@@ -60,6 +60,7 @@ import {
   type PendingToolCall,
   type ToolCallDecision,
 } from "../lib/llm";
+import { playNeedAnswerSound, playTaskDoneSound } from "../lib/assistantSounds";
 import { estimateTokenCount } from "../lib/tokens";
 
 export type { ChatMessage, MessageBlock, ReasoningBlock, TextBlock, ToolCallBlock, ToolCallStatus } from "../lib/chatBlocks";
@@ -106,9 +107,23 @@ export function useLlmChat(
   initialTodos: Task[],
   onTurnSettled: (messages: ChatMessage[], todos: Task[]) => void,
   activeFilePath: string | null,
+  taskDoneSoundEnabled: boolean,
+  needAnswerSoundEnabled: boolean,
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [sending, setSending] = useState(false);
+
+  // Sound toggles live in refs so `collectDecisions` (empty deps — one
+  // stable Promise factory for the panel's lifetime) always reads the
+  // latest Settings-tab value without being recreated on every toggle.
+  const taskDoneSoundEnabledRef = useRef(taskDoneSoundEnabled);
+  const needAnswerSoundEnabledRef = useRef(needAnswerSoundEnabled);
+  useEffect(() => {
+    taskDoneSoundEnabledRef.current = taskDoneSoundEnabled;
+  }, [taskDoneSoundEnabled]);
+  useEffect(() => {
+    needAnswerSoundEnabledRef.current = needAnswerSoundEnabled;
+  }, [needAnswerSoundEnabled]);
 
   // The mode the *previous* request actually went out with — `null` until
   // the first send, so the very first turn never fires a spurious "just
@@ -293,6 +308,12 @@ export function useLlmChat(
           }, blocks),
         ),
       );
+
+      // One chime per ask-user pause — even if the batch has several
+      // `askUser` calls, they share a single card group.
+      if (needAnswerSoundEnabledRef.current && calls.some((c) => c.name === "askUser")) {
+        playNeedAnswerSound();
+      }
     });
   }, []);
 
@@ -681,6 +702,9 @@ export function useLlmChat(
               : m,
           ),
         );
+        if (!stoppedByUser && taskDoneSoundEnabledRef.current) {
+          playTaskDoneSound();
+        }
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         // Best-effort: drives the "Сжать историю и повторить" retry action
