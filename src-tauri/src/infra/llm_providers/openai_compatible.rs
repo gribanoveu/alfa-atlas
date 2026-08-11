@@ -453,40 +453,23 @@ impl OpenAiCompatibleProvider {
 }
 
 impl LlmProvider for OpenAiCompatibleProvider {
+    /// Implemented via the streaming endpoint and accumulated into one
+    /// reply — several OpenAI-compatible corporate proxies (e.g. AlfaGen)
+    /// reject non-streaming `/chat/completions` with HTTP 400 (often with
+    /// an empty body) while accepting the same payload with `"stream":true`.
+    /// `chat_stream` is already the path the assistant UI uses, so routing
+    /// one-shot callers (`llm_chat_once`, fast-apply) through it keeps both
+    /// surfaces on the working wire shape. Deltas are discarded here; only
+    /// the final accumulated text/`tool_calls` matter to these callers.
     fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
-        let body = self.build_body(&request, false);
-
-        let mut response = self
-            .agent
-            .post(self.chat_url())
-            .header("Authorization", &format!("Bearer {}", self.api_key))
-            .send_json(&body)
-            .map_err(|e| LlmError::Http(e.to_string()))?;
-        response = ok_or_status_error(response)?;
-
-        let parsed: ChatCompletionResponse = response
-            .body_mut()
-            .read_json()
-            .map_err(|e| LlmError::Http(e.to_string()))?;
-
-        let choice = parsed
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| LlmError::Provider("empty choices array".to_string()))?;
-
+        let result = self.chat_stream(request, &|_delta| {}, &|| false)?;
         Ok(ChatResponse {
-            content: choice.message.content,
-            tool_calls: choice
-                .message
-                .tool_calls
-                .into_iter()
-                .map(|tc| LlmToolCall {
-                    id: tc.id,
-                    name: tc.function.name,
-                    arguments: tc.function.arguments,
-                })
-                .collect(),
+            content: if result.text.is_empty() {
+                None
+            } else {
+                Some(result.text)
+            },
+            tool_calls: result.tool_calls,
         })
     }
 

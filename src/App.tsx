@@ -68,6 +68,7 @@ import { useStandardsCheck } from "./hooks/useStandardsCheck";
 import { useEmbeddingIndexWarmup } from "./hooks/useEmbeddingIndexWarmup";
 import { useEmbeddingPriorityFiles } from "./hooks/useEmbeddingPriorityFiles";
 import { useEmbeddingSetup } from "./hooks/useEmbeddingSetup";
+import { useLlmSetup } from "./hooks/useLlmSetup";
 import { findAnchors } from "./lib/workspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
@@ -528,6 +529,12 @@ function App() {
   // directly. See those hooks' doc comment on why each panel keeps its own
   // separate instance rather than sharing one.
   const embeddingSetup = useEmbeddingSetup(project.repoRoot);
+  const llmSetup = useLlmSetup();
+  const selectionAiProviderId =
+    llmSetup.settings?.activeProviderId ?? llmSetup.providers[0]?.id ?? null;
+  const selectionAiLlmReady =
+    selectionAiProviderId !== null &&
+    Boolean(llmSetup.hasApiKeyMap[selectionAiProviderId]);
   // Shows a brief "Синхронизировано" confirmation in the status bar segment
   // right after a successful click-to-sync — `indexStatus` alone would just
   // silently settle back to the normal "Проиндексировано чанков: N" label,
@@ -1702,6 +1709,8 @@ function App() {
                   : null
               }
               editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
+              providerId={selectionAiProviderId}
+              llmReady={selectionAiLlmReady}
               onEditorInstanceChange={handleEditorInstanceChange}
               onMonacoInstanceChange={setMonacoInstance}
             />

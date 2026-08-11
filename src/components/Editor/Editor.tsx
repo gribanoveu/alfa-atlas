@@ -9,6 +9,7 @@ import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
 import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
 import { useMonacoIncludeGutter } from "../../hooks/useMonacoIncludeGutter";
 import { useMonacoOutline } from "../../hooks/useMonacoOutline";
+import { useMonacoSelectionAi } from "../../hooks/useMonacoSelectionAi";
 import { useMonacoSpellcheck } from "../../hooks/useMonacoSpellcheck";
 import type { GitFileDiff } from "../../lib/git";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
@@ -19,8 +20,11 @@ import type { EditorViewMode } from "../../types/viewMode";
 import { DocumentPreview } from "../DocumentPreview/DocumentPreview";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { EditorTabs, type DisplayTab } from "./EditorTabs";
+import { SelectionAiPreview } from "./SelectionAiPreview";
+import { SelectionAiToolbar } from "./SelectionAiToolbar";
 import "./Editor.css";
 import "./GitGutter.css";
+import "./SelectionAi.css";
 
 type GitGutterConfig = {
   repoRoot: string;
@@ -81,6 +85,10 @@ type EditorPaneProps = {
   docsRoot: string | null;
   gitGutter?: GitGutterConfig | null;
   editorFontSizePx: number;
+  /** Active LLM provider id for selection AI actions; null when none configured. */
+  providerId: string | null;
+  /** True when the active provider has an API key and can serve `llmChatOnce`. */
+  llmReady: boolean;
   /** Уведомляет о смене текущего экземпляра редактора (для команд Undo/Redo из меню). */
   onEditorInstanceChange?: (
     editor: MonacoEditor.IStandaloneCodeEditor | null,
@@ -118,6 +126,8 @@ export function EditorPane({
   docsRoot,
   gitGutter,
   editorFontSizePx,
+  providerId,
+  llmReady,
   onEditorInstanceChange,
   onMonacoInstanceChange,
 }: EditorPaneProps) {
@@ -238,6 +248,32 @@ export function EditorPane({
     docsRoot,
     gitGutter?.repoRoot ?? null,
     onOpenDocumentReference,
+  );
+
+  const selectionAi = useMonacoSelectionAi({
+    monaco,
+    editor: textEditor,
+    activeTab: isImageTab ? null : activeTab,
+    viewMode: isImageTab ? "render" : viewMode,
+    providerId,
+    llmReady,
+    onContentChange: onChangeContent,
+  });
+
+  const selectionOverlay = (
+    <div className="selection-ai-overlay" ref={selectionAi.overlayRef}>
+      <SelectionAiToolbar
+        state={selectionAi.state}
+        onAction={selectionAi.runAction}
+        onToggleCustom={selectionAi.setCustomPromptOpen}
+      />
+      <SelectionAiPreview
+        state={selectionAi.state}
+        onAccept={selectionAi.accept}
+        onReject={selectionAi.reject}
+        onRetry={selectionAi.retry}
+      />
+    </div>
   );
 
   const handleChange = useCallback(
@@ -414,11 +450,19 @@ export function EditorPane({
             </>
           ) : viewMode === "split" ? (
             <SplitLayout
-              monacoNode={monacoNode}
+              monacoNode={
+                <>
+                  {monacoNode}
+                  {selectionOverlay}
+                </>
+              }
               previewNode={previewNode}
             />
           ) : (
-            <div className="editor-monaco-wrap">{monacoNode}</div>
+            <div className="editor-monaco-wrap">
+              {monacoNode}
+              {selectionOverlay}
+            </div>
           )
         ) : (
           <div className="editor-empty">Откройте файл в дереве документации</div>
