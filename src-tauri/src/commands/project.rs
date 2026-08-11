@@ -160,20 +160,38 @@ pub fn rename_project_file(
     from_relative: String,
     to_relative: String,
 ) -> Result<RenameReport, String> {
-    let report = match docs_root_suffix_and_repo_root(&index, &docs_root) {
+    let resolved = docs_root_suffix_and_repo_root(&index, &docs_root);
+    let renamed: Vec<RenamedPath> = match &resolved {
+        Some((_, suffix)) => vec![RenamedPath {
+            old: reference_rewrite::to_repo_relative(suffix, &from_relative),
+            new: reference_rewrite::to_repo_relative(suffix, &to_relative),
+        }],
+        None => Vec::new(),
+    };
+
+    let report = match &resolved {
         Some((repo_root, suffix)) => {
-            let old = reference_rewrite::to_repo_relative(&suffix, &from_relative);
-            let new = reference_rewrite::to_repo_relative(&suffix, &to_relative);
-            let renamed = [RenamedPath { old, new }];
-            let rewritten = reference_rewrite::rewrite_references(&index, &repo_root, &renamed)
+            let rewritten = reference_rewrite::rewrite_references(&index, repo_root, &renamed)
                 .map_err(|e| e.to_string())?;
-            reference_rewrite::into_report(&suffix, rewritten)
+            reference_rewrite::into_report(suffix, rewritten)
         }
         None => RenameReport::default(),
     };
 
     docs_fs::rename_project_file(&docs_root, &from_relative, &to_relative)
         .map_err(|e| e.to_string())?;
+
+    // Keep the renamed document's own index row in sync immediately,
+    // rather than only once the async file-watcher gets to it — mirrors
+    // `services::ai_tools::move_path`'s identical fix for the AI-driven
+    // path. Best-effort: a rename that succeeded on disk must not be
+    // reported as failed just because this lagged/errored.
+    if let Some((repo_root, _)) = &resolved {
+        for pair in &renamed {
+            let _ = index.rename_document(repo_root.join(&pair.old), repo_root.join(&pair.new));
+        }
+    }
+
     Ok(report)
 }
 
@@ -184,20 +202,35 @@ pub fn rename_project_dir(
     from_relative: String,
     to_relative: String,
 ) -> Result<RenameReport, String> {
-    let report = match docs_root_suffix_and_repo_root(&index, &docs_root) {
+    let resolved = docs_root_suffix_and_repo_root(&index, &docs_root);
+    let renamed: Vec<RenamedPath> = match &resolved {
+        Some((_, suffix)) => {
+            let old = reference_rewrite::to_repo_relative(suffix, &from_relative);
+            let new = reference_rewrite::to_repo_relative(suffix, &to_relative);
+            reference_rewrite::renamed_paths_for_dir_move(&index, &old, &new)
+        }
+        None => Vec::new(),
+    };
+
+    let report = match &resolved {
         Some((repo_root, suffix)) => {
-            let old = reference_rewrite::to_repo_relative(&suffix, &from_relative);
-            let new = reference_rewrite::to_repo_relative(&suffix, &to_relative);
-            let renamed = reference_rewrite::renamed_paths_for_dir_move(&index, &old, &new);
-            let rewritten = reference_rewrite::rewrite_references(&index, &repo_root, &renamed)
+            let rewritten = reference_rewrite::rewrite_references(&index, repo_root, &renamed)
                 .map_err(|e| e.to_string())?;
-            reference_rewrite::into_report(&suffix, rewritten)
+            reference_rewrite::into_report(suffix, rewritten)
         }
         None => RenameReport::default(),
     };
 
     docs_fs::rename_project_dir(&docs_root, &from_relative, &to_relative)
         .map_err(|e| e.to_string())?;
+
+    // See `rename_project_file`'s matching comment.
+    if let Some((repo_root, _)) = &resolved {
+        for pair in &renamed {
+            let _ = index.rename_document(repo_root.join(&pair.old), repo_root.join(&pair.new));
+        }
+    }
+
     Ok(report)
 }
 

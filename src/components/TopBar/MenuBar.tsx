@@ -160,7 +160,7 @@ const MENUS: MenuDef[] = [
       {
         type: "item",
         id: "toolLog",
-        label: "Журнал вызовов инструментов…",
+        label: "Журнал вызовов…",
         action: "tools.toolLog",
         icon: ScrollText,
       },

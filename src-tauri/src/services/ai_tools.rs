@@ -170,14 +170,13 @@ pub fn execute_tool(
         ToolCall::GitBlame(args) => git_blame(scope, args),
         ToolCall::Check(args) => check(scope, args, deps),
         ToolCall::WriteFile(args) => {
-            write_file(scope, args).map(|(path, diff)| ToolResult::FileWritten { path, diff })
+            write_file(scope, args, deps).map(|(path, diff)| ToolResult::FileWritten { path, diff })
         }
-        ToolCall::EditFile(args) => edit_file(scope, args, deps.fast_apply.as_ref())
+        ToolCall::EditFile(args) => edit_file(scope, args, deps.fast_apply.as_ref(), deps)
             .map(|(path, diff)| ToolResult::FileEdited { path, diff }),
-        ToolCall::DeleteFile(args) => {
-            delete_file(scope, args).map(|(path, diff)| ToolResult::FileDeleted { path, diff })
-        }
-        ToolCall::CreateDirectory(args) => create_directory(scope, args).map(
+        ToolCall::DeleteFile(args) => delete_file(scope, args, deps)
+            .map(|(path, diff)| ToolResult::FileDeleted { path, diff }),
+        ToolCall::CreateDirectory(args) => create_directory(scope, args, deps).map(
             |(path, template, created_files)| ToolResult::DirectoryCreated {
                 path,
                 template,
@@ -185,7 +184,7 @@ pub fn execute_tool(
             },
         ),
         ToolCall::DeleteDirectory(args) => {
-            delete_directory(scope, args).map(|path| ToolResult::DirectoryDeleted { path })
+            delete_directory(scope, args, deps).map(|path| ToolResult::DirectoryDeleted { path })
         }
         ToolCall::Move(args) => {
             move_path(scope, args, deps).map(|(from, to, updated_files)| ToolResult::Moved {
@@ -510,8 +509,14 @@ struct RawTodoArgs {
     tasks: Option<Vec<String>>,
     #[serde(default)]
     id: Option<String>,
+    // Deliberately a raw `String` rather than `Option<TodoUpdateStatus>`: a
+    // typed field would fail JSON deserialization itself on an
+    // out-of-enum value like "in_progress", surfacing serde's generic
+    // "unknown variant" message instead of the actionable explanation
+    // below (models have been observed giving up the turn after that
+    // generic message rather than retrying).
     #[serde(default)]
-    status: Option<TodoUpdateStatus>,
+    status: Option<String>,
     #[serde(default)]
     note: Option<String>,
 }
@@ -530,9 +535,23 @@ fn parse_todo_call(input: &str) -> Result<ToolCall, String> {
         }
         "update" => {
             let id = raw.id.ok_or_else(|| "op \"update\" requires `id`".to_string())?;
-            let status = raw.status.ok_or_else(|| {
+            let raw_status = raw.status.ok_or_else(|| {
                 "op \"update\" requires `status` (\"completed\" or \"cancelled\")".to_string()
             })?;
+            let status = match raw_status.as_str() {
+                "completed" => TodoUpdateStatus::Completed,
+                "cancelled" => TodoUpdateStatus::Cancelled,
+                "pending" | "in_progress" => {
+                    return Err(format!(
+                        "`status: \"{raw_status}\"` cannot be set directly — pending/in_progress are runtime-managed: the runtime auto-activates the next pending task the instant the current one is completed or cancelled. Call update with `status: \"completed\"` or `status: \"cancelled\"` instead, or make no call at all if you're just continuing work on the already-active task."
+                    ));
+                }
+                other => {
+                    return Err(format!(
+                        "`status: \"{other}\"` is not a valid value — expected \"completed\" or \"cancelled\""
+                    ));
+                }
+            };
             Ok(ToolCall::TodoUpdate(TodoUpdateArgs { id, status, note: raw.note }))
         }
         other => Err(format!("unknown todo op: \"{other}\" (expected \"write\" or \"update\")")),
@@ -586,8 +605,8 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ListFiles) {
         defs.push(LlmToolDefinition {
             name: "listFiles".to_string(),
-            description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use this tool to discover files, locate files, or inspect directories. Returns an indented ASCII tree (directories end with `/`), not a flat list. Do not manually prepend a documentation-root or repository-root segment to `path` — it is already relative to the current root."
-    .to_string(),
+            description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use this tool to discover files, locate files, or inspect directories. Returns an indented ASCII tree (directories end with `/`), not a flat list. The tree's first line is a display-only label for the current root (in Full-repo mode it may be the repository folder name); it is not part of any path argument. Child entries are relative to the current access-mode root. Do not manually prepend a documentation-root or repository-root segment to `path` — it is already relative to the current root."
+                .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -612,7 +631,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
     if scope.allows(ToolName::ReadFile) {
         defs.push(LlmToolDefinition {
             name: "readFile".to_string(),
-            description: "Read the text content of one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details. Prefer a line range for a large file when only part of it is relevant. Paths returned by listFiles/grep are already correctly rooted — pass them here as-is, with no manual prefix added or stripped."
+            description: "Read the text content of one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known, exact content is required, a search result needs verification, or a claim depends on specific implementation or documentation details. Prefer a line range for a large file when only part of it is relevant. Paths returned by grep, and paths constructed from listFiles entries (excluding the tree's display-only root label), are already correctly rooted — pass them here as-is, with no manual prefix added or stripped."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -798,7 +817,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "editFile".to_string(),
             description:
-                "Make one or more precise, targeted edits to an existing documentation file by replacing exact snippets of its current content, given its path relative to the documentation root — not the repository root, even in Full-repo mode. Each edit's `old` text should match the file's CURRENT content exactly once, and all edits in one call are validated against the file's original content and applied together, or none are — they are independent of each other and of their order. If an edit's `old` doesn't match exactly (whitespace/formatting drift, or you're recalling the content from memory rather than a fresh read), an automatic reconciliation step tries to locate and apply the intended change anyway before giving up — but still add a few more surrounding lines to `old` to make it unique whenever you can, rather than relying on that. Prefer this over writeFile for small, localized changes: it's cheaper and safer than resending the whole file. Always requires explicit user approval before anything is written."
+                "Make one or more precise, targeted edits to an existing documentation file by replacing exact snippets of its current content, given its path relative to the documentation root — not the repository root, even in Full-repo mode. Each edit's `old` text should match the file's CURRENT content exactly once, and all edits in one call are validated against the file's original content and applied together, or none are — they are independent of each other and of their order. If an edit's `old` doesn't match exactly (whitespace/formatting drift, or you're recalling the content from memory rather than a fresh read), the call may be rejected; some sessions may attempt automatic reconciliation, but treat exact matching as the contract and add a few more surrounding lines to `old` to make it unique and exact. Prefer this over writeFile for small, localized changes: it's cheaper and safer than resending the whole file. Always requires explicit user approval before anything is written."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -853,7 +872,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "createDirectory".to_string(),
             description:
-                "Create a directory (including any missing parent directories) given its path relative to the documentation root — not the repository root, even in Full-repo mode. Use this before writing a file into a folder that doesn't exist yet. For a new REST API method's documentation folder, pass template: \"restEndpoint\" — the same scaffold the editor's \"New folder\" dialog offers (method.adoc, request.adoc, response.adoc, and a PlantUML sequence diagram named after the folder). The request.adoc/response.adoc names are always bare, never prefixed with the method name — one folder is one method by convention, so the prefix would be redundant; do not rename them to match differently-named legacy folders. Omit template (or pass null) for an empty directory. Always requires explicit user approval before it actually happens — the user may deny it, in which case nothing is created. Fails if the path already exists as a file or directory, so a successful result always means the folder is newly created, never pre-existing. On success, the result's `createdFiles` field already lists every generated file's exact path — treat it as authoritative and do not call listFiles to re-verify what was created."
+                "Create a directory (including any missing parent directories) given its path relative to the documentation root — not the repository root, even in Full-repo mode. Use this only when the directory itself must exist (for example, an empty folder or a template scaffold). Do not call it solely to prepare parent directories for writeFile — writeFile creates missing parent directories automatically. For a new REST API method's documentation folder, pass template: \"restEndpoint\" — the same scaffold the editor's \"New folder\" dialog offers: `{methodName}.adoc`, `request.adoc`, `response.adoc`, and `{methodName}.puml`, where `{methodName}` is the final path segment. The `request.adoc`/`response.adoc` names are always bare, never prefixed with the method name — one folder is one method by convention, so the prefix would be redundant; do not rename them to match differently-named legacy folders. Omit template (or pass null) for an empty directory. The call is subject to the project's approval settings; if approval is required and the user denies it, nothing is created. Fails if the path already exists as a file or directory, so a successful result always means the folder is newly created, never pre-existing. On success, the result's `createdFiles` field already lists every generated file's exact path — treat it as authoritative and do not call listFiles to re-verify what was created."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -898,7 +917,7 @@ pub fn llm_tool_definitions(scope: &ToolScope) -> Vec<LlmToolDefinition> {
         defs.push(LlmToolDefinition {
             name: "move".to_string(),
             description:
-                "Move or rename a file or directory, given its current path and a new path, both relative to the documentation root — not the repository root, even in Full-repo mode. This is one operation covering both cases: a newPath in the same directory with a different name is a rename, a newPath elsewhere is a move (optionally with a new name too). Works for both files and directories — there is no separate rename tool or directory-specific variant. References to the old path elsewhere in the documentation (include::, xref:, and JSON/YAML $ref) are updated automatically so they keep pointing at the right file. Fails if something already exists at newPath — nothing is overwritten. newPath's parent directory must already exist — use createDirectory first if it doesn't. Always requires explicit user approval before anything changes — the user may deny it."
+                "Move or rename a file or directory, given its current path and a new path, both relative to the documentation root — not the repository root, even in Full-repo mode. This is one operation covering both cases: a newPath in the same directory with a different name is a rename, a newPath elsewhere is a move (optionally with a new name too). Works for both files and directories — there is no separate rename tool or directory-specific variant. References to the old path elsewhere in the documentation (include::, xref:, and JSON/YAML $ref) are updated automatically so they keep pointing at the right file. Fails if something already exists at newPath — nothing is overwritten. newPath's parent directory must already exist — use createDirectory first if it doesn't. Unlike writeFile, move does not create missing parent directories. Always requires explicit user approval before anything changes — the user may deny it."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1413,7 +1432,11 @@ fn slice_lines(content: String, start_line: Option<u32>, end_line: Option<u32>) 
 /// parent directories, and rejects anything outside the recognized
 /// document-format allowlist (`domain::supported_files::is_supported_file`)
 /// regardless of `AiAccessMode`.
-fn write_file(scope: &ToolScope, args: WriteFileArgs) -> Result<(String, FileDiffStats), ToolError> {
+fn write_file(
+    scope: &ToolScope,
+    args: WriteFileArgs,
+    deps: &EmbeddingDeps,
+) -> Result<(String, FileDiffStats), ToolError> {
     let docs_root = scope.docs_root.to_string_lossy();
     // NotFound-tolerant read, same pattern as `commands::project::
     // read_project_file_or_none` — a brand-new file diffs against `""`
@@ -1424,6 +1447,15 @@ fn write_file(scope: &ToolScope, args: WriteFileArgs) -> Result<(String, FileDif
         Err(e) => return Err(e.into()),
     };
     docs_fs::write_project_file(&docs_root, &args.path, &args.content)?;
+    // Best-effort: keeps the in-memory index in step with this write
+    // immediately, rather than only once the async file-watcher gets to it
+    // — which otherwise regularly still lags behind by the time the next
+    // tool call in the same round (e.g. `move`'s reference lookup, or
+    // `check`) reads the index. Never fails the call itself — a write that
+    // succeeded on disk must not be reported as failed just because the
+    // index update lagged (e.g. `EmbeddingDeps::empty()` in tests, or no
+    // project open).
+    let _ = deps.workspace_index.update_document(scope.docs_root.join(&args.path));
     let diff = text_diff::diff_stats(&old, &args.content);
     Ok((args.path, diff))
 }
@@ -1440,11 +1472,14 @@ fn edit_file(
     scope: &ToolScope,
     args: EditFileArgs,
     fast_apply: Option<&(Arc<dyn LlmProvider>, String)>,
+    deps: &EmbeddingDeps,
 ) -> Result<(String, FileDiffStats), ToolError> {
     let docs_root = scope.docs_root.to_string_lossy();
     let content = docs_fs::read_project_file(&docs_root, &args.path)?;
     let edited = apply_edits(&content, &args.edits, fast_apply)?;
     docs_fs::write_project_file(&docs_root, &args.path, &edited)?;
+    // See `write_file`'s matching comment — same best-effort sync.
+    let _ = deps.workspace_index.update_document(scope.docs_root.join(&args.path));
     let diff = text_diff::diff_stats(&content, &edited);
     Ok((args.path, diff))
 }
@@ -1712,13 +1747,21 @@ fn validate_fast_apply_output(original: &str, candidate: &str, edit: &FileEdit) 
 /// Always targets `scope.docs_root`, same reasoning as `write_file`.
 /// Reuses `docs_fs::delete_project_file` as-is: fails if the path is
 /// missing or not a file.
-fn delete_file(scope: &ToolScope, args: DeleteFileArgs) -> Result<(String, FileDiffStats), ToolError> {
+fn delete_file(
+    scope: &ToolScope,
+    args: DeleteFileArgs,
+    deps: &EmbeddingDeps,
+) -> Result<(String, FileDiffStats), ToolError> {
     let docs_root = scope.docs_root.to_string_lossy();
     // Missing-file already errors below via `delete_project_file`'s own
     // `NotFound` (see `delete_file_rejects_missing_file`) — this read just
     // surfaces that same error slightly earlier, with no fallback needed.
     let old = docs_fs::read_project_file(&docs_root, &args.path)?;
     docs_fs::delete_project_file(&docs_root, &args.path)?;
+    // See `write_file`'s matching comment — same best-effort sync, so a
+    // `check` (or another tool) called right after doesn't still see
+    // diagnostics for a file that's already gone.
+    let _ = deps.workspace_index.remove_document(scope.docs_root.join(&args.path));
     let diff = text_diff::diff_stats(&old, "");
     Ok((args.path, diff))
 }
@@ -1733,6 +1776,7 @@ fn delete_file(scope: &ToolScope, args: DeleteFileArgs) -> Result<(String, FileD
 fn create_directory(
     scope: &ToolScope,
     args: CreateDirectoryArgs,
+    deps: &EmbeddingDeps,
 ) -> Result<(String, Option<String>, Vec<String>), ToolError> {
     let docs_root = scope.docs_root.to_string_lossy();
     match args.template.as_deref() {
@@ -1751,6 +1795,11 @@ fn create_directory(
             }
             let created_files = rest_endpoint_created_files(&args.path, method_name);
             docs_fs::create_rest_endpoint_folder(&docs_root, &args.path, method_name)?;
+            // See `write_file`'s matching comment — same best-effort sync,
+            // for every file the scaffold just created.
+            for file in &created_files {
+                let _ = deps.workspace_index.update_document(scope.docs_root.join(file));
+            }
             Ok((args.path, Some("restEndpoint".into()), created_files))
         }
         Some(other) => Err(ToolError::InvalidArguments {
@@ -1786,12 +1835,30 @@ fn rest_endpoint_created_files(folder_path: &str, method_name: &str) -> Vec<Stri
 /// `ToolError::DirectoryNotEmpty` rather than silently deleting its
 /// contents; pass `recursive: true` to delete a non-empty directory in one
 /// call.
-fn delete_directory(scope: &ToolScope, args: DeleteDirectoryArgs) -> Result<String, ToolError> {
-    docs_fs::delete_project_dir(
-        &scope.docs_root.to_string_lossy(),
-        &args.path,
-        args.recursive.unwrap_or(false),
-    )?;
+fn delete_directory(
+    scope: &ToolScope,
+    args: DeleteDirectoryArgs,
+    deps: &EmbeddingDeps,
+) -> Result<String, ToolError> {
+    let recursive = args.recursive.unwrap_or(false);
+    // Only a `recursive` delete can remove indexed files at all — a
+    // non-recursive delete only ever succeeds against an already-empty
+    // directory, which by definition holds nothing the index tracks.
+    // Enumerated and cleared from the index *before* the actual removal
+    // (mirrors `move_path`'s "read the index before mutating the
+    // filesystem" ordering): `remove_document` resolves each file's index
+    // id by walking up from its path, which breaks once a parent
+    // directory is gone — as every parent below the top one would be,
+    // partway through removing a multi-level subtree.
+    if recursive {
+        let abs_dir = scope.docs_root.join(&args.path);
+        if let Ok(nested) = crate::infra::workspace_scanner::scan_all(&abs_dir) {
+            for file in nested {
+                let _ = deps.workspace_index.remove_document(file.path);
+            }
+        }
+    }
+    docs_fs::delete_project_dir(&scope.docs_root.to_string_lossy(), &args.path, recursive)?;
     Ok(args.path)
 }
 
@@ -1820,12 +1887,18 @@ fn move_path(
     let docs_root = scope.docs_root.to_string_lossy();
     let is_dir = scope.docs_root.join(&args.path).is_dir();
 
+    // Also captures `renamed` (the repo-relative old/new pairs) so it's
+    // still available below, after the actual filesystem move, to update
+    // the moved document(s)' own index rows — empty when `docs_root`
+    // doesn't resolve under `repo_root`, same "skip the cascade entirely"
+    // case `updated_files` already handles.
+    let mut renamed: Vec<reference_rewrite::RenamedPath> = Vec::new();
     let updated_files =
         match reference_rewrite::docs_root_suffix(&scope.repo_root, &docs_root) {
             Some(suffix) => {
                 let old = reference_rewrite::to_repo_relative(&suffix, &args.path);
                 let new = reference_rewrite::to_repo_relative(&suffix, &args.new_path);
-                let renamed: Vec<reference_rewrite::RenamedPath> = if is_dir {
+                renamed = if is_dir {
                     reference_rewrite::renamed_paths_for_dir_move(&deps.workspace_index, &old, &new)
                 } else {
                     vec![reference_rewrite::RenamedPath { old, new }]
@@ -1845,6 +1918,18 @@ fn move_path(
         docs_fs::rename_project_dir(&docs_root, &args.path, &args.new_path)?;
     } else {
         docs_fs::rename_project_file(&docs_root, &args.path, &args.new_path)?;
+    }
+
+    // See `write_file`'s matching comment — same best-effort sync, so the
+    // moved document(s) themselves are found at their new path immediately
+    // (their content still gets re-parsed asynchronously, same as any
+    // other `update_document`/`index_file` call, but their existence and
+    // path are correct right away — including for a `move` chained
+    // straight after this one in the same round).
+    for pair in &renamed {
+        let _ = deps
+            .workspace_index
+            .rename_document(scope.repo_root.join(&pair.old), scope.repo_root.join(&pair.new));
     }
 
     Ok((args.path, args.new_path, updated_files))
@@ -3330,6 +3415,42 @@ mod tests {
         fs::remove_dir_all(&repo).ok();
     }
 
+    /// The other half of the benchmark-surfaced gap: a recursive
+    /// `deleteDirectory` used to leave every nested file's row behind in
+    /// the index (only the top-level fs subtree was ever touched — nothing
+    /// in the AI tool path called `remove_document`), so a `check` right
+    /// after still reported diagnostics for files that no longer existed
+    /// on disk.
+    #[test]
+    fn delete_directory_recursive_removes_nested_documents_from_the_index() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("folder/nested")).unwrap();
+        fs::write(docs.join("folder/note.adoc"), "= Note\n").unwrap();
+        fs::write(docs.join("folder/nested/deep.adoc"), "= Deep\n").unwrap();
+
+        let mut deps = EmbeddingDeps::empty();
+        deps.workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        assert!(deps.workspace_index.get_document(&docs.join("folder/nested/deep.adoc")).is_some());
+
+        execute_tool(
+            &scope,
+            ToolCall::DeleteDirectory(DeleteDirectoryArgs {
+                path: "folder".to_string(),
+                recursive: Some(true),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+
+        assert!(deps.workspace_index.get_document(&docs.join("folder/note.adoc")).is_none());
+        assert!(deps.workspace_index.get_document(&docs.join("folder/nested/deep.adoc")).is_none());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
     #[test]
     fn move_renames_a_file_in_place() {
         let (repo, docs) = fixture_repo();
@@ -3483,6 +3604,66 @@ mod tests {
         let (_, _, updated_files) =
             move_it_with_deps(&scope, "intro.adoc", "introduction.adoc", &deps).unwrap();
         assert!(updated_files.is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    /// Reproduces the exact gap a benchmark run of the file tools surfaced:
+    /// a `writeFile` call creates a file that references another, then a
+    /// `move` call in the same turn relocates the referenced file — before
+    /// `write_file` synchronously called `update_document`, `move`'s
+    /// reference lookup ran against a `WorkspaceIndex` that had never heard
+    /// of the just-written file, so it silently reported zero updated
+    /// references even though the include was right there on disk.
+    #[test]
+    fn move_finds_a_reference_written_by_write_file_earlier_in_the_same_turn() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("sub")).unwrap();
+        fs::write(docs.join("sub/detail.adoc"), "= Detail\n").unwrap();
+        fs::create_dir_all(docs.join("sub2")).unwrap();
+
+        let mut deps = EmbeddingDeps::empty();
+        deps.workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        // `guide.adoc` doesn't exist yet when the index above is built —
+        // it's created through the real tool, same as the AI would.
+        execute_tool(
+            &scope,
+            ToolCall::WriteFile(WriteFileArgs {
+                path: "guide.adoc".to_string(),
+                content: "= Guide\n\ninclude::sub/detail.adoc[]\n".to_string(),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+
+        let (_, _, updated_files) =
+            move_it_with_deps(&scope, "sub/detail.adoc", "sub2/detail.adoc", &deps).unwrap();
+        assert_eq!(
+            updated_files,
+            vec![UpdatedReference { docs_relative_path: "guide.adoc".to_string(), count: 1 }]
+        );
+        assert_eq!(
+            fs::read_to_string(docs.join("guide.adoc")).unwrap(),
+            "= Guide\n\ninclude::sub2/detail.adoc[]\n"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn move_updates_the_moved_documents_own_row_in_the_index() {
+        let (repo, docs) = fixture_repo();
+        let mut deps = EmbeddingDeps::empty();
+        deps.workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        move_it_with_deps(&scope, "intro.adoc", "introduction.adoc", &deps).unwrap();
+
+        assert!(deps.workspace_index.get_document(&docs.join("intro.adoc")).is_none());
+        assert!(deps.workspace_index.get_document(&docs.join("introduction.adoc")).is_some());
 
         fs::remove_dir_all(&repo).ok();
     }

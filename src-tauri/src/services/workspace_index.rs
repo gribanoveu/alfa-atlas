@@ -314,7 +314,6 @@ impl WorkspaceIndex {
     /// Rename: update the document row, but leave references in OTHER docs
     /// pointing at the old path (they become broken until manually edited),
     /// per spec section 4.
-    #[allow(dead_code)]
     pub fn rename_document(
         self: &Arc<Self>,
         old: PathBuf,
