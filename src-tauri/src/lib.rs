@@ -5,10 +5,19 @@ mod services;
 
 use domain::settings::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, WindowState};
 use services::window_settings;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
 
+use crate::commands::embeddings::{
+    BackgroundBacklogSlot, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard,
+    FullSyncActiveSlot, IndexStoreSlot, IndexWatcherSlot, PriorityFilesSlot,
+};
+use crate::commands::llm::{ChatCancelFlag, LlmProviderSlot};
 use crate::infra::parsers::registry::ParserRegistry;
+use crate::services::chunk_builder::ChunkIndex;
+use crate::services::embedding_model::DownloadState;
+use crate::services::repo_index::RepositoryIndex;
 use crate::services::spellcheck::SpellcheckEngine;
 use crate::services::workspace_index::WorkspaceIndex;
 
@@ -79,7 +88,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_http::init());
+        .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_notification::init());
 
     // MCP bridge plugin — debug-only, so the Cursor Tauri MCP server can
     // inspect the running app for diagnostics. No effect in production builds.
@@ -101,6 +111,19 @@ pub fn run() {
             }
             app.manage(index);
             app.manage(Arc::new(SpellcheckEngine::load()));
+            app.manage(Arc::new(RepositoryIndex::new()));
+            app.manage(Arc::new(ChunkIndex::new()));
+            app.manage(Arc::new(EmbeddingIndexSlot::new(None)));
+            app.manage(Arc::new(IndexStoreSlot::new(None)));
+            app.manage(Arc::new(EmbeddingProviderSlot::new(None)));
+            app.manage(Arc::new(EmbeddingSyncGuard::new(())));
+            app.manage(Arc::new(FullSyncActiveSlot::new(false)));
+            app.manage(Arc::new(IndexWatcherSlot::new(None)));
+            app.manage(Arc::new(PriorityFilesSlot::new(HashSet::new())));
+            app.manage(Arc::new(BackgroundBacklogSlot::new(None)));
+            app.manage(Arc::new(DownloadState::default()));
+            app.manage(Arc::new(LlmProviderSlot::new(None)));
+            app.manage(Arc::new(ChatCancelFlag::new(false)));
 
             Ok(())
         })
@@ -120,6 +143,7 @@ pub fn run() {
             commands::project::probe_open_path,
             commands::project::open_project,
             commands::project::add_gitignore_entry,
+            commands::project::ensure_atlas_gitignore,
             commands::project::open_cached_project,
             commands::project::get_project,
             commands::project::get_saved_repo_root,
@@ -144,6 +168,11 @@ pub fn run() {
             commands::git::git_commit_files,
             commands::git::git_commit_file_diff,
             commands::git::git_discard_file_changes,
+            commands::git::git_restore_discard_backup,
+            commands::git::git_undo_commit,
+            commands::git::git_create_branch_at_oid,
+            commands::git::git_reset_to_oid,
+            commands::git::git_head_oid,
             commands::git::git_apply_diff_content,
             commands::git::git_list_branches,
             commands::git::git_fetch_branches,
@@ -151,15 +180,28 @@ pub fn run() {
             commands::git::git_checkout_branch,
             commands::git::git_delete_branch,
             commands::git::git_checkout_remote_branch,
+            commands::git::git_stash_list,
+            commands::git::git_stash_apply,
+            commands::git::git_stash_drop,
             commands::git::git_get_credentials,
             commands::git::git_save_credentials,
             commands::git::git_get_key_status,
             commands::git::git_generate_key,
             commands::git::git_import_key,
             commands::git::git_clone,
+            commands::git_action_log::git_action_log_list,
+            commands::git_action_log::git_action_log_append,
+            commands::git_action_log::git_action_log_mark_undone,
+            commands::tool_call_log::tool_call_log_query,
+            commands::tool_call_log::tool_call_log_clear,
             commands::project::list_docs_tree,
             commands::project::read_project_file,
+            commands::project::read_project_file_or_none,
             commands::project::resolve_asset_path,
+            commands::project::list_image_files,
+            commands::project::import_external_file,
+            commands::project::read_external_text_file,
+            commands::project::write_external_text_file,
             commands::project::write_project_file,
             commands::project::create_project_file,
             commands::project::create_project_file_from_template,
@@ -187,6 +229,7 @@ pub fn run() {
             commands::workspace_index::clear_index,
             commands::workspace_index::index_is_open,
             commands::workspace_index::get_document,
+            commands::workspace_index::get_document_by_id,
             commands::workspace_index::get_documents,
             commands::workspace_index::find_document,
             commands::workspace_index::find_anchor,
@@ -213,6 +256,47 @@ pub fn run() {
             commands::spellcheck::add_custom_dictionary_word,
             commands::spellcheck::remove_custom_dictionary_word,
             commands::ai_tools::ai_execute_tool,
+            commands::ai_tools::ai_get_access_mode,
+            commands::ai_tools::ai_set_access_mode,
+            commands::ai_tools::ai_get_tool_definitions,
+            commands::ai_tools::ai_get_auto_approved_tools,
+            commands::ai_tools::ai_set_tool_auto_approved,
+            commands::ai_tools::ai_get_allowed_tools,
+            commands::ai_tools::ai_set_tool_allowed,
+            commands::ai_tools::ai_get_memory_wake,
+            commands::embeddings::embedding_get_config,
+            commands::embeddings::embedding_set_config,
+            commands::embeddings::embedding_set_remote_api_key,
+            commands::embeddings::embedding_has_remote_api_key,
+            commands::embeddings::embedding_model_status,
+            commands::embeddings::embedding_download_model,
+            commands::embeddings::embedding_cancel_model_download,
+            commands::embeddings::embedding_sync,
+            commands::embeddings::embedding_index_status,
+            commands::embeddings::embedding_index_teardown,
+            commands::embeddings::embedding_set_priority_files,
+            commands::repo_index::repo_index_summary,
+            commands::llm::llm_get_settings,
+            commands::llm::llm_set_settings,
+            commands::llm::llm_list_providers,
+            commands::llm::llm_upsert_provider,
+            commands::llm::llm_remove_provider,
+            commands::llm::llm_set_api_key,
+            commands::llm::llm_has_api_key,
+            commands::llm::llm_list_models,
+            commands::llm::llm_test_connection,
+            commands::llm::llm_chat_stream,
+            commands::llm::llm_chat_stream_resume,
+            commands::llm::llm_cancel_chat,
+            commands::llm::llm_chat_once,
+            commands::chat_history::chat_list,
+            commands::chat_history::chat_load_messages,
+            commands::chat_history::chat_save,
+            commands::chat_history::chat_set_archived,
+            commands::plans::plan_list,
+            commands::plans::plan_get,
+            commands::plans::plan_delete,
+            commands::export::write_export_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

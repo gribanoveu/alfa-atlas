@@ -26,10 +26,14 @@ pub async fn check_spelling(
     engine: tauri::State<'_, Arc<SpellcheckEngine>>,
     text: String,
     doc_kind: DocKind,
+    path: String,
 ) -> Result<Vec<SpellIssue>, String> {
     let engine = engine.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let config = spellcheck_prefs::load_spellcheck_config().unwrap_or_default();
+        if !config.should_check_path(&path) {
+            return Vec::new();
+        }
         engine.check_text(&text, doc_kind, &config)
     })
     .await

@@ -10,6 +10,7 @@ import {
   type SpellcheckConfig,
 } from "../../lib/spellcheck";
 import "../Welcome/CloneRepoModal.css";
+import "./SpellcheckTab.css";
 import "./StandardsRulesTab.css";
 
 type SpellcheckTabProps = {
@@ -110,6 +111,14 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
     [config, persistConfig],
   );
 
+  const toggleCheckTxt = useCallback(
+    (checkTxt: boolean) => {
+      if (!config) return;
+      void persistConfig({ ...config, checkTxt });
+    },
+    [config, persistConfig],
+  );
+
   const addWord = useCallback(async () => {
     const word = newWord.trim();
     if (!word) return;
@@ -175,6 +184,18 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
         </label>
       </div>
 
+      <div className="settings-row">
+        <label className="settings-check">
+          <input
+            type="checkbox"
+            checked={config?.checkTxt ?? false}
+            disabled={!config || busy || !(config?.enabled ?? true)}
+            onChange={(event) => toggleCheckTxt(event.target.checked)}
+          />
+          <span>Проверять файлы .txt</span>
+        </label>
+      </div>
+
       <div className="standards-rules-list">
         {dictionaries === null ? (
           <p className="settings-hint">Загрузка…</p>
@@ -205,9 +226,10 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
       </p>
 
       <div className="settings-row">
-        <div className="settings-actions">
+        <div className="spellcheck-add-word">
           <input
             type="text"
+            className="clone-modal-input"
             value={newWord}
             placeholder="Добавить слово…"
             disabled={busy}

@@ -1,3 +1,4 @@
+import { formatGitProgress, useGitProgress } from "../../hooks/useGitProgress";
 import "../Welcome/CloneRepoModal.css";
 
 type PushConfirmModalProps = {
@@ -17,6 +18,8 @@ export function PushConfirmModal({
   onCancel,
   onConfirm,
 }: PushConfirmModalProps) {
+  const gitProgress = useGitProgress();
+  const progressLabel = busy ? formatGitProgress(gitProgress.event) : null;
   const message = hasUpstream
     ? `Будет отправлено ${ahead} ${commitWord(ahead)} из ветки «${branchName}» на сервер.`
     : `Ветка «${branchName}» ещё не отправлялась на сервер. Она будет создана в удалённом репозитории и привязана как upstream.`;
@@ -53,10 +56,13 @@ export function PushConfirmModal({
             type="button"
             className="clone-modal-btn primary"
             disabled={busy}
-            onClick={onConfirm}
+            onClick={() => {
+              gitProgress.reset();
+              onConfirm();
+            }}
             autoFocus
           >
-            Отправить
+            {busy ? (progressLabel ? `Отправка… ${progressLabel}` : "Отправка…") : "Отправить"}
           </button>
         </div>
       </div>

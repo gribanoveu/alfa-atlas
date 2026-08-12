@@ -51,7 +51,7 @@ impl LanguageIndexer for AsciiDocIndexer {
 
         let mut symbols = Vec::new();
         walk(tree.root_node(), content.as_bytes(), &mut symbols);
-        LanguageFacts { symbols }
+        LanguageFacts { symbols, imports: Vec::new() }
     }
 }
 

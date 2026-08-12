@@ -213,22 +213,24 @@ export function buildHunkDiffLines(
       const lineCount = Math.max(removedLines.length, addedLines.length);
 
       for (let lineIndex = 0; lineIndex < lineCount; lineIndex += 1) {
+        const hasRemoved = lineIndex < removedLines.length;
+        const hasAdded = lineIndex < addedLines.length;
         const removedText = removedLines[lineIndex] ?? "";
         const addedText = addedLines[lineIndex] ?? "";
 
-        if (removedText && addedText) {
+        if (hasRemoved && hasAdded) {
           const { removedParts, addedParts } = charDiffParts(
             removedText,
             addedText,
           );
           lines.push({ kind: "removed", parts: removedParts });
           lines.push({ kind: "added", parts: addedParts });
-        } else if (removedText) {
+        } else if (hasRemoved) {
           lines.push({
             kind: "removed",
             parts: wholeLineParts("removed", removedText),
           });
-        } else if (addedText) {
+        } else if (hasAdded) {
           lines.push({
             kind: "added",
             parts: wholeLineParts("added", addedText),
@@ -258,6 +260,9 @@ function escapeHtml(text: string): string {
 }
 
 function renderDiffParts(parts: HunkDiffPart[]): string {
+  if (parts.every((part) => part.text.length === 0)) {
+    return `<span class="git-gutter-diff-blank">↵</span>`;
+  }
   return parts
     .map((part) => {
       const className =

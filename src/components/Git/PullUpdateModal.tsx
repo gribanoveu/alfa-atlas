@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PullMode } from "../../lib/git";
+import { formatGitProgress, useGitProgress } from "../../hooks/useGitProgress";
 import "../Welcome/CloneRepoModal.css";
 import "./PullUpdateModal.css";
 
@@ -17,6 +18,8 @@ export function PullUpdateModal({
   onRequestResetToRemote,
 }: PullUpdateModalProps) {
   const [mode, setMode] = useState<PullMode>("merge");
+  const gitProgress = useGitProgress();
+  const progressLabel = busy ? formatGitProgress(gitProgress.event) : null;
 
   return (
     <div
@@ -89,9 +92,12 @@ export function PullUpdateModal({
               type="button"
               className="clone-modal-btn primary"
               disabled={busy}
-              onClick={() => onConfirm(mode)}
+              onClick={() => {
+                gitProgress.reset();
+                onConfirm(mode);
+              }}
             >
-              Обновить
+              {busy ? (progressLabel ? `Обновление… ${progressLabel}` : "Обновление…") : "Обновить"}
             </button>
           </div>
         </div>

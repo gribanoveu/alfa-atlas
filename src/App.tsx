@@ -12,6 +12,8 @@ import { PullUpdateModal } from "./components/Git/PullUpdateModal";
 import { PushConfirmModal } from "./components/Git/PushConfirmModal";
 import { ResetRemoteConfirmModal } from "./components/Git/ResetRemoteConfirmModal";
 import { DeleteBranchConfirmModal } from "./components/Git/DeleteBranchConfirmModal";
+import { DiscardStashConfirmModal } from "./components/Git/DiscardStashConfirmModal";
+import { GitStashPreviewModal } from "./components/Git/GitStashPreviewModal";
 import { RightDock } from "./components/RightDock/RightDock";
 import { NewFileModal } from "./components/Sidebar/NewFileModal";
 import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
@@ -22,20 +24,32 @@ import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
 import type {
+  CheckoutOutcome,
   GitBranchInfo,
   GitDiffScope,
   GitFileDiff,
   GitFileStatus,
+  GitStashEntry,
+  GitStashRestoreOutcome,
   PullMode,
 } from "./lib/git";
 import {
+  deriveSyncPillState,
   gitCommitFileDiff,
   gitCommitFiles,
+  gitCreateBranchAtOid,
+  gitHeadOid,
+  gitResetToOid,
+  gitRestoreDiscardBackup,
   gitSyncStatus,
+  gitUndoCommit,
   hasTrackedGitChanges,
-  hasUnpushedCommits,
 } from "./lib/git";
+import { friendlyGitError } from "./lib/gitErrors";
 import { useBranches } from "./hooks/useBranches";
+import { useGitStash } from "./hooks/useGitStash";
+import { useGitActionLog } from "./hooks/useGitActionLog";
+import type { GitActionLogEntry } from "./lib/gitActionLog";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useSpecsRepo } from "./hooks/useSpecsRepo";
@@ -51,6 +65,10 @@ import { useAsciiDocParser } from "./hooks/useAsciiDocParser";
 import { useEditorViewMode } from "./hooks/useEditorViewMode";
 import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
 import { useStandardsCheck } from "./hooks/useStandardsCheck";
+import { useEmbeddingIndexWarmup } from "./hooks/useEmbeddingIndexWarmup";
+import { useEmbeddingPriorityFiles } from "./hooks/useEmbeddingPriorityFiles";
+import { useEmbeddingSetup } from "./hooks/useEmbeddingSetup";
+import { useLlmSetup } from "./hooks/useLlmSetup";
 import { findAnchors } from "./lib/workspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
@@ -65,23 +83,38 @@ import {
   createRestEndpointFolder,
   deleteProjectDir,
   deleteProjectFile,
+  importExternalFile,
   readProjectFile,
   renameProjectDir,
   renameProjectFile,
+  type UpdatedReference,
 } from "./lib/project";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
-import { formatLabelFor, isAsciiDocPath, lineEndingLabelFor } from "./lib/supportedFiles";
+import {
+  formatLabelFor,
+  isAsciiDocPath,
+  isImageAsset,
+  isSupportedFile,
+  lineEndingLabelFor,
+} from "./lib/supportedFiles";
 import {
   resolveRelativeToDocument,
   toDocsRelativePath,
   toRepoRelativePath,
 } from "./lib/paths";
 import { RenameModal } from "./components/Sidebar/RenameModal";
+import { useOsFileDrop } from "./hooks/useOsFileDrop";
 
 function joinParent(parentPath: string, name: string): string {
   if (!parentPath || parentPath === ".") return name;
   return `${parentPath.replace(/[/\\]+$/, "")}/${name}`;
+}
+
+function dirnameOf(path: string): string {
+  const segments = path.split(/[/\\]/).filter(Boolean);
+  segments.pop();
+  return segments.length > 0 ? segments.join("/") : ".";
 }
 
 /** Append " copy" to a name. For files it goes before the extension
@@ -186,6 +219,16 @@ function App() {
     setActiveKind("file");
   }, [editor.activeTabId]);
 
+  useEffect(() => {
+    const onOpenPlan = (event: Event) => {
+      const planId = (event as CustomEvent<{ planId?: string }>).detail?.planId;
+      if (!planId) return;
+      void editor.openPlan(planId);
+    };
+    window.addEventListener("atlas-open-plan", onOpenPlan);
+    return () => window.removeEventListener("atlas-open-plan", onOpenPlan);
+  }, [editor.openPlan]);
+
   const displayTabs: DisplayTab[] = useMemo(() => {
     const fileTabs: DisplayTab[] = editor.tabs.map((t) => ({
       id: t.id,
@@ -281,6 +324,12 @@ function App() {
   const branches = useBranches(project.repoRoot, {
     active: Boolean(project.repoRoot),
   });
+  const stash = useGitStash(project.repoRoot, {
+    active: Boolean(project.repoRoot),
+  });
+  const actionLog = useGitActionLog(project.repoRoot, {
+    active: Boolean(project.repoRoot),
+  });
   const [folderError, setFolderError] = useState<string | null>(null);
   const [dismissedToastMessage, setDismissedToastMessage] = useState<string | null>(null);
   const [successToast, setSuccessToast] = useState<{ id: number; message: string } | null>(null);
@@ -317,15 +366,21 @@ function App() {
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [resetRemoteConfirmOpen, setResetRemoteConfirmOpen] = useState(false);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
+  // Checking out an existing branch no longer blocks on uncommitted changes
+  // (see performCheckout/handleCheckoutOutcome — those changes get
+  // auto-stashed instead), so this only ever fires for "create branch",
+  // where there's no destination tree to stash-restore into.
   const [branchSwitchBlocked, setBranchSwitchBlocked] = useState<{
-    kind: "checkout" | "create";
     branchName: string;
-    isRemote?: boolean;
   } | null>(null);
   const [gitAlert, setGitAlert] = useState<{
     message: string;
     title?: string;
     variant?: "error" | "info";
+  } | null>(null);
+  const [pendingStashConflict, setPendingStashConflict] = useState<{
+    id: string;
+    branch: string;
   } | null>(null);
   const [gitDiffTarget, setGitDiffTarget] = useState<{
     file: GitFileStatus;
@@ -336,6 +391,8 @@ function App() {
     commitHash: string;
     file: GitFileStatus;
   } | null>(null);
+  const [stashPreviewTarget, setStashPreviewTarget] = useState<GitStashEntry | null>(null);
+  const [stashDiscardTarget, setStashDiscardTarget] = useState<GitStashEntry | null>(null);
   const [revealRequest, setRevealRequest] = useState<{
     id: number;
     line: number;
@@ -351,6 +408,7 @@ function App() {
   const insertCounter = useRef(0);
   const skipNextPanelSync = useRef(false);
   const prevDirtyCount = useRef(0);
+  const seededDocsRoot = useRef<string | null>(null);
 
   useEffect(() => {
     if (!session.ready || !session.loadedState || !project.docsRoot) return;
@@ -399,6 +457,8 @@ function App() {
   useEffect(() => {
     if (!session.ready || !session.loadedState || !project.docsRoot) return;
     if (tree.nodes.length === 0) return;
+    if (seededDocsRoot.current === project.docsRoot) return;
+    seededDocsRoot.current = project.docsRoot;
     const loaded = session.loadedState.expandedDirs;
     const isDefault =
       loaded.length === 0 || (loaded.length === 1 && loaded[0] === ".");
@@ -423,14 +483,89 @@ function App() {
     .join(" ");
 
   const hasProject = Boolean(project.docsRoot && project.repoRoot);
-  const hasUnpushedChanges = hasProject && hasUnpushedCommits(git.status);
+
+  const handleOsImportExternal = useCallback(
+    async (destDirPath: string, absolutePaths: string[]) => {
+      const docsRoot = project.docsRoot;
+      if (!docsRoot) return;
+      let lastOpened: string | null = null;
+      for (const sourceAbsolute of absolutePaths) {
+        try {
+          const rel = await importExternalFile(
+            docsRoot,
+            destDirPath,
+            sourceAbsolute,
+          );
+          if (isSupportedFile(rel) || isImageAsset(rel)) {
+            lastOpened = rel;
+          }
+        } catch (e) {
+          setFolderError(e instanceof Error ? e.message : String(e));
+        }
+      }
+      session.ensureExpanded(destDirPath);
+      await tree.refresh();
+      git.scheduleRefresh();
+      if (lastOpened) {
+        void editor.openFile(lastOpened);
+      }
+    },
+    [project.docsRoot, session, tree, git, editor],
+  );
+
+  const { osDropTargetPath } = useOsFileDrop(hasProject, {
+    onImportExternal: (destDirPath, paths) => {
+      void handleOsImportExternal(destDirPath, paths);
+    },
+    onOpenExternal: (absolutePath) => {
+      void editor.openExternalFile(absolutePath);
+    },
+    onReject: (message) => {
+      setFolderError(message);
+    },
+  });
+
   const workspaceIndex = useWorkspaceIndex(project.repoRoot, {
     active: hasProject,
   });
   const standards = useStandardsCheck(project.docsRoot, {
     active: hasProject,
   });
+  useEmbeddingIndexWarmup(project.repoRoot, { active: hasProject });
+  // Feeds the status bar's embedding-index segment — mostly a read-only
+  // observer of whatever `AssistantPanel`/`EmbeddingsTab`'s own instances
+  // (or the incremental file watcher) triggered, except for the segment's
+  // own click-to-sync handler below, which calls this instance's `sync()`
+  // directly. See those hooks' doc comment on why each panel keeps its own
+  // separate instance rather than sharing one.
+  const embeddingSetup = useEmbeddingSetup(project.repoRoot);
+  const llmSetup = useLlmSetup();
+  const selectionAiProviderId =
+    llmSetup.settings?.activeProviderId ?? llmSetup.providers[0]?.id ?? null;
+  const selectionAiLlmReady =
+    selectionAiProviderId !== null &&
+    Boolean(llmSetup.hasApiKeyMap[selectionAiProviderId]);
+  // Shows a brief "Синхронизировано" confirmation in the status bar segment
+  // right after a successful click-to-sync — `indexStatus` alone would just
+  // silently settle back to the normal "Проиндексировано чанков: N" label,
+  // which doesn't read as clear feedback that the click actually did
+  // something. `stats === null` means `sync()` caught an error internally
+  // (it never rejects — see `useEmbeddingSetup.ts`), so this only fires on
+  // a real success.
+  const [embedJustSynced, setEmbedJustSynced] = useState(false);
+  const handleEmbedSyncClick = () => {
+    void embeddingSetup.sync().then((stats) => {
+      if (!stats) return;
+      setEmbedJustSynced(true);
+      setTimeout(() => setEmbedJustSynced(false), 1500);
+    });
+  };
+  useEmbeddingPriorityFiles(
+    editor.tabs.filter((t) => t.origin === "project").map((t) => t.path),
+    { active: hasProject },
+  );
   const [standardsSettingsSignal, setStandardsSettingsSignal] = useState(0);
+  const [llmSettingsSignal, setLlmSettingsSignal] = useState(0);
 
   useEffect(() => {
     if (layout.activeTool === "branches" && hasProject) {
@@ -453,6 +588,20 @@ function App() {
     prevConflictCount.current = count;
   }, [git.status.conflicted.length, layout]);
 
+  // Once a stash-restore conflict (pendingStashConflict) has been fully
+  // resolved through the normal conflict UI, the shelved entry is redundant
+  // — its content is already merged into the working tree — so drop it
+  // quietly. Skipped while a real merge is also in progress so we don't
+  // misfire on an unrelated, coincidentally-simultaneous conflict.
+  useEffect(() => {
+    if (!pendingStashConflict) return;
+    if (git.status.conflicted.length > 0) return;
+    if (git.status.mergeInProgress) return;
+    const id = pendingStashConflict.id;
+    setPendingStashConflict(null);
+    void stash.discard(id);
+  }, [pendingStashConflict, git.status.conflicted.length, git.status.mergeInProgress, stash]);
+
   const cursorLabel = hasProject
     ? `Ln ${editor.cursor.line}, Col ${editor.cursor.column}`
     : "Ln 1, Col 1";
@@ -461,6 +610,21 @@ function App() {
     if (!hasProject) return;
     setPullModalOpen(true);
   }, [hasProject]);
+
+  const syncPillState = deriveSyncPillState({
+    status: git.status,
+    currentBranchBehind: branches.branches.find((b) => b.isCurrent)?.behind ?? null,
+    hasPendingStashConflict: pendingStashConflict !== null,
+  });
+  const handleSyncPillClick = useCallback(() => {
+    if (syncPillState === "unpushed") {
+      setPushConfirmOpen(true);
+    } else if (syncPillState === "behind") {
+      openPullModal();
+    } else {
+      layout.setRightTool("git");
+    }
+  }, [syncPillState, openPullModal, layout]);
 
   function behindCommitsMessage(count: number): string {
     const mod10 = count % 10;
@@ -497,13 +661,19 @@ function App() {
           id: successToastCounter.current,
           message: "Изменения отправлены на сервер",
         });
+        actionLog.record({
+          kind: "push",
+          summary: "Изменения отправлены на сервер",
+          undoable: false,
+          payload: { kind: "push" },
+        });
       }
     } catch (e) {
       setGitAlert({
         message: e instanceof Error ? e.message : String(e),
       });
     }
-  }, [git, hasProject, project.repoRoot]);
+  }, [git, hasProject, project.repoRoot, actionLog]);
 
   const onPullConfirm = useCallback(
     async (mode: PullMode) => {
@@ -525,18 +695,42 @@ function App() {
   );
 
   const onResetToRemoteConfirm = useCallback(async () => {
+    const preResetOid = project.repoRoot
+      ? await gitHeadOid(project.repoRoot).catch(() => null)
+      : null;
     const err = await git.resetToRemote();
     setResetRemoteConfirmOpen(false);
     setPullModalOpen(false);
-    if (err) setGitAlert({ message: err });
-  }, [git]);
+    if (err) {
+      setGitAlert({ message: err });
+    } else if (preResetOid) {
+      actionLog.record({
+        kind: "resetToRemote",
+        summary: "Ветка сброшена к версии на сервере",
+        undoable: true,
+        payload: { kind: "resetToRemote", preResetOid },
+      });
+    }
+  }, [git, project.repoRoot, actionLog]);
 
   const onDeleteBranchConfirm = useCallback(async () => {
     if (!deleteBranchTarget) return;
-    const ok = await branches.deleteBranch(deleteBranchTarget.name);
+    const { name, tipOid } = deleteBranchTarget;
+    const ok = await branches.deleteBranch(name);
     setDeleteBranchTarget(null);
-    if (!ok && branches.error) setGitAlert({ message: branches.error });
-  }, [branches, deleteBranchTarget]);
+    if (!ok) {
+      if (branches.error) setGitAlert({ message: branches.error });
+      return;
+    }
+    if (tipOid) {
+      actionLog.record({
+        kind: "deleteBranch",
+        summary: `Удалена ветка «${name}»`,
+        undoable: true,
+        payload: { kind: "deleteBranch", name, tipOid },
+      });
+    }
+  }, [branches, deleteBranchTarget, actionLog]);
 
   const onPushConfirm = useCallback(async () => {
     setPushConfirmOpen(false);
@@ -614,16 +808,170 @@ function App() {
     ]);
   }, [editor.reloadAllOpenTabs, git, project.refreshBranch, tree]);
 
+  // Shared by the auto-restore-on-checkout path and the shelf's manual
+  // "Восстановить" button. `conflict`/`blocked`/`skipped` are all
+  // guaranteed by the backend to leave the shelf entry intact — never
+  // silently dropped — so none of these branches need a fallback recovery
+  // path, only messaging pointing at where the entry still lives.
+  const handleStashRestoreOutcome = useCallback((restore: GitStashRestoreOutcome) => {
+    if (restore.outcome === "applied") {
+      successToastCounter.current += 1;
+      setSuccessToast({
+        id: successToastCounter.current,
+        message: "Изменения ветки восстановлены",
+      });
+    } else if (restore.outcome === "conflict") {
+      setPendingStashConflict({ id: restore.entry.id, branch: restore.entry.branch });
+    } else if (restore.outcome === "blocked") {
+      setGitAlert({
+        title: "Изменения не восстановлены",
+        message: `Не удалось автоматически восстановить отложенные изменения для ветки «${restore.entry.branch}» — ${restore.reason}. Изменения сохранены и доступны в панели Git → «Отложенные изменения».`,
+        variant: "info",
+      });
+    } else if (restore.outcome === "skipped") {
+      setGitAlert({
+        title: "Изменения не восстановлены",
+        message:
+          "Для этой ветки в панели Git → «Отложенные изменения» сохранено несколько наборов изменений — выберите нужный вручную.",
+        variant: "info",
+      });
+    }
+  }, []);
+
+  // Surfaces what happened as a side effect of a checkout: tracked changes
+  // shelved on the branch we left, and/or a shelf entry restored (or not)
+  // on the branch we arrived at. See useBranches.checkoutBranch and the
+  // backend's checkout_branch/auto_stash_tracked_changes for how this is
+  // produced.
+  const handleCheckoutOutcome = useCallback(
+    (outcome: CheckoutOutcome) => {
+      if (outcome.shelved) {
+        successToastCounter.current += 1;
+        setSuccessToast({
+          id: successToastCounter.current,
+          message: `Незакоммиченные изменения ветки «${outcome.shelved.branch}» отложены — вернитесь на неё, чтобы восстановить.`,
+        });
+      }
+      if (outcome.restore) handleStashRestoreOutcome(outcome.restore);
+    },
+    [handleStashRestoreOutcome],
+  );
+
   const performCheckout = useCallback(
     async (name: string, discardChanges: boolean, isRemote: boolean) => {
-      const ok = isRemote
+      const fromBranch = git.status.branch;
+      const outcome = isRemote
         ? await branches.checkoutRemoteBranch(name, discardChanges)
         : await branches.checkoutBranch(name, discardChanges);
-      if (!ok) return;
-      project.setBranchFromGit(isRemote ? localNameFromRemoteBranch(name) : name);
+      if (!outcome) return;
+      const toBranch = isRemote ? localNameFromRemoteBranch(name) : name;
+      project.setBranchFromGit(toBranch);
       await refreshAfterBranchChange();
+      await stash.refresh();
+      handleCheckoutOutcome(outcome);
+      // Informational only — checkout is already safe by design (auto-stash
+      // shelf), so this entry never carries an undo button.
+      actionLog.record({
+        kind: "checkout",
+        summary: fromBranch ? `Переключение: ${fromBranch} → ${toBranch}` : `Переключение на ${toBranch}`,
+        undoable: false,
+        payload: { kind: "checkout", from: fromBranch ?? "", to: toBranch },
+      });
     },
-    [branches, project.setBranchFromGit, refreshAfterBranchChange],
+    [branches, project.setBranchFromGit, refreshAfterBranchChange, stash, handleCheckoutOutcome, git.status.branch, actionLog],
+  );
+
+  const onRestoreShelfEntry = useCallback(
+    async (entry: GitStashEntry) => {
+      const restore = await stash.restore(entry.id);
+      if (!restore) {
+        if (stash.error) setGitAlert({ message: stash.error });
+        return;
+      }
+      await refreshAfterBranchChange();
+      handleStashRestoreOutcome(restore);
+    },
+    [stash, refreshAfterBranchChange, handleStashRestoreOutcome],
+  );
+
+  const onDiscardShelfEntry = useCallback((entry: GitStashEntry) => {
+    setStashDiscardTarget(entry);
+  }, []);
+
+  const onConfirmDiscardShelfEntry = useCallback(async () => {
+    if (!stashDiscardTarget) return;
+    const { branch } = stashDiscardTarget;
+    const ok = await stash.discard(stashDiscardTarget.id);
+    setStashDiscardTarget(null);
+    if (!ok) {
+      if (stash.error) setGitAlert({ message: stash.error });
+      return;
+    }
+    actionLog.record({
+      kind: "stashDrop",
+      summary: `Отложенные изменения ветки «${branch}» удалены`,
+      undoable: false,
+      payload: { kind: "stashDrop", branch },
+    });
+  }, [stash, stashDiscardTarget, actionLog]);
+
+  const onPreviewShelfEntry = useCallback((entry: GitStashEntry) => {
+    setStashPreviewTarget(entry);
+  }, []);
+
+  const loadStashFiles = useCallback(
+    async (stashId: string): Promise<GitFileStatus[] | null> => {
+      if (!project.repoRoot) return null;
+      try {
+        return await gitCommitFiles(project.repoRoot, stashId);
+      } catch {
+        return null;
+      }
+    },
+    [project.repoRoot],
+  );
+
+  // Dispatches an action-log entry's "Отменить" button to the matching
+  // backend undo primitive. Never called for `entry.undoable === false`
+  // entries (push/stashDrop, or a discard with nothing backed up) — the UI
+  // doesn't render an undo button for those in the first place.
+  const handleUndoAction = useCallback(
+    async (entry: GitActionLogEntry) => {
+      if (!project.repoRoot || !entry.undoable) return;
+      const repoRoot = project.repoRoot;
+      try {
+        switch (entry.payload.kind) {
+          case "stage":
+            await git.unstage(entry.payload.paths);
+            break;
+          case "unstage":
+            await git.stage(entry.payload.paths);
+            break;
+          case "commit":
+          case "mergeCommit":
+            await gitUndoCommit(repoRoot, entry.payload.oid);
+            break;
+          case "deleteBranch":
+            await gitCreateBranchAtOid(repoRoot, entry.payload.name, entry.payload.tipOid);
+            break;
+          case "resetToRemote":
+            await gitResetToOid(repoRoot, entry.payload.preResetOid);
+            break;
+          case "discardFileChanges":
+            if (entry.payload.backupStashId) {
+              await gitRestoreDiscardBackup(repoRoot, entry.payload.backupStashId);
+            }
+            break;
+          default:
+            return;
+        }
+        actionLog.markUndone(entry.id);
+        await Promise.all([git.refresh(), branches.refresh(), stash.refresh()]);
+      } catch (e) {
+        setGitAlert({ message: e instanceof Error ? e.message : String(e) });
+      }
+    },
+    [project.repoRoot, actionLog, git, branches, stash],
   );
 
   const performCreateBranch = useCallback(
@@ -636,6 +984,10 @@ function App() {
     [branches, project.setBranchFromGit, refreshAfterBranchChange],
   );
 
+  // Checking out an existing branch is never blocked on uncommitted
+  // changes anymore — performCheckout auto-stashes them (see
+  // handleCheckoutOutcome above) instead of forcing a commit-or-discard
+  // choice up front.
   const handleCheckoutBranch = useCallback(
     async (branch: GitBranchInfo) => {
       const saved = await editor.saveAllDirtyTabs();
@@ -645,17 +997,9 @@ function App() {
         });
         return;
       }
-      if (hasTrackedGitChanges(git.status)) {
-        setBranchSwitchBlocked({
-          kind: "checkout",
-          branchName: branch.name,
-          isRemote: branch.isRemote,
-        });
-        return;
-      }
       await performCheckout(branch.name, false, branch.isRemote);
     },
-    [editor.saveAllDirtyTabs, git.status, performCheckout],
+    [editor.saveAllDirtyTabs, performCheckout],
   );
 
   const handleCreateBranch = useCallback(
@@ -668,7 +1012,7 @@ function App() {
         return;
       }
       if (hasTrackedGitChanges(git.status)) {
-        setBranchSwitchBlocked({ kind: "create", branchName: name });
+        setBranchSwitchBlocked({ branchName: name });
         return;
       }
       await performCreateBranch(name, false);
@@ -678,14 +1022,10 @@ function App() {
 
   const handleDiscardAndSwitchBranch = useCallback(async () => {
     if (!branchSwitchBlocked) return;
-    const { kind, branchName, isRemote } = branchSwitchBlocked;
+    const { branchName } = branchSwitchBlocked;
     setBranchSwitchBlocked(null);
-    if (kind === "checkout") {
-      await performCheckout(branchName, true, isRemote ?? false);
-    } else {
-      await performCreateBranch(branchName, true);
-    }
-  }, [branchSwitchBlocked, performCheckout, performCreateBranch]);
+    await performCreateBranch(branchName, true);
+  }, [branchSwitchBlocked, performCreateBranch]);
 
   const openGitFileDiff = useCallback(
     (path: string, scope: GitDiffScope) => {
@@ -721,19 +1061,30 @@ function App() {
   );
 
   const onAbortMerge = useCallback(async () => {
+    // A stash-restore conflict looks identical to a merge conflict from
+    // git's perspective (conflicted index entries, no MERGE_HEAD) — same
+    // abort machinery, different messaging so the user knows their shelved
+    // changes aren't gone, just still sitting in the shelf unapplied.
+    const isStashAbort = pendingStashConflict !== null;
     const confirmed = window.confirm(
-      "Отменить слияние? Файлы вернутся к состоянию до обновления, изменения с сервера будут отброшены.",
+      isStashAbort
+        ? "Отменить восстановление отложенных изменений? Рабочая копия вернётся к состоянию до восстановления — сами изменения останутся в разделе «Отложенные изменения»."
+        : "Отменить слияние? Файлы вернутся к состоянию до обновления, изменения с сервера будут отброшены.",
     );
     if (!confirmed) return;
+    // Clear before the conflict count can reach zero so the auto-drop
+    // effect doesn't mistake this abort for a resolved conflict and drop
+    // the shelf entry the user chose to keep.
+    setPendingStashConflict(null);
     const ok = await git.abortMerge();
     if (ok) {
       successToastCounter.current += 1;
       setSuccessToast({
         id: successToastCounter.current,
-        message: "Слияние отменено",
+        message: isStashAbort ? "Восстановление отменено" : "Слияние отменено",
       });
     }
-  }, [git]);
+  }, [git, pendingStashConflict]);
 
   const onFinishMergeRetry = useCallback(async () => {
     const ok = await git.finishMerge();
@@ -745,6 +1096,50 @@ function App() {
       });
     }
   }, [git]);
+
+  // Thin wrappers around useGitPanel's stage/unstage/commit that additionally
+  // record the action log entry — bound directly into <RightDock git={{...}}>
+  // below instead of git.stage/git.unstage/git.commit themselves, since
+  // those raw hook methods don't know about the log.
+  const handleStage = useCallback(
+    (paths: string[]) => {
+      if (paths.length === 0) return;
+      void git.stage(paths);
+      actionLog.record({
+        kind: "stage",
+        summary: paths.length === 1 ? `В индекс добавлен ${paths[0]}` : `В индекс добавлено файлов: ${paths.length}`,
+        undoable: true,
+        payload: { kind: "stage", paths },
+      });
+    },
+    [git, actionLog],
+  );
+
+  const handleUnstage = useCallback(
+    (paths: string[]) => {
+      if (paths.length === 0) return;
+      void git.unstage(paths);
+      actionLog.record({
+        kind: "unstage",
+        summary: paths.length === 1 ? `Из индекса убран ${paths[0]}` : `Из индекса убрано файлов: ${paths.length}`,
+        undoable: true,
+        payload: { kind: "unstage", paths },
+      });
+    },
+    [git, actionLog],
+  );
+
+  const handleCommit = useCallback(() => {
+    void git.commit().then((hash) => {
+      if (!hash) return;
+      actionLog.record({
+        kind: "commit",
+        summary: `Создан коммит ${hash}`,
+        undoable: true,
+        payload: { kind: "commit", oid: hash },
+      });
+    });
+  }, [git, actionLog]);
 
   const openCommitFileDiff = useCallback(
     (commitHash: string, file: GitFileStatus) => {
@@ -798,15 +1193,93 @@ function App() {
     [editor, project.docsRoot, project.repoRoot],
   );
 
+  // Reconciles an open editor tab against a change the AI assistant just
+  // made directly on disk (`writeFile`/`editFile`/`deleteFile`/
+  // `createDirectory`/`deleteDirectory`, see `AssistantConversation`'s
+  // `onFileWritten`). Without this, a tab left open on the affected path
+  // keeps showing its now-stale in-memory content — and if it's dirty (or
+  // becomes dirty) by the time autosave/save-on-switch fires,
+  // `useEditorTabs.saveTab` would write that stale content straight back to
+  // disk, silently reverting the assistant's change (or resurrecting a file
+  // it just deleted). Mirrors `editor.discardTabsUnder` in the manual
+  // tree-delete confirm above for the delete case, and `reloadTabFromDisk`
+  // in `applyRenameReport`/`handleGitSaveContent` for the write case.
+  const handleAssistantFileWritten = useCallback(
+    ({ tool, path }: { tool: string; path: string }) => {
+      void tree.refresh();
+      if (openApiBundle.bundle) void openApiBundle.reload();
+      // Tool results use access-mode-relative paths; editor tabs are docs-relative.
+      const docsPath =
+        project.repoRoot && project.docsRoot
+          ? toDocsRelativePath(path, project.repoRoot, project.docsRoot)
+          : path;
+      switch (tool) {
+        case "writeFile":
+        case "editFile":
+          void editor.reloadTabFromDisk(docsPath);
+          break;
+        case "deleteFile":
+        case "deleteDirectory":
+          editor.discardTabsUnder(docsPath);
+          break;
+        default:
+          break;
+      }
+    },
+    [tree, editor, openApiBundle, project.repoRoot, project.docsRoot],
+  );
+
+  // Same idea as `handleAssistantFileWritten`, but a `move` tool call has
+  // both an old and a new path, so a plain reload isn't enough — an open
+  // tab under `from` needs to keep pointing at the same file at its new
+  // path, exactly like the manual drag-and-drop `onMove` handler below
+  // achieves via `editor.remapTabsUnder`/`session.remapExpandedUnder`. The
+  // move's reference-rewrite report reuses `applyRenameReport` so cascaded
+  // changes to *other* open tabs (files that included/referenced the moved
+  // one) get reloaded and reported the same way a manual rename does.
+  const handleAssistantFileMoved = useCallback(
+    ({ from, to, updatedFiles }: { from: string; to: string; updatedFiles: UpdatedReference[] }) => {
+      const toDocs = (p: string) =>
+        project.repoRoot && project.docsRoot
+          ? toDocsRelativePath(p, project.repoRoot, project.docsRoot)
+          : p;
+      const docsFrom = toDocs(from);
+      const docsTo = toDocs(to);
+      editor.remapTabsUnder(docsFrom, docsTo);
+      session.remapExpandedUnder(docsFrom, docsTo);
+      session.ensureExpanded(dirnameOf(docsTo));
+      void tree.refresh();
+      if (openApiBundle.bundle) void openApiBundle.reload();
+      git.scheduleRefresh();
+      void applyRenameReport({
+        updatedFiles: updatedFiles.map((f) => ({
+          docsRelativePath: toDocs(f.docsRelativePath),
+          count: f.count,
+        })),
+      });
+    },
+    [editor, session, tree, git, applyRenameReport, openApiBundle, project.repoRoot, project.docsRoot],
+  );
+
   const handleGitDiscard = useCallback(
     async (repoRelativePath: string) => {
-      const ok = await git.discardFileChanges(repoRelativePath);
-      if (!ok) return false;
+      const result = await git.discardFileChanges(repoRelativePath);
+      if (!result.ok) return false;
       await syncEditorAfterGitDiscard(repoRelativePath);
       setGitDiffTarget(null);
+      actionLog.record({
+        kind: "discardFileChanges",
+        summary: `Отменены изменения в ${repoRelativePath}`,
+        undoable: result.backupId !== null,
+        payload: {
+          kind: "discardFileChanges",
+          path: repoRelativePath,
+          backupStashId: result.backupId,
+        },
+      });
       return true;
     },
-    [git, syncEditorAfterGitDiscard],
+    [git, syncEditorAfterGitDiscard, actionLog],
   );
 
   const handleGitSaveContent = useCallback(
@@ -1111,8 +1584,8 @@ function App() {
         onGoForward={() => void editor.goForward()}
         canGoBack={editor.canGoBack}
         canGoForward={editor.canGoForward}
-        hasUnpushedChanges={hasUnpushedChanges}
-        onOpenPushConfirm={() => setPushConfirmOpen(true)}
+        syncPillState={syncPillState}
+        onSyncPillClick={handleSyncPillClick}
         onSelectProject={async (root) => {
           await closeProject();
           try {
@@ -1125,6 +1598,7 @@ function App() {
           project.submitProbe(cloned);
         }}
         openStandardsSettingsSignal={standardsSettingsSignal}
+        openLlmSettingsSignal={llmSettingsSignal}
       />
       <div className="workspace">
         <div className={mainClassName}>
@@ -1135,7 +1609,11 @@ function App() {
             tree={tree.nodes}
             treeLoading={tree.loading}
             treeError={tree.error}
-            activePath={editor.activeTab?.path ?? null}
+            activePath={
+              editor.activeTab?.origin === "project"
+                ? editor.activeTab.path
+                : null
+            }
             expandedDirs={session.expandedDirs}
             separateExternal={generalPrefs.prefs.separateExternalFolder}
             specsRepo={specsRepo.info}
@@ -1144,6 +1622,7 @@ function App() {
             onRefreshTree={() => {
               void tree.refresh();
               void workspaceIndex.rebuildIndex();
+              if (openApiBundle.bundle) void openApiBundle.reload();
             }}
             onExpandAll={() => session.expandAll(collectDirPaths(tree.nodes))}
             onCollapseAll={session.collapseAll}
@@ -1186,6 +1665,7 @@ function App() {
               setCopiedItem(target);
             }}
             copiedItem={copiedItem}
+            osDropTargetPath={osDropTargetPath}
             onPaste={async (destDirPath) => {
               if (!project.docsRoot || !copiedItem) return;
               const name = copiedItem.path.split(/[/\\]/).filter(Boolean).pop();
@@ -1241,6 +1721,7 @@ function App() {
               insertRequest={insertRequest}
               onOpenProblems={openProblems}
               onOpenXref={openXref}
+              onOpenDocumentReference={openDocumentReference}
               viewMode={viewMode.viewMode}
               onViewModeChange={viewMode.setViewMode}
               docsRoot={project.docsRoot}
@@ -1254,6 +1735,8 @@ function App() {
                   : null
               }
               editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
+              providerId={selectionAiProviderId}
+              llmReady={selectionAiLlmReady}
               onEditorInstanceChange={handleEditorInstanceChange}
               onMonacoInstanceChange={setMonacoInstance}
             />
@@ -1287,12 +1770,12 @@ function App() {
                     canCommit: git.canCommit,
                     busy: git.busy,
                     error: git.error,
-                    onStage: (path) => void git.stage([path]),
-                    onUnstage: (path) => void git.unstage([path]),
-                    onStageAll: (paths) => void git.stage(paths),
+                    onStage: (path) => handleStage([path]),
+                    onUnstage: (path) => handleUnstage([path]),
+                    onStageAll: (paths) => handleStage(paths),
                     onUnstageAll: () =>
-                      void git.unstage(git.status.staged.map((f) => f.path)),
-                    onCommit: () => void git.commit(),
+                      handleUnstage(git.status.staged.map((f) => f.path)),
+                    onCommit: handleCommit,
                     onRefresh: () => void git.refresh(),
                     onOpenFileDiff: openGitFileDiff,
                     onOpenConflict: openConflict,
@@ -1304,6 +1787,13 @@ function App() {
                           scope: gitDiffTarget.scope,
                         }
                       : null,
+                    shelf: stash.entries,
+                    shelfBusy: stash.busy,
+                    currentBranch: git.status.branch,
+                    pendingShelfConflictId: pendingStashConflict?.id ?? null,
+                    onRestoreShelfEntry: (entry) => void onRestoreShelfEntry(entry),
+                    onDiscardShelfEntry,
+                    onPreviewShelfEntry,
                   }
                 : null
             }
@@ -1320,13 +1810,31 @@ function App() {
                 ? {
                     currentBranch: project.branchName ?? "—",
                     branches: branches.branches,
-                    busy: branches.busy,
+                    busy: branches.busy || embeddingSetup.busy,
                     error: branches.error,
                     onCheckout: (branch) => void handleCheckoutBranch(branch),
                     onCreateBranch: (name) => void handleCreateBranch(name),
                     onRefresh: () => void branches.refresh(),
                     onFetch: () => void branches.fetchBranches(),
                     onDelete: (branch) => setDeleteBranchTarget(branch),
+                  }
+                : null
+            }
+            assistant={{
+              onOpenSettings: () => setLlmSettingsSignal((n) => n + 1),
+              specsRepoInfo: specsRepo.info,
+              docsRoot: project.docsRoot ?? "",
+              onFileWritten: handleAssistantFileWritten,
+              onFileMoved: handleAssistantFileMoved,
+              repoRoot: project.repoRoot,
+              activeFilePath: editor.activeTab?.path ?? null,
+            }}
+            gitActionLog={
+              hasProject
+                ? {
+                    entries: actionLog.entries,
+                    busy: git.busy || branches.busy || stash.busy,
+                    onUndo: (entry) => void handleUndoAction(entry),
                   }
                 : null
             }
@@ -1374,6 +1882,11 @@ function App() {
         indexStatus={workspaceIndex.status}
         indexProgress={workspaceIndex.progress}
         indexStats={workspaceIndex.stats}
+        embedIndexStatus={hasProject ? embeddingSetup.indexStatus : null}
+        embedSyncProgress={hasProject ? embeddingSetup.syncProgress : null}
+        onEmbedSyncClick={hasProject ? handleEmbedSyncClick : undefined}
+        embedSyncDisabled={embeddingSetup.busy || !embeddingSetup.providerConfigured}
+        embedJustSynced={embedJustSynced}
       />
 
       {project.pendingOpen ? (
@@ -1509,7 +2022,7 @@ function App() {
       {branchSwitchBlocked ? (
         <CheckoutBlockedModal
           branchName={branchSwitchBlocked.branchName}
-          mode={branchSwitchBlocked.kind}
+          mode="create"
           busy={branches.busy || git.busy}
           onCancel={() => setBranchSwitchBlocked(null)}
           onOpenCommit={() => {
@@ -1553,10 +2066,32 @@ function App() {
         />
       ) : null}
 
+      {stashPreviewTarget ? (
+        <GitStashPreviewModal
+          entry={stashPreviewTarget}
+          onClose={() => setStashPreviewTarget(null)}
+          onLoadFiles={loadStashFiles}
+          onOpenFile={(file) => {
+            const commitHash = stashPreviewTarget.id;
+            setStashPreviewTarget(null);
+            openCommitFileDiff(commitHash, file);
+          }}
+        />
+      ) : null}
+
+      {stashDiscardTarget ? (
+        <DiscardStashConfirmModal
+          branchName={stashDiscardTarget.branch}
+          busy={stash.busy}
+          onCancel={() => setStashDiscardTarget(null)}
+          onConfirm={() => void onConfirmDiscardShelfEntry()}
+        />
+      ) : null}
+
       {gitAlert ? (
         <AlertOkModal
           title={gitAlert.title}
-          message={gitAlert.message}
+          message={friendlyGitError(gitAlert.message)}
           variant={gitAlert.variant}
           onClose={() => setGitAlert(null)}
         />

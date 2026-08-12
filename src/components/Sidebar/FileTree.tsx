@@ -47,6 +47,8 @@ type FileTreeProps = {
   onCopy: (target: FileTreeDeleteTarget) => void;
   onPaste: (destDirPath: string) => void;
   copiedItem: FileTreeDeleteTarget | null;
+  /** Highlight from OS file drag (Tauri), merged with in-tree move target. */
+  osDropTargetPath?: string | null;
   onResizeExternal?: (delta: number) => void;
   onResizeExternalEnd?: () => void;
 };
@@ -138,6 +140,7 @@ function FileTreeNode({
             (isDropTarget ? " drop-target" : "")
           }
           style={{ paddingLeft: 4 + depth * 14 }}
+          data-drop-dir={node.path}
           draggable
           onDragStart={(event) => onDragStart(event, { path: node.path, isDir: true })}
           onDragEnd={onDragEnd}
@@ -246,6 +249,7 @@ export function FileTree({
   onCopy,
   onPaste,
   copiedItem,
+  osDropTargetPath = null,
   onResizeExternal,
   onResizeExternalEnd,
 }: FileTreeProps) {
@@ -254,6 +258,7 @@ export function FileTree({
   const [dragging, setDragging] = useState<FileTreeDeleteTarget | null>(null);
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const draggingRef = useRef<FileTreeDeleteTarget | null>(null);
+  const effectiveDropTarget = dropTargetPath ?? osDropTargetPath;
   const rootExpanded = expandedDirs.has(".");
   const { main, external } = separateExternal
     ? splitExternalNodes(nodes)
@@ -362,10 +367,11 @@ export function FileTree({
           <div
             className={
               "file-tree-row dir root" +
-              (dropTargetPath === "." ? " drop-target" : "")
+              (effectiveDropTarget === "." ? " drop-target" : "")
             }
             style={{ paddingLeft: 4 }}
             title={rootPath}
+            data-drop-dir="."
             onDragOver={(event) => handleDragOverDir(event, ".")}
             onDragLeave={(event) => handleDragLeaveDir(event, ".")}
             onDrop={(event) => handleDropOnDir(event, ".")}
@@ -396,7 +402,7 @@ export function FileTree({
                   activePath={activePath}
                   expandedDirs={expandedDirs}
                   dragging={dragging}
-                  dropTargetPath={dropTargetPath}
+                  dropTargetPath={effectiveDropTarget}
                   onToggleDir={onToggleDir}
                   onOpenFile={onOpenFile}
                   onContextMenu={openContextMenu}
@@ -413,8 +419,12 @@ export function FileTree({
       </div>
 
       {external ? (
-        <div className="file-tree-external-dock">
-          {onResizeExternal ? (
+        <div
+          className={
+            "file-tree-external-dock" + (externalExpanded ? "" : " collapsed")
+          }
+        >
+          {onResizeExternal && externalExpanded ? (
             <PanelResizeHandle
               direction="vertical"
               invert
@@ -429,11 +439,12 @@ export function FileTree({
                 type="button"
                 className={
                   "file-tree-row dir external-root" +
-                  (dropTargetPath === external.path ? " drop-target" : "") +
+                  (effectiveDropTarget === external.path ? " drop-target" : "") +
                   (dragging?.path === external.path ? " dragging" : "")
                 }
                 style={{ paddingLeft: 4 }}
                 title={external.path}
+                data-drop-dir={external.path}
                 draggable
                 onDragStart={(event) =>
                   handleDragStart(event, { path: external.path, isDir: true })
@@ -481,7 +492,7 @@ export function FileTree({
                       activePath={activePath}
                       expandedDirs={expandedDirs}
                       dragging={dragging}
-                      dropTargetPath={dropTargetPath}
+                      dropTargetPath={effectiveDropTarget}
                       onToggleDir={onToggleDir}
                       onOpenFile={onOpenFile}
                       onContextMenu={openContextMenu}

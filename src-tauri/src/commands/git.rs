@@ -1,9 +1,51 @@
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use tauri::{AppHandle, Emitter, State};
+
+use crate::commands::embeddings::FullSyncActiveSlot;
 use crate::domain::git::{
-    AppKeyStatus, GitBranchInfo, GitCommitSummary, GitConflictFile, GitCredentials, GitDiffScope,
-    GitFileDiff, GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode,
+    AppKeyStatus, CheckoutOutcome, GitBranchInfo, GitCommitSummary, GitConflictFile,
+    GitCredentials, GitDiffScope, GitFileDiff, GitFileStatus, GitProgressEvent, GitStashEntry,
+    GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::domain::project_config::ProbeResult;
 use crate::services::{git_clone, git_credentials, git_ops};
+
+/// Rejects a branch-switching command while a full `embedding_sync` walk is
+/// in flight — see `FullSyncActiveSlot`'s doc comment for why this only
+/// covers the first/full sync, not incremental watcher ticks.
+fn reject_if_full_sync_active(flag: &FullSyncActiveSlot) -> Result<(), String> {
+    if flag.load(Ordering::Acquire) {
+        return Err(
+            "Идёт первичная синхронизация эмбеддингов. Дождитесь её завершения, затем переключите ветку."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+const GIT_PROGRESS_EVENT: &str = "git://progress";
+/// libgit2's `transfer_progress` fires very frequently on large repos —
+/// throttle emissions to the UI so we don't flood the event channel.
+const GIT_PROGRESS_THROTTLE: Duration = Duration::from_millis(100);
+
+/// Builds a progress callback that forwards `GitProgressEvent`s to the
+/// frontend over `GIT_PROGRESS_EVENT`, throttled so only ~10/sec reach the
+/// UI regardless of how often libgit2 invokes the underlying callback.
+fn progress_emitter(app: AppHandle) -> impl FnMut(GitProgressEvent) {
+    let mut last = Instant::now()
+        .checked_sub(GIT_PROGRESS_THROTTLE)
+        .unwrap_or_else(Instant::now);
+    move |event: GitProgressEvent| {
+        let now = Instant::now();
+        if now.duration_since(last) >= GIT_PROGRESS_THROTTLE {
+            last = now;
+            let _ = app.emit(GIT_PROGRESS_EVENT, &event);
+        }
+    }
+}
 
 #[tauri::command]
 pub fn git_status(repo_root: String) -> Result<GitStatusSnapshot, String> {
@@ -31,9 +73,10 @@ pub fn git_log(repo_root: String, limit: Option<usize>) -> Result<Vec<GitCommitS
 }
 
 #[tauri::command]
-pub async fn git_pull(repo_root: String, mode: PullMode) -> Result<(), String> {
+pub async fn git_pull(repo_root: String, mode: PullMode, app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_ops::pull(&repo_root, mode).map_err(|e| e.to_string())
+        let mut emit = progress_emitter(app);
+        git_ops::pull(&repo_root, mode, Some(&mut emit)).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -85,9 +128,10 @@ pub async fn git_sync_status(repo_root: String) -> Result<GitSyncStatus, String>
 }
 
 #[tauri::command]
-pub async fn git_push(repo_root: String) -> Result<(), String> {
+pub async fn git_push(repo_root: String, app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_ops::push(&repo_root).map_err(|e| e.to_string())
+        let mut emit = progress_emitter(app);
+        git_ops::push(&repo_root, Some(&mut emit)).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -120,8 +164,33 @@ pub fn git_commit_file_diff(
 }
 
 #[tauri::command]
-pub fn git_discard_file_changes(repo_root: String, path: String) -> Result<(), String> {
+pub fn git_discard_file_changes(repo_root: String, path: String) -> Result<Option<String>, String> {
     git_ops::discard_file_changes(&repo_root, &path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_restore_discard_backup(repo_root: String, backup_id: String) -> Result<(), String> {
+    git_ops::restore_discard_backup(&repo_root, &backup_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_undo_commit(repo_root: String, commit_hash: String) -> Result<(), String> {
+    git_ops::undo_commit(&repo_root, &commit_hash).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_create_branch_at_oid(repo_root: String, name: String, oid: String) -> Result<(), String> {
+    git_ops::create_branch_at_oid(&repo_root, &name, &oid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_reset_to_oid(repo_root: String, oid: String) -> Result<(), String> {
+    git_ops::reset_to_oid(&repo_root, &oid).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_head_oid(repo_root: String) -> Result<String, String> {
+    git_ops::head_oid(&repo_root).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -140,9 +209,10 @@ pub fn git_list_branches(repo_root: String) -> Result<Vec<GitBranchInfo>, String
 }
 
 #[tauri::command]
-pub async fn git_fetch_branches(repo_root: String) -> Result<(), String> {
+pub async fn git_fetch_branches(repo_root: String, app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_ops::fetch_branches(&repo_root).map_err(|e| e.to_string())
+        let mut emit = progress_emitter(app);
+        git_ops::fetch_branches(&repo_root, Some(&mut emit)).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -153,7 +223,9 @@ pub fn git_create_branch(
     repo_root: String,
     name: String,
     discard_changes: bool,
+    full_sync_active: State<'_, Arc<FullSyncActiveSlot>>,
 ) -> Result<(), String> {
+    reject_if_full_sync_active(&full_sync_active)?;
     git_ops::create_branch(&repo_root, &name, discard_changes).map_err(|e| e.to_string())
 }
 
@@ -162,7 +234,9 @@ pub fn git_checkout_branch(
     repo_root: String,
     name: String,
     discard_changes: bool,
-) -> Result<(), String> {
+    full_sync_active: State<'_, Arc<FullSyncActiveSlot>>,
+) -> Result<CheckoutOutcome, String> {
+    reject_if_full_sync_active(&full_sync_active)?;
     git_ops::checkout_branch(&repo_root, &name, discard_changes).map_err(|e| e.to_string())
 }
 
@@ -176,8 +250,28 @@ pub fn git_checkout_remote_branch(
     repo_root: String,
     name: String,
     discard_changes: bool,
-) -> Result<(), String> {
+    full_sync_active: State<'_, Arc<FullSyncActiveSlot>>,
+) -> Result<CheckoutOutcome, String> {
+    reject_if_full_sync_active(&full_sync_active)?;
     git_ops::checkout_remote_branch(&repo_root, &name, discard_changes).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_stash_list(repo_root: String) -> Result<Vec<GitStashEntry>, String> {
+    git_ops::stash_list(&repo_root).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_stash_apply(
+    repo_root: String,
+    stash_id: String,
+) -> Result<GitStashRestoreOutcome, String> {
+    git_ops::stash_apply(&repo_root, &stash_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_stash_drop(repo_root: String, stash_id: String) -> Result<(), String> {
+    git_ops::stash_drop(&repo_root, &stash_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -207,9 +301,14 @@ pub fn git_import_key(source_path: String) -> Result<AppKeyStatus, String> {
 }
 
 #[tauri::command]
-pub async fn git_clone(url: String, destination: String) -> Result<ProbeResult, String> {
+pub async fn git_clone(
+    url: String,
+    destination: String,
+    app: AppHandle,
+) -> Result<ProbeResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        git_clone::clone_repository(&url, &destination)?;
+        let mut emit = progress_emitter(app);
+        git_clone::clone_repository(&url, &destination, Some(&mut emit))?;
 
         // After cloning, probe the repo to find docs root candidates.
         // The frontend will show ConfirmOpenProjectModal for the user to pick.
@@ -225,4 +324,21 @@ pub async fn git_clone(url: String, destination: String) -> Result<ProbeResult, 
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reject_if_full_sync_active_errs_while_a_full_sync_is_running() {
+        let flag = FullSyncActiveSlot::new(true);
+        assert!(reject_if_full_sync_active(&flag).is_err());
+    }
+
+    #[test]
+    fn reject_if_full_sync_active_allows_checkout_when_idle() {
+        let flag = FullSyncActiveSlot::new(false);
+        assert!(reject_if_full_sync_active(&flag).is_ok());
+    }
 }

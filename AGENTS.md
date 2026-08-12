@@ -10,6 +10,11 @@ Context for AI coding agents (Claude Code and others) working in this repository
 - Stack: Tauri v2, React + TypeScript frontend, Rust backend
 - Package manager: **bun** — always use `bun`/`bunx`, never `npm`/`pnpm`/`yarn`
 
+Tech stack
+Frontend: React 19 + TypeScript, Vite build, plain CSS files per component (no CSS-in-JS/Tailwind), lucide-react for icons. No global state library (Redux/Zustand/Context store) — state lives in custom hooks (src/hooks/*) composed directly into components (e.g. useLlmChat, useLlmSetup).
+
+Backend: Tauri v2 (Rust), ureq (blocking HTTP client, not reqwest) for LLM provider calls, tauri::async_runtime::spawn_blocking to run them off the async runtime, tauri::Emitter events to push streaming deltas to the frontend.
+
 ## Setup & commands
 
 ```bash

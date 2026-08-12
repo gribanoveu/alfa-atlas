@@ -18,6 +18,8 @@ export type MenuActionId =
   | "git.pull"
   | "git.push"
   | "tools.settings"
+  | "tools.toolLog"
+  | "tools.plans"
   | "help.about"
   | "help.docs"
   | "help.feedback"

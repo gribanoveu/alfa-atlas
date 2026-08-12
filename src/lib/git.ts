@@ -56,6 +56,8 @@ export type GitBranchInfo = {
   isRemote: boolean;
   /** Commits on the upstream not yet pulled locally; null if no upstream. */
   behind: number | null;
+  /** The branch's tip commit oid — used to undo a branch deletion. */
+  tipOid: string | null;
 };
 
 export function hasTrackedGitChanges(status: GitStatusSnapshot): boolean {
@@ -65,10 +67,98 @@ export function hasTrackedGitChanges(status: GitStatusSnapshot): boolean {
   );
 }
 
+/** Coarse-grained summary of repo sync state for the TopBar pill. Distinct
+ * from GitSyncStatus (the live {ahead,behind} fetch-check shape below) —
+ * this is a UI-facing enum derived from already-available snapshot data,
+ * recomputed on the same cadence git.status/branches already refresh on
+ * (no new polling). */
+export type SyncPillState =
+  | "conflict"
+  | "merging"
+  | "dirty"
+  | "behind"
+  | "unpushed"
+  | "synced";
+
+export type SyncPillInput = {
+  status: GitStatusSnapshot;
+  /** `behind` of the *current* branch from GitBranchInfo — a last-fetch snapshot, not live. */
+  currentBranchBehind: number | null;
+  /** Whether a stash-restore conflict is pending (App.tsx's pendingStashConflict). */
+  hasPendingStashConflict: boolean;
+};
+
+/** Precedence: conflict > merging > dirty > behind > unpushed > synced.
+ * `dirty` outranks `behind`/`unpushed` because it's the immediate local
+ * loss-risk; `behind` outranks `unpushed` because pushing while behind
+ * needs a pull first anyway — telling the user to pull is the more useful
+ * of the two messages. */
+export function deriveSyncPillState(input: SyncPillInput): SyncPillState {
+  const { status, currentBranchBehind, hasPendingStashConflict } = input;
+  if (status.conflicted.length > 0 || hasPendingStashConflict) return "conflict";
+  if (status.mergeInProgress) return "merging";
+  if (hasTrackedGitChanges(status)) return "dirty";
+  if ((currentBranchBehind ?? 0) > 0) return "behind";
+  if (hasUnpushedCommits(status)) return "unpushed";
+  return "synced";
+}
+
+export function syncPillLabel(state: SyncPillState): string {
+  switch (state) {
+    case "conflict":
+      return "Конфликт файлов";
+    case "merging":
+      return "Слияние в процессе";
+    case "dirty":
+      return "Есть несохранённые правки";
+    case "behind":
+      return "Есть новые изменения";
+    case "unpushed":
+      return "Нужно отправить";
+    case "synced":
+      return "Все синхронизировано";
+  }
+}
+
 export type GitSyncStatus = {
   ahead: number;
   behind: number;
 };
+
+/** One shelved (auto-stashed) set of tracked working-tree changes. */
+export type GitStashEntry = {
+  id: string;
+  branch: string;
+  createdAt: number;
+  filesChanged: number;
+};
+
+export type GitStashRestoreOutcome =
+  | { outcome: "applied"; entry: GitStashEntry }
+  | { outcome: "conflict"; entry: GitStashEntry }
+  | { outcome: "blocked"; entry: GitStashEntry; reason: string }
+  | { outcome: "skipped"; count: number };
+
+export type CheckoutOutcome = {
+  shelved: GitStashEntry | null;
+  restore: GitStashRestoreOutcome | null;
+};
+
+export type GitProgressEvent =
+  | { kind: "started"; op: string }
+  | {
+      kind: "transfer";
+      op: string;
+      receivedObjects: number;
+      totalObjects: number;
+      receivedBytes: number;
+      indexedDeltas: number;
+      totalDeltas: number;
+    }
+  | { kind: "push"; op: string; current: number; total: number; bytes: number }
+  | { kind: "finished"; op: string };
+
+export const GIT_PROGRESS_EVENT = "git://progress";
 
 export type SshKeySource =
   | { kind: "keyContent"; privateKey: string }
@@ -185,11 +275,42 @@ export function gitCommitFileDiff(
   });
 }
 
+/** Discards `path`'s uncommitted changes, taking a backup first so the
+ * discard is undoable. Returns the backup id (opaque — pass to
+ * gitRestoreDiscardBackup to undo) or null if there was nothing to
+ * discard. */
 export function gitDiscardFileChanges(
   repoRoot: string,
   path: string,
+): Promise<string | null> {
+  return invoke<string | null>("git_discard_file_changes", { repoRoot, path });
+}
+
+export function gitRestoreDiscardBackup(
+  repoRoot: string,
+  backupId: string,
 ): Promise<void> {
-  return invoke<void>("git_discard_file_changes", { repoRoot, path });
+  return invoke<void>("git_restore_discard_backup", { repoRoot, backupId });
+}
+
+export function gitUndoCommit(repoRoot: string, commitHash: string): Promise<void> {
+  return invoke<void>("git_undo_commit", { repoRoot, commitHash });
+}
+
+export function gitCreateBranchAtOid(
+  repoRoot: string,
+  name: string,
+  oid: string,
+): Promise<void> {
+  return invoke<void>("git_create_branch_at_oid", { repoRoot, name, oid });
+}
+
+export function gitResetToOid(repoRoot: string, oid: string): Promise<void> {
+  return invoke<void>("git_reset_to_oid", { repoRoot, oid });
+}
+
+export function gitHeadOid(repoRoot: string): Promise<string> {
+  return invoke<string>("git_head_oid", { repoRoot });
 }
 
 export function gitApplyDiffContent(
@@ -221,8 +342,8 @@ export function gitCheckoutBranch(
   repoRoot: string,
   name: string,
   discardChanges = false,
-): Promise<void> {
-  return invoke<void>("git_checkout_branch", { repoRoot, name, discardChanges });
+): Promise<CheckoutOutcome> {
+  return invoke<CheckoutOutcome>("git_checkout_branch", { repoRoot, name, discardChanges });
 }
 
 export function gitDeleteBranch(
@@ -236,12 +357,27 @@ export function gitCheckoutRemoteBranch(
   repoRoot: string,
   name: string,
   discardChanges = false,
-): Promise<void> {
-  return invoke<void>("git_checkout_remote_branch", {
+): Promise<CheckoutOutcome> {
+  return invoke<CheckoutOutcome>("git_checkout_remote_branch", {
     repoRoot,
     name,
     discardChanges,
   });
+}
+
+export function gitStashList(repoRoot: string): Promise<GitStashEntry[]> {
+  return invoke<GitStashEntry[]>("git_stash_list", { repoRoot });
+}
+
+export function gitStashApply(
+  repoRoot: string,
+  stashId: string,
+): Promise<GitStashRestoreOutcome> {
+  return invoke<GitStashRestoreOutcome>("git_stash_apply", { repoRoot, stashId });
+}
+
+export function gitStashDrop(repoRoot: string, stashId: string): Promise<void> {
+  return invoke<void>("git_stash_drop", { repoRoot, stashId });
 }
 
 export function gitGetCredentials(): Promise<GitCredentials> {

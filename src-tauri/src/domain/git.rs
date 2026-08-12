@@ -74,6 +74,24 @@ pub struct GitFileDiff {
     pub is_binary: bool,
 }
 
+/// One contiguous run of lines attributed to the same commit — produced by
+/// `infra::git_repo::blame` and surfaced to the AI harness as
+/// `ToolResult::GitBlame`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBlameHunk {
+    /// 1-indexed, inclusive.
+    pub start_line: u32,
+    /// 1-indexed, inclusive.
+    pub end_line: u32,
+    /// Short (7-char) commit hash.
+    pub commit: String,
+    pub author: String,
+    /// ISO-8601 UTC (`YYYY-MM-DDTHH:MM:SSZ`).
+    pub authored_at: String,
+    pub summary: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitBranchInfo {
@@ -83,6 +101,11 @@ pub struct GitBranchInfo {
     /// Commits present on the branch's upstream but not yet pulled locally.
     /// `None` when the branch has no upstream (or is itself a remote branch).
     pub behind: Option<usize>,
+    /// The branch's tip commit oid (hex) — captured so a "delete branch" UI
+    /// action can offer an undo (recreate at this oid) after the branch ref
+    /// itself is gone. `None` only if the branch's target couldn't be
+    /// resolved (e.g. a symbolic ref with no direct target).
+    pub tip_oid: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -90,6 +113,85 @@ pub struct GitBranchInfo {
 pub struct GitSyncStatus {
     pub ahead: usize,
     pub behind: usize,
+}
+
+/// One shelved (auto-stashed) set of tracked working-tree changes, tied to
+/// the branch it was captured from. Backed by a real git2 stash entry
+/// tagged with the `docflow-auto: ` message prefix — hand-made `git stash`
+/// entries created outside the app are filtered out and never surfaced or
+/// touched by any of the operations below.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashEntry {
+    /// Full stash commit oid (hex). Stable across index shifts, unlike
+    /// libgit2's positional stash index, which shifts every time any stash
+    /// is pushed or dropped.
+    pub id: String,
+    pub branch: String,
+    /// Unix timestamp (seconds) — the stash commit's author time.
+    pub created_at: i64,
+    pub files_changed: usize,
+}
+
+/// Outcome of applying a shelf entry, either as part of an automatic
+/// restore-on-checkout or a manual "Восстановить" action. Never implies the
+/// entry was silently lost: `Conflict` and `Blocked` both leave the stash
+/// entry in place so it stays visible and recoverable in the shelf list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+pub enum GitStashRestoreOutcome {
+    /// Applied cleanly; the stash entry has already been dropped.
+    Applied { entry: GitStashEntry },
+    /// Conflict markers were written to the working tree and the index has
+    /// conflicts (surfaced via the existing `GitStatusSnapshot.conflicted`).
+    /// The stash entry was NOT dropped and remains in the shelf until the
+    /// conflict is resolved.
+    Conflict { entry: GitStashEntry },
+    /// Restore was refused (e.g. the destination branch already has staged
+    /// changes). Stash entry untouched.
+    Blocked { entry: GitStashEntry, reason: String },
+    /// More than one shelf entry exists for this branch — ambiguous, left
+    /// for a manual pick via the shelf list instead of guessing which to
+    /// apply.
+    Skipped { count: usize },
+}
+
+/// Result of `checkout_branch`/`checkout_remote_branch` under the
+/// auto-stash flow: tracked changes on the source branch are shelved
+/// instead of blocking the switch, and any shelf entry for the destination
+/// branch is auto-restored when unambiguous.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckoutOutcome {
+    /// Some(..) if tracked changes on the source branch were auto-stashed.
+    pub shelved: Option<GitStashEntry>,
+    /// Some(..) if an auto-restore was attempted (or skipped as ambiguous)
+    /// for the destination branch.
+    pub restore: Option<GitStashRestoreOutcome>,
+}
+
+/// A progress update for a network-bound git operation (fetch/pull/push/
+/// clone), emitted as Tauri events so the UI can show real progress instead
+/// of a static "in progress" label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum GitProgressEvent {
+    Started { op: String },
+    Transfer {
+        op: String,
+        received_objects: usize,
+        total_objects: usize,
+        received_bytes: usize,
+        indexed_deltas: usize,
+        total_deltas: usize,
+    },
+    Push {
+        op: String,
+        current: usize,
+        total: usize,
+        bytes: usize,
+    },
+    Finished { op: String },
 }
 
 /// SSH key stored in app settings.
@@ -203,6 +305,8 @@ pub enum GitError {
     CloneFailed(String),
     #[error("destination already exists: {0}")]
     DestinationExists(String),
+    #[error("shelved changes not found: {0}")]
+    StashNotFound(String),
     #[error("{0}")]
     Message(String),
 }

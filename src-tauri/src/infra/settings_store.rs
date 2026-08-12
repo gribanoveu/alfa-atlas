@@ -37,3 +37,40 @@ pub fn save(settings: &AppSettings) -> Result<(), SettingsError> {
     fs::write(&path, contents).map_err(SettingsError::Write)?;
     Ok(())
 }
+
+/// Shared test seam for anything that resolves through `settings_dir()`
+/// (`chat_store`, `commands::embeddings::resolve_index_paths`, …).
+/// `$HOME` is process-global and `cargo test` runs on multiple threads by
+/// default, so every test module that redirects it must serialize against
+/// every *other* one too, not just against tests in its own module —
+/// hence one shared lock/helper here rather than a private copy per
+/// module (a private copy only protects a module against itself).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// Redirects `settings_dir()`'s effect for the duration of `f` by
+    /// pointing `$HOME` at a fresh temp dir, holding `HOME_ENV_LOCK` for
+    /// the whole swap-run-restore round trip.
+    pub(crate) fn with_temp_home<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let home = std::env::temp_dir().join(format!("alfa-atlas-test-home-{nanos}-{n}"));
+        std::fs::create_dir_all(&home).unwrap();
+        let previous = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        let result = f();
+        match previous {
+            Some(p) => std::env::set_var("HOME", p),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&home).ok();
+        result
+    }
+}

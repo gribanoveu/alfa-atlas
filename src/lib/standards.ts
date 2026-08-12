@@ -5,7 +5,6 @@ export type RuleDef = {
   title: string;
   weight: number;
   defaultEnabled: boolean;
-  requiresNetwork: boolean;
 };
 
 export type Finding = {

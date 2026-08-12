@@ -1,6 +1,7 @@
 /**
- * File formats the editor can open. Other formats are rejected by future
- * open-file flows; keep this list as the single source of truth for filters/UI.
+ * File formats the editor can open as text. Image assets are listed separately
+ * (`IMAGE_ASSET_EXTENSIONS` / `isImageAsset`) for the docs tree and preview
+ * tabs — they must not be added to `SUPPORTED_EXTENSIONS` (read/write/index).
  */
 import { extensionOf } from "./fileExtensions";
 import { ASCIIDOC_LANGUAGE_ID } from "../monaco/asciidocLanguage";
@@ -18,6 +19,18 @@ export const SUPPORTED_EXTENSIONS = [
   ".yml",
   ".mmd",
   ".mermaid",
+] as const;
+
+/** Keep in sync with `IMAGE_ASSET_EXTENSIONS` in `src-tauri/.../supported_files.rs`. */
+export const IMAGE_ASSET_EXTENSIONS = [
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".svg",
+  ".webp",
+  ".bmp",
+  ".ico",
 ] as const;
 
 export type SupportedExtension = (typeof SUPPORTED_EXTENSIONS)[number];
@@ -49,6 +62,12 @@ export const DEFAULT_NEW_FILE_EXTENSION = ".adoc" as const;
 export function isSupportedFile(path: string): boolean {
   const ext = extensionOf(path);
   return (SUPPORTED_EXTENSIONS as readonly string[]).includes(ext);
+}
+
+/** True for image binaries shown in the docs tree / opened as preview tabs. */
+export function isImageAsset(path: string): boolean {
+  const ext = extensionOf(path);
+  return (IMAGE_ASSET_EXTENSIONS as readonly string[]).includes(ext);
 }
 
 /** True when the path is an AsciiDoc document (`.adoc` or `.asciidoc`). */
@@ -83,6 +102,7 @@ export function monacoLanguageFor(path: string): string {
 
 /** Human-readable format label for the status bar. */
 export function formatLabelFor(path: string): string {
+  if (isImageAsset(path)) return "Image";
   switch (extensionOf(path)) {
     case ".adoc":
     case ".asciidoc":

@@ -64,6 +64,7 @@ export function clampGeneralPrefs(prefs: GeneralPrefs): GeneralPrefs {
 
 export type SettingsPaths = {
   userSettingsDir: string;
+  plansDir: string;
   projectRoot: string | null;
   projectConfigDir: string | null;
 };

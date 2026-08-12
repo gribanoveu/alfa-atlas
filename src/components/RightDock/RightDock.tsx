@@ -11,9 +11,14 @@ import type {
   GitBranchInfo,
   GitDiffScope,
   GitFileStatus,
+  GitStashEntry,
 } from "../../lib/git";
+import type { GitActionLogEntry } from "../../lib/gitActionLog";
+import type { SpecsRepoInfo } from "../../lib/openapi";
+import type { UpdatedReference } from "../../lib/project";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
+import { AssistantPanel } from "./AssistantPanel";
 import { BranchesPanel } from "./BranchesPanel";
 import { GitPanel } from "./GitPanel";
 import { AsciiDocPanel } from "./AsciiDocPanel";
@@ -81,6 +86,13 @@ export type GitPanelViewProps = {
   onAbortMerge: () => void;
   onFinishMerge: () => void;
   selectedDiff?: { path: string; scope: GitDiffScope } | null;
+  shelf: GitStashEntry[];
+  shelfBusy: boolean;
+  currentBranch: string | null;
+  pendingShelfConflictId?: string | null;
+  onRestoreShelfEntry: (entry: GitStashEntry) => void;
+  onDiscardShelfEntry: (entry: GitStashEntry) => void;
+  onPreviewShelfEntry: (entry: GitStashEntry) => void;
 };
 
 export type BranchesPanelViewProps = {
@@ -107,6 +119,20 @@ type RightDockProps = {
     canInsert: boolean;
     onInsert: (text: string) => void;
   } | null;
+  assistant?: {
+    onOpenSettings: () => void;
+    specsRepoInfo: SpecsRepoInfo | null;
+    docsRoot: string;
+    onFileWritten: (info: { tool: string; path: string }) => void;
+    onFileMoved: (info: { from: string; to: string; updatedFiles: UpdatedReference[] }) => void;
+    repoRoot: string | null;
+    activeFilePath: string | null;
+  } | null;
+  gitActionLog?: {
+    entries: GitActionLogEntry[];
+    busy: boolean;
+    onUndo: (entry: GitActionLogEntry) => void;
+  } | null;
 };
 
 export function RightDock({
@@ -118,6 +144,8 @@ export function RightDock({
   git,
   branches,
   asciidoc,
+  assistant,
+  gitActionLog,
 }: RightDockProps) {
   const open = Boolean(activeTool);
   const active = activeTool ? TOOL_DEFS[activeTool] : undefined;
@@ -173,6 +201,13 @@ export function RightDock({
                 onAbortMerge={git.onAbortMerge}
                 onFinishMerge={git.onFinishMerge}
                 selectedDiff={git.selectedDiff}
+                shelf={git.shelf}
+                shelfBusy={git.shelfBusy}
+                currentBranch={git.currentBranch}
+                pendingShelfConflictId={git.pendingShelfConflictId}
+                onRestoreShelfEntry={git.onRestoreShelfEntry}
+                onDiscardShelfEntry={git.onDiscardShelfEntry}
+                onPreviewShelfEntry={git.onPreviewShelfEntry}
               />
             ) : activeTool === "asciidoc" && asciidoc ? (
               <AsciiDocPanel
@@ -192,7 +227,17 @@ export function RightDock({
                 onDelete={branches.onDelete}
               />
             ) : activeTool === "suggestions" ? (
-              <NotificationsPanel />
+              <NotificationsPanel gitActionLog={gitActionLog ?? undefined} />
+            ) : activeTool === "assistant" && assistant ? (
+              <AssistantPanel
+                onOpenSettings={assistant.onOpenSettings}
+                specsRepoInfo={assistant.specsRepoInfo}
+                docsRoot={assistant.docsRoot}
+                onFileWritten={assistant.onFileWritten}
+                onFileMoved={assistant.onFileMoved}
+                repoRoot={assistant.repoRoot}
+                activeFilePath={assistant.activeFilePath}
+              />
             ) : (
               <div className="panel-empty">{active.empty}</div>
             )}

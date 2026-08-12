@@ -1,0 +1,21 @@
+{
+  "llm": [
+    {
+      "id": "alfagen",
+      "label": "AlfaGen",
+      "baseUrl": "https://alfagen.moscow.alfaintra.net/continue-dev/v1",
+      "defaultModel": "DeepSeek-V4-Flash",
+      "limit": {
+        "context": 1000000,
+        "output": 30000
+      },
+      "trustedCertPem": "-----BEGIN CERTIFICATE-----\nMIIFTTCCAzWgAwIBAgIGAZiEjyMbMA0GCSqGSIb3DQEBDQUAMEQxHTAbBgNVBAMM\nFEFsZmEtQmFuayBTVCBDQSBSb290MRYwFAYDVQQKDA1KU0MgQWxmYS1CYW5rMQsw\nCQYDVQQGEwJSVTAeFw0yNTA4MDcxMjQzNDlaFw00NTA4MDIxMjQzNDlaMEQxHTAb\nBgNVBAMMFEFsZmEtQmFuayBTVCBDQSBSb290MRYwFAYDVQQKDA1KU0MgQWxmYS1C\nYW5rMQswCQYDVQQGEwJSVTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIB\nAKpG8A2aGugVhBYTHk8L66vtCqiuB8PyBUk56DzPTqaxwBDa3pn+dgzpeCxXv8Bn\n8wUiadqlobqNMTUN7SfVNSY2tkfEdwPmMoVpMVeX0/p9VWWbac172ZQWAomDfO6i\n1v2gxI2hJOa3srHzcZaPsMQJINmJUqhE5n+YhAKYJhXuoPIG5Okw1O4i3lBFeOJp\nqRPrMp4JLRe+fuYkFiVru+OJcEptZS385ACq9G/isWACraXiUmmT79tut4NS7yZb\ngHq+E4qaAClZcTmmMUdi3B9obE95j3MqzQi//OM9X/LZuK0ZC+jo5OkPHnsqbIdO\nTWP9X24rTST4+IxPqT+URnTpkBv7cKKVeopvOjeXCRqxLV/BShvxulyTQxn1D2bk\nd1JECJUBfk9HPNki69Xcr5M5HPCMbx95Eq72u0lsTZJbmdj4A77meCHypvH1m2jC\np9Fer4cJ1Hmc1geDSaIHFAweuKcD4cXAU+ES/wqBgAHlFjn8f2lV5HoqWyRT/kY7\nzQc3m/0im+1+Nd3u+cuAPlxAFfWjuA1bHCCLyQ6tCu+0Eu/hSIuIRbMdo25gbzi0\nLwO4/8hlZKoekr6SclDYl9dz4oViSGogjBJLQKoIWPXoBNSWb/NVwF2dXJzS46fZ\nvwLjeVgar6xiDgzWY0v+deApcLMdrFhRKREOpHEmpzEPAgMBAAGjRTBDMBIGA1Ud\nEwEB/wQIMAYBAf8CAQMwHQYDVR0OBBYEFLGFNRhmwsmiyTqiUG6C+KkvUr8jMA4G\nA1UdDwEB/wQEAwIBBjANBgkqhkiG9w0BAQ0FAAOCAgEAppHn9c0lesiptIKCHBaL\nDbqLJj4HEhkIzBeBo1lCfrMowF6cze4YP7OmWT0ltBl/CDaPPwz0c8rqiQUVaV9+\n4MY++1FytRmd5iO/oPSnpEyv1xeS1KuSdE9Bq6DwrmacsUwLpUgEw+SczOsQokTB\nkdFvYbkzoPoOgpIiNHYhEKwKiT69icfEVRzFijJcaqqfmTyagwKRlIYa+GB3V1aE\nq5VTVwqPVkwzI9pk7z/+JktFABLQLFdREpiX6dYuFYTLrPn6Myc/eohUPNvRlQgG\no3DJFlskg7rWIAjsq2q98POfx3jBiORnVUziRW6a75acjWKtYIz1lF+aqUi6D1Uy\n90iL68+inJN7FkhmZkIVmkvRGqI7McfjiO6D3IAgsSddY8abUrgCA+QWFFeXdv03\nCdSD8AXSeHusxC5tscfx4tfj39A3r7jYN+roCpgOKIMKGuK3C0cL3RCSpIVaJ1jW\nVlsIAGo/pczis40VVGst2/wNj65kkN8ndZdj0RQICHXK1dtECSNmJlEzDf1TQ1GZ\ntB1MhCGqSf+U4LUrQUhTCJGA99fs3RHVmMXCOoPCo7ZbgLZ/2TeKi2uo0N4klF9t\nLUlYyuhRl7F0OMPj3GD64MOBRcAYJ9A/s5cL9rF83q+XvykpoPTFVQibmZlIiyXz\nNhXqyzBsDdL1HDu7xFdxVI8=\n-----END CERTIFICATE-----\n"
+    }
+  ],
+  "embedding": {
+    "baseUrl": null,
+    "model": null,
+    "dimensions": null,
+    "trustedCertPem": null
+  }
+}

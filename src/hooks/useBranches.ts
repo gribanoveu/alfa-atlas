@@ -6,6 +6,7 @@ import {
   gitDeleteBranch,
   gitFetchBranches,
   gitListBranches,
+  type CheckoutOutcome,
   type GitBranchInfo,
 } from "../lib/git";
 
@@ -73,20 +74,46 @@ export function useBranches(
     [repoRoot, run],
   );
 
+  // These bypass `run()` (which collapses the result to a boolean) because
+  // callers need the `CheckoutOutcome` payload — whether changes were
+  // auto-stashed and what happened on restore — to drive the post-checkout
+  // toast/alert/conflict flow.
   const checkoutBranch = useCallback(
-    (name: string, discardChanges = false) => {
-      if (!repoRoot) return Promise.resolve(false);
-      return run(() => gitCheckoutBranch(repoRoot, name, discardChanges));
+    async (name: string, discardChanges = false): Promise<CheckoutOutcome | null> => {
+      if (!repoRoot) return null;
+      setBusy(true);
+      try {
+        const outcome = await gitCheckoutBranch(repoRoot, name, discardChanges);
+        await refresh();
+        setError(null);
+        return outcome;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return null;
+      } finally {
+        setBusy(false);
+      }
     },
-    [repoRoot, run],
+    [repoRoot, refresh],
   );
 
   const checkoutRemoteBranch = useCallback(
-    (name: string, discardChanges = false) => {
-      if (!repoRoot) return Promise.resolve(false);
-      return run(() => gitCheckoutRemoteBranch(repoRoot, name, discardChanges));
+    async (name: string, discardChanges = false): Promise<CheckoutOutcome | null> => {
+      if (!repoRoot) return null;
+      setBusy(true);
+      try {
+        const outcome = await gitCheckoutRemoteBranch(repoRoot, name, discardChanges);
+        await refresh();
+        setError(null);
+        return outcome;
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        return null;
+      } finally {
+        setBusy(false);
+      }
     },
-    [repoRoot, run],
+    [repoRoot, refresh],
   );
 
   const fetchBranches = useCallback(() => {

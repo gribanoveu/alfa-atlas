@@ -18,6 +18,11 @@ import type { SpellcheckConfig } from "../../lib/spellcheck";
 import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
 import { CredentialsTab } from "./CredentialsTab";
+import { EmbeddingsTab } from "./EmbeddingsTab";
+import { LlmTab } from "./LlmTab";
+import { LoggingTab } from "./LoggingTab";
+import { NotificationsTab } from "./NotificationsTab";
+import { PermissionsTab } from "./PermissionsTab";
 import { SpellcheckTab } from "./SpellcheckTab";
 import { StandardsRulesTab } from "./StandardsRulesTab";
 
@@ -28,7 +33,12 @@ export type SectionId =
   | "paths"
   | "credentials"
   | "standards"
-  | "spellcheck";
+  | "spellcheck"
+  | "embeddings"
+  | "llm"
+  | "logging"
+  | "notifications"
+  | "permissions";
 
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "general", label: "Общие" },
@@ -38,6 +48,11 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "credentials", label: "Git" },
   { id: "standards", label: "Стандарты" },
   { id: "spellcheck", label: "Орфография" },
+  { id: "embeddings", label: "Эмбеддинги" },
+  { id: "llm", label: "Провайдеры" },
+  { id: "logging", label: "Логирование" },
+  { id: "notifications", label: "Уведомления" },
+  { id: "permissions", label: "Разрешения" },
 ];
 
 type FontSizePrefKey =
@@ -555,6 +570,12 @@ export function SettingsDialog({
                 </div>
                 <div className="settings-row">
                   <span className="settings-hint" style={{ paddingLeft: 0 }}>
+                    Планы (~/.atlas/plans)
+                  </span>
+                  <div className="settings-path">{paths?.plansDir ?? "…"}</div>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-hint" style={{ paddingLeft: 0 }}>
                     Текущий / сохранённый проект
                   </span>
                   <div
@@ -595,6 +616,16 @@ export function SettingsDialog({
             {section === "spellcheck" ? (
               <SpellcheckTab onConfigChange={onSpellcheckConfigChange} />
             ) : null}
+
+            {section === "embeddings" ? <EmbeddingsTab repoRoot={projectRoot} /> : null}
+
+            {section === "llm" ? <LlmTab /> : null}
+
+            {section === "logging" ? <LoggingTab /> : null}
+
+            {section === "notifications" ? <NotificationsTab /> : null}
+
+            {section === "permissions" ? <PermissionsTab /> : null}
 
             {error ? <div className="settings-error">{error}</div> : null}
           </div>

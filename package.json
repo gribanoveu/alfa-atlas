@@ -11,10 +11,12 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@plantuml/core": "^1.2026.6",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-http": "^2.5.9",
+    "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "asciidoctor": "^4.0.6",
     "diff": "^9.0.0",
@@ -23,9 +25,12 @@
     "monaco-editor": "^0.56.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-draggable": "^4.7.1",
     "react-markdown": "^10.1.0",
     "rehype-slug": "^6.0.0",
     "remark-gfm": "^4.0.1",
+    "shiki": "^4.4.3",
+    "streamdown": "^2.5.0",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

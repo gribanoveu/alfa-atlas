@@ -1,8 +1,13 @@
 import "../Welcome/CloneRepoModal.css";
 
+// Only fires for branch creation — checking out an existing branch
+// auto-stashes uncommitted changes instead of blocking (see
+// App.tsx's performCheckout/handleCheckoutOutcome), since there's a
+// destination branch to restore them onto. Creating a branch has no
+// separate destination tree, so the auto-stash flow doesn't apply here.
 type CheckoutBlockedModalProps = {
   branchName: string;
-  mode: "checkout" | "create";
+  mode: "create";
   busy: boolean;
   onCancel: () => void;
   onOpenCommit: () => void;
@@ -11,14 +16,12 @@ type CheckoutBlockedModalProps = {
 
 export function CheckoutBlockedModal({
   branchName,
-  mode,
   busy,
   onCancel,
   onOpenCommit,
   onDiscardAndContinue,
 }: CheckoutBlockedModalProps) {
-  const actionLabel =
-    mode === "create" ? "Создать ветку" : "Переключить ветку";
+  const actionLabel = "Создать ветку";
 
   return (
     <div
@@ -39,19 +42,9 @@ export function CheckoutBlockedModal({
           В коммит добавлены файлы, но коммит не сделан
         </div>
         <div className="clone-modal-message">
-          {mode === "create" ? (
-            <>
-              Перед созданием ветки <strong>{branchName}</strong> нужно
-              разобраться с текущими файлами добавленными в Stage, 
-              но для которых не сделан коммит.
-            </>
-          ) : (
-            <>
-              Перед переключением на <strong>{branchName}</strong> нужно
-              разобраться с текущими файлами добавленными в Stage, 
-              но для которых не сделан коммит.
-            </>
-          )}
+          Перед созданием ветки <strong>{branchName}</strong> нужно
+          разобраться с текущими файлами добавленными в Stage,
+          но для которых не сделан коммит.
         </div>
         <p
           style={{
@@ -84,9 +77,7 @@ export function CheckoutBlockedModal({
             disabled={busy}
             onClick={onDiscardAndContinue}
           >
-            {mode === "create"
-              ? "Отменить изменения и создать"
-              : "Отменить изменения и переключить"}
+            Отменить изменения и создать
           </button>
           <button
             type="button"

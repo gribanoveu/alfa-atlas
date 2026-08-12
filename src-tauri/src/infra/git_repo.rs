@@ -1,14 +1,17 @@
 use std::path::{Path, PathBuf};
 
 use git2::{
-    build::CheckoutBuilder, AnnotatedCommit, Branch, BranchType, Cred, CredentialType, Delta,
-    DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions, RemoteCallbacks,
-    Repository, RepositoryState, ResetType, Signature, Status, StatusOptions, StatusShow,
+    build::CheckoutBuilder, AnnotatedCommit, BlameOptions, Branch, BranchType, Cred, CredentialType,
+    Delta, DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions,
+    RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashApplyOptions,
+    StashSaveOptions, Status, StatusOptions, StatusShow,
 };
 
 use crate::domain::git::{
-    GitBranchInfo, GitCommitSummary, GitConflictFile, GitCredentials, GitDiffScope, GitError,
-    GitFileDiff, GitFileStatus, GitStatusSnapshot, GitSyncStatus, PullMode, SshKeySource,
+    CheckoutOutcome, GitBlameHunk, GitBranchInfo, GitCommitSummary, GitConflictFile,
+    GitCredentials, GitDiffScope, GitError, GitFileDiff, GitFileStatus, GitProgressEvent,
+    GitStashEntry, GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
+    SshKeySource,
 };
 
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
@@ -67,6 +70,14 @@ fn open_repo(repo_root: &Path) -> Result<Repository, GitError> {
 fn validate_relative_path(path: &str) -> Result<&Path, GitError> {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed.starts_with('/') || trimmed.starts_with('\\') {
+        return Err(GitError::InvalidPath(path.to_string()));
+    }
+    // `Component::Prefix` only fires when compiled for Windows, so a
+    // drive-letter prefix like `C:\foo` would otherwise slip through
+    // unrecognized on macOS/Linux, where `Path` treats it as one opaque
+    // component. Check for it explicitly so the rejection is platform-independent.
+    let bytes = trimmed.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
         return Err(GitError::InvalidPath(path.to_string()));
     }
     let p = Path::new(trimmed);
@@ -351,6 +362,32 @@ pub fn commit(repo_root: &Path, message: &str) -> Result<String, GitError> {
 
     let full = oid.to_string();
     Ok(full[..7.min(full.len())].to_string())
+}
+
+/// Undoes a `commit()`/`finish_merge()` call by soft-resetting HEAD to the
+/// commit's first parent — index and working tree are left untouched, so
+/// this is a clean, low-risk undo (staged files go right back to staged).
+/// Refuses if HEAD no longer points at `commit_hash` (something else was
+/// committed since) rather than guessing which history to rewrite.
+/// `commit_hash` is compared against the short (7-char) form, matching
+/// what `commit()`/`finish_merge()` already return and what the frontend
+/// action log stores.
+pub fn undo_commit(repo_root: &Path, commit_hash: &str) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let head = repo
+        .head()
+        .map_err(GitError::Operation)?
+        .peel_to_commit()
+        .map_err(GitError::Operation)?;
+    if short_oid(head.id()) != commit_hash {
+        return Err(GitError::Message(
+            "HEAD изменился с момента коммита — отмена невозможна".into(),
+        ));
+    }
+    let parent = head.parent(0).map_err(GitError::Operation)?;
+    repo.reset(parent.as_object(), ResetType::Soft, None)
+        .map_err(GitError::Operation)?;
+    Ok(())
 }
 
 pub fn log(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitError> {
@@ -657,6 +694,44 @@ fn configure_ssh_transport(callbacks: &mut RemoteCallbacks<'_>, trust_all: bool)
     }
 }
 
+/// Wires `on_progress` into `callbacks.transfer_progress`, used by
+/// fetch/pull/clone. Emits one `GitProgressEvent::Transfer` per libgit2
+/// progress tick — the caller (`commands/git.rs`) is responsible for
+/// throttling before turning these into UI updates.
+fn configure_transfer_progress<'cb>(
+    callbacks: &mut RemoteCallbacks<'cb>,
+    op: String,
+    on_progress: &'cb mut dyn FnMut(GitProgressEvent),
+) {
+    callbacks.transfer_progress(move |progress| {
+        on_progress(GitProgressEvent::Transfer {
+            op: op.clone(),
+            received_objects: progress.received_objects(),
+            total_objects: progress.total_objects(),
+            received_bytes: progress.received_bytes(),
+            indexed_deltas: progress.indexed_deltas(),
+            total_deltas: progress.total_deltas(),
+        });
+        true
+    });
+}
+
+/// Wires `on_progress` into `callbacks.push_transfer_progress`, used by push.
+fn configure_push_progress<'cb>(
+    callbacks: &mut RemoteCallbacks<'cb>,
+    op: String,
+    on_progress: &'cb mut dyn FnMut(GitProgressEvent),
+) {
+    callbacks.push_transfer_progress(move |current, total, bytes| {
+        on_progress(GitProgressEvent::Push {
+            op: op.clone(),
+            current,
+            total,
+            bytes,
+        });
+    });
+}
+
 struct UpstreamRef {
     remote_name: String,
     /// Remote-tracking ref name, e.g. `refs/remotes/origin/main`.
@@ -708,11 +783,15 @@ fn fetch_upstream<'repo>(
     upstream: &UpstreamRef,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<AnnotatedCommit<'repo>, GitError> {
     let config = repo.config().map_err(GitError::Operation)?;
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, &config, credentials, app_private_key);
     configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
+    if let Some(cb) = on_progress {
+        configure_transfer_progress(&mut callbacks, "fetch".to_string(), cb);
+    }
 
     let mut fetch_opts = FetchOptions::new(); // fetch_upstream
     fetch_opts.remote_callbacks(callbacks);
@@ -859,10 +938,11 @@ pub fn pull(
     mode: PullMode,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let upstream = upstream_of_head(&repo)?;
-    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key, on_progress)?;
     match mode {
         PullMode::Merge => do_merge(&repo, &theirs),
         PullMode::Rebase => do_rebase(&repo, &theirs),
@@ -1036,7 +1116,7 @@ pub fn sync_status(
         Err(GitError::NoUpstream) => return Ok(GitSyncStatus { ahead: 0, behind: 0 }),
         Err(e) => return Err(e),
     };
-    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key, None)?;
     let local = repo
         .head()
         .map_err(GitError::Operation)?
@@ -1055,9 +1135,41 @@ pub fn reset_to_remote(
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let upstream = upstream_of_head(&repo)?;
-    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key)?;
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key, None)?;
     let commit = repo
         .find_object(theirs.id(), Some(git2::ObjectType::Commit))
+        .map_err(GitError::Operation)?;
+    repo.reset(
+        &commit,
+        ResetType::Hard,
+        Some(CheckoutBuilder::default().force()),
+    )
+    .map_err(GitError::Operation)?;
+    Ok(())
+}
+
+/// Current HEAD commit oid (hex) — used by the frontend action log to
+/// capture a "before" snapshot ahead of a destructive operation (currently
+/// just reset-to-remote) so it can be undone via `reset_to_oid`.
+pub fn head_oid(repo_root: &Path) -> Result<String, GitError> {
+    let repo = open_repo(repo_root)?;
+    let commit = repo
+        .head()
+        .map_err(GitError::Operation)?
+        .peel_to_commit()
+        .map_err(GitError::Operation)?;
+    Ok(commit.id().to_string())
+}
+
+/// Undoes `reset_to_remote()` (or any other hard-reset) by hard-resetting
+/// back to a previously captured oid. Mirrors the hard-reset pattern
+/// already used by `reset_to_remote`/`discard_tracked_changes`/`abort_merge`.
+pub fn reset_to_oid(repo_root: &Path, oid: &str) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let oid = git2::Oid::from_str(oid)
+        .map_err(|_| GitError::Message(format!("invalid commit id: {oid}")))?;
+    let commit = repo
+        .find_object(oid, Some(git2::ObjectType::Commit))
         .map_err(GitError::Operation)?;
     repo.reset(
         &commit,
@@ -1183,6 +1295,97 @@ pub fn file_diff(
     }
 }
 
+/// Line authorship for `path`, compacted into contiguous hunks that share
+/// the same final commit. Optional `start_line`/`end_line` are 1-indexed
+/// inclusive and passed straight to libgit2's blame options (`None` =
+/// whole file). Returns an empty vec for an empty file.
+pub fn blame(
+    repo_root: &Path,
+    path: &str,
+    start_line: Option<u32>,
+    end_line: Option<u32>,
+) -> Result<Vec<GitBlameHunk>, GitError> {
+    let rel = validate_relative_path(path)?;
+    let repo = open_repo(repo_root)?;
+
+    let mut opts = BlameOptions::new();
+    if let Some(start) = start_line {
+        opts.min_line(start.max(1) as usize);
+    }
+    if let Some(end) = end_line {
+        opts.max_line(end.max(1) as usize);
+    }
+
+    let blame = repo
+        .blame_file(rel, Some(&mut opts))
+        .map_err(GitError::Operation)?;
+
+    let mut hunks = Vec::new();
+    for hunk in blame.iter() {
+        let start = hunk.final_start_line() as u32;
+        let lines = hunk.lines_in_hunk() as u32;
+        if lines == 0 {
+            continue;
+        }
+        let end = start.saturating_add(lines).saturating_sub(1);
+        let oid = hunk.final_commit_id();
+        let commit = short_oid(oid);
+        let (author, authored_at) = match hunk.final_signature() {
+            Some(sig) => (sig.name().unwrap_or("unknown").to_string(), format_git_time(sig.when())),
+            None => ("unknown".into(), String::new()),
+        };
+        let summary = hunk
+            .summary()
+            .ok()
+            .flatten()
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        hunks.push(GitBlameHunk {
+            start_line: start,
+            end_line: end,
+            commit,
+            author,
+            authored_at,
+            summary,
+        });
+    }
+    Ok(hunks)
+}
+
+/// Format a libgit2 signature timestamp as UTC ISO-8601 (`YYYY-MM-DDTHH:MM:SSZ`)
+/// without pulling in chrono/time — epoch seconds are already UTC; the
+/// signature's recorded offset is ignored so the AI tool payload stays
+/// timezone-stable across machines.
+fn format_git_time(time: git2::Time) -> String {
+    let secs = time.seconds().max(0) as u64;
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let hour = rem / 3_600;
+    let min = (rem % 3_600) / 60;
+    let sec = rem % 60;
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}Z")
+}
+
+/// Convert days since Unix epoch to a Gregorian `(year, month, day)` —
+/// Howard Hinnant's `civil_from_days`.
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m as u32, d as u32)
+}
+
 /// Write `content` as the new state for `path` at the given diff `scope`,
 /// enabling partial (hunk-level) revert from the diff view — mirrors
 /// IDEA's per-chunk "revert" arrows, which edit the modified pane and save
@@ -1239,14 +1442,91 @@ pub fn apply_diff_content(
     Ok(())
 }
 
-pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError> {
+/// Discards `path`'s uncommitted changes (staged + unstaged, or deletes an
+/// untracked file/dir). Unlike the old implementation, this takes a backup
+/// first via a pathspec-scoped stash, so the discard is undoable — see
+/// `restore_discard_backup`. Returns `Some(backup_id)` (the stash oid) if
+/// there was anything to discard, `None` if the path had no changes at all
+/// (matches the previous no-op behavior — nothing to undo either).
+///
+/// Exception: on a brand-new repo with no commits yet (`repo.head()` fails
+/// with `UnbornBranch`), libgit2's stash has nothing to diff against, so
+/// this falls back to the old no-backup behavior for that narrow edge case
+/// — discard remains non-undoable only when there is no history at all.
+pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<Option<String>, GitError> {
     let rel = validate_relative_path(path)?;
-    let repo = open_repo(repo_root)?;
+    let mut repo = open_repo(repo_root)?;
     let workdir = repo
         .workdir()
-        .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
+        .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?
+        .to_path_buf();
 
+    let mut check_opts = StatusOptions::new();
+    check_opts
+        .pathspec(path)
+        .include_untracked(true)
+        .recurse_untracked_dirs(true);
+    let has_changes = !repo
+        .statuses(Some(&mut check_opts))
+        .map_err(GitError::Operation)?
+        .is_empty();
+    if !has_changes {
+        return Ok(None);
+    }
+
+    // Untracked file: back up its raw content as a git blob and delete it.
+    // (Empirically, restoring an untracked-only pathspec-scoped stash via
+    // `stash_apply` fails with libgit2's "1 conflict prevents checkout" —
+    // a checkout-safety rejection, not a real content conflict, and not
+    // worth chasing through libgit2's checkout-action internals when a
+    // blob is simpler and more direct anyway: there's no tracked content
+    // to 3-way-merge against, just bytes to put back.) Whole untracked
+    // directories are a documented exception: a single blob can't capture
+    // a directory's contents, so they're deleted with no backup, same as
+    // the pre-existing behavior.
+    if repo.head().is_err() {
+        return discard_on_unborn_branch(&repo, &workdir, rel, path);
+    }
     if path_is_untracked(&repo, path)? {
+        let full = workdir.join(rel);
+        if full.is_dir() {
+            std::fs::remove_dir_all(&full)
+                .map_err(|e| GitError::Message(format!("failed to remove directory: {e}")))?;
+            return Ok(None);
+        }
+        if !full.is_file() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&full)
+            .map_err(|e| GitError::Message(format!("failed to read file: {e}")))?;
+        let blob_oid = repo.blob(&bytes).map_err(GitError::Operation)?;
+        std::fs::remove_file(&full)
+            .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
+        return Ok(Some(format!("{UNTRACKED_BACKUP_PREFIX}{blob_oid}:{path}")));
+    }
+
+    let sig = commit_signature(&repo)?;
+    let mut save_opts = StashSaveOptions::new(sig);
+    save_opts.pathspec(rel);
+    let oid = repo
+        .stash_save_ext(Some(&mut save_opts))
+        .map_err(GitError::Operation)?;
+    Ok(Some(oid.to_string()))
+}
+
+/// No commit exists yet (brand-new repo before the first commit) — neither
+/// the stash backup nor the blob backup used above make sense to keep
+/// consistent with libgit2's own requirements (stash needs a HEAD commit
+/// to diff against), so this narrow edge case falls back to the original
+/// no-backup behavior: discard remains non-undoable only when there is no
+/// history at all yet.
+fn discard_on_unborn_branch(
+    repo: &Repository,
+    workdir: &Path,
+    rel: &Path,
+    path: &str,
+) -> Result<Option<String>, GitError> {
+    if path_is_untracked(repo, path)? {
         let full = workdir.join(rel);
         if full.is_dir() {
             std::fs::remove_dir_all(&full)
@@ -1255,24 +1535,6 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError
             std::fs::remove_file(&full)
                 .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
         }
-        return Ok(());
-    }
-
-    if repo.head().is_ok() {
-        let head_obj = repo
-            .head()
-            .map_err(GitError::Operation)?
-            .peel_to_commit()
-            .map_err(GitError::Operation)?
-            .into_object();
-        let tree = head_obj.peel_to_tree().map_err(GitError::Operation)?;
-        let tree_obj = tree.as_object();
-        let mut checkout = CheckoutBuilder::new();
-        checkout.force().path(rel);
-        repo.checkout_tree(tree_obj, Some(&mut checkout))
-            .map_err(GitError::Operation)?;
-        repo.reset_default(Some(&head_obj), std::iter::once(rel))
-            .map_err(GitError::Operation)?;
     } else {
         let mut index = repo.index().map_err(GitError::Operation)?;
         let _ = index.remove_path(rel);
@@ -1286,12 +1548,94 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<(), GitError
                 .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
         }
     }
+    Ok(None)
+}
+
+/// Prefix tagging a discard-backup id as a raw blob capture (untracked
+/// file) rather than a stash oid (tracked file) — see `discard_file_changes`.
+/// Format: `blob:<oid>:<repo-relative path>`. The oid is a fixed-length hex
+/// SHA and never contains `:`, so splitting on the first `:` correctly
+/// recovers the path even if the path itself contains one.
+const UNTRACKED_BACKUP_PREFIX: &str = "blob:";
+
+/// Positional stash index lookup by oid alone, no message-tag check —
+/// unlike `find_stash_index_by_id` (which only matches `docflow-auto: `
+/// branch-shelf entries), discard-backup stashes carry libgit2's default
+/// "WIP on <branch>: ..." message (StashSaveOptions has no message setter
+/// in this git2 version), so the caller already has the exact oid in hand
+/// from `discard_file_changes`'s return value and doesn't need tag matching.
+fn find_stash_index_by_oid_only(repo: &mut Repository, target: git2::Oid) -> Result<usize, GitError> {
+    let mut found = None;
+    repo.stash_foreach(|index, _message, oid| {
+        if *oid == target {
+            found = Some(index);
+            return false;
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+    found.ok_or_else(|| GitError::StashNotFound(target.to_string()))
+}
+
+/// Restores a discard-backup — the "Undo" action for a discardFileChanges
+/// log entry. Two forms, see `discard_file_changes`/`UNTRACKED_BACKUP_PREFIX`:
+/// a `blob:<oid>:<path>` id writes the backed-up bytes straight back to
+/// disk (untracked-file case); anything else is treated as a stash oid
+/// (tracked-file case), applied via `stash_apply` — never `stash_pop`,
+/// matching `do_stash_apply`'s conflict-safety discipline. A stash conflict
+/// means the file was touched again since the discard; that's surfaced as
+/// a plain error and the backup is left in place rather than inventing a
+/// dedicated conflict-recovery UI for this single-path case.
+pub fn restore_discard_backup(repo_root: &Path, backup_id: &str) -> Result<(), GitError> {
+    if let Some(rest) = backup_id.strip_prefix(UNTRACKED_BACKUP_PREFIX) {
+        let (oid_str, path) = rest
+            .split_once(':')
+            .ok_or_else(|| GitError::Message("некорректный идентификатор резервной копии".into()))?;
+        let repo = open_repo(repo_root)?;
+        let oid = git2::Oid::from_str(oid_str)
+            .map_err(|_| GitError::StashNotFound(backup_id.to_string()))?;
+        let blob = repo.find_blob(oid).map_err(GitError::Operation)?;
+        let workdir = repo
+            .workdir()
+            .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
+        let rel = validate_relative_path(path)?;
+        let full = workdir.join(rel);
+        if full.exists() {
+            return Err(GitError::Message(
+                "не удалось восстановить — по этому пути уже есть файл".into(),
+            ));
+        }
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| GitError::Message(format!("failed to create directory: {e}")))?;
+        }
+        std::fs::write(&full, blob.content())
+            .map_err(|e| GitError::Message(format!("failed to write file: {e}")))?;
+        return Ok(());
+    }
+
+    let mut repo = open_repo(repo_root)?;
+    let target = git2::Oid::from_str(backup_id)
+        .map_err(|_| GitError::StashNotFound(backup_id.to_string()))?;
+    let index = find_stash_index_by_oid_only(&mut repo, target)?;
+    repo.stash_apply(index, Some(&mut StashApplyOptions::new()))
+        .map_err(GitError::Operation)?;
+    if repo.index().map_err(GitError::Operation)?.has_conflicts() {
+        return Err(GitError::Message(
+            "не удалось восстановить — файл был изменён после отмены".into(),
+        ));
+    }
+    let drop_index = find_stash_index_by_oid_only(&mut repo, target)?;
+    repo.stash_drop(drop_index).map_err(GitError::Operation)?;
     Ok(())
 }
 
 /// Pick the remote to push a newly-tracked branch to: `origin` if present,
-/// the sole remote if there's exactly one, otherwise ambiguous.
-fn default_remote_name(repo: &Repository) -> Result<String, GitError> {
+/// the sole remote if there's exactly one, otherwise ambiguous. Also reused
+/// by `infra::repository_identity::resolve` to pick which remote's URL
+/// identifies the repository — same "which remote is *the* remote"
+/// question, so the same preference order applies.
+pub(crate) fn default_remote_name(repo: &Repository) -> Result<String, GitError> {
     let remotes = repo.remotes().map_err(GitError::Operation)?;
     let names: Vec<&str> = remotes.iter().filter_map(|r| r.ok().flatten()).collect();
     if names.contains(&"origin") {
@@ -1315,11 +1659,15 @@ fn push_refspec(
     remote_branch: &str,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let config = repo.config().map_err(GitError::Operation)?;
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, &config, credentials, app_private_key);
     configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
+    if let Some(cb) = on_progress {
+        configure_push_progress(&mut callbacks, "push".to_string(), cb);
+    }
 
     let mut push_opts = PushOptions::new();
     push_opts.remote_callbacks(callbacks);
@@ -1335,6 +1683,7 @@ pub fn push(
     repo_root: &Path,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let head = repo.head().map_err(GitError::Operation)?;
@@ -1356,6 +1705,7 @@ pub fn push(
             &upstream.remote_branch,
             credentials,
             app_private_key,
+            on_progress,
         ),
         // No upstream yet — push to a sensible default remote and start tracking it,
         // mirroring `git push -u origin <branch>`.
@@ -1368,6 +1718,7 @@ pub fn push(
                 &local_branch,
                 credentials,
                 app_private_key,
+                on_progress,
             )?;
             let mut branch = repo
                 .find_branch(&local_branch, BranchType::Local)
@@ -1436,6 +1787,218 @@ fn ensure_clean_or_discard(repo: &Repository, discard_changes: bool) -> Result<(
     }
 }
 
+/// Message prefix tagging stash entries this app creates automatically when
+/// switching branches with uncommitted tracked changes. Hand-made `git
+/// stash` entries created outside the app (which won't have this prefix)
+/// are filtered out everywhere below and never touched.
+const STASH_TAG_PREFIX: &str = "docflow-auto: ";
+
+fn stash_message_for_branch(branch: &str) -> String {
+    format!("{STASH_TAG_PREFIX}{branch}")
+}
+
+/// libgit2 doesn't store the message we pass to `stash_save2` verbatim — it
+/// wraps it as `"On <branch>: <our message>\n"` (see `stash.c`'s
+/// `prepare_worktree_commit_message`, which splices in the branch name
+/// itself before the colon). So the tag is searched for as a substring
+/// rather than matched as a strict prefix.
+fn parse_stash_branch(message: &str) -> Option<&str> {
+    let idx = message.find(STASH_TAG_PREFIX)?;
+    let rest = &message[idx + STASH_TAG_PREFIX.len()..];
+    Some(rest.trim_end())
+}
+
+fn stash_entry_metadata(
+    repo: &Repository,
+    branch: String,
+    oid: git2::Oid,
+) -> Result<GitStashEntry, GitError> {
+    let commit = repo.find_commit(oid).map_err(GitError::Operation)?;
+    let files_changed = commit
+        .parent(0)
+        .ok()
+        .and_then(|parent| parent.tree().ok())
+        .and_then(|parent_tree| commit.tree().ok().map(|tree| (parent_tree, tree)))
+        .and_then(|(parent_tree, tree)| {
+            repo.diff_tree_to_tree(Some(&parent_tree), Some(&tree), None)
+                .ok()
+        })
+        .map(|diff| diff.deltas().len())
+        .unwrap_or(0);
+    Ok(GitStashEntry {
+        id: oid.to_string(),
+        branch,
+        created_at: commit.time().seconds(),
+        files_changed,
+    })
+}
+
+/// Stash all tracked, uncommitted changes (staged + unstaged) under a
+/// `docflow-auto: <branch>` message tying the entry back to `branch`.
+/// Untracked files are deliberately left alone, matching the pre-existing
+/// checkout-blocking behavior. No-op if nothing tracked is dirty.
+fn auto_stash_tracked_changes(
+    repo: &mut Repository,
+    branch: &str,
+) -> Result<Option<GitStashEntry>, GitError> {
+    if !has_tracked_uncommitted_changes(repo)? {
+        return Ok(None);
+    }
+    let sig = commit_signature(repo)?;
+    let oid = repo
+        .stash_save2(&sig, Some(&stash_message_for_branch(branch)), None)
+        .map_err(GitError::Operation)?;
+    Ok(Some(stash_entry_metadata(repo, branch.to_string(), oid)?))
+}
+
+/// Re-resolves a shelf entry's *current* positional stash index from its
+/// stable oid. Must be called fresh, immediately before `stash_apply`/
+/// `stash_drop` — the index shifts every time any stash is pushed or
+/// dropped, so it is never cached across calls.
+fn find_stash_index_by_id(repo: &mut Repository, stash_id: &str) -> Result<usize, GitError> {
+    let target = git2::Oid::from_str(stash_id)
+        .map_err(|_| GitError::StashNotFound(stash_id.to_string()))?;
+    let mut found = None;
+    repo.stash_foreach(|index, message, oid| {
+        if *oid == target && parse_stash_branch(message).is_some() {
+            found = Some(index);
+            return false;
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+    found.ok_or_else(|| GitError::StashNotFound(stash_id.to_string()))
+}
+
+fn find_stash_branch_for_oid(
+    repo: &mut Repository,
+    target: git2::Oid,
+) -> Result<String, GitError> {
+    let mut found = None;
+    repo.stash_foreach(|_index, message, oid| {
+        if *oid == target {
+            found = parse_stash_branch(message).map(|b| b.to_string());
+            return false;
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+    found.ok_or_else(|| GitError::StashNotFound(target.to_string()))
+}
+
+/// Applies one shelf entry by its stable stash-commit oid.
+///
+/// CRITICAL: uses `stash_apply`, never `stash_pop`. libgit2's `stash_pop` is
+/// `stash_apply` followed by an *unconditional* `stash_drop` on success —
+/// and `stash_apply` itself returns `Ok` even when the restore produced
+/// conflicts (the final checkout runs without `ALLOW_CONFLICTS`, writing
+/// conflict markers into the working tree and leaving the index conflicted,
+/// exactly like this codebase's own `do_merge` already does for ordinary
+/// merges). Using `stash_pop` here would silently drop the entry the moment
+/// a restore conflicts — the exact data-loss trap this feature exists to
+/// avoid. So conflicts are detected explicitly via `index.has_conflicts()`
+/// after `stash_apply`, and `stash_drop` is only ever called from this
+/// function, only on the fully-clean path.
+fn do_stash_apply(
+    repo: &mut Repository,
+    stash_id: &str,
+    entry: GitStashEntry,
+) -> Result<GitStashRestoreOutcome, GitError> {
+    let index = find_stash_index_by_id(repo, stash_id)?;
+    match repo.stash_apply(index, Some(&mut StashApplyOptions::new())) {
+        Ok(()) => {
+            let has_conflicts = repo.index().map_err(GitError::Operation)?.has_conflicts();
+            if has_conflicts {
+                Ok(GitStashRestoreOutcome::Conflict { entry })
+            } else {
+                let drop_index = find_stash_index_by_id(repo, stash_id)?;
+                repo.stash_drop(drop_index).map_err(GitError::Operation)?;
+                Ok(GitStashRestoreOutcome::Applied { entry })
+            }
+        }
+        Err(e) if e.code() == git2::ErrorCode::Uncommitted => Ok(GitStashRestoreOutcome::Blocked {
+            entry,
+            reason: "на этой ветке уже есть добавленные в индекс изменения".into(),
+        }),
+        Err(e) => Err(GitError::Operation(e)),
+    }
+}
+
+/// Looks for docflow-managed shelf entries tagged for `branch`. Auto-restore
+/// only happens when exactly one exists (unambiguous); with zero it's a
+/// no-op, with two or more it's left for a manual pick in the shelf list
+/// rather than guessing which one to apply.
+fn maybe_auto_restore(
+    repo: &mut Repository,
+    branch: &str,
+) -> Result<Option<GitStashRestoreOutcome>, GitError> {
+    let mut raw = Vec::new();
+    repo.stash_foreach(|_index, message, oid| {
+        if parse_stash_branch(message) == Some(branch) {
+            raw.push(*oid);
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+
+    match raw.len() {
+        0 => Ok(None),
+        1 => {
+            let oid = raw[0];
+            let entry = stash_entry_metadata(repo, branch.to_string(), oid)?;
+            Ok(Some(do_stash_apply(repo, &oid.to_string(), entry)?))
+        }
+        n => Ok(Some(GitStashRestoreOutcome::Skipped { count: n })),
+    }
+}
+
+/// List every docflow-managed shelf entry, newest first.
+pub fn list_stash_shelf(repo_root: &Path) -> Result<Vec<GitStashEntry>, GitError> {
+    let mut repo = open_repo(repo_root)?;
+    let mut raw: Vec<(String, git2::Oid)> = Vec::new();
+    repo.stash_foreach(|_index, message, oid| {
+        if let Some(branch) = parse_stash_branch(message) {
+            raw.push((branch.to_string(), *oid));
+        }
+        true
+    })
+    .map_err(GitError::Operation)?;
+
+    let mut entries = raw
+        .into_iter()
+        .map(|(branch, oid)| stash_entry_metadata(&repo, branch, oid))
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(entries)
+}
+
+/// Manually apply a shelf entry (the "Восстановить" action in the shelf
+/// UI). Requires the caller to already be on the branch the entry was
+/// captured from — applying branch X's shelved edits onto branch Y's tree
+/// is refused rather than guessed at.
+pub fn apply_stash_entry(repo_root: &Path, stash_id: &str) -> Result<GitStashRestoreOutcome, GitError> {
+    let mut repo = open_repo(repo_root)?;
+    let oid = git2::Oid::from_str(stash_id)
+        .map_err(|_| GitError::StashNotFound(stash_id.to_string()))?;
+    let branch = find_stash_branch_for_oid(&mut repo, oid)?;
+    let entry = stash_entry_metadata(&repo, branch.clone(), oid)?;
+
+    if branch_name(&repo).as_deref() != Some(branch.as_str()) {
+        return Err(GitError::Message(format!(
+            "эти изменения относятся к ветке «{branch}» — переключитесь на неё, чтобы восстановить"
+        )));
+    }
+    do_stash_apply(&mut repo, stash_id, entry)
+}
+
+/// Permanently delete a shelf entry (the "Удалить" action in the shelf UI —
+/// the one genuinely destructive operation in the whole feature).
+pub fn drop_stash_entry(repo_root: &Path, stash_id: &str) -> Result<(), GitError> {
+    let mut repo = open_repo(repo_root)?;
+    let index = find_stash_index_by_id(&mut repo, stash_id)?;
+    repo.stash_drop(index).map_err(GitError::Operation)
+}
+
 fn switch_to_branch(repo: &Repository, branch_name: &str) -> Result<(), GitError> {
     let branch = repo
         .find_branch(branch_name, BranchType::Local)
@@ -1470,10 +2033,12 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
             .ok_or_else(|| GitError::Message("branch has invalid name".into()))?
             .to_string();
         let behind = branch_behind_count(&repo, &branch);
+        let tip_oid = branch.get().target().map(|oid| oid.to_string());
         out.push(GitBranchInfo {
             is_current: current.as_deref() == Some(name.as_str()),
             is_remote: false,
             behind,
+            tip_oid,
             name,
         });
     }
@@ -1494,6 +2059,7 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
             is_current: false,
             is_remote: true,
             behind: None,
+            tip_oid: branch.get().target().map(|oid| oid.to_string()),
         });
     }
 
@@ -1522,6 +2088,7 @@ pub fn fetch_branches(
     repo_root: &Path,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    mut on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let config = repo.config().map_err(GitError::Operation)?;
@@ -1532,6 +2099,9 @@ pub fn fetch_branches(
         let mut callbacks = RemoteCallbacks::new();
         configure_credentials(&mut callbacks, &config, credentials, app_private_key);
         configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
+        if let Some(cb) = on_progress.as_deref_mut() {
+            configure_transfer_progress(&mut callbacks, format!("fetch:{name}"), cb);
+        }
 
         let mut fetch_opts = FetchOptions::new();
         fetch_opts.remote_callbacks(callbacks);
@@ -1570,39 +2140,89 @@ pub fn delete_branch(repo_root: &Path, name: &str) -> Result<(), GitError> {
     branch.delete().map_err(GitError::Operation)
 }
 
+/// Undoes `delete_branch()` by recreating a local branch at an explicit
+/// commit oid captured by the caller before the delete — unlike
+/// `create_branch`, which only branches from current HEAD. Doesn't check
+/// out the new branch (delete_branch never switches either) and doesn't
+/// restore upstream tracking (libgit2 discards that on delete, along with
+/// the branch itself — an accepted, documented limitation of this undo).
+pub fn create_branch_at_oid(repo_root: &Path, name: &str, oid: &str) -> Result<(), GitError> {
+    let name = validate_branch_name(name)?;
+    let repo = open_repo(repo_root)?;
+    if repo.find_branch(name, BranchType::Local).is_ok() {
+        return Err(GitError::BranchAlreadyExists(name.to_string()));
+    }
+    let oid = git2::Oid::from_str(oid)
+        .map_err(|_| GitError::Message(format!("invalid commit id: {oid}")))?;
+    let commit = repo.find_commit(oid).map_err(GitError::Operation)?;
+    repo.branch(name, &commit, false)
+        .map_err(GitError::Operation)?;
+    Ok(())
+}
+
+/// Checks out `name`. If there are uncommitted tracked changes, they are
+/// auto-stashed (tagged to the source branch) instead of blocking the
+/// switch, and any unambiguous shelf entry for the destination branch is
+/// auto-restored — see `auto_stash_tracked_changes`/`maybe_auto_restore`
+/// and `do_stash_apply`'s doc comment for why this never silently drops
+/// changes, even on conflict. `discard_changes` remains a hard-discard
+/// escape hatch at the API level but is no longer driven by the checkout
+/// UI, which always prefers stashing.
 pub fn checkout_branch(
     repo_root: &Path,
     name: &str,
     discard_changes: bool,
-) -> Result<(), GitError> {
+) -> Result<CheckoutOutcome, GitError> {
     let name = validate_branch_name(name)?;
-    let repo = open_repo(repo_root)?;
+    let mut repo = open_repo(repo_root)?;
     if repo.find_branch(name, BranchType::Local).is_err() {
         return Err(GitError::BranchNotFound(name.to_string()));
     }
 
     let current = branch_name(&repo);
     if current.as_deref() == Some(name) {
-        return Ok(());
+        return Ok(CheckoutOutcome {
+            shelved: None,
+            restore: None,
+        });
     }
 
-    ensure_clean_or_discard(&repo, discard_changes)?;
-    switch_to_branch(&repo, name)
+    let shelved = if discard_changes {
+        discard_tracked_changes(&repo)?;
+        None
+    } else {
+        let source = current.unwrap_or_else(|| "detached".to_string());
+        auto_stash_tracked_changes(&mut repo, &source)?
+    };
+
+    switch_to_branch(&repo, name)?;
+    let restore = maybe_auto_restore(&mut repo, name)?;
+    Ok(CheckoutOutcome { shelved, restore })
 }
 
 /// Check out a remote-tracking branch (e.g. `origin/feature-x`). If a local
 /// branch with the same short name (`feature-x`) doesn't exist yet, it is
 /// created tracking the remote branch; otherwise the existing local branch
 /// is checked out as-is (mirrors `git checkout <remote-shorthand>`).
+/// Auto-stash/auto-restore behavior mirrors `checkout_branch`.
 pub fn checkout_remote_branch(
     repo_root: &Path,
     remote_branch_name: &str,
     discard_changes: bool,
-) -> Result<(), GitError> {
-    let repo = open_repo(repo_root)?;
-    let remote_branch = repo
-        .find_branch(remote_branch_name, BranchType::Remote)
-        .map_err(|_| GitError::BranchNotFound(remote_branch_name.to_string()))?;
+) -> Result<CheckoutOutcome, GitError> {
+    let mut repo = open_repo(repo_root)?;
+    // Scoped so the immutable borrow `remote_branch` holds on `repo` ends
+    // before the mutable borrows needed for auto-stashing below.
+    let remote_commit_oid = {
+        let remote_branch = repo
+            .find_branch(remote_branch_name, BranchType::Remote)
+            .map_err(|_| GitError::BranchNotFound(remote_branch_name.to_string()))?;
+        remote_branch
+            .get()
+            .peel_to_commit()
+            .map_err(GitError::Operation)?
+            .id()
+    };
 
     let local_name = remote_branch_name
         .split_once('/')
@@ -1612,15 +2232,23 @@ pub fn checkout_remote_branch(
 
     let current = branch_name(&repo);
     if current.as_deref() == Some(local_name.as_str()) {
-        return Ok(());
+        return Ok(CheckoutOutcome {
+            shelved: None,
+            restore: None,
+        });
     }
 
-    ensure_clean_or_discard(&repo, discard_changes)?;
+    let shelved = if discard_changes {
+        discard_tracked_changes(&repo)?;
+        None
+    } else {
+        let source = current.unwrap_or_else(|| "detached".to_string());
+        auto_stash_tracked_changes(&mut repo, &source)?
+    };
 
     if repo.find_branch(&local_name, BranchType::Local).is_err() {
-        let commit = remote_branch
-            .get()
-            .peel_to_commit()
+        let commit = repo
+            .find_commit(remote_commit_oid)
             .map_err(GitError::Operation)?;
         let mut local_branch = repo
             .branch(&local_name, &commit, false)
@@ -1630,7 +2258,9 @@ pub fn checkout_remote_branch(
             .map_err(GitError::Operation)?;
     }
 
-    switch_to_branch(&repo, &local_name)
+    switch_to_branch(&repo, &local_name)?;
+    let restore = maybe_auto_restore(&mut repo, &local_name)?;
+    Ok(CheckoutOutcome { shelved, restore })
 }
 
 pub fn clone_repo(
@@ -1639,6 +2269,7 @@ pub fn clone_repo(
     repo_config: &git2::Config,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<Repository, GitError> {
     if destination.exists() {
         return Err(GitError::DestinationExists(
@@ -1649,6 +2280,9 @@ pub fn clone_repo(
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, repo_config, credentials, app_private_key);
     configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
+    if let Some(cb) = on_progress {
+        configure_transfer_progress(&mut callbacks, "clone".to_string(), cb);
+    }
 
     let mut fetch_opts = FetchOptions::new(); // clone
     fetch_opts.remote_callbacks(callbacks);
@@ -1882,7 +2516,7 @@ mod tests {
 
         let config = git2::Config::open_default().unwrap();
         let creds = GitCredentials::default();
-        let result = clone_repo("https://example.com/repo.git", &dest, &config, &creds, None);
+        let result = clone_repo("https://example.com/repo.git", &dest, &config, &creds, None, None);
         assert!(
             matches!(result, Err(GitError::DestinationExists(_))),
             "expected DestinationExists, but got a different result"
@@ -1898,7 +2532,7 @@ mod tests {
 
         let config = git2::Config::open_default().unwrap();
         let creds = GitCredentials::default();
-        let result = clone_repo("not-a-valid-url", &dest, &config, &creds, None);
+        let result = clone_repo("not-a-valid-url", &dest, &config, &creds, None, None);
         assert!(
             result.is_err(),
             "expected error for invalid URL, but clone succeeded"
@@ -1954,7 +2588,7 @@ mod tests {
 
         let config = git2::Config::open_default().unwrap();
         let creds = GitCredentials::default();
-        let repo = clone_repo(remote.to_str().unwrap(), &dest, &config, &creds, None).unwrap();
+        let repo = clone_repo(remote.to_str().unwrap(), &dest, &config, &creds, None, None).unwrap();
         assert!(dest.join("README.md").exists());
         assert!(!repo.is_bare());
 
@@ -1996,7 +2630,7 @@ mod tests {
         ));
 
         let creds = GitCredentials::default();
-        push(&local, &creds, None).unwrap();
+        push(&local, &creds, None, None).unwrap();
 
         let branch = repo.find_branch("main", BranchType::Local).ok().or_else(|| {
             let name = branch_name(&repo)?;
@@ -2115,6 +2749,43 @@ mod tests {
     }
 
     #[test]
+    fn blame_compacts_contiguous_lines_from_the_same_commit() {
+        let dir = temp_dir("blame-basic");
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Alice").unwrap();
+            config.set_str("user.email", "alice@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "line1\nline2\n", "init");
+        commit_file(&repo, "a.txt", "line1\nline2\nline3\n", "append");
+
+        let hunks = blame(&dir, "a.txt", None, None).unwrap();
+        assert!(hunks.len() >= 1);
+        assert_eq!(hunks[0].start_line, 1);
+        assert!(!hunks[0].commit.is_empty());
+        assert_eq!(hunks[0].author, "Alice");
+        assert!(hunks[0].authored_at.ends_with('Z'));
+        assert!(hunks.iter().any(|h| h.summary.contains("init") || h.summary.contains("append")));
+
+        let ranged = blame(&dir, "a.txt", Some(3), Some(3)).unwrap();
+        assert_eq!(ranged.len(), 1);
+        assert_eq!(ranged[0].start_line, 3);
+        assert_eq!(ranged[0].end_line, 3);
+        assert!(ranged[0].summary.contains("append"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn format_git_time_formats_unix_epoch_as_utc_iso() {
+        let t = git2::Time::new(0, 0);
+        assert_eq!(format_git_time(t), "1970-01-01T00:00:00Z");
+        let t = git2::Time::new(1_000_000_000, 0);
+        assert_eq!(format_git_time(t), "2001-09-09T01:46:40Z");
+    }
+
+    #[test]
     fn commit_file_diff_root_commit_has_empty_original() {
         let dir = temp_dir("commit-file-diff-root");
         let repo = Repository::init(&dir).unwrap();
@@ -2181,7 +2852,7 @@ mod tests {
         }
         commit_file(&repo, "a.txt", "one", "first");
         repo.remote("origin", remote.to_str().unwrap()).unwrap();
-        push(&local, &GitCredentials::default(), None).unwrap();
+        push(&local, &GitCredentials::default(), None, None).unwrap();
 
         // In sync right after the initial push.
         let status = unpushed_status(&repo);
@@ -2398,7 +3069,7 @@ mod tests {
         commit_file(&repo_a, "a.txt", "base\n", "init");
         repo_a.remote("origin", remote.to_str().unwrap()).unwrap();
         let creds = GitCredentials::default();
-        push(&local_a, &creds, None).unwrap();
+        push(&local_a, &creds, None, None).unwrap();
 
         let repo_b = Repository::clone(remote.to_str().unwrap(), &local_b).unwrap();
         {
@@ -2409,12 +3080,12 @@ mod tests {
 
         // A changes a.txt and pushes.
         commit_file(&repo_a, "a.txt", "from A\n", "A change");
-        push(&local_a, &creds, None).unwrap();
+        push(&local_a, &creds, None, None).unwrap();
 
         // B changes the same line locally without pulling first, then pulls.
         commit_file(&repo_b, "a.txt", "from B\n", "B change");
 
-        let err = pull(&local_b, PullMode::Merge, &creds, None).unwrap_err();
+        let err = pull(&local_b, PullMode::Merge, &creds, None, None).unwrap_err();
         assert!(matches!(err, GitError::MergeConflict), "expected MergeConflict, got {err:?}");
 
         assert_eq!(repo_b.state(), RepositoryState::Merge);
@@ -2435,5 +3106,333 @@ mod tests {
         assert!(!after.merge_in_progress);
 
         fs::remove_dir_all(&base).ok();
+    }
+
+    fn init_repo_with_identity(dir: &Path) -> Repository {
+        let repo = Repository::init(dir).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("user.name", "Test").unwrap();
+        config.set_str("user.email", "test@test.com").unwrap();
+        repo
+    }
+
+    #[test]
+    fn checkout_branch_auto_stashes_and_restores_cleanly_on_return() {
+        let dir = temp_dir("stash-roundtrip");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "f.txt", "line1\n", "init");
+        let base_name = branch_name(&repo).unwrap();
+
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &head_commit, false).unwrap();
+
+        // Uncommitted tracked edit on the source branch — this is what
+        // should get shelved instead of blocking the switch.
+        fs::write(dir.join("f.txt"), "line1\nlocal-edit\n").unwrap();
+
+        let outcome = checkout_branch(&dir, "feature", false).unwrap();
+        assert!(outcome.shelved.is_some(), "expected the edit to be auto-stashed");
+        assert!(outcome.restore.is_none(), "no shelf entry existed for 'feature' yet");
+        assert_eq!(branch_name(&repo).as_deref(), Some("feature"));
+        assert_eq!(
+            fs::read_to_string(dir.join("f.txt")).unwrap(),
+            "line1\n",
+            "feature's working tree should be clean, not carrying the stashed edit"
+        );
+
+        let shelf = list_stash_shelf(&dir).unwrap();
+        assert_eq!(shelf.len(), 1);
+        assert_eq!(shelf[0].branch, base_name);
+
+        let outcome = checkout_branch(&dir, &base_name, false).unwrap();
+        assert!(outcome.shelved.is_none(), "feature had no uncommitted changes to shelve");
+        match outcome.restore {
+            Some(GitStashRestoreOutcome::Applied { .. }) => {}
+            other => panic!("expected a clean Applied restore, got {other:?}"),
+        }
+        assert_eq!(
+            fs::read_to_string(dir.join("f.txt")).unwrap(),
+            "line1\nlocal-edit\n",
+            "the shelved edit should have been restored"
+        );
+        assert!(
+            list_stash_shelf(&dir).unwrap().is_empty(),
+            "the shelf entry should be dropped after a clean apply"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn checkout_branch_restore_conflict_keeps_shelf_entry_intact() {
+        // Reproduces the scenario the auto-stash feature exists to protect
+        // against: the destination branch advances (e.g. via a pull that
+        // happened while the user was away on another branch) in a way that
+        // overlaps the shelved edit. The restore must NOT silently drop the
+        // stash — it has to stay in the shelf, visible and recoverable.
+        let dir = temp_dir("stash-conflict");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "f.txt", "line1\n", "init");
+        let base_name = branch_name(&repo).unwrap();
+        let base_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &base_commit, false).unwrap();
+
+        // Shelve an uncommitted edit on the base branch by switching away.
+        fs::write(dir.join("f.txt"), "line1\nlocal-edit\n").unwrap();
+        let outcome = checkout_branch(&dir, "feature", false).unwrap();
+        assert!(outcome.shelved.is_some());
+        assert_eq!(branch_name(&repo).as_deref(), Some("feature"));
+
+        // Simulate the base branch advancing without us being checked out
+        // on it (e.g. a background pull performed via another tool),
+        // touching the exact same insertion point as the shelved edit.
+        let new_blob = repo.blob(b"line1\nremote-edit\n").unwrap();
+        let mut treebuilder = repo
+            .treebuilder(Some(&base_commit.tree().unwrap()))
+            .unwrap();
+        treebuilder.insert("f.txt", new_blob, 0o100644).unwrap();
+        let new_tree_oid = treebuilder.write().unwrap();
+        let new_tree = repo.find_tree(new_tree_oid).unwrap();
+        let sig = commit_signature(&repo).unwrap();
+        let new_commit_oid = repo
+            .commit(None, &sig, &sig, "simulated remote update", &new_tree, &[&base_commit])
+            .unwrap();
+        let mut base_branch = repo.find_branch(&base_name, BranchType::Local).unwrap();
+        base_branch
+            .get_mut()
+            .set_target(new_commit_oid, "simulated remote update")
+            .unwrap();
+
+        // feature is clean, so switching back to base only exercises the
+        // restore path, not another auto-stash.
+        let outcome = checkout_branch(&dir, &base_name, false).unwrap();
+        assert!(outcome.shelved.is_none());
+        let entry = match outcome.restore {
+            Some(GitStashRestoreOutcome::Conflict { entry }) => entry,
+            other => panic!("expected a Conflict restore outcome, got {other:?}"),
+        };
+        assert_eq!(entry.branch, base_name);
+
+        // The shelf entry must still be there — nothing was silently lost.
+        let shelf = list_stash_shelf(&dir).unwrap();
+        assert_eq!(shelf.len(), 1, "conflicted restore must not drop the stash entry");
+        assert_eq!(shelf[0].id, entry.id);
+
+        // And the conflict is visible through the normal status surface.
+        let snapshot = status(&dir).unwrap();
+        assert_eq!(snapshot.conflicted.len(), 1);
+        assert_eq!(snapshot.conflicted[0].path, "f.txt");
+
+        // Resolving the conflict and manually dropping the (now redundant)
+        // shelf entry should work via the same public API the shelf UI uses.
+        resolve_conflict(&dir, "f.txt", "line1\nresolved\n").unwrap();
+        drop_stash_entry(&dir, &entry.id).unwrap();
+        assert!(list_stash_shelf(&dir).unwrap().is_empty());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn apply_stash_entry_refuses_when_not_on_the_shelved_branch() {
+        let dir = temp_dir("stash-wrong-branch");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "f.txt", "line1\n", "init");
+        let base_name = branch_name(&repo).unwrap();
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &head_commit, false).unwrap();
+
+        fs::write(dir.join("f.txt"), "line1\nlocal-edit\n").unwrap();
+        checkout_branch(&dir, "feature", false).unwrap();
+
+        let shelf = list_stash_shelf(&dir).unwrap();
+        assert_eq!(shelf.len(), 1);
+        assert_eq!(shelf[0].branch, base_name);
+
+        // Still on 'feature' — applying the base branch's shelf entry
+        // directly (the manual "Восстановить" action) must be refused
+        // rather than silently applied onto the wrong branch's tree.
+        let err = apply_stash_entry(&dir, &shelf[0].id).unwrap_err();
+        assert!(matches!(err, GitError::Message(_)));
+        assert_eq!(list_stash_shelf(&dir).unwrap().len(), 1);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn undo_commit_soft_resets_to_parent_and_keeps_index() {
+        let dir = temp_dir("undo-commit");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+
+        fs::write(dir.join("a.txt"), "two").unwrap();
+        stage_paths(&dir, &["a.txt".to_string()]).unwrap();
+        let hash = commit(&dir, "second").unwrap();
+
+        undo_commit(&dir, &hash).unwrap();
+
+        let history = log(&dir, 10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].message, "init");
+
+        let snapshot = status(&dir).unwrap();
+        assert_eq!(snapshot.staged.len(), 1);
+        assert_eq!(snapshot.staged[0].path, "a.txt");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn undo_commit_refuses_when_head_has_moved_on() {
+        let dir = temp_dir("undo-commit-stale");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+        let first_hash = commit_file_and_commit(&dir, "a.txt", "two", "second");
+        commit_file(&repo, "a.txt", "three", "third");
+
+        let err = undo_commit(&dir, &first_hash).unwrap_err();
+        assert!(matches!(err, GitError::Message(_)));
+
+        // History untouched — still three commits.
+        assert_eq!(log(&dir, 10).unwrap().len(), 3);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    fn commit_file_and_commit(dir: &Path, name: &str, content: &str, message: &str) -> String {
+        fs::write(dir.join(name), content).unwrap();
+        stage_paths(dir, &[name.to_string()]).unwrap();
+        commit(dir, message).unwrap()
+    }
+
+    #[test]
+    fn create_branch_at_oid_recreates_a_deleted_branch() {
+        let dir = temp_dir("create-branch-at-oid");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+        let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
+        let tip_oid = head_commit.id().to_string();
+
+        repo.branch("feature", &head_commit, false).unwrap();
+        delete_branch(&dir, "feature").unwrap();
+        assert!(repo.find_branch("feature", BranchType::Local).is_err());
+
+        create_branch_at_oid(&dir, "feature", &tip_oid).unwrap();
+        let recreated = repo.find_branch("feature", BranchType::Local).unwrap();
+        assert_eq!(recreated.get().target().unwrap().to_string(), tip_oid);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn create_branch_at_oid_refuses_when_branch_already_exists() {
+        let dir = temp_dir("create-branch-at-oid-exists");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+        let oid = repo.head().unwrap().peel_to_commit().unwrap().id().to_string();
+
+        let err = create_branch_at_oid(&dir, &branch_name(&repo).unwrap(), &oid).unwrap_err();
+        assert!(matches!(err, GitError::BranchAlreadyExists(_)));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn head_oid_and_reset_to_oid_round_trip() {
+        let dir = temp_dir("reset-to-oid");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+        let before = head_oid(&dir).unwrap();
+
+        commit_file(&repo, "a.txt", "two", "second");
+        assert_ne!(head_oid(&dir).unwrap(), before);
+
+        reset_to_oid(&dir, &before).unwrap();
+        assert_eq!(head_oid(&dir).unwrap(), before);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn discard_file_changes_returns_none_when_nothing_to_discard() {
+        let dir = temp_dir("discard-noop");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one", "init");
+
+        assert_eq!(discard_file_changes(&dir, "a.txt").unwrap(), None);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn discard_tracked_edit_backs_up_and_restore_returns_it() {
+        let dir = temp_dir("discard-tracked");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one\n", "init");
+        fs::write(dir.join("a.txt"), "one\nlocal-edit\n").unwrap();
+
+        let backup_id = discard_file_changes(&dir, "a.txt").unwrap();
+        assert!(backup_id.is_some());
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one\n");
+
+        restore_discard_backup(&dir, &backup_id.unwrap()).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\nlocal-edit\n"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn discard_untracked_file_backs_up_and_restore_recreates_it() {
+        let dir = temp_dir("discard-untracked");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one\n", "init");
+        fs::write(dir.join("new.txt"), "brand new\n").unwrap();
+
+        let backup_id = discard_file_changes(&dir, "new.txt").unwrap();
+        assert!(backup_id.is_some(), "expected a backup for the untracked file");
+        assert!(
+            !dir.join("new.txt").exists(),
+            "discard should still delete the untracked file from disk"
+        );
+
+        restore_discard_backup(&dir, &backup_id.unwrap()).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join("new.txt")).unwrap(),
+            "brand new\n",
+            "restore should recreate the untracked file with its original content"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn restore_discard_backup_errors_without_dropping_when_file_changed_since() {
+        let dir = temp_dir("discard-restore-conflict");
+        let repo = init_repo_with_identity(&dir);
+        commit_file(&repo, "a.txt", "one\n", "init");
+        fs::write(dir.join("a.txt"), "one\nlocal-edit\n").unwrap();
+
+        let backup_id = discard_file_changes(&dir, "a.txt").unwrap().unwrap();
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "one\n");
+
+        // Something else happens to the same file after the discard —
+        // committed, so the stash's 3-way apply has to reconcile against a
+        // genuinely different base than what it captured.
+        commit_file(&repo, "a.txt", "one\nremote-edit\n", "unrelated update");
+
+        let err = restore_discard_backup(&dir, &backup_id).unwrap_err();
+        assert!(matches!(err, GitError::Message(_)));
+
+        // The backup must still be there — nothing silently lost.
+        let index = find_stash_index_by_oid_only(
+            &mut open_repo(&dir).unwrap(),
+            git2::Oid::from_str(&backup_id).unwrap(),
+        );
+        assert!(index.is_ok(), "backup stash entry should survive a failed restore");
+
+        fs::remove_dir_all(&dir).ok();
     }
 }

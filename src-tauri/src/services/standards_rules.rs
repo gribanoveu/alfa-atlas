@@ -501,9 +501,10 @@ pub struct RuleImpl {
 
 /// The full rule registry, in the same order and with the same weights as
 /// the standard's "Вес критериев" table (sums to 100 for the default-enabled
-/// set). К.1.3 is intentionally absent: it requires checking links over the
-/// network (including internal Confluence over VPN) and is out of scope for
-/// this checker; add it here as a new `RuleImpl` when that becomes feasible.
+/// set). К.1.3 ("Корректность ссылок") is permanently out of scope: it would
+/// require making live HTTP requests to check for 404s (including internal
+/// Confluence links, only reachable over VPN), and this checker performs no
+/// network access at all — it only reads local files under the docs root.
 pub const RULES: &[RuleImpl] = &[
     RuleImpl {
         def: RuleDef {
@@ -511,7 +512,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Папка с документацией присутствует",
             weight: 20,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k1_1,
     },
@@ -521,7 +521,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Папка документации соответствует структуре",
             weight: 20,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k1_2,
     },
@@ -531,7 +530,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Файл метода содержит Оглавление",
             weight: 3,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k2_1,
     },
@@ -541,7 +539,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Файл метода содержит поле Назначение",
             weight: 3,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k2_2,
     },
@@ -551,7 +548,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Диаграмма корректна",
             weight: 3,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k3_1,
     },
@@ -561,7 +557,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Таблица с входными данными присутствует",
             weight: 10,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k4_1,
     },
@@ -571,7 +566,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Таблица с входными данными корректна",
             weight: 3,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k4_2,
     },
@@ -581,7 +575,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Пример входных данных присутствует",
             weight: 10,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k4_3,
     },
@@ -591,7 +584,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Пример входных данных корректен",
             weight: 3,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k4_4,
     },
@@ -601,7 +593,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Таблица с выходными данными присутствует",
             weight: 5,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k5_1,
     },
@@ -611,7 +602,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Таблица с выходными данными корректна",
             weight: 3,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k5_2,
     },
@@ -621,7 +611,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Пример выходных данных присутствует",
             weight: 5,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k5_3,
     },
@@ -631,7 +620,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Пример выходных данных корректен",
             weight: 3,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k5_4,
     },
@@ -641,7 +629,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Раздел с алгоритмами корректен",
             weight: 3,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k6_1,
     },
@@ -651,7 +638,6 @@ pub const RULES: &[RuleImpl] = &[
             title: "Обработка ошибок",
             weight: 3,
             default_enabled: true,
-            requires_network: false,
         },
         check: check_k7_1,
     },

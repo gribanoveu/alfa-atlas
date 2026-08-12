@@ -1,0 +1,249 @@
+.llm-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.llm-tab .credentials-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.llm-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.llm-provider-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+
+.llm-provider-item.is-open {
+  border-color: var(--accent-dim);
+}
+
+.llm-provider-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.llm-provider-row:hover {
+  background: var(--bg-2);
+}
+
+.llm-provider-chevron {
+  flex: none;
+  color: var(--text-2);
+}
+
+.llm-provider-status {
+  flex: none;
+}
+
+.llm-provider-status.ok {
+  color: var(--green);
+}
+
+.llm-provider-status.pending {
+  color: var(--text-2);
+}
+
+.llm-provider-row-label {
+  flex: 1;
+  font-size: var(--font-ui);
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.llm-provider-badge {
+  flex: none;
+  font-size: var(--font-ui-sm);
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.llm-provider-badge.system {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.llm-provider-badge.active {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.llm-provider-detail {
+  gap: 10px;
+  padding: 10px;
+  padding-top: 0;
+}
+
+.llm-add-provider {
+  gap: 10px;
+}
+
+.llm-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.llm-model-row .clone-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.llm-model-refresh {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-0);
+  color: var(--text-1);
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.llm-model-refresh:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: var(--bg-2);
+}
+
+.llm-model-refresh:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.llm-model-refresh .spin {
+  animation: llm-model-refresh-spin 0.9s linear infinite;
+}
+
+@keyframes llm-model-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.llm-api-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.llm-api-key-row .clone-modal-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.llm-api-key-save {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-0);
+  color: var(--text-1);
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.llm-api-key-save:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: var(--bg-2);
+}
+
+.llm-api-key-save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.llm-cert-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-cert-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 0;
+  border: none;
+  background: none;
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--font-ui-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.llm-cert-toggle:hover {
+  color: var(--text-0);
+}
+
+.llm-cert-textarea {
+  min-height: 80px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+  font-family: var(--font-mono, monospace);
+  resize: vertical;
+}
+
+.llm-test-result-icon {
+  flex: none;
+  display: flex;
+  align-items: center;
+}
+
+.llm-test-result-icon .ok {
+  color: var(--green);
+}
+
+.llm-test-result-icon .error {
+  color: var(--red-tag);
+}
+
+.llm-inline-error {
+  color: var(--red-tag);
+}
+
+.llm-inline-success {
+  color: var(--green);
+}

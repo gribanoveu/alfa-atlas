@@ -1,0 +1,52 @@
+.permissions-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.permissions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.permissions-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.permissions-item-label {
+  font-size: var(--font-ui);
+}
+
+.permissions-item-revoke {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.permissions-tab .settings-link-btn.danger {
+  color: var(--danger);
+}
+
+.permissions-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.permissions-item-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}

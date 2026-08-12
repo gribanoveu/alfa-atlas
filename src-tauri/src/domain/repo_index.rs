@@ -83,6 +83,18 @@ pub struct Symbol {
     pub end_byte: u32,
 }
 
+/// One `import` statement extracted from a Java file (see
+/// `infra::language_indexers::java`). `fqn` is the dotted, already-joined
+/// name — `com.foo.Bar` for a regular import, `com.foo` (no trailing `.*`)
+/// for a wildcard import, distinguished by `is_wildcard`. Resolving this to
+/// an actual file is a separate, whole-index concern — see
+/// `services::repo_index::RepositoryIndex::java_dependencies`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportRef {
+    pub fqn: String,
+    pub is_wildcard: bool,
+}
+
 /// Repo-relative path, `/`-separated — newtype over the key `RepositoryIndex`
 /// stores files under, so a bare `String` key isn't ambiguous with any other
 /// path-shaped string in the domain.
@@ -108,6 +120,7 @@ pub struct FileMetadata {
 pub struct IndexedFile {
     pub metadata: FileMetadata,
     pub symbols: Vec<Symbol>,
+    pub imports: Vec<ImportRef>,
 }
 
 #[derive(Debug, Error)]
@@ -135,9 +148,12 @@ impl From<ProjectError> for RepoIndexError {
 /// What a `LanguageIndexer` extracts from one file's content. A struct, not
 /// a bare `Vec<Symbol>`, so a future `imports`/`links`/`toc` field is
 /// additive — no implementor's signature needs to change to grow this.
+/// `imports` is populated only by `JavaIndexer` today; every other language's
+/// indexer leaves it empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LanguageFacts {
     pub symbols: Vec<Symbol>,
+    pub imports: Vec<ImportRef>,
 }
 
 /// One language's indexing logic. Deliberately infallible — a file that

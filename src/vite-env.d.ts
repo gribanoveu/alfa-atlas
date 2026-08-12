@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 
-// Vendored PlantUML engine (TeaVM-compiled ES module). The shipped file has
+// PlantUML engine (TeaVM-compiled ES module). The shipped package has
 // no type declarations; declare the public surface we use.
-declare module "*/vendor/plantuml/plantuml.js" {
+declare module "@plantuml/core" {
   export function render(
     lines: string[],
     targetId: string,

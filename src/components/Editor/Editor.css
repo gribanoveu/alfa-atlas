@@ -107,6 +107,7 @@
 }
 
 .editor-monaco-wrap {
+  position: relative;
   height: 100%;
   min-height: 0;
 }
@@ -134,6 +135,43 @@
 }
 
 /* ── View mode switch ────────────────────────────────────────────── */
+
+.tabs-bar-trailing {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 0;
+  border-left: 1px solid var(--border);
+}
+
+.plan-tab-start-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  margin: 0 6px 0 8px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: var(--font-ui-sm, 12px);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.plan-tab-start-btn:hover {
+  filter: brightness(1.06);
+}
+
+.plan-tab-preview {
+  height: 100%;
+  overflow: auto;
+  padding: 20px 28px 32px;
+  box-sizing: border-box;
+}
 
 .view-mode-switch {
   display: flex;
@@ -209,6 +247,22 @@
 .df-line-highlight-warning {
   background: rgba(255, 179, 0, 0.14) !important;
   box-shadow: inset 3px 0 0 #ffb300;
+}
+
+/* ── Include/xref/image gutter navigation icon ───────────────────── */
+
+/* codicon-шрифт Monaco (см. Diagnostics выше) — иконка перехода к файлу
+   рядом со строками include::/image::/xref:, назначается через
+   glyphMarginClassName и кликабельна (useMonacoIncludeGutter.ts). */
+.asciidoc-include-gutter-icon {
+  color: var(--text-2);
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.asciidoc-include-gutter-icon:hover {
+  opacity: 1;
+  color: var(--accent);
 }
 
 /* ── Errors indicator overlay widget ─────────────────────────────── */

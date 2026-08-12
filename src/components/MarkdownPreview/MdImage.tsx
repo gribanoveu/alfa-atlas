@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { resolveAssetTargetDocsRelative } from "../../lib/paths";
 import { resolveAssetPath } from "../../lib/project";
 
 type LoadState =
@@ -14,10 +15,13 @@ export function MdImage({
   src,
   alt,
   docsRoot,
+  filePath = null,
 }: {
   src: string | undefined;
   alt: string | undefined;
   docsRoot: string | null;
+  /** Docs-relative path of the markdown file (for `../` targets). */
+  filePath?: string | null;
 }) {
   const target = src ?? "";
   const label = alt ?? target ?? "image";
@@ -38,25 +42,37 @@ export function MdImage({
       return;
     }
 
+    const primary = resolveAssetTargetDocsRelative(target, filePath);
+    const raw = target.replace(/\\/g, "/").replace(/^\/+/, "");
+    const candidates = primary === raw ? [primary] : [primary, raw];
+
     let cancelled = false;
     setState({ kind: "loading" });
-    resolveAssetPath(docsRoot, target)
-      .then((canonical) => {
-        if (cancelled) return;
-        setState({ kind: "loaded", src: convertFileSrc(canonical) });
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setState({
-          kind: "error",
-          message: e instanceof Error ? e.message : String(e),
-        });
+
+    void (async () => {
+      let lastError: unknown = null;
+      for (const candidate of candidates) {
+        try {
+          const canonical = await resolveAssetPath(docsRoot, candidate);
+          if (cancelled) return;
+          setState({ kind: "loaded", src: convertFileSrc(canonical) });
+          return;
+        } catch (e) {
+          lastError = e;
+        }
+      }
+      if (cancelled) return;
+      setState({
+        kind: "error",
+        message:
+          lastError instanceof Error ? lastError.message : String(lastError),
       });
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [target, docsRoot]);
+  }, [target, docsRoot, filePath]);
 
   return (
     <figure className="asc-image">

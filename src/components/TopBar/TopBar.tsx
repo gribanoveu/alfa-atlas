@@ -1,18 +1,21 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronLeft, ChevronRight, CloudUpload, FolderOpen } from "lucide-react";
+import { ChevronLeft, ChevronRight, FolderOpen } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
 import type { GeneralPrefs } from "../../lib/prefs";
-import type { ProbeResult } from "../../lib/git";
+import type { ProbeResult, SyncPillState } from "../../lib/git";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
 import { SettingsDialog } from "../Settings/SettingsDialog";
 import type { SectionId } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
+import { ToolCallLogModal } from "../ToolLog/ToolCallLogModal";
+import { PlansModal } from "../Plans/PlansModal";
 import { AboutModal } from "./AboutModal";
 import { MenuBar } from "./MenuBar";
 import { RecentProjectsDropdown } from "./RecentProjectsDropdown";
+import { SyncStatusPill } from "./SyncStatusPill";
 import "./TopBar.css";
 
 type TopBarProps = {
@@ -43,12 +46,14 @@ type TopBarProps = {
   onGoForward?: () => void;
   canGoBack?: boolean;
   canGoForward?: boolean;
-  hasUnpushedChanges?: boolean;
-  onOpenPushConfirm?: () => void;
+  syncPillState: SyncPillState;
+  onSyncPillClick: () => void;
   onSelectProject?: (root: string) => void;
   onCloneProject?: (probe: ProbeResult) => Promise<void>;
   /** Bump this (e.g. `n => n + 1`) to open Settings on the "standards" tab. */
   openStandardsSettingsSignal?: number;
+  /** Bump this (e.g. `n => n + 1`) to open Settings on the "llm" tab. */
+  openLlmSettingsSignal?: number;
 };
 
 export function TopBar({
@@ -79,18 +84,22 @@ export function TopBar({
   onGoForward,
   canGoBack = false,
   canGoForward = false,
-  hasUnpushedChanges = false,
-  onOpenPushConfirm,
+  syncPillState,
+  onSyncPillClick,
   onSelectProject,
   onCloneProject,
   openStandardsSettingsSignal,
+  openLlmSettingsSignal,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [toolLogOpen, setToolLogOpen] = useState(false);
+  const [plansOpen, setPlansOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
   const standardsSignalRef = useRef(openStandardsSettingsSignal);
+  const llmSignalRef = useRef(openLlmSettingsSignal);
 
   useEffect(() => {
     if (
@@ -103,6 +112,15 @@ export function TopBar({
     setSettingsInitialSection("standards");
     setSettingsOpen(true);
   }, [openStandardsSettingsSignal]);
+
+  useEffect(() => {
+    if (openLlmSettingsSignal === undefined || openLlmSettingsSignal === llmSignalRef.current) {
+      return;
+    }
+    llmSignalRef.current = openLlmSettingsSignal;
+    setSettingsInitialSection("llm");
+    setSettingsOpen(true);
+  }, [openLlmSettingsSignal]);
 
   const onAction = useCallback(
     (action: MenuActionId) => {
@@ -159,6 +177,12 @@ export function TopBar({
         case "tools.settings":
           setSettingsInitialSection(undefined);
           setSettingsOpen(true);
+          break;
+        case "tools.toolLog":
+          setToolLogOpen(true);
+          break;
+        case "tools.plans":
+          setPlansOpen(true);
           break;
         case "help.about":
           setAboutOpen(true);
@@ -224,16 +248,8 @@ export function TopBar({
               <ChevronRight size={16} />
             </button>
           </div>
-          {hasUnpushedChanges ? (
-            <button
-              type="button"
-              className="unpushed-indicator-btn"
-              title="Есть неотправленные изменения — отправить на сервер"
-              aria-label="Есть неотправленные изменения — отправить на сервер"
-              onClick={onOpenPushConfirm}
-            >
-              <CloudUpload size={16} />
-            </button>
+          {hasProject ? (
+            <SyncStatusPill state={syncPillState} onClick={onSyncPillClick} />
           ) : null}
           <div className="repo-chip-wrapper">
             <button
@@ -298,6 +314,19 @@ export function TopBar({
           onPrefsChange={onPrefsChange}
           onSpellcheckConfigChange={onSpellcheckConfigChange}
           initialSection={settingsInitialSection}
+        />
+      ) : null}
+      {toolLogOpen ? <ToolCallLogModal projectRoot={projectRoot} onClose={() => setToolLogOpen(false)} /> : null}
+      {plansOpen ? (
+        <PlansModal
+          onClose={() => setPlansOpen(false)}
+          onStartPlan={(planId) => {
+            window.dispatchEvent(new CustomEvent("atlas-start-plan", { detail: { planId } }));
+          }}
+          onOpenInEditor={(planId) => {
+            window.dispatchEvent(new CustomEvent("atlas-open-plan", { detail: { planId } }));
+            setPlansOpen(false);
+          }}
         />
       ) : null}
     </>

@@ -294,6 +294,25 @@
   width: 22px;
 }
 
+.git-stash-row .git-file-dir {
+  text-align: left;
+}
+
+.git-stash-conflict-badge {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: var(--font-ui-sm);
+  color: var(--red-tag);
+  background: color-mix(in srgb, var(--red-tag) 14%, transparent);
+  white-space: nowrap;
+}
+
+.git-stash-discard:hover:not(:disabled) {
+  color: var(--red-tag);
+}
+
 .git-commit-list {
   list-style: none;
   margin: 0;

@@ -4,6 +4,7 @@ import { gitClone } from "../../lib/git";
 import type { ProbeResult } from "../../lib/git";
 import { checkPathExists } from "../../lib/project";
 import { getGeneralPrefs, setGeneralPrefs } from "../../lib/prefs";
+import { formatGitProgress, useGitProgress } from "../../hooks/useGitProgress";
 import "./CloneRepoModal.css";
 
 function getRepoName(url: string): string | null {
@@ -33,6 +34,8 @@ export function CloneRepoModal({
   const [cloning, setCloning] = useState(false);
   const [needsAuth, setNeedsAuth] = useState(false);
   const [conflict, setConflict] = useState(false);
+  const gitProgress = useGitProgress();
+  const progressLabel = cloning ? formatGitProgress(gitProgress.event) : null;
 
   const repoName = useMemo(() => getRepoName(url), [url]);
 
@@ -89,6 +92,7 @@ export function CloneRepoModal({
   const submit = async () => {
     setMessage(null);
     setNeedsAuth(false);
+    gitProgress.reset();
     setCloning(true);
     try {
       setMessage("Клонирование...");
@@ -208,7 +212,11 @@ export function CloneRepoModal({
             onClick={() => void submit()}
             disabled={canSubmit}
           >
-            {cloning ? "Клонирование…" : "Клонировать"}
+            {cloning
+              ? progressLabel
+                ? `Клонирование… ${progressLabel}`
+                : "Клонирование…"
+              : "Клонировать"}
           </button>
         </div>
       </div>

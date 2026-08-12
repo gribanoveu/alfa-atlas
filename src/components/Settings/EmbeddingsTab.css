@@ -1,0 +1,126 @@
+.embeddings-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.embeddings-tab .credentials-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.embeddings-provider-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.embeddings-provider-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  cursor: pointer;
+}
+
+.embeddings-provider-option:has(input:checked) {
+  border-color: var(--accent-dim);
+  background: var(--bg-2);
+}
+
+.embeddings-provider-option input {
+  margin-top: 3px;
+}
+
+.embeddings-provider-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.embeddings-provider-option-label {
+  font-size: var(--font-ui);
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.embeddings-provider-option-hint {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+.embeddings-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.embeddings-progress-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-2);
+  overflow: hidden;
+}
+
+.embeddings-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.embeddings-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.embeddings-progress-label {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.embeddings-tab .settings-link-btn.danger {
+  color: var(--red-tag);
+}
+
+.embeddings-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.embeddings-status-badge.ok {
+  color: var(--green);
+}
+
+.embeddings-status-badge.error {
+  color: var(--red-tag);
+}
+
+.settings-hint-button {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.settings-hint-button:hover:not(:disabled) {
+  color: var(--text-1);
+  text-decoration: underline;
+}
+
+.settings-hint-button:disabled {
+  cursor: default;
+}

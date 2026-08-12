@@ -419,6 +419,7 @@ mod tests {
                 .map(|d| (d.id.to_string(), false))
                 .collect(),
             skip_camel_case: true,
+            check_txt: false,
         };
         for id in enabled_ids {
             config.dictionaries.insert((*id).to_string(), true);

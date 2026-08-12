@@ -1,13 +1,14 @@
 /**
- * PlantUML rendering engine — thin wrapper around the vendored TeaVM-compiled
- * `@plantuml/core` engine in `src/vendor/plantuml/`.
+ * PlantUML rendering engine — thin wrapper around the TeaVM-compiled
+ * `@plantuml/core` engine.
  *
  * The engine is loaded lazily on the first `renderPlantuml()` call and shared
  * across all components. `renderToString` uses shared internal state, so
  * renders MUST be serialized — `processQueue()` runs them one at a time.
  *
- * Files are vendored (not pulled from CDN at runtime) per project requirement:
- * no external network requests are made to render diagrams.
+ * `@plantuml/core` is bundled locally (not pulled from CDN at runtime) per
+ * project requirement: no external network requests are made to render
+ * diagrams.
  */
 
 type RenderResult = { kind: "ok"; svg: string } | { kind: "error"; message: string };
@@ -22,7 +23,7 @@ interface PlantumlEngine {
 
 // `viz-global.js` must be loaded as a classic <script> before the engine
 // module is imported. Vite's `?url` suffix gives us a bundleable asset URL.
-import vizGlobalUrl from "../../vendor/plantuml/viz-global.js?url";
+import vizGlobalUrl from "@plantuml/core/viz-global.js?url";
 
 let enginePromise: Promise<PlantumlEngine> | null = null;
 let vizScriptLoaded: Promise<void> | null = null;
@@ -65,7 +66,7 @@ async function loadEngine(): Promise<PlantumlEngine> {
     await loadVizGlobal();
     // Dynamic import → Vite code-splits the ~7MB engine into a separate chunk
     // loaded only when a plantuml block is actually rendered.
-    const mod = await import("../../vendor/plantuml/plantuml.js");
+    const mod = await import("@plantuml/core");
     return mod as unknown as PlantumlEngine;
   })();
   return enginePromise;

@@ -5,6 +5,7 @@ import { useAsciiDocRender } from "../../hooks/useAsciiDocRender";
 import { AscBlockList } from "./AscBlockList";
 import { AscMermaid } from "./AscMermaid";
 import { AscPlantuml } from "./AscPlantuml";
+import { AscPreviewProvider } from "./AscPreviewContext";
 import { AscToc, type AscTocPlacement } from "./AscToc";
 import { InlineHtml } from "./InlineHtml";
 import type { AbstractBlock, Section } from "./types";
@@ -165,37 +166,39 @@ export function AsciiDocPreview({
   );
 
   return (
-    <div className="asc-preview" ref={attachPreviewNode}>
-      {docTitle ? (
-        <h1 className="asc-doc-title">
-          <InlineHtml html={docTitle} onOpenXref={onOpenXref} />
-        </h1>
-      ) : null}
+    <AscPreviewProvider value={{ docsRoot, filePath }}>
+      <div className="asc-preview" ref={attachPreviewNode}>
+        {docTitle ? (
+          <h1 className="asc-doc-title">
+            <InlineHtml html={docTitle} onOpenXref={onOpenXref} />
+          </h1>
+        ) : null}
 
-      {tocEnabled && tocPlacement === "top" ? (
-        <AscToc
-          sections={tocSections}
-          title={tocTitle}
-          maxLevel={tocLevels}
-          placement="top"
-          containerRef={previewRef}
-        />
-      ) : null}
-
-      {isSidebarToc ? (
-        <div className={`asc-preview-body asc-preview-body-toc-${tocPlacement}`}>
+        {tocEnabled && tocPlacement === "top" ? (
           <AscToc
             sections={tocSections}
             title={tocTitle}
             maxLevel={tocLevels}
-            placement={tocPlacement}
+            placement="top"
             containerRef={previewRef}
           />
-          <div className="asc-preview-content">{blockList}</div>
-        </div>
-      ) : (
-        blockList
-      )}
-    </div>
+        ) : null}
+
+        {isSidebarToc ? (
+          <div className={`asc-preview-body asc-preview-body-toc-${tocPlacement}`}>
+            <AscToc
+              sections={tocSections}
+              title={tocTitle}
+              maxLevel={tocLevels}
+              placement={tocPlacement}
+              containerRef={previewRef}
+            />
+            <div className="asc-preview-content">{blockList}</div>
+          </div>
+        ) : (
+          blockList
+        )}
+      </div>
+    </AscPreviewProvider>
   );
 }

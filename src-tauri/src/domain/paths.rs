@@ -10,17 +10,40 @@ pub fn ensure_under(root: &Path, path: &Path) -> Result<PathBuf, ProjectError> {
     let canonical = if path.exists() {
         path.canonicalize().map_err(ProjectError::Canonicalize)?
     } else {
-        // For not-yet-existing write targets: canonicalize parent + join name.
-        let parent = path
-            .parent()
-            .ok_or_else(|| ProjectError::Message(format!("invalid path: {}", path.display())))?;
-        let name = path.file_name().ok_or_else(|| {
-            ProjectError::Message(format!("invalid path: {}", path.display()))
-        })?;
-        let parent = parent
-            .canonicalize()
-            .map_err(ProjectError::Canonicalize)?;
-        parent.join(name)
+        // For a not-yet-existing target (a write/create destination, or
+        // simply a `readFile`/`listFiles` path the caller got wrong): walk
+        // up to the nearest ancestor that *does* exist — not just the
+        // immediate parent — and rejoin the missing tail onto its
+        // canonical form. A target two or more directories deep in a tree
+        // that doesn't exist yet is the normal case for `writeFile`'s
+        // documented "missing parent directories are created
+        // automatically" behavior (the actual `fs::create_dir_all` for
+        // those directories happens later, in `docs_fs::write_project_file`
+        // — this function only resolves and validates the path); it must
+        // resolve exactly like a one-level-missing target does, not fail
+        // here before that creation ever gets a chance to run. `path` is
+        // always a descendant of `root` (built by `join_relative`), so this
+        // loop is guaranteed to terminate at `root` at the latest, which
+        // was just confirmed to exist above.
+        let mut existing = path.to_path_buf();
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        while !existing.exists() {
+            let name = existing.file_name().ok_or_else(|| {
+                ProjectError::Message(format!("invalid path: {}", path.display()))
+            })?;
+            tail.push(name.to_os_string());
+            existing = existing
+                .parent()
+                .ok_or_else(|| {
+                    ProjectError::Message(format!("invalid path: {}", path.display()))
+                })?
+                .to_path_buf();
+        }
+        let mut canonical = existing.canonicalize().map_err(ProjectError::Canonicalize)?;
+        for part in tail.into_iter().rev() {
+            canonical.push(part);
+        }
+        canonical
     };
 
     if !canonical.starts_with(&root) {
@@ -61,6 +84,63 @@ pub fn relative_to(root: &Path, absolute: &Path) -> Result<String, ProjectError>
     Ok(parts.join("/"))
 }
 
+/// Like `relative_to`, but tolerates `absolute` not existing (canonicalizes
+/// its parent + rejoins the file name instead) — mirrors
+/// `domain::workspace_index::relative_key_lenient`. Used by the incremental
+/// index watcher, which must resolve a `FileId` for `Remove` events (and
+/// for `Upserted` events that raced a deletion) where the path is already
+/// gone.
+pub fn relative_to_lenient(root: &Path, absolute: &Path) -> Result<String, ProjectError> {
+    if absolute.exists() {
+        return relative_to(root, absolute);
+    }
+    let root = root.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let parent = absolute
+        .parent()
+        .ok_or_else(|| ProjectError::Message(format!("invalid path: {}", absolute.display())))?;
+    let name = absolute
+        .file_name()
+        .ok_or_else(|| ProjectError::Message(format!("invalid path: {}", absolute.display())))?;
+    let parent = parent.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let absolute = parent.join(name);
+
+    if absolute == root {
+        return Ok(".".to_string());
+    }
+    let rel = absolute
+        .strip_prefix(&root)
+        .map_err(|_| ProjectError::DocsOutsideRepo(absolute.display().to_string()))?;
+
+    let mut parts = Vec::new();
+    for component in rel.components() {
+        match component {
+            Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
+            Component::CurDir => {}
+            _ => {
+                return Err(ProjectError::DocsOutsideRepo(
+                    absolute.display().to_string(),
+                ));
+            }
+        }
+    }
+    Ok(parts.join("/"))
+}
+
+/// Plain string check, no filesystem access: `candidate` equals `prefix` or
+/// starts with `"{prefix}/"`. `candidate` and `prefix` are already-relative,
+/// `/`-separated strings (a `FileId` and a project's `docs_root`,
+/// respectively) — used to filter search results to a subtree without
+/// resolving each candidate against disk. An empty `prefix` is a
+/// fail-closed sentinel: it matches nothing, not everything — a caller that
+/// means "no filtering" represents that as `None` one level up, never as
+/// `""` here.
+pub fn is_under_relative_prefix(candidate: &str, prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return false;
+    }
+    candidate == prefix || candidate.starts_with(&format!("{prefix}/"))
+}
+
 /// Join `root` with a relative path that uses `/` separators. Rejects `..`.
 pub fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, ProjectError> {
     if relative.is_empty() || relative == "." {
@@ -84,14 +164,23 @@ pub fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, ProjectErro
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    // A nanosecond timestamp alone can collide between parallel test threads
+    // on a coarser system clock — see the same fix already applied in
+    // `services::docs_fs`/`services::ai_tools`'s own `temp_dir` helpers. A
+    // per-process counter guarantees uniqueness regardless of clock
+    // resolution.
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temp_dir() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("alfa-atlas-paths-{nanos}"));
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-paths-{nanos}-{n}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -114,6 +203,92 @@ mod tests {
     fn rejects_parent_escape() {
         let root = temp_dir();
         assert!(join_relative(&root, "../outside").is_err());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Regression test: a target several directories deep in a tree that
+    /// doesn't exist yet at all (not just its immediate parent) must still
+    /// resolve to a clean, contained canonical path — not fail with a raw
+    /// `io::Error` from trying to canonicalize a nonexistent parent. This is
+    /// what `writeFile`'s "missing parent directories are created
+    /// automatically" behavior (and a plain `readFile`/`listFiles` on a
+    /// wrong multi-segment path returning a clean `NotFound` instead of an
+    /// opaque OS error) both depend on.
+    #[test]
+    fn ensure_under_resolves_a_target_several_missing_directories_deep() {
+        let root = temp_dir();
+
+        let target = root.join("brand").join("new").join("dir").join("file.adoc");
+        let resolved = ensure_under(&root, &target).unwrap();
+        assert_eq!(resolved, root.canonicalize().unwrap().join("brand/new/dir/file.adoc"));
+        assert!(!resolved.exists());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn ensure_under_still_rejects_a_deep_missing_target_that_escapes_root() {
+        let root = temp_dir();
+        let outside = root.parent().unwrap().join("escaped-brand-new-dir-outside-root").join("file.adoc");
+
+        let err = ensure_under(&root, &outside).unwrap_err();
+        assert!(matches!(err, ProjectError::PathEscape(_)));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn is_under_relative_prefix_matches_exact_and_nested() {
+        assert!(is_under_relative_prefix("docs", "docs"));
+        assert!(is_under_relative_prefix("docs/guide.adoc", "docs"));
+    }
+
+    #[test]
+    fn is_under_relative_prefix_rejects_a_sibling() {
+        assert!(!is_under_relative_prefix("docsx/guide.adoc", "docs"));
+        assert!(!is_under_relative_prefix("src/main.rs", "docs"));
+    }
+
+    #[test]
+    fn is_under_relative_prefix_empty_prefix_matches_nothing() {
+        assert!(!is_under_relative_prefix("docs/guide.adoc", ""));
+        assert!(!is_under_relative_prefix("", ""));
+    }
+
+    #[test]
+    fn relative_to_lenient_delegates_when_the_path_still_exists() {
+        let root = temp_dir();
+        let file = root.join("a.txt");
+        fs::write(&file, "x").unwrap();
+
+        assert_eq!(relative_to_lenient(&root, &file).unwrap(), "a.txt");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn relative_to_lenient_resolves_a_since_deleted_file() {
+        let root = temp_dir();
+        let file = root.join("gone.txt");
+        fs::write(&file, "x").unwrap();
+        fs::remove_file(&file).unwrap();
+
+        assert_eq!(relative_to_lenient(&root, &file).unwrap(), "gone.txt");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn relative_to_lenient_resolves_a_since_deleted_nested_file() {
+        let root = temp_dir();
+        let nested_dir = root.join("src").join("docs");
+        fs::create_dir_all(&nested_dir).unwrap();
+        let file = nested_dir.join("gone.md");
+        fs::write(&file, "x").unwrap();
+        fs::remove_file(&file).unwrap();
+
+        assert_eq!(relative_to_lenient(&root, &file).unwrap(), "src/docs/gone.md");
+
         fs::remove_dir_all(&root).ok();
     }
 }

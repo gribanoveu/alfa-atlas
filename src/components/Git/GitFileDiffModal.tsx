@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { GitDiffScope, GitFileDiff, GitFileStatus } from "../../lib/git";
 import { monacoLanguageFor } from "../../lib/supportedFiles";
 import { ATLAS_DARK_THEME_ID } from "../../monaco/asciidocLanguage";
+import { DiscardChangesConfirmModal } from "./DiscardChangesConfirmModal";
 import "../Welcome/CloneRepoModal.css";
 import "./GitFileDiffModal.css";
 
@@ -34,6 +35,7 @@ export function GitFileDiffModal({
   const [error, setError] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const editorWrapRef = useRef<HTMLDivElement>(null);
   const diffEditorRef = useRef<Parameters<DiffOnMount>[0] | null>(null);
 
@@ -71,18 +73,19 @@ export function GitFileDiffModal({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy && !discarding && !saving) onClose();
+      if (event.key !== "Escape" || busy || discarding || saving) return;
+      if (confirmingDiscard) {
+        setConfirmingDiscard(false);
+        return;
+      }
+      onClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [busy, discarding, saving, onClose]);
+  }, [busy, discarding, saving, confirmingDiscard, onClose]);
 
   const handleDiscard = async () => {
-    const confirmed = window.confirm(
-      `Отменить все изменения в «${target.file.path}» и вернуть файл к последнему коммиту?`,
-    );
-    if (!confirmed) return;
-
+    setConfirmingDiscard(false);
     setDiscarding(true);
     setError(null);
     try {
@@ -233,10 +236,14 @@ export function GitFileDiffModal({
             type="button"
             className="clone-modal-btn git-diff-discard-btn"
             disabled={actionBusy || loading || diff?.isBinary === true}
-            onClick={() => void handleDiscard()}
-            title="Вернуть файл к последнему коммиту (HEAD)"
+            onClick={() => setConfirmingDiscard(true)}
+            title={
+              target.file.status === "?"
+                ? "Удалить файл — он не отслеживается git"
+                : "Вернуть файл к последнему коммиту (HEAD)"
+            }
           >
-            Отменить изменения
+            {target.file.status === "?" ? "Удалить файл" : "Отменить изменения"}
           </button>
           <div className="git-diff-actions-right">
             <button
@@ -259,6 +266,16 @@ export function GitFileDiffModal({
           </div>
         </div>
       </div>
+
+      {confirmingDiscard ? (
+        <DiscardChangesConfirmModal
+          path={target.file.path}
+          isUntracked={target.file.status === "?"}
+          busy={discarding}
+          onCancel={() => setConfirmingDiscard(false)}
+          onConfirm={() => void handleDiscard()}
+        />
+      ) : null}
     </div>
   );
 }

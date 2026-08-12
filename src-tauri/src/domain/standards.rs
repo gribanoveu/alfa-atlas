@@ -19,9 +19,6 @@ pub struct RuleDef {
     pub title: &'static str,
     pub weight: u32,
     pub default_enabled: bool,
-    /// Rules that would need network access (link/endpoint checks) are
-    /// registered but not runnable yet; the UI disables their toggle.
-    pub requires_network: bool,
 }
 
 /// Outcome of running one rule's check function against a method folder.
@@ -91,7 +88,6 @@ mod tests {
             title: "test",
             weight: 20,
             default_enabled: true,
-            requires_network: false,
         };
         let config = StandardsRuleConfig::default();
         assert!(config.is_enabled(&def));

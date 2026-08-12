@@ -1,9 +1,7 @@
 import type * as Monaco from "monaco-editor";
 import { useEffect } from "react";
-import { findMacroTargetAt } from "../lib/asciidocReferences";
-import { resolveRelativeToDocument, toDocsRelativePath, toRepoRelativePath } from "../lib/paths";
+import { findMacroTargetAt, resolveMacroTargetDocsRelative } from "../lib/asciidocReferences";
 import { ASCIIDOC_LANGUAGE_ID } from "../monaco/asciidocLanguage";
-import { findDocument, getDocument } from "../lib/workspaceIndex";
 
 /**
  * Registers Ctrl+Click ("go to definition") on `include::`/`image::`/
@@ -31,23 +29,12 @@ export function useMonacoDefinitions(
         // slash (same convention as `documentIdFromModel` in
         // useMonacoCompletions.ts).
         const sourceDocsRelative = model.uri.path.replace(/^\//, "");
-        const naiveDocsRelative = resolveRelativeToDocument(macroTarget.target, sourceDocsRelative);
-
-        let resolvedDocsRelative: string | null = null;
-        const naiveRepoRelative = toRepoRelativePath(naiveDocsRelative, repoRoot, docsRoot);
-        const naiveDoc = await getDocument(naiveRepoRelative).catch(() => null);
-        if (naiveDoc) {
-          resolvedDocsRelative = naiveDocsRelative;
-        } else {
-          // Dir-relative resolution didn't hit a real document — fall back
-          // to a by-filename index lookup (also covers targets that were
-          // inserted as repo-relative paths by older autocomplete).
-          const basename = macroTarget.target.split("/").pop() || macroTarget.target;
-          const matches = await findDocument(basename).catch(() => []);
-          if (matches.length > 0) {
-            resolvedDocsRelative = toDocsRelativePath(matches[0].relativePath, repoRoot, docsRoot);
-          }
-        }
+        const resolvedDocsRelative = await resolveMacroTargetDocsRelative(
+          macroTarget,
+          sourceDocsRelative,
+          repoRoot,
+          docsRoot,
+        );
         if (!resolvedDocsRelative) return null;
 
         const uri = monaco.Uri.parse(

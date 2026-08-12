@@ -116,6 +116,10 @@
   background: var(--bg-1);
 }
 
+.file-tree-external-dock.collapsed {
+  height: auto;
+}
+
 .file-tree-external-dock .panel-resize-handle.vertical {
   position: absolute;
   top: -2px;

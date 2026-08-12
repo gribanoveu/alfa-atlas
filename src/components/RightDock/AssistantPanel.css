@@ -1,0 +1,2876 @@
+.assistant-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+}
+
+
+/* =========================================================
+   Chat switcher (history dropdown + new/archive buttons)
+   ========================================================= */
+
+.assistant-chat-switcher {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 0;
+}
+
+.assistant-chat-history-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-chat-icon-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.assistant-chat-history-item {
+  display: flex;
+  align-items: stretch;
+}
+
+.assistant-chat-history-option {
+  flex: 1;
+  min-width: 0;
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assistant-chat-history-option .clone-select-path {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-chat-history-time {
+  flex: none;
+  font-size: calc(var(--font-ui-sm) * 0.85);
+  color: var(--text-2);
+}
+
+.assistant-chat-history-archive {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  color: var(--text-2);
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+}
+
+.assistant-chat-history-archive:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.assistant-chat-export {
+  position: relative;
+  flex: none;
+}
+
+/* Anchored to the button's right edge rather than stretching full-width
+   like `.clone-select-menu`'s default `left: 0; right: 0` (that default
+   assumes a wide trigger, e.g. the chat-switcher dropdown right above this
+   one) — this trigger is a narrow icon button, so the menu needs its own
+   width instead of inheriting one from its parent. */
+.assistant-chat-export-menu {
+  left: auto;
+  right: 0;
+  min-width: 170px;
+}
+
+.assistant-export-error {
+  flex: none;
+  margin: 6px 10px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--red-tag);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--red-tag) 7%, var(--bg-0));
+  color: var(--red-tag);
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+
+/* =========================================================
+   Archived chats — inline view within the panel (replaces
+   the conversation area, not an overlay)
+   ========================================================= */
+
+.assistant-archive-inline {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.assistant-archive-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-archive-back {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-1);
+}
+
+.assistant-archive-back:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.assistant-archive-header-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.assistant-archive-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.assistant-archive-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+}
+
+.assistant-archive-item-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-ui-sm);
+  color: var(--text-0);
+}
+
+.assistant-archive-empty {
+  padding: 10px 2px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+
+/* =========================================================
+   Access
+   ========================================================= */
+
+.assistant-panel-access {
+  flex: none;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.assistant-access-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.assistant-access-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.assistant-access-btn:hover:not(:disabled):not(.active) {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.assistant-access-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.assistant-access-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.assistant-access-hint {
+  margin-top: 6px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
+
+/* =========================================================
+   Chat surface
+   ========================================================= */
+
+.assistant-chat {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+
+/* =========================================================
+   Model selector + context usage
+   ========================================================= */
+
+.assistant-model-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-model-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.assistant-model-select .clone-select-trigger {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  gap: 6px;
+}
+
+.assistant-model-select .clone-select-path {
+  font-size: var(--font-ui-sm);
+}
+
+.assistant-model-select .clone-select-menu .clone-select-path {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-word;
+}
+
+
+/* =========================================================
+   Index status
+   ========================================================= */
+
+.assistant-chat-index-note {
+  flex: none;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-chat-index-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assistant-chat-index-sync-btn {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  color: var(--accent, var(--text-1));
+  cursor: pointer;
+}
+
+.assistant-chat-index-sync-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  filter: brightness(1.15);
+}
+
+.assistant-chat-index-sync-btn:disabled {
+  color: var(--text-2);
+  cursor: default;
+}
+
+
+/* =========================================================
+   Todo progress widget
+   ========================================================= */
+
+/* Floating card, deliberately not flush with the panel chrome (no shared
+   edge-to-edge border/background with `.assistant-chat`) — margin on every
+   side plus rounded corners and a shadow read as "hovering over the chat"
+   rather than another strip of the panel itself. Same border/shadow recipe
+   as `.assistant-scroll-to-bottom`'s floating pill elsewhere in this file,
+   for a consistent "floating over the transcript" visual language. */
+.assistant-todo-widget {
+  flex: none;
+  margin: 8px 10px 0;
+
+  border: 1px solid var(--border);
+  border-radius: 10px;
+
+  background: var(--bg-1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+  overflow: hidden;
+}
+
+.assistant-todo-widget-header-row {
+  display: flex;
+  align-items: center;
+}
+
+.assistant-todo-widget-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 8px 7px 10px;
+
+  border: none;
+  background: none;
+
+  font-family: inherit;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  text-align: left;
+
+  cursor: pointer;
+}
+
+.assistant-todo-widget-header:hover {
+  background: var(--bg-2);
+}
+
+.assistant-todo-widget-clear {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 6px;
+
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+
+  cursor: pointer;
+}
+
+.assistant-todo-widget-clear:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+.assistant-todo-widget-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Persistent "this is a plan/checklist" identifier, inline at the start of
+   the one summary line — enough on its own to read unambiguously as a todo
+   tracker at a glance rather than a generic status pill, without needing a
+   whole separate label row. */
+.assistant-todo-widget-icon {
+  flex: none;
+  color: var(--text-2);
+}
+
+.assistant-todo-widget-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+
+  line-height: 1.5;
+  font-size: calc(var(--font-ui-sm) * 1.2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-todo-widget.is-done .assistant-todo-widget-summary {
+  color: var(--accent);
+}
+
+.assistant-todo-widget-chevron {
+  flex: none;
+  color: var(--text-2);
+}
+
+.assistant-todo-widget-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+
+  margin: 0;
+  padding: 2px 10px 8px;
+
+  max-height: 180px;
+  overflow-y: auto;
+
+  list-style: none;
+  
+
+  border-top: 1px solid var(--border);
+}
+
+.assistant-todo-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+
+  padding: 5px 0;
+
+  font-size: var(--font-ui-ui);
+  line-height: 1.5;
+}
+
+.assistant-todo-row-index {
+  flex: none;
+  min-width: 1.4em;
+
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.assistant-todo-row-glyph {
+  flex: none;
+  color: var(--text-2);
+}
+
+.assistant-todo-row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-todo-row.is-cancelled {
+  color: var(--text-2);
+}
+
+.assistant-todo-row.is-cancelled .assistant-todo-row-title {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+
+/* =========================================================
+   Follow-up suggestion bar (branching chips)
+   ========================================================= */
+
+/* Compact strip above the composer — one row, no card chrome. */
+.assistant-followup-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  padding: 6px 10px 0;
+
+  border-top: 1px solid var(--border);
+  background: var(--bg-0);
+}
+
+.assistant-followup-bar-icon {
+  flex: none;
+  color: var(--text-2);
+  opacity: 0.7;
+}
+
+.assistant-followup-bar-chips {
+  flex: 1;
+  min-width: 0;
+
+  display: flex;
+  align-items: center;
+  gap: 4px;
+
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.assistant-followup-bar-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.assistant-followup-chip {
+  flex: none;
+
+  border: none;
+  border-radius: 999px;
+  padding: 3px 9px;
+
+  background: var(--bg-2);
+  color: var(--text-2);
+
+  font-size: var(--font-ui-sm);
+  font-family: inherit;
+  line-height: 1.35;
+  white-space: nowrap;
+
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.assistant-followup-chip:hover:not(:disabled) {
+  background: var(--bg-1);
+  color: var(--text-1);
+}
+
+.assistant-followup-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.assistant-followup-bar-dismiss {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-2);
+  opacity: 0.6;
+
+  cursor: pointer;
+}
+
+.assistant-followup-bar-dismiss:hover {
+  opacity: 1;
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+
+/* =========================================================
+   Message list
+   ========================================================= */
+
+.assistant-chat-messages {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  overflow-y: auto;
+  padding: 8px 10px 16px;
+  scrollbar-gutter: stable;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-chat-messages {
+    scroll-behavior: auto;
+  }
+}
+
+/* Floating "jump to newest message" pill — shown once the user scrolls up
+   away from the live bottom edge while a conversation keeps growing (see
+   `AssistantConversation`'s `pinnedToBottom`/`showJumpToBottom` state), so
+   auto-follow doesn't fight someone who scrolled up to re-read something. */
+.assistant-scroll-to-bottom {
+  position: sticky;
+  align-self: center;
+  bottom: 4px;
+  margin-top: auto;
+  z-index: 5;
+
+  display: flex;
+  align-items: center;
+  gap: 4px;
+
+  height: 30px;
+  padding: 8px 10px 8px 8px;
+
+  border: 1px solid var(--border);
+  border-radius: 999px;
+
+  background: var(--bg-1);
+  color: var(--text-2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+
+ 
+  line-height: 1;
+  cursor: pointer;
+
+  animation: assistant-scroll-to-bottom-in 0.12s ease;
+}
+
+.assistant-scroll-to-bottom:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+@keyframes assistant-scroll-to-bottom-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.assistant-chat-placeholder {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: 320px;
+  text-align: center;
+  color: var(--text-2);
+}
+
+.assistant-chat-placeholder-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.assistant-chat-placeholder-desc {
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-chat-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.assistant-suggestion-chip {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 10px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: calc(var(--font-ui-sm) * 1.1);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.assistant-suggestion-chip:hover {
+  background: var(--bg-2);
+}
+
+.assistant-suggestion-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+
+/* =========================================================
+   Base message
+   ========================================================= */
+
+.assistant-chat-message {
+  max-width: 90%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: calc(var(--font-ui-sm) * 1.2);
+  word-break: break-word;
+}
+
+
+/* =========================================================
+   User message
+   ========================================================= */
+
+.assistant-chat-message.user {
+  align-self: flex-end;
+  max-width: 85%;
+  margin: 6px 0 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+
+/* =========================================================
+   Assistant message
+   ========================================================= */
+
+.assistant-chat-message.assistant {
+  align-self: stretch;
+  max-width: 100%;
+  padding: 12px 14px 16px;
+  background: transparent;
+  color: var(--text-1);
+  border: none;
+  white-space: normal;
+}
+
+.assistant-chat-message.assistant > * {
+  max-width: 900px;
+}
+
+
+/* Paragraphs, headings and lists inside assistant replies are styled by
+   the `.markdown-*` classes in AssistantMarkdown.css — that file is the
+   single source of truth for prose typography. */
+
+
+/* =========================================================
+   Links
+   ========================================================= */
+
+.assistant-chat-message a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.assistant-chat-message a:hover {
+  text-decoration: underline;
+}
+
+
+/* Inline code (`.markdown-code-inline`) and code blocks
+   (`.markdown-code-block`) are styled by AssistantMarkdown.css — that file
+   is the single source of truth for both, so no tag-selector rules for
+   `code`/`pre` live here anymore. */
+
+
+/* =========================================================
+   Blockquote
+   ========================================================= */
+
+.assistant-chat-message blockquote {
+  margin: 12px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--border);
+  color: var(--text-2);
+}
+
+.assistant-chat-message blockquote p {
+  margin-bottom: 6px;
+}
+
+
+/* =========================================================
+   Horizontal separator
+   ========================================================= */
+
+.assistant-chat-message hr {
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+
+/* =========================================================
+   Tables
+   ========================================================= */
+
+   .assistant-chat-message table {
+    width: 100%;
+    max-width: 100%;
+    margin: 14px 0;
+  
+    border-collapse: separate;
+    border-spacing: 0;
+  
+    table-layout: fixed;
+  
+    font-size: 0.9em;
+    line-height: 1.45;
+  
+    overflow: hidden;
+  
+    border: 1px solid var(--border);
+    border-radius: 7px;
+  
+    background: var(--bg-1);
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Cells
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message th,
+  .assistant-chat-message td {
+    min-width: 0;
+  
+    padding: 6px 8px;
+  
+    border: 0;
+    border-bottom: 1px solid var(--border);
+  
+    text-align: left;
+    vertical-align: top;
+  
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Header
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message th {
+    background: var(--bg-2);
+  
+    color: var(--text-0);
+  
+    font-weight: 600;
+    white-space: normal;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Body
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message td {
+    background: var(--bg-1);
+    color: var(--text-1);
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Row separators
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message tbody tr:not(:last-child) td {
+    border-bottom: 1px solid var(--border);
+  }
+  
+  .assistant-chat-message tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Hover
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message tbody tr:hover td {
+    background: var(--bg-2);
+  }
+  
+  
+  /* ---------------------------------------------------------
+     First / last column
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message th:first-child,
+  .assistant-chat-message td:first-child {
+    padding-left: 9px;
+  }
+  
+  .assistant-chat-message th:last-child,
+  .assistant-chat-message td:last-child {
+    padding-right: 9px;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Code inside tables
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message td code,
+  .assistant-chat-message th code {
+    padding: 1px 4px;
+  
+    border-radius: 3px;
+  
+    background: var(--bg-2);
+  
+    font-family:
+      "JetBrains Mono",
+      ui-monospace,
+      SFMono-Regular,
+      Menlo,
+      monospace;
+  
+    font-size: 0.86em;
+  
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Links inside tables
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message td a,
+  .assistant-chat-message th a {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Long content
+     --------------------------------------------------------- */
+  
+  .assistant-chat-message td pre,
+  .assistant-chat-message th pre {
+    max-width: 100%;
+    margin: 4px 0;
+  
+    overflow-x: auto;
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Narrow assistant panel
+     --------------------------------------------------------- */
+  
+  @media (max-width: 700px) {
+    .assistant-chat-message table {
+      font-size: 0.85em;
+    }
+  
+    .assistant-chat-message th,
+    .assistant-chat-message td {
+      padding: 5px 6px;
+    }
+  
+    .assistant-chat-message th:first-child,
+    .assistant-chat-message td:first-child {
+      padding-left: 7px;
+    }
+  
+    .assistant-chat-message th:last-child,
+    .assistant-chat-message td:last-child {
+      padding-right: 7px;
+    }
+  }
+  
+  
+  /* ---------------------------------------------------------
+     Very narrow panel
+     --------------------------------------------------------- */
+  
+  @media (max-width: 480px) {
+    .assistant-chat-message table {
+      font-size: 0.82em;
+    }
+  
+    .assistant-chat-message th,
+    .assistant-chat-message td {
+      padding: 4px 5px;
+    }
+  }
+
+
+/* =========================================================
+   Cancelled message (user clicked Stop)
+   ========================================================= */
+
+.assistant-chat-cancelled-note {
+  margin-top: 4px;
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+  font-style: italic;
+}
+
+
+/* =========================================================
+   Failed message — a card under the turn's own text/blocks (which stay
+   their normal color, see AssistantConversation's `failed` handling)
+   rather than recoloring the whole message red.
+   ========================================================= */
+
+.assistant-chat-error-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--red-tag);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--red-tag) 7%, var(--bg-0));
+  color: var(--red-tag);
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-chat-error-card svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.assistant-chat-error-retry {
+  margin-top: 2px;
+  padding: 3px 9px;
+  border: 1px solid var(--red-tag);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--red-tag);
+  font-size: var(--font-ui-xs);
+  cursor: pointer;
+}
+
+.assistant-chat-error-retry:hover {
+  background: color-mix(in srgb, var(--red-tag) 12%, transparent);
+}
+
+
+/* =========================================================
+   History-compaction notice — a display-only marker inserted when
+   `useLlmChat`'s proactive compaction pass folds an older slice of the
+   conversation into a summary (see `src/lib/contextCompaction.ts`). Styled
+   as a centered pill, deliberately unlike a chat bubble, so it reads as a
+   system event rather than something either party "said".
+   ========================================================= */
+
+.assistant-chat-compaction-notice {
+  display: flex;
+  justify-content: center;
+  margin: 2px 0;
+}
+
+.assistant-chat-compaction-notice span {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-1);
+  color: var(--text-2);
+  font-size: var(--font-ui-xs);
+  line-height: 1.4;
+}
+
+
+/* =========================================================
+   Streaming indicator
+   ========================================================= */
+
+.assistant-chat-typing {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.assistant-chat-typing span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--text-2);
+  animation: assistant-chat-typing-pulse 1s infinite ease-in-out;
+}
+
+.assistant-chat-typing span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.assistant-chat-typing span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes assistant-chat-typing-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+  }
+
+  40% {
+    opacity: 1;
+  }
+}
+
+
+/* =========================================================
+   Container for assistant message blocks
+   ========================================================= */
+
+   .assistant-chat-blocks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .assistant-tool-call {
+    margin: 1px 0;
+  }
+
+
+/* =========================================================
+   Reasoning block ("Модель думает…" / "Ход рассуждений")
+   — same collapsed-by-default container as a tool call, see
+   AssistantReasoningBlock.
+   ========================================================= */
+
+.assistant-reasoning {
+  display: flex;
+  flex-direction: column;
+  margin: 8px 0 2px;
+  padding: 6px 0 0;
+
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: 8px;
+
+  background: color-mix(in srgb, var(--accent) 3%, var(--bg-1));
+  color: var(--text-2);
+
+  overflow: hidden;
+
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.assistant-reasoning-thinking {
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-1));
+}
+
+.assistant-reasoning:has(.assistant-reasoning-detail) {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-1));
+}
+
+.assistant-reasoning-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+
+  padding: 4px 10px 7px;
+
+  border: none;
+  border-radius: 6px;
+
+  background: transparent;
+
+  font: inherit;
+  font-size: var(--font-ui-sm);
+  font-weight: 400;
+
+  color: var(--text-2);
+  text-align: left;
+
+  cursor: pointer;
+
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.assistant-reasoning-header:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.assistant-reasoning-chevron,
+.assistant-reasoning-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+
+.assistant-reasoning-chevron {
+  color: var(--text-2);
+  opacity: 0.75;
+}
+
+.assistant-reasoning-icon {
+  color: var(--text-2);
+  opacity: 0.85;
+}
+
+.assistant-reasoning-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* While thinking, the label shimmers — a gradient sweeping across the text
+   itself (background-clip: text), the "переливается" effect requested for
+   this indicator; a plain opacity pulse (see .assistant-chat-typing) reads
+   as "loading", this reads as "actively composing". */
+.assistant-reasoning-thinking .assistant-reasoning-label {
+  background: linear-gradient(
+    90deg,
+    var(--text-2) 0%,
+    var(--text-2) 35%,
+    var(--text-0) 50%,
+    var(--text-2) 65%,
+    var(--text-2) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: assistant-reasoning-shimmer 1.8s linear infinite;
+}
+
+@keyframes assistant-reasoning-shimmer {
+  0% {
+    background-position: 250% 0;
+  }
+  100% {
+    background-position: -250% 0;
+  }
+}
+
+.assistant-reasoning-thinking .assistant-reasoning-icon {
+  color: var(--accent);
+}
+
+.assistant-reasoning-detail {
+  margin-top: 2px;
+  padding: 8px 12px 12px 30px;
+
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+
+  font-size: calc(var(--font-ui-sm) * 0.95);
+  line-height: 1.55;
+
+  color: var(--text-2);
+}
+
+/* =========================================================
+   Tool call
+   ========================================================= */
+
+.assistant-tool-call {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0;
+  padding: 0;
+
+  border: 1px solid transparent;
+  border-radius: 7px;
+
+  background: transparent;
+  color: var(--text-2);
+
+  overflow: hidden;
+
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+
+/*
+ * Expanded tool call becomes a subtle container.
+ * Collapsed calls remain visually lightweight.
+ */
+.assistant-tool-call:has(.assistant-tool-call-detail) {
+  border-color: var(--border);
+  background: var(--bg-1);
+}
+
+
+/* =========================================================
+   Tool call header
+   ========================================================= */
+
+.assistant-tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+
+  padding: 5px 7px;
+
+  border: none;
+  border-radius: 6px;
+
+  background: transparent;
+
+  font: inherit;
+  font-size: var(--font-ui-sm);
+  font-weight: 400;
+
+  color: var(--text-2);
+  text-align: left;
+
+  cursor: pointer;
+
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.assistant-tool-call-header:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+
+/* =========================================================
+   Chevron / status icon
+   ========================================================= */
+
+.assistant-tool-call-chevron,
+.assistant-tool-call-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+
+.assistant-tool-call-chevron {
+  color: var(--text-2);
+  opacity: 0.75;
+}
+
+.assistant-tool-call-done .assistant-tool-call-icon {
+  color: var(--accent);
+}
+
+.assistant-tool-call-error .assistant-tool-call-icon {
+  color: var(--red-tag);
+}
+
+.assistant-tool-call-pendingApproval .assistant-tool-call-icon {
+  color: var(--accent);
+}
+
+
+/* =========================================================
+   Tool activity text
+   ========================================================= */
+
+.assistant-tool-call-header > * {
+  min-width: 0;
+}
+
+.assistant-tool-call-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* =========================================================
+   Result summary
+   ========================================================= */
+
+   .assistant-tool-call-summary {
+    min-width: 0;
+  
+    margin-left: 4px;
+    padding-left: 0;
+  
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  
+    font-size: calc(var(--font-ui-sm) * 0.9);
+    font-weight: 400;
+  
+    color: var(--text-2);
+    opacity: 0.7;
+  }
+  
+  .assistant-tool-call-error .assistant-tool-call-summary {
+    color: var(--red-tag);
+    opacity: 0.9;
+  }
+
+  .assistant-tool-call-detail-summary {
+    margin: 0 0 2px;
+    padding: 0 0 8px;
+  
+    border-bottom: 1px solid var(--border);
+  
+    color: var(--text-2);
+    font-size: var(--font-ui-sm);
+    line-height: 1.4;
+  }
+
+/* =========================================================
+   Running state
+   ========================================================= */
+
+.assistant-tool-call-running {
+  background: color-mix(
+    in srgb,
+    var(--accent) 5%,
+    transparent
+  );
+}
+
+.assistant-tool-call-running .assistant-tool-call-header {
+  color: var(--text-1);
+}
+
+
+/* =========================================================
+   Pending-approval state (inline card, see AssistantToolCallBlock)
+   — deliberately styled as just another "expanded tool call", the same
+   quiet container `.assistant-tool-call:has(.assistant-tool-call-detail)`
+   already uses, not a distinct callout — this app's tool-call rows stay
+   visually lightweight (see that rule's own comment), and a bright/colored
+   card here would read as a foreign widget dropped into the transcript.
+   ========================================================= */
+
+.assistant-tool-call-pendingApproval {
+  border-color: var(--border);
+  background: var(--bg-1);
+}
+
+/* =========================================================
+   Combined tool-approval group card (AssistantToolApprovalGroup)
+   ========================================================= */
+
+.assistant-tool-approval-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 2px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-1);
+  color: var(--text-2);
+}
+
+.assistant-tool-approval-group-header {
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.assistant-tool-approval-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.assistant-tool-approval-group-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+}
+
+.assistant-tool-approval-group-item:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+}
+
+.assistant-tool-approval-group-item-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.assistant-tool-approval-group-item-checkbox {
+  flex: none;
+  accent-color: var(--accent);
+}
+
+/* Base look shared by the item title whether it's plain text (no
+ * expandable body — `move`, `requestFullRepoAccess`, …) or the button that
+ * toggles one open (`writeFile`'s diff, `deleteFile`'s content, …) — see
+ * `isExpandableToolCall`. The title itself is the click target for
+ * expanding, so nothing below it needs to say "Показать изменения". */
+.assistant-tool-approval-group-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-0);
+}
+
+.assistant-tool-approval-group-item-title span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.assistant-tool-approval-group-item-title-toggle {
+  padding: 2px 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+button.assistant-tool-approval-group-item-title-toggle:hover {
+  color: var(--accent);
+}
+
+.assistant-tool-approval-group-item-preview {
+  padding-left: 20px;
+}
+
+.assistant-tool-approval-group-item-preview:empty {
+  display: none;
+}
+
+/* Deliberately styled as a distinct, warning-tinted block (same
+ * `--yellow` used by admonitions/conflict banners elsewhere in the app,
+ * see `tokens.css`) rather than reusing the tiny, low-contrast
+ * `.assistant-tool-call-detail-label` style — granting persistent trust is
+ * a different kind of decision than a one-off approve, and needs to read
+ * that way instead of blending into the card. */
+.assistant-tool-approval-group-trust {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 32%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--yellow) 7%, transparent);
+}
+
+.assistant-tool-approval-group-trust-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.assistant-tool-approval-group-trust-heading svg {
+  flex: none;
+  color: var(--yellow);
+}
+
+.assistant-tool-approval-group-trust-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.assistant-tool-approval-group-trust-item:hover {
+  background: color-mix(in srgb, var(--yellow) 12%, transparent);
+  color: var(--text-0);
+}
+
+.assistant-tool-approval-group-trust-item input[type="checkbox"] {
+  accent-color: var(--yellow);
+}
+
+.assistant-tool-approval-path {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+}
+
+.assistant-tool-approval-path-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 2px 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.assistant-tool-approval-path-toggle:hover {
+  color: var(--text-0, var(--text-1));
+}
+
+.assistant-tool-approval-edit-count {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-ui, sans-serif);
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.assistant-tool-approval-reason {
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.assistant-tool-approval-timer {
+  height: 3px;
+  border-radius: 1px;
+  overflow: hidden;
+  background: var(--bg-2);
+}
+
+.assistant-tool-approval-timer-fill {
+  height: 100%;
+  background: var(--accent, var(--text-2));
+  transition-property: width;
+  transition-timing-function: linear;
+}
+
+.assistant-tool-approval-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.assistant-tool-approval-buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+
+/* =========================================================
+   Ask-user clarifying questions card
+   ========================================================= */
+
+.assistant-ask-user-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  transition: opacity 0.15s ease;
+}
+
+.assistant-ask-user-card.is-decided {
+  opacity: 0.72;
+}
+
+.assistant-ask-user-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.assistant-ask-user-card-eyebrow {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.assistant-ask-user-card-title {
+  font-size: calc(var(--font-ui) * 1.08);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-0);
+}
+
+.assistant-ask-user-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.assistant-ask-user-card-section + .assistant-ask-user-card-section {
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.assistant-ask-user-card-section-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.assistant-ask-user-card-error {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--red-tag);
+}
+
+.assistant-ask-user-card-questions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.assistant-ask-user-card-question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.assistant-ask-user-card-prompt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-ui);
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--text-0);
+}
+
+.assistant-ask-user-card-prompt-index {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: calc(var(--font-ui-sm) * 0.85);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.assistant-ask-user-card-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.assistant-ask-user-card-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-0);
+  font-size: var(--font-ui);
+  line-height: 1.4;
+  color: var(--text-1);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.assistant-ask-user-card-option:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text-0);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-0));
+}
+
+.assistant-ask-user-card-option.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-0));
+  color: var(--text-0);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.assistant-ask-user-card-option:has(input:disabled) {
+  cursor: default;
+}
+
+.assistant-ask-user-card-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.assistant-ask-user-card-option-mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1.5px solid var(--text-2);
+  border-radius: 999px;
+  background: transparent;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.assistant-ask-user-card-option input[type="checkbox"] + .assistant-ask-user-card-option-mark {
+  border-radius: 4px;
+}
+
+.assistant-ask-user-card-option.is-selected .assistant-ask-user-card-option-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--bg-0);
+}
+
+.assistant-ask-user-card-option-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-ask-user-card-custom {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font: inherit;
+  font-size: var(--font-ui);
+  line-height: 1.45;
+  transition: border-color 0.12s ease;
+}
+
+.assistant-ask-user-card-custom::placeholder {
+  color: var(--text-2);
+}
+
+.assistant-ask-user-card-custom:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.assistant-ask-user-card-custom:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.assistant-ask-user-card-custom:disabled {
+  opacity: 0.6;
+}
+
+.assistant-ask-user-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+/* =========================================================
+   Plan card (createPlan / updatePlan) — same shell as ask-user
+   ========================================================= */
+
+.assistant-plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  transition: opacity 0.15s ease;
+}
+
+.assistant-plan-card.is-running,
+.assistant-plan-card.is-error {
+  opacity: 0.85;
+}
+
+.assistant-plan-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.assistant-plan-card-eyebrow {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.assistant-plan-card-title {
+  font-size: calc(var(--font-ui) * 1.08);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-0);
+}
+
+.assistant-plan-card-overview {
+  margin: 0;
+  font-size: var(--font-ui);
+  line-height: 1.45;
+  color: var(--text-1);
+}
+
+.assistant-plan-card-error {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--red-tag);
+}
+
+.assistant-plan-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+
+/* =========================================================
+   Spinner
+   ========================================================= */
+
+.assistant-chat-tool-spinner {
+  flex: none;
+
+  width: 15px;
+  height: 15px;
+
+  color: var(--accent);
+
+  animation: assistant-chat-spin 0.8s linear infinite;
+}
+
+@keyframes assistant-chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+/* =========================================================
+   Expanded tool detail
+   ========================================================= */
+
+.assistant-tool-call-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  margin: 0;
+  padding: 10px 10px 5px 10px;
+
+  border-top: 1px solid var(--border);
+}
+
+
+/* =========================================================
+   Detail sections
+   ========================================================= */
+
+.assistant-tool-call-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.assistant-tool-call-detail-label {
+  display: flex;
+  align-items: center;
+
+  font-size: calc(var(--font-ui-sm) * 0.82);
+  font-weight: 600;
+  line-height: 1.3;
+
+  color: var(--text-2);
+  opacity: 0.7;
+
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+
+ /* =========================================================
+    Tool detail — code / arguments / file content
+    ========================================================= */
+
+    .assistant-tool-call-detail-code {
+      position: relative;
+    
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+    
+      margin: 0;
+      padding: 9px 11px;
+    
+      max-height: 280px;
+    
+      overflow-x: auto;
+      overflow-y: auto;
+    
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    
+      background: var(--bg-0);
+      color: var(--text-1);
+    
+      font-family:
+        "JetBrains Mono",
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Monaco,
+        Consolas,
+        monospace;
+    
+      font-size: 0.8em;
+      line-height: 1.55;
+    
+      /* Сохраняем структуру кода */
+      white-space: pre;
+    
+      /* Не даём длинным строкам ломать layout */
+      word-break: normal;
+      overflow-wrap: normal;
+    
+      /* Убираем лишний браузерный margin */
+      tab-size: 2;
+    
+      scrollbar-gutter: stable;
+    }
+    
+    
+    /* =========================================================
+       Code scrollbar
+       ========================================================= */
+    
+    .assistant-tool-call-detail-code::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
+    
+    .assistant-tool-call-detail-code::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    
+    .assistant-tool-call-detail-code::-webkit-scrollbar-thumb {
+      background: var(--bg-2);
+      border-radius: 999px;
+    }
+    
+    .assistant-tool-call-detail-code::-webkit-scrollbar-thumb:hover {
+      background: var(--text-2);
+    }
+    
+    
+    /* =========================================================
+       Firefox
+       ========================================================= */
+    
+    .assistant-tool-call-detail-code {
+      scrollbar-width: thin;
+      scrollbar-color: var(--bg-2) transparent;
+    }
+    
+    
+    /* =========================================================
+       Narrow panel
+       ========================================================= */
+    
+    @media (max-width: 600px) {
+      .assistant-tool-call-detail-code {
+        padding: 8px 9px;
+        font-size: 0.78em;
+        line-height: 1.5;
+      }
+    }
+
+/* =========================================================
+   Error detail
+   ========================================================= */
+
+.assistant-tool-call-detail-error {
+  margin: 0;
+
+  padding: 8px 10px;
+
+  border-left: 2px solid var(--red-tag);
+  border-radius: 3px;
+
+  background: color-mix(
+    in srgb,
+    var(--red-tag) 7%,
+    var(--bg-0)
+  );
+
+  color: var(--red-tag);
+
+  font-family:
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+
+  font-size: 0.82em;
+  line-height: 1.5;
+
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+
+/* =========================================================
+   Empty result
+   ========================================================= */
+
+.assistant-tool-call-detail-empty {
+  margin: 0;
+  padding: 3px 0;
+
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  opacity: 0.7;
+}
+
+
+/* =========================================================
+   File list
+   ========================================================= */
+
+.assistant-tool-call-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+
+  margin: 0;
+  padding: 4px;
+
+  max-height: 240px;
+  overflow: auto;
+
+  border: 1px solid var(--border);
+  border-radius: 5px;
+
+  background: var(--bg-0);
+
+  list-style: none;
+
+  scrollbar-gutter: stable;
+}
+
+.assistant-tool-call-detail-list li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+
+  min-width: 0;
+
+  padding: 4px 6px;
+
+  border-radius: 3px;
+
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-tool-call-detail-list li:hover {
+  background: var(--bg-1);
+}
+
+.assistant-tool-call-detail-icon {
+  flex: none;
+
+  width: 14px;
+  height: 14px;
+
+  color: var(--text-2);
+}
+
+.assistant-tool-call-detail-list li > span:last-child {
+  min-width: 0;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  font-family:
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+
+  font-size: 0.85em;
+
+  color: var(--text-1);
+}
+
+
+/* =========================================================
+   Search results
+   ========================================================= */
+
+.assistant-tool-call-detail-matches {
+  gap: 0;
+  padding: 4px;
+}
+
+.assistant-tool-call-detail-matches li {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+
+  padding: 7px 8px;
+
+  border-radius: 4px;
+}
+
+.assistant-tool-call-detail-matches li:hover {
+  background: var(--bg-1);
+}
+
+.assistant-tool-call-detail-matches li:not(:last-child) {
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+
+/* =========================================================
+   Search result header
+   ========================================================= */
+
+.assistant-tool-call-detail-match-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  min-width: 0;
+
+  gap: 8px;
+}
+
+.assistant-tool-call-detail-match-path {
+  min-width: 0;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  font-family:
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+
+  font-size: 0.82em;
+
+  color: var(--text-1);
+}
+
+
+/* =========================================================
+   Search snippet
+   ========================================================= */
+
+.assistant-tool-call-detail-match-snippet {
+  margin: 0;
+  padding: 5px 7px;
+
+  border-left: 2px solid var(--border);
+
+  color: var(--text-2);
+  opacity: 0.85;
+
+  font-family:
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+
+  font-size: 0.8em;
+  line-height: 1.5;
+
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+
+/* =========================================================
+   Search source badge
+   ========================================================= */
+
+.assistant-tool-call-source-badge {
+  flex: none;
+
+  padding: 1px 6px;
+
+  border: 1px solid var(--border);
+  border-radius: 999px;
+
+  font-size: calc(var(--font-ui-sm) * 0.78);
+  line-height: 1.35;
+
+  color: var(--text-2);
+
+  white-space: nowrap;
+  cursor: default;
+}
+
+.assistant-tool-call-source-semantic {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.assistant-tool-call-source-symbol {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+
+
+/* =========================================================
+   Context usage
+   ========================================================= */
+
+.assistant-context-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.assistant-context-ring {
+  flex: none;
+
+  /* SVG circles start at 3 o'clock by default — rotate so the fill arc
+     sweeps starting from 12 o'clock instead. */
+  transform: rotate(-90deg);
+}
+
+.assistant-context-ring-track {
+  fill: none;
+
+  stroke: var(--bg-2);
+  stroke-width: 3;
+}
+
+.assistant-context-ring-fill {
+  fill: none;
+
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+
+  transition: stroke-dashoffset 0.2s ease;
+}
+
+.assistant-context-bar.near-limit .assistant-context-ring-fill {
+  stroke: var(--red-tag);
+}
+
+.assistant-context-bar-label {
+  flex: none;
+
+  font-size: var(--font-ui-sm);
+
+  color: var(--text-2);
+
+  white-space: nowrap;
+}
+
+
+/* =========================================================
+   Input area
+   ========================================================= */
+
+.assistant-chat-input-row {
+  flex: none;
+
+  padding: 10px;
+
+  border-top: 1px solid var(--border);
+
+  background: var(--bg-0);
+}
+
+.assistant-chat-input-row.has-followups {
+  padding-top: 6px;
+  border-top: none;
+}
+
+.assistant-chat-input-wrap {
+  position: relative;
+}
+
+.assistant-chat-input {
+  width: 100%;
+
+  resize: none;
+
+  /* Bottom padding must clear `.assistant-chat-input-tools`'s full
+     footprint (bottom: 6px + its tallest child `.assistant-chat-send`'s
+     30px = 36px), or the last line of typed text scrolls in underneath
+     the overlaid mode toggle/send button instead of stopping above it. */
+  padding: 10px 42px 40px 12px;
+
+  border: 1px solid var(--border);
+  border-radius: 8px;
+
+  background: var(--bg-1);
+  color: var(--text-1);
+
+  font-size: var(--font-ui-ui);
+  font-family: inherit;
+  line-height: 1.5;
+
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.assistant-chat-input:focus {
+  outline: none;
+
+  border-color: var(--accent);
+
+  background: var(--bg-1);
+}
+
+.assistant-chat-input:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.assistant-chat-input-tools {
+  position: absolute;
+
+  right: 6px;
+  bottom: 6px;
+
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-chat-send {
+  flex: none;
+
+  width: 30px;
+  height: 30px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border: none;
+  border-radius: 6px;
+
+  background: transparent;
+  color: var(--text-2);
+
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.assistant-chat-send:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.assistant-chat-send:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Replaces `.assistant-chat-send` in the same spot while a turn is in
+   flight — see `AssistantConversation.tsx`'s `sending` branch. */
+.assistant-chat-stop {
+  flex: none;
+
+  width: 30px;
+  height: 30px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border: none;
+  border-radius: 6px;
+
+  background: transparent;
+  color: var(--red-tag);
+
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.assistant-chat-stop:hover {
+  background: var(--bg-2);
+}
+
+/* Chat mode picker (Агент / План / Вопрос) — visual only for now, see
+   `ChatModeSelect` in AssistantPanel.tsx. */
+.assistant-mode-select {
+  position: relative;
+  flex: none;
+}
+
+.assistant-mode-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+
+  height: 26px;
+  padding: 0 8px;
+
+  border: 1px solid transparent;
+  border-radius: 6px;
+
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.assistant-mode-trigger:hover {
+  color: var(--text-0);
+}
+
+.assistant-mode-trigger.is-open {
+  border-color: var(--border);
+  color: var(--text-0);
+  background: var(--bg-0);
+}
+
+.assistant-mode-chevron {
+  transform: rotate(180deg);
+  transition: transform 0.15s ease;
+}
+
+.assistant-mode-trigger.is-open .assistant-mode-chevron {
+  transform: rotate(0deg);
+}
+
+.assistant-mode-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+
+  min-width: 140px;
+  padding: 4px;
+
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.assistant-mode-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+
+  padding: 6px 8px;
+
+  border: none;
+  border-radius: 5px;
+
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--font-ui-sm);
+  text-align: left;
+}
+
+.assistant-mode-option:hover {
+  background: var(--bg-2);
+}
+
+.assistant-mode-option.is-active {
+  color: var(--text-0);
+  background: var(--accent-dim);
+}
+
+
+/* =========================================================
+   Setup prompt
+   ========================================================= */
+
+.assistant-setup-prompt {
+  margin: auto;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+
+  gap: 8px;
+
+  max-width: 240px;
+  padding: 16px;
+
+  text-align: center;
+
+  color: var(--text-2);
+}
+
+.assistant-setup-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.assistant-setup-desc {
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+
+/* =========================================================
+   Buttons
+   ========================================================= */
+
+.assistant-btn {
+  font-size: var(--font-ui-sm);
+
+  padding: 5px 12px;
+
+  border-radius: 4px;
+  border: 1px solid var(--border);
+
+  background: var(--bg-2);
+  color: var(--text-1);
+
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.assistant-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  border-color: var(--text-2);
+}
+
+.assistant-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.assistant-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.assistant-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+
+/* =========================================================
+   Tool approval — writeFile diff preview (WriteFileDiffReview),
+   embedded inline in a pendingApproval card, see
+   ".assistant-tool-approval-*" above for the card/timer/actions.
+   ========================================================= */
+
+.tool-approval-diff {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.tool-approval-diff-placeholder {
+  padding: 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.tool-approval-diff-error {
+  color: var(--red-tag);
+}
+
+/* Tool approval — deleteDirectory content listing (DeleteDirectoryReview). */
+
+.tool-approval-dir-list {
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+}
+
+.tool-approval-dir-list-item {
+  padding: 1px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-approval-dir-list-more {
+  padding-top: 4px;
+  color: var(--text-2);
+}
+
+.assistant-tool-call-auto-approved {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-left: 4px;
+  color: var(--text-2);
+}
+
+/* Always-visible "+N -M" pill on a settled writeFile/editFile/deleteFile
+   call's header (see `DiffBadge` in AssistantToolCallBlock.tsx) — same
+   green/red convention as the rest of the app's diff UI (`--green`/
+   `--red-tag`, `styles/tokens.css`). */
+.assistant-tool-call-diff-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  font-size: var(--font-ui-sm);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+.assistant-tool-call-diff-added {
+  color: var(--green);
+}
+
+.assistant-tool-call-diff-removed {
+  color: var(--red-tag);
+}
+
+/* Lightweight colored unified-diff view in a settled call's expanded detail
+   (see `DiffLines`) — same line-background recipe as the editor's own git
+   gutter popup (`.git-gutter-diff-added`/`-removed` in
+   `components/Editor/GitGutter.css`), reused here as its own namespaced
+   classes rather than shared verbatim, consistent with this file's other
+   per-component styling. */
+.assistant-tool-call-diff {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--font-ui-sm);
+  line-height: 1.5;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 260px;
+}
+
+.assistant-tool-call-diff-line {
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-1);
+}
+
+.assistant-tool-call-diff-line-added {
+  background: color-mix(in srgb, #3fb950 10%, transparent);
+  color: var(--text-0);
+}
+
+.assistant-tool-call-diff-line-removed {
+  background: color-mix(in srgb, #f85149 10%, transparent);
+  color: var(--text-0);
+}
+
+.assistant-tool-call-diff-line-hunk {
+  color: var(--text-2);
+}
+
+.assistant-tool-call-diff-truncated {
+  padding: 2px 8px;
+  color: var(--text-2);
+  font-style: italic;
+}
+
+
+/* =========================================================
+   Responsive
+   ========================================================= */
+
+@media (max-width: 600px) {
+  .assistant-tool-call-summary {
+    display: none;
+  }
+
+  .assistant-tool-call-detail {
+    padding-left: 10px;
+  }
+
+  .assistant-tool-call-detail-code {
+    max-height: 180px;
+  }
+
+  .assistant-tool-call-detail-list {
+    max-height: 180px;
+  }
+}

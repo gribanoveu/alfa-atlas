@@ -314,7 +314,6 @@ impl WorkspaceIndex {
     /// Rename: update the document row, but leave references in OTHER docs
     /// pointing at the old path (they become broken until manually edited),
     /// per spec section 4.
-    #[allow(dead_code)]
     pub fn rename_document(
         self: &Arc<Self>,
         old: PathBuf,
@@ -873,6 +872,17 @@ impl WorkspaceIndex {
         self.documents.get(&id).map(|r| r.clone())
     }
 
+    /// Same lookup as `get_document`, but by the document's already-known
+    /// repo-relative `DocumentId` key directly — no filesystem
+    /// canonicalize, so (unlike `get_document`) this works from a frontend
+    /// that only ever deals in repo-relative path strings and has no
+    /// absolute filesystem path to pass in. Same pattern `find_anchors`/
+    /// `find_includes`/`find_references` already use for an exact-key
+    /// lookup.
+    pub fn get_document_by_id(&self, id: &str) -> Option<Document> {
+        self.documents.get(&DocumentId::new(id.to_string())).map(|r| r.clone())
+    }
+
     pub fn get_documents(&self) -> Vec<Document> {
         self.documents.iter().map(|r| r.value().clone()).collect()
     }
@@ -1046,6 +1056,26 @@ mod tests {
         assert_eq!(idx.anchors.len(), 1); // "installation"
         assert_eq!(idx.find_anchor("installation").len(), 1);
         assert_eq!(idx.find_includes(&DocumentId::new("install.adoc")).len(), 1);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_indexes_json_ref_as_an_include() {
+        let root = temp_dir();
+        fs::write(
+            root.join("api.json"),
+            r#"{"components": {"$ref": "./common.json"}}"#,
+        )
+        .unwrap();
+        fs::write(root.join("common.json"), "{}").unwrap();
+
+        let idx = build_index(&root);
+        assert_eq!(idx.documents.len(), 2);
+        let includes = idx.find_includes(&DocumentId::new("api.json"));
+        assert_eq!(includes.len(), 1);
+        // `insert_parsed` resolves the raw `./common.json` target to a
+        // repo-relative key before storing it.
+        assert_eq!(includes[0].path, "common.json");
         fs::remove_dir_all(&root).ok();
     }
 

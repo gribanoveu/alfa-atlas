@@ -5,6 +5,7 @@
 //! "why" behind the data shapes and gap-ownership rules.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -15,6 +16,7 @@ use crate::domain::chunk_index::{
 };
 use crate::domain::repo_index::{FileId, Language, RepoIndexError};
 use crate::infra::chunk_strategies;
+use crate::services::chunk_text::{resolve_text, ChunkTextError};
 use crate::services::repo_index::RepositoryIndex;
 
 /// Builds chunks — holds only the strategy registry, no result state.
@@ -70,14 +72,35 @@ impl ChunkBuilder {
 
         let chunks: Vec<Chunk> = spans
             .into_iter()
-            .map(|span| {
+            .filter_map(|span| {
+                // A `ChunkStrategy` bug (or, historically, a language
+                // indexer handing it overlapping anchors — see
+                // `infra::language_indexers::java`'s regression test) can
+                // produce a span whose `start_byte`/`end_byte` don't
+                // actually bound a valid slice of `content`. Skipping just
+                // that span — rather than letting `content[start..end]`
+                // panic — matches this codebase's existing resilience
+                // policy elsewhere (an unreadable file, a file that fails
+                // to build, still don't abort the whole pass); a slicing
+                // panic here previously crashed the whole embedding-sync
+                // worker thread.
+                if span.start_byte > span.end_byte || span.end_byte as usize > content.len() {
+                    eprintln!(
+                        "[chunk-builder] skipping invalid span {}#{}-{} (content len {})",
+                        file_id.0,
+                        span.start_byte,
+                        span.end_byte,
+                        content.len()
+                    );
+                    return None;
+                }
                 let text = content[span.start_byte as usize..span.end_byte as usize].to_string();
                 let hash = chunk_hash(file_hash, span.start_byte, span.end_byte);
                 let qualified_name = span
                     .anchor_symbol
                     .as_ref()
                     .and_then(|anchor| qualified_name_for(anchor, &symbols));
-                Chunk {
+                Some(Chunk {
                     metadata: ChunkMetadata {
                         id: ChunkId(format!(
                             "{}#{}-{}",
@@ -94,7 +117,7 @@ impl ChunkBuilder {
                         ordinal: 0,
                     },
                     text,
-                }
+                })
             })
             .collect();
 
@@ -118,10 +141,16 @@ impl ChunkBuilder {
     }
 }
 
-/// Stores chunks — no knowledge of how they were built. `DashMap<ChunkId,
-/// Chunk>`, same storage style `RepositoryIndex` uses for `IndexedFile`.
+/// Stores chunk **metadata** only — no knowledge of how chunks were built,
+/// and deliberately no chunk text. `DashMap<ChunkId, ChunkMetadata>`, same
+/// storage style `RepositoryIndex` uses for `IndexedFile` (which, for the
+/// same reason, never carries file content either). A chunk's text is read
+/// on demand via `services::chunk_text::resolve_text` — keeping it out of
+/// this map is the whole point: resident memory here scales with chunk
+/// *count* (tens of bytes each), not with the total size of the indexed
+/// text (up to `DEFAULT_MAX_CHUNK_BYTES` per chunk).
 pub struct ChunkIndex {
-    chunks: DashMap<ChunkId, Chunk>,
+    chunks: DashMap<ChunkId, ChunkMetadata>,
 }
 
 impl Default for ChunkIndex {
@@ -137,9 +166,24 @@ impl ChunkIndex {
         }
     }
 
+    /// Takes builder output (`Chunk`, which still carries `text` — needed
+    /// in-flight to compute hashes and enforce the size limit) but stores
+    /// only `chunk.metadata`; `text` is dropped once this returns.
     pub fn insert_all(&self, chunks: Vec<Chunk>) {
         for chunk in chunks {
-            self.chunks.insert(chunk.metadata.id.clone(), chunk);
+            self.chunks.insert(chunk.metadata.id.clone(), chunk.metadata);
+        }
+    }
+
+    /// Replaces every chunk in this index with `chunks` — used to
+    /// repopulate a freshly-attached project's index from
+    /// `infra::index_store::IndexStore::load_all_chunks` on cold start,
+    /// without a full repo rescan. Unlike `insert_all`, takes metadata
+    /// directly (nothing to build here, it's already been persisted).
+    pub fn load_metadata(&self, chunks: Vec<ChunkMetadata>) {
+        self.chunks.clear();
+        for metadata in chunks {
+            self.chunks.insert(metadata.id.clone(), metadata);
         }
     }
 
@@ -149,22 +193,70 @@ impl ChunkIndex {
     /// `file_id`); fine at today's scale, and the API doesn't need to
     /// change if that's ever worth optimizing.
     pub fn replace_for_file(&self, file_id: &FileId, chunks: Vec<Chunk>) {
-        self.chunks.retain(|_, c| c.metadata.file_id != *file_id);
+        self.chunks.retain(|_, m| m.file_id != *file_id);
         self.insert_all(chunks);
     }
 
-    /// Every chunk belonging to one file — re-embedding, deletion, display,
-    /// debug all want this without scanning the whole map by hand each time.
-    pub fn chunks_for_file(&self, file_id: &FileId) -> Vec<Chunk> {
+    /// Every chunk's metadata belonging to one file — re-embedding,
+    /// deletion, display, debug all want this without scanning the whole
+    /// map by hand each time.
+    pub fn chunks_for_file(&self, file_id: &FileId) -> Vec<ChunkMetadata> {
         self.chunks
             .iter()
-            .filter(|entry| entry.value().metadata.file_id == *file_id)
+            .filter(|entry| entry.value().file_id == *file_id)
             .map(|entry| entry.value().clone())
             .collect()
     }
 
-    pub fn get(&self, id: &ChunkId) -> Option<Chunk> {
+    pub fn get(&self, id: &ChunkId) -> Option<ChunkMetadata> {
         self.chunks.get(id).map(|entry| entry.value().clone())
+    }
+
+    /// Every chunk's metadata, across every file — what a lexical (no
+    /// embeddings) search fallback scans. No secondary index by content;
+    /// this is a full scan, same cost class as `chunk_ids()` just with the
+    /// full `ChunkMetadata` instead of only the key.
+    pub fn all(&self) -> Vec<ChunkMetadata> {
+        self.chunks.iter().map(|entry| entry.value().clone()).collect()
+    }
+
+    /// `get` plus an on-demand read of the chunk's text from `repo_root`.
+    /// `None` if `id` isn't in this index; `Some(Err(_))` if the metadata
+    /// exists but the text couldn't be resolved (file missing, or changed
+    /// since indexing — see `ChunkTextError`).
+    pub fn get_with_text(
+        &self,
+        id: &ChunkId,
+        repo_root: &Path,
+    ) -> Option<Result<(ChunkMetadata, String), ChunkTextError>> {
+        let metadata = self.get(id)?;
+        Some(resolve_text(repo_root, &metadata).map(|text| (metadata.clone(), text)))
+    }
+
+    /// Any one stored chunk's `file_hash` for `file_id` (every chunk of a
+    /// file shares the same one) — `None` if the file has no chunks in this
+    /// index. Cheap fast path for an incremental sync to skip re-chunking a
+    /// file whose content hasn't changed since it was last indexed.
+    pub fn file_hash_for(&self, file_id: &FileId) -> Option<blake3::Hash> {
+        self.chunks
+            .iter()
+            .find(|entry| entry.value().file_id == *file_id)
+            .map(|entry| entry.value().file_hash)
+    }
+
+    /// Every distinct `file_id` with at least one chunk in this index — an
+    /// incremental sync diffs this against the repo's current file list to
+    /// find files that were deleted since the index was last built/loaded.
+    pub fn file_ids(&self) -> std::collections::HashSet<FileId> {
+        self.chunks.iter().map(|entry| entry.value().file_id.clone()).collect()
+    }
+
+    /// Every chunk id currently stored, across every file — cheap (clones
+    /// only the small keys, not each chunk's text), mirrors
+    /// `RepositoryIndex::file_ids()`. What `EmbeddingIndex::sync` diffs
+    /// against to detect chunks that no longer exist.
+    pub fn chunk_ids(&self) -> Vec<ChunkId> {
+        self.chunks.iter().map(|entry| entry.key().clone()).collect()
     }
 
     pub fn clear(&self) {
@@ -307,6 +399,51 @@ public class UserService {
         fs::remove_dir_all(&root).ok();
     }
 
+    /// End-to-end regression test for the crash this session fixed: a
+    /// method containing an anonymous class (a common Mockito/Runnable/etc.
+    /// pattern, also produced by JUnit5 `@Nested` classes with methods
+    /// nested even deeper) used to make the Java indexer emit an
+    /// overlapping `Method` symbol, which `spans_from_backward_gap_symbols`
+    /// turned into a span with `start_byte > end_byte` — panicking on
+    /// `content[start..end]` inside `build_file` and taking down the whole
+    /// embedding-sync worker thread. See
+    /// `infra::language_indexers::java`'s own regression test for the
+    /// symbol-extraction half of this fix — this test instead exercises
+    /// the full `RepositoryIndex` -> `ChunkBuilder` pipeline, so a
+    /// regression here would be caught even if some *other* future
+    /// language indexer reintroduces overlapping anchors.
+    #[test]
+    fn anonymous_class_inside_a_method_does_not_panic_while_chunking() {
+        let root = fixture_repo();
+        let content = r#"public class Setup {
+    public void configure() {
+        doSomething(new Runnable() {
+            @Override
+            public void run() {
+                System.out.println("nested");
+            }
+        });
+    }
+
+    public void teardown() {
+    }
+}
+"#;
+        fs::write(root.join("src/Setup.java"), content).unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        let builder = ChunkBuilder::new();
+        let options = ChunkBuildOptions::default();
+
+        let file_id = FileId("src/Setup.java".to_string());
+        let chunks = builder.build_file(&repo_index, &file_id, &options).unwrap();
+
+        assert!(!chunks.is_empty());
+        assert_full_coverage_no_overlap(&chunks, content.len());
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn markdown_splits_by_heading() {
         let root = fixture_repo();
@@ -445,6 +582,29 @@ public class UserService {
         let index = ChunkIndex::new();
         index.insert_all(chunks);
         assert!(index.get(&id).is_some());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn chunk_ids_lists_every_stored_chunk_across_files() {
+        let root = fixture_repo();
+        fs::write(root.join("src/UserService.java"), JAVA_SAMPLE).unwrap();
+        fs::write(root.join("src/response.json"), r#"{"a": 1}"#).unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&root).unwrap();
+        let builder = ChunkBuilder::new();
+        let all_chunks = builder.build_all(&repo_index, &ChunkBuildOptions::default());
+
+        let index = ChunkIndex::new();
+        index.insert_all(all_chunks.clone());
+
+        let ids = index.chunk_ids();
+        assert_eq!(ids.len(), all_chunks.len());
+        for chunk in &all_chunks {
+            assert!(ids.contains(&chunk.metadata.id));
+        }
 
         fs::remove_dir_all(&root).ok();
     }

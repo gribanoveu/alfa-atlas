@@ -7,19 +7,26 @@ import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
 import { useMonacoDefinitions } from "../../hooks/useMonacoDefinitions";
 import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
 import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
+import { useMonacoIncludeGutter } from "../../hooks/useMonacoIncludeGutter";
 import { useMonacoOutline } from "../../hooks/useMonacoOutline";
+import { useMonacoSelectionAi } from "../../hooks/useMonacoSelectionAi";
 import { useMonacoSpellcheck } from "../../hooks/useMonacoSpellcheck";
 import type { GitFileDiff } from "../../lib/git";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import { ATLAS_DARK_THEME_ID } from "../../monaco/asciidocLanguage";
 import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
+import { planIdFromTabId } from "../../hooks/useEditorTabs";
 import type { EditorViewMode } from "../../types/viewMode";
 import { DocumentPreview } from "../DocumentPreview/DocumentPreview";
+import { MarkdownPreview } from "../MarkdownPreview/MarkdownPreview";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { EditorTabs, type DisplayTab } from "./EditorTabs";
+import { SelectionAiPreview } from "./SelectionAiPreview";
+import { SelectionAiToolbar } from "./SelectionAiToolbar";
 import "./Editor.css";
 import "./GitGutter.css";
+import "./SelectionAi.css";
 
 type GitGutterConfig = {
   repoRoot: string;
@@ -71,11 +78,19 @@ type EditorPaneProps = {
   onOpenProblems: () => void;
   /** Клик по xref-ссылке в превью AsciiDoc (path#anchor или #anchor). */
   onOpenXref?: (href: string) => void;
+  /** Клик по иконке перехода в жёлобе редактора рядом с include::/image::/
+   * xref: (docs-relative путь + опциональный якорь) — та же функция,
+   * что открывает файл по Ctrl+Click в самом Monaco. */
+  onOpenDocumentReference?: (docsRelativePath: string, anchor: string | null) => void;
   viewMode: EditorViewMode;
   onViewModeChange: (mode: EditorViewMode) => void;
   docsRoot: string | null;
   gitGutter?: GitGutterConfig | null;
   editorFontSizePx: number;
+  /** Active LLM provider id for selection AI actions; null when none configured. */
+  providerId: string | null;
+  /** True when the active provider has an API key and can serve `llmChatOnce`. */
+  llmReady: boolean;
   /** Уведомляет о смене текущего экземпляра редактора (для команд Undo/Redo из меню). */
   onEditorInstanceChange?: (
     editor: MonacoEditor.IStandaloneCodeEditor | null,
@@ -107,11 +122,14 @@ export function EditorPane({
   insertRequest,
   onOpenProblems,
   onOpenXref,
+  onOpenDocumentReference,
   viewMode,
   onViewModeChange,
   docsRoot,
   gitGutter,
   editorFontSizePx,
+  providerId,
+  llmReady,
   onEditorInstanceChange,
   onMonacoInstanceChange,
 }: EditorPaneProps) {
@@ -121,6 +139,22 @@ export function EditorPane({
   const highlightRef = useRef<string[]>([]);
   const lastHandledInsertIdRef = useRef(0);
   const knownTabIdsRef = useRef<Set<string>>(new Set());
+  const isImageTab = activeTab?.kind === "image";
+  const isPlanTab = activeTab?.kind === "plan";
+  // Image tabs do not mount Monaco — do not reuse the previous file's editor
+  // instance with the image path (gutter/spellcheck/diagnostics).
+  // Plan tabs are virtual markdown: Monaco yes, but no git/spell/AI overlays.
+  const textEditor = isImageTab ? null : editor;
+  const projectTextTab = !isImageTab && !isPlanTab ? activeTab : null;
+
+  // Plan tabs keep their own view mode (default render) so opening a plan
+  // doesn't fight the user's source/split preference for real files.
+  const [planViewMode, setPlanViewMode] = useState<EditorViewMode>("render");
+  useEffect(() => {
+    if (isPlanTab) setPlanViewMode("render");
+  }, [activeTab?.id, isPlanTab]);
+
+  const effectiveViewMode = isPlanTab ? planViewMode : viewMode;
 
   const handleMount: OnMount = useCallback(
     (editorInstance, monacoInstance) => {
@@ -188,30 +222,30 @@ export function EditorPane({
   // Если файл переименован в другое расширение уже после создания модели
   // (модель переиспользуется по `tab.id`, а не по пути), синхронизируем язык.
   useEffect(() => {
-    if (!monaco || !editor || !activeTab) return;
-    const model = editor.getModel();
+    if (!monaco || !textEditor || !activeTab || isImageTab) return;
+    const model = textEditor.getModel();
     if (model && model.getLanguageId() !== activeTab.language) {
       monaco.editor.setModelLanguage(model, activeTab.language);
     }
-  }, [monaco, editor, activeTab]);
+  }, [monaco, textEditor, activeTab, isImageTab]);
 
   useMonacoCompletions(monaco, completionsEnabled, docsRoot, gitGutter?.repoRoot ?? null);
   useMonacoOutline(monaco);
   useMonacoDefinitions(monaco, docsRoot, gitGutter?.repoRoot ?? null);
-  useMonacoDiagnostics(monaco, editor, diagnostics, activeTab?.path ?? null);
-  useMonacoSpellcheck(monaco, editor, activeTab, spellcheckConfig);
+  useMonacoDiagnostics(monaco, textEditor, diagnostics, projectTextTab?.path ?? null);
+  useMonacoSpellcheck(monaco, textEditor, projectTextTab, spellcheckConfig);
   useMonacoErrorsWidget(
-    editor,
+    textEditor,
     diagnostics,
-    activeTab?.path ?? null,
+    projectTextTab?.path ?? null,
     onOpenProblems,
   );
 
   useGitGutter({
     monaco,
-    editor,
-    activeTab,
-    viewMode,
+    editor: textEditor,
+    activeTab: projectTextTab,
+    viewMode: isImageTab ? "render" : effectiveViewMode,
     repoRoot: gitGutter?.repoRoot ?? null,
     docsRoot: gitGutter?.docsRoot ?? docsRoot,
     loadFileDiff:
@@ -219,6 +253,42 @@ export function EditorPane({
       (async () => null),
     onContentChange: onChangeContent,
   });
+
+  // Регистрируется после useGitGutter — см. useMonacoIncludeGutter.ts о том,
+  // почему порядок здесь важен для курсора в жёлобе.
+  useMonacoIncludeGutter(
+    monaco,
+    editor,
+    isPlanTab ? null : docsRoot,
+    isPlanTab ? null : (gitGutter?.repoRoot ?? null),
+    onOpenDocumentReference,
+  );
+
+  const selectionAi = useMonacoSelectionAi({
+    monaco,
+    editor: textEditor,
+    activeTab: projectTextTab,
+    viewMode: isImageTab ? "render" : effectiveViewMode,
+    providerId,
+    llmReady,
+    onContentChange: onChangeContent,
+  });
+
+  const selectionOverlay = (
+    <div className="selection-ai-overlay" ref={selectionAi.overlayRef}>
+      <SelectionAiToolbar
+        state={selectionAi.state}
+        onAction={selectionAi.runAction}
+        onToggleCustom={selectionAi.setCustomPromptOpen}
+      />
+      <SelectionAiPreview
+        state={selectionAi.state}
+        onAccept={selectionAi.accept}
+        onReject={selectionAi.reject}
+        onRetry={selectionAi.retry}
+      />
+    </div>
+  );
 
   const handleChange = useCallback(
     (value: string | undefined) => {
@@ -308,8 +378,13 @@ export function EditorPane({
   }, [editor, monaco, insertRequest, activeTabId]);
 
   useEffect(() => {
-    editor?.updateOptions({ fontSize: editorFontSizePx });
-  }, [editor, editorFontSizePx]);
+    editor?.updateOptions({
+      fontSize: editorFontSizePx,
+      readOnly: isPlanTab,
+      domReadOnly: isPlanTab,
+      glyphMargin: !isPlanTab,
+    });
+  }, [editor, editorFontSizePx, isPlanTab]);
 
   const options: MonacoEditor.IStandaloneEditorConstructionOptions = {
     fontFamily: "'JetBrains Mono', ui-monospace, monospace",
@@ -320,8 +395,14 @@ export function EditorPane({
     padding: { top: 8 },
     renderLineHighlight: "line",
     wordWrap: "on",
-    glyphMargin: true,
+    glyphMargin: !isPlanTab,
+    readOnly: isPlanTab,
+    domReadOnly: isPlanTab,
     lineDecorationsWidth: 11,
+    // Off so `include::`/`xref:` path completions are not drowned out by
+    // document-word suggestions after mid-path edits (Monaco's default word
+    // pattern splits on `/`, so path providers lose the filter fight).
+    wordBasedSuggestions: "off",
     // On by default in Monaco already — set explicitly so the intent is
     // visible here rather than relying on an unstated library default.
     // Only actually pins anything for AsciiDoc, fed by useMonacoOutline's
@@ -337,7 +418,7 @@ export function EditorPane({
   // (и молча терять) новую. Модель, а вместе с ней стек undo/redo, курсор и
   // scroll — переживают переключение вкладок; закрывается она явно эффектом
   // выше, когда вкладка реально закрыта.
-  const monacoNode = activeTab ? (
+  const monacoNode = activeTab && !isImageTab ? (
     <Editor
       key={activeTab.id}
       path={activeTab.id}
@@ -353,13 +434,39 @@ export function EditorPane({
   ) : null;
 
   const previewNode = activeTab ? (
-    <DocumentPreview
-      content={activeTab.content}
-      filePath={activeTab.path}
-      docsRoot={docsRoot}
-      monaco={monaco}
-      onOpenXref={onOpenXref}
-    />
+    isPlanTab ? (
+      <div className="plan-tab-preview">
+        <MarkdownPreview
+          content={activeTab.content}
+          filePath={null}
+          docsRoot={docsRoot}
+          monaco={monaco}
+        />
+      </div>
+    ) : (
+      <DocumentPreview
+        content={activeTab.content}
+        filePath={activeTab.path}
+        docsRoot={docsRoot}
+        monaco={monaco}
+        onOpenXref={onOpenXref}
+      />
+    )
+  ) : null;
+
+  const planId = isPlanTab && activeTab ? planIdFromTabId(activeTab.id) : null;
+  const planActions = planId ? (
+    <button
+      type="button"
+      className="plan-tab-start-btn"
+      onClick={() => {
+        window.dispatchEvent(
+          new CustomEvent("atlas-start-plan", { detail: { planId } }),
+        );
+      }}
+    >
+      Начать
+    </button>
   ) : null;
 
   return (
@@ -371,27 +478,40 @@ export function EditorPane({
         onClose={onCloseTab}
         onCloseAll={onCloseAllTabs}
         onCloseOthers={onCloseOtherTabs}
-        viewMode={viewMode}
-        onViewModeChange={onViewModeChange}
+        viewMode={effectiveViewMode}
+        onViewModeChange={isPlanTab ? setPlanViewMode : onViewModeChange}
+        hideViewMode={isImageTab}
+        allowedViewModes={isPlanTab ? (["source", "render"] as const) : undefined}
+        actions={planActions}
       />
-      <div className={`editor-body editor-body-${viewMode}`}>
+      <div className={`editor-body editor-body-${isImageTab ? "render" : effectiveViewMode}`}>
         {activeKind === "openapi" ? (
           openApiExplorer
         ) : activeTab ? (
-          viewMode === "split" ? (
-            <SplitLayout
-              monacoNode={monacoNode}
-              previewNode={previewNode}
-            />
-          ) : viewMode === "render" ? (
+          isImageTab || effectiveViewMode === "render" ? (
             <>
-              <div className="editor-monaco-wrap" style={{ display: "none" }}>
-                {monacoNode}
-              </div>
+              {monacoNode ? (
+                <div className="editor-monaco-wrap" style={{ display: "none" }}>
+                  {monacoNode}
+                </div>
+              ) : null}
               <div className="editor-preview-wrap">{previewNode}</div>
             </>
+          ) : effectiveViewMode === "split" ? (
+            <SplitLayout
+              monacoNode={
+                <>
+                  {monacoNode}
+                  {selectionOverlay}
+                </>
+              }
+              previewNode={previewNode}
+            />
           ) : (
-            <div className="editor-monaco-wrap">{monacoNode}</div>
+            <div className="editor-monaco-wrap">
+              {monacoNode}
+              {isPlanTab ? null : selectionOverlay}
+            </div>
           )
         ) : (
           <div className="editor-empty">Откройте файл в дереве документации</div>

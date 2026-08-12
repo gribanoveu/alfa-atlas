@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { resolveAssetTargetDocsRelative } from "../../lib/paths";
 import { resolveAssetPath } from "../../lib/project";
 import type { AbstractBlock } from "./types";
+import { useAscPreview } from "./AscPreviewContext";
 
 type LoadState =
   | { kind: "loading" }
@@ -13,18 +15,21 @@ const EXTERNAL_RE = /^https?:\/\//i;
 /**
  * Блок изображения `image::target[alt]`.
  *
- * Локальные пути резолвятся против docsRoot через backend-команду
- * `resolve_asset_path` (валидация `..` и containment), затем превращаются
- * в WebView-loadable URL через `convertFileSrc`. Внешние `http(s)://`
- * и `data:` URL отдаются напрямую.
+ * Paths resolve like `include::` — relative to the previewed document's
+ * directory — then via `resolve_asset_path` + `convertFileSrc`. If that
+ * misses, fall back to treating the target as docs-root-relative (legacy
+ * paths). Внешние `http(s)://` и `data:` URL отдаются напрямую.
  */
 export function AscImage({
   block,
-  docsRoot,
+  docsRoot: docsRootProp,
 }: {
   block: AbstractBlock;
-  docsRoot: string | null;
+  docsRoot?: string | null;
 }) {
+  const preview = useAscPreview();
+  const docsRoot = docsRootProp ?? preview.docsRoot;
+  const filePath = preview.filePath;
   const target = block.getAttribute("target") as string | null;
   const alt = (block.getAttribute("alt") as string | null) ?? target ?? "image";
 
@@ -45,25 +50,37 @@ export function AscImage({
       return;
     }
 
+    const primary = resolveAssetTargetDocsRelative(target, filePath);
+    const raw = target.replace(/\\/g, "/").replace(/^\/+/, "");
+    const candidates = primary === raw ? [primary] : [primary, raw];
+
     let cancelled = false;
     setState({ kind: "loading" });
-    resolveAssetPath(docsRoot, target)
-      .then((canonical) => {
-        if (cancelled) return;
-        setState({ kind: "loaded", src: convertFileSrc(canonical) });
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setState({
-          kind: "error",
-          message: e instanceof Error ? e.message : String(e),
-        });
+
+    void (async () => {
+      let lastError: unknown = null;
+      for (const candidate of candidates) {
+        try {
+          const canonical = await resolveAssetPath(docsRoot, candidate);
+          if (cancelled) return;
+          setState({ kind: "loaded", src: convertFileSrc(canonical) });
+          return;
+        } catch (e) {
+          lastError = e;
+        }
+      }
+      if (cancelled) return;
+      setState({
+        kind: "error",
+        message:
+          lastError instanceof Error ? lastError.message : String(lastError),
       });
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [target, docsRoot]);
+  }, [target, docsRoot, filePath]);
 
   return (
     <figure className="asc-image">

@@ -38,13 +38,25 @@ export function OpenApiExplorer({ bundle, loading, error }: OpenApiExplorerProps
   );
   const grouped = useMemo(() => groupByTag(filtered), [filtered]);
 
+  // `selected` can point at an operation that no longer exists after the
+  // spec reloads (endpoint deleted from disk) — falls back to the first
+  // remaining operation exactly like an unset selection does, instead of
+  // rendering a stale nav highlight next to a blank detail pane.
+  const selectedOperation =
+    document && selected ? getOperation(document, selected.path, selected.method) : null;
+
   const activeSelection =
-    selected ?? (filtered.length > 0 ? { path: filtered[0].path, method: filtered[0].method } : null);
+    selected && selectedOperation
+      ? selected
+      : filtered.length > 0
+        ? { path: filtered[0].path, method: filtered[0].method }
+        : null;
 
   const activeOperation =
-    document && activeSelection
+    selectedOperation ??
+    (document && activeSelection
       ? getOperation(document, activeSelection.path, activeSelection.method)
-      : null;
+      : null);
 
   if (loading) {
     return <div className="oas-explorer panel-empty">Загрузка спецификации…</div>;

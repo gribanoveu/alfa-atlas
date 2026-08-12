@@ -1,4 +1,6 @@
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { INDEX_EVENT_CHANNEL, type IndexEvent } from "../lib/workspaceIndex";
 import {
   gitAbortMerge,
   gitApplyDiffContent,
@@ -119,6 +121,34 @@ export function useGitPanel(
     };
   }, []);
 
+  // The workspace file watcher (services/file_watcher.rs) already emits
+  // indexUpdated whenever a tracked document changes on disk — including
+  // edits made outside the app (another editor, a `git checkout` run in a
+  // terminal). Piggyback on that existing channel instead of adding a
+  // second watcher: it's the same "did a tracked file change" signal the
+  // git panel needs, just not wired to it previously. Known limitation:
+  // indexUpdated only fires for supported document extensions (see
+  // is_supported_file in file_watcher.rs), so external edits to other
+  // tracked files (e.g. .gitignore) won't trigger this.
+  useEffect(() => {
+    if (!active || !repoRoot) return;
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listen<IndexEvent>(INDEX_EVENT_CHANNEL, (event) => {
+      if (cancelled) return;
+      if (event.payload.kind === "indexUpdated") {
+        scheduleRefresh();
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [active, repoRoot, scheduleRefresh]);
+
   const stage = useCallback(
     async (paths: string[]) => {
       if (!repoRoot || paths.length === 0) return;
@@ -151,20 +181,22 @@ export function useGitPanel(
     [refresh, repoRoot],
   );
 
-  const commit = useCallback(async () => {
-    if (!repoRoot) return false;
+  /** Returns the new commit's short hash, or null if nothing was committed
+   * (no repo, no message, nothing staged) or the commit failed. */
+  const commit = useCallback(async (): Promise<string | null> => {
+    if (!repoRoot) return null;
     const formatted = formatDocCommitMessage(jiraKey, description);
-    if (!formatted || status.staged.length === 0) return false;
+    if (!formatted || status.staged.length === 0) return null;
     setBusy(true);
     try {
-      await gitCommit(repoRoot, formatted);
+      const hash = await gitCommit(repoRoot, formatted);
       setJiraKey("");
       setDescription("");
       await refresh();
-      return true;
+      return hash;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      return false;
+      return null;
     } finally {
       setBusy(false);
     }
@@ -326,17 +358,17 @@ export function useGitPanel(
   );
 
   const discardFileChanges = useCallback(
-    async (path: string): Promise<boolean> => {
-      if (!repoRoot) return false;
+    async (path: string): Promise<{ ok: true; backupId: string | null } | { ok: false }> => {
+      if (!repoRoot) return { ok: false };
       setBusy(true);
       try {
-        await gitDiscardFileChanges(repoRoot, path);
+        const backupId = await gitDiscardFileChanges(repoRoot, path);
         await refresh();
         setError(null);
-        return true;
+        return { ok: true, backupId };
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
-        return false;
+        return { ok: false };
       } finally {
         setBusy(false);
       }

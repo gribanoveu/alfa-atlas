@@ -52,7 +52,7 @@ impl Default for WindowState {
     }
 }
 
-pub const MAX_RECENT_PROJECTS: usize = 10;
+pub const MAX_RECENT_PROJECTS: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProjectSettings {
@@ -222,6 +222,17 @@ pub struct AppSettings {
     pub standards: crate::domain::standards::StandardsRuleConfig,
     #[serde(default)]
     pub spellcheck: crate::domain::spellcheck::SpellcheckConfig,
+    /// Global — one embedding provider choice across every project, not
+    /// per-repo. The remote API key is never part of this (or any)
+    /// `settings.json` — see `infra::embedding_credentials_store`.
+    #[serde(default)]
+    pub embedding: crate::domain::embeddings::EmbeddingProviderConfig,
+    /// Global — configured LLM providers (system-provider overrides plus
+    /// any custom ones) and which is active, across every project. API
+    /// keys are never part of this (or any) `settings.json` — see
+    /// `infra::llm_credentials_store`.
+    #[serde(default)]
+    pub llm: crate::domain::llm::LlmSettings,
 }
 
 #[derive(Debug, Error)]
@@ -328,6 +339,23 @@ mod tests {
             settings.general.autosave_delay_ms,
             DEFAULT_AUTOSAVE_DELAY_MS
         );
+    }
+
+    #[test]
+    fn deserializes_legacy_settings_without_embedding() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
+        // Empty override — resolve layer fills Local from the null bundled preset.
+        assert_eq!(settings.embedding.kind, None);
+        assert_eq!(settings.embedding.remote_base_url, None);
+    }
+
+    #[test]
+    fn deserializes_legacy_settings_without_llm() {
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"window":{"width":800.0,"height":600.0}}"#).unwrap();
+        assert_eq!(settings.llm.active_provider_id, None);
+        assert!(settings.llm.providers.is_empty());
     }
 
     #[test]
