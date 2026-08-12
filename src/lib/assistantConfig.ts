@@ -1,4 +1,5 @@
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, MatchSource, Task } from "./aiTools";
+import { normalizeSemanticSearchResult } from "./aiTools";
 import type { ToolCallBlock } from "./chatBlocks";
 import type { SpecsRepoInfo } from "./openapi";
 
@@ -251,17 +252,23 @@ When a project-specific claim requires verification: (1) check whether evidence 
 - \`semanticSearch\`: put **English** identifiers, class/method/API names, config keys, and exact technical terms; put the **Russian** meaning, role, or business context around them. Example: «описание метода createPayment и обработка ошибок валидации», not a fully Russian paraphrase of \`PaymentService\`.
 - \`grep\`: use **English** literals as they appear in source or docs (symbol names, paths, enum values). Russian prose is a poor grep target — use \`semanticSearch\` for that.
 
-**First query — make it count:** one strong \`semanticSearch\` beats several vague ones. In the *first* call, already include likely **English** symbols inferred from the question (camelCase method names like \`getPatentNotifications\`, \`Notification\`, \`*Service\`, REST path segments) plus Russian business meaning. In OpenAPI projects, method documentation often lives in a folder named like the operation (\`getPatentNotifications/\`) — include that name if you can guess it from the user's words. Do not invent external system names (regulators, queues) unless they appeared in the question or prior results.
+**Guess the operation / class name:** from a Russian question, invent only English camelCase that is **justified by words actually in the question** — translate/domain-calque those words, do not smuggle in project jargon the user never said. Examples:
+- «список уведомлений для подачи» → \`getNotifications\`, \`NotificationList\`, \`Notification\` / \`notifications\` (есть «уведомления» и «список»; **нет** слова про патент — не выдумывать \`Patent\`)
+- «создать платёж» → \`createPayment\`, \`PaymentService\`
+- «скачать последний документ» → \`downloadLastDocument\`
+Prefer \`get\`/\`create\`/\`update\`/\`delete\` + noun from the question in PascalCase. In OpenAPI projects the docs folder is often named like the operation — use that name only after search/results reveal it, or when the user said it. Do **not** invent external system names, product codes, or domain prefixes (regulators, queues, «патент», …) unless they appeared in the question or prior tool results.
+
+**First query — make it count:** one strong \`semanticSearch\` beats several vague ones. The *first* call must already include those justified camelCase names **plus** Russian business meaning — not only a lone plain word. Bad: «формирование списка notifications» (слишком плоско). Good: «getNotifications NotificationList список уведомлений для подачи». Refine with real names (\`getPatentNotifications\`, …) only after a hit or doc reveals them.
 
 **After search — read, don't browse:** if \`semanticSearch\` returned file paths, \`readFile\` those next. Do not call \`listFiles\` on a parent directory when you already have concrete hits — \`listFiles\` is for unknown structure, not as a parallel discovery step after search.
 
-**Refine, don't repeat:** a second \`semanticSearch\` is justified only when the first returned nothing useful or you learned a **new** identifier (class, method, path) from a \`readFile\`. Then search with that identifier — do not rephrase the same broad Russian question. Prefer at most **two** \`semanticSearch\` calls per request.
+**Refine, don't repeat:** a second \`semanticSearch\` is justified only when the first returned nothing useful or you learned a **new** identifier (class, method, path) from a \`readFile\`. Then search with that identifier — do not rephrase the same broad Russian question. Prefer at most **two** \`semanticSearch\` calls per request. If the tool result's \`meta.hint\` suggests adding camelCase names, follow that on the next search.
 
 **Research chain for "how does X work" / algorithm questions** (Full-repo, when implementation matters):
-1. One \`semanticSearch\` with English symbols + Russian context.
-2. \`readFile\` the **entry point** from results — controller/handler for API behavior, or the matching \`.adoc\` / \`.puml\` for documented flow.
-3. From there, \`readFile\` the **implementation** the entry point delegates to — do not open a similarly named but unrelated \`*Service.java\` until the controller or doc names the correct class.
-4. Answer only after reading the implementation (and doc, if present) — search hits alone are not enough.
+1. One \`semanticSearch\` with guessed English symbols + Russian context.
+2. From results, \`readFile\` at most **2–3** files in the first pass: (a) the matching \`.adoc\` / operation folder doc if present, (b) the **implementation** service/handler that owns the algorithm (\`*Service.java\` named in the doc or clearly matching the operation — not a similarly named sibling). Optionally the controller if the service path is unclear.
+3. Do **not** open mappers, DTOs, helpers, or sibling services until the algorithm is incomplete after those reads.
+4. Answer once the implementation (and doc, if present) establish the flow — search hits alone are not enough.
 
 **When \`listFiles\` vs search:** use \`listFiles\` when you need directory shape (scaffold check, "what's in this folder", filename patterns). Skip it when the question is about logic/content and \`semanticSearch\` already surfaced paths.
 
@@ -1032,8 +1039,10 @@ export function describeToolResult(
       return parts.length > 0 ? parts.join(", ") : "Пусто";
     }
     case "semanticSearchResults": {
-      const matches = block.result.result;
-      if (matches.length === 0) return "Результатов: 0";
+      const { matches, meta } = normalizeSemanticSearchResult(block.result.result);
+      if (matches.length === 0) {
+        return meta.weak ? "Результатов: 0 · слабый поиск" : "Результатов: 0";
+      }
       const counts = new Map<MatchSource, number>();
       for (const m of matches) counts.set(m.source, (counts.get(m.source) ?? 0) + 1);
       // Tag which tier of `services::ai_tools::semantic_search`'s
@@ -1044,7 +1053,8 @@ export function describeToolResult(
       const breakdown = [...counts.entries()]
         .map(([source, count]) => `${describeMatchSourceShort(source)}: ${count}`)
         .join(", ");
-      return `Результатов: ${matches.length} (${breakdown})`;
+      const weakSuffix = meta.weak ? " · слабый поиск" : "";
+      return `Результатов: ${matches.length} (${breakdown})${weakSuffix}`;
     }
     case "grepResults": {
       const { matches, truncated } = block.result.result;

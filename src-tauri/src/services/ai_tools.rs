@@ -20,9 +20,10 @@ use crate::domain::ai_tools::{
     DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileDiffStats, FileEdit,
     GetAsciidocTemplatesArgs, GitBlameArgs, GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs,
     MatchSource, MemoryArgs, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
-    RequestModeSwitchArgs, AskUserArgs, SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs,
-    TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult,
-    ToolScope, UpdatePlanArgs, UpdatePlanTodoArgs, WriteFileArgs,
+    RequestModeSwitchArgs, AskUserArgs, SemanticSearchArgs, SemanticSearchMeta,
+    SemanticSearchPayload, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs,
+    ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, UpdatePlanArgs,
+    UpdatePlanTodoArgs, WriteFileArgs,
 };
 use crate::domain::asciidoc_element_templates::{
     find_many as find_asciidoc_templates, ASCIIDOC_ELEMENT_TEMPLATES,
@@ -36,6 +37,10 @@ use crate::domain::llm::{
 use crate::domain::paths;
 use crate::domain::project_config::{ProjectConfig, ProjectError, TreeNode, UpdatedReference};
 use crate::domain::repo_index::{FileId, Symbol};
+use crate::domain::search_query::{
+    extract_search_tokens, lexical_token_weight, path_segment_matches, symbol_name_matches_token,
+    weak_search_hint, MatchTightness, SearchMetaInput,
+};
 use crate::domain::workspace_index::DocumentId;
 use crate::infra::{embedding_credentials_store, embedding_providers, project_store, workspace_scanner};
 use crate::services::chunk_builder::ChunkIndex;
@@ -906,7 +911,7 @@ pub fn llm_tool_definitions(
     if visible(ToolName::ReadFile) {
         defs.push(LlmToolDefinition {
             name: "readFile".to_string(),
-            description: "Read the text content of one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known — especially paths from semanticSearch/grep results. For \"how does X work\" questions: read the entry point first (controller/handler or matching .adoc/.puml from search), then read the implementation class the entry point delegates to — do not guess among similarly named *Service.java files. Prefer a line range for a large file when only part of it is relevant. Paths returned by grep/semanticSearch, and paths constructed from listFiles entries (excluding the tree's display-only root label), are already correctly rooted — pass them here as-is, with no manual prefix added or stripped."
+            description: "Read the text content of one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known — especially paths from semanticSearch/grep results. For \"how does X work\" questions: after search, read at most 2–3 files first — the matching .adoc (if any) and the owning implementation (*Service / handler named by the doc or operation), not mappers, DTOs, or sibling services until the algorithm is incomplete. Prefer a line range for a large file when only part of it is relevant. Paths returned by grep/semanticSearch, and paths constructed from listFiles entries (excluding the tree's display-only root label), are already correctly rooted — pass them here as-is, with no manual prefix added or stripped."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -934,14 +939,14 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "semanticSearch".to_string(),
             description:
-                "Default search tool — use this first whenever you need to find something in the project and the exact file or line is not already known. Searches via symbol lookup, semantic similarity, and lexical fallback. One strong first query beats several vague repeats — include likely English identifiers (camelCase methods, *Service, REST segments) plus Russian business context in the first call; in OpenAPI projects, guess the operation folder name (e.g. getPatentNotifications). A second call is only for a new identifier learned from readFile, not a rephrased broad question — prefer at most two searches per request. After results, readFile returned paths directly; do not listFiles the parent. Project docs are Russian, code/identifiers English. Verify with readFile before precise claims; use grep only for exhaustive exact line matches."
+                "Default search tool — use this first whenever you need to find something in the project and the exact file or line is not already known. Searches via symbol lookup (exact + stem), semantic similarity, and lexical fallback. One strong first query beats several vague repeats — guess camelCase names justified by words in the question (уведомления→Notification/getNotifications, не выдумывать Patent если пользователь не сказал «патент») plus Russian business context; do not send only a lone plain word. Refine with real operation/class names only after a hit reveals them. A second call is only for a new identifier learned from readFile — prefer at most two searches per request. After results, readFile at most 2–3 entry files (adoc + owning *Service); do not listFiles the parent or open mappers/siblings until needed. If meta.hint is present, follow it on the next search. Verify with readFile before precise claims; use grep only for exhaustive exact line matches."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query: English identifiers (class/method/API names, guessed camelCase from the question) + Russian business context. Strong first query — do not repeat the same broad question; refine only with new identifiers from readFile."
+                        "description": "Search query: English camelCase justified by the question's own words (getNotifications from «уведомления», not invented domain prefixes) + Russian business context. Prefer identifiers over a lone plain word. Strong first query — refine only with new names from readFile."
                     },
                     "topK": {
                         "type": ["integer", "null"],
@@ -2738,43 +2743,77 @@ fn list_full_repo(
 
 /// Cascade entry point: an exact symbol-name hit (cheapest, always tried)
 /// is prepended to whichever of the semantic/lexical tiers fills the
-/// remaining `top_k` budget, chosen by `is_semantic_ready`.
+/// remaining `top_k` budget, chosen by `is_semantic_ready`. Returns matches
+/// plus `meta` (extracted tokens, weak-search hint) for the model/UI.
 fn semantic_search(
     scope: &ToolScope,
     args: SemanticSearchArgs,
     deps: &EmbeddingDeps,
-) -> Result<Vec<ToolMatch>, ToolError> {
+) -> Result<SemanticSearchPayload, ToolError> {
     let top_k = args.top_k.unwrap_or(DEFAULT_TOP_K).clamp(1, MAX_TOP_K);
+    let extracted_tokens = extract_search_tokens(&args.query);
 
-    // Exact-name tier stays authoritative/unboosted — it's already the
-    // cheapest, most-precise signal, not the "did you mean something in the
-    // same file family" heuristic `related` below is.
+    // Exact-name / path-segment tier stays authoritative/unboosted — it's
+    // already the cheapest, most-precise signal, not the "did you mean
+    // something in the same file family" heuristic `related` below is.
     let mut results = symbol_matches(&deps.repo_index, scope, &args.query, top_k);
 
+    let mut tiers_used = vec!["symbol".to_string()];
     let remaining = top_k.saturating_sub(results.len());
-    if remaining == 0 {
-        return Ok(results);
+    if remaining > 0 {
+        let related = deps
+            .active_file
+            .as_ref()
+            .map(|file_id| related_files(deps, file_id))
+            .unwrap_or_default();
+
+        // Over-fetch when a boost could reorder results — a related-but-not-
+        // quite-top-ranked chunk needs candidates beyond `remaining` to have any
+        // chance of surfacing after boosting.
+        let fetch_k = if related.is_empty() {
+            remaining
+        } else {
+            (remaining * 3).min(MAX_TOP_K * 3)
+        };
+
+        let tier_results = if is_semantic_ready(deps) {
+            tiers_used.push("semantic".to_string());
+            semantic_matches(scope, deps, &args.query, fetch_k)?
+        } else {
+            tiers_used.push("lexical".to_string());
+            lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
+        };
+
+        results.extend(apply_related_boost(tier_results, &related, remaining));
     }
 
-    let related = deps
-        .active_file
-        .as_ref()
-        .map(|file_id| related_files(deps, file_id))
-        .unwrap_or_default();
+    let symbol_hits = results
+        .iter()
+        .filter(|m| m.source == MatchSource::Symbol)
+        .count() as u32;
+    let has_semantic = results.iter().any(|m| m.source == MatchSource::Semantic);
+    let only_lexical = !results.is_empty()
+        && results.iter().all(|m| m.source == MatchSource::Lexical)
+        && symbol_hits == 0;
+    let (weak, hint) = weak_search_hint(SearchMetaInput {
+        match_count: results.len(),
+        symbol_hits,
+        has_semantic,
+        only_lexical,
+        tiers_used: &tiers_used,
+        extracted_tokens: &extracted_tokens,
+    });
 
-    // Over-fetch when a boost could reorder results — a related-but-not-
-    // quite-top-ranked chunk needs candidates beyond `remaining` to have any
-    // chance of surfacing after boosting.
-    let fetch_k = if related.is_empty() { remaining } else { (remaining * 3).min(MAX_TOP_K * 3) };
-
-    let tier_results = if is_semantic_ready(deps) {
-        semantic_matches(scope, deps, &args.query, fetch_k)?
-    } else {
-        lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
-    };
-
-    results.extend(apply_related_boost(tier_results, &related, remaining));
-    Ok(results)
+    Ok(SemanticSearchPayload {
+        matches: results,
+        meta: SemanticSearchMeta {
+            tiers_used,
+            symbol_hits,
+            extracted_tokens,
+            weak,
+            hint,
+        },
+    })
 }
 
 /// Boosts (multiplicatively, via `RELATED_FILE_BOOST`) every match whose
@@ -2982,21 +3021,33 @@ fn semantic_matches(
     Ok(out)
 }
 
-/// No-embeddings fallback: scans every chunk's resolved text for a
-/// case-insensitive substring match, ranked by occurrence count (a weak
-/// proxy score — not comparable to the semantic tier's cosine similarity).
+/// No-embeddings fallback: scans every chunk's resolved text for
+/// case-insensitive token matches (from `extract_search_tokens`), ranked by
+/// a weighted occurrence sum. When no tokens are extracted, falls back to
+/// the whole query as a single needle (backward-compatible for one-word
+/// queries). Scores are not comparable to the semantic tier's cosine
+/// similarity.
 fn lexical_matches(
     chunk_index: &ChunkIndex,
     scope: &ToolScope,
     query: &str,
     top_k: usize,
 ) -> Vec<ToolMatch> {
-    let needle = query.to_lowercase();
-    if needle.is_empty() {
-        return Vec::new();
-    }
+    let tokens = extract_search_tokens(query);
+    let needles: Vec<(String, f32)> = if tokens.is_empty() {
+        let whole = query.trim().to_lowercase();
+        if whole.is_empty() {
+            return Vec::new();
+        }
+        vec![(whole, 1.0)]
+    } else {
+        tokens
+            .iter()
+            .map(|t| (t.to_lowercase(), lexical_token_weight(t)))
+            .collect()
+    };
 
-    let mut scored: Vec<(usize, ChunkMetadata, String)> = Vec::new();
+    let mut scored: Vec<(f32, ChunkMetadata, String)> = Vec::new();
     for metadata in chunk_index.all() {
         if !scope.allows_search_result(&metadata.file_id) {
             continue;
@@ -3004,22 +3055,27 @@ fn lexical_matches(
         let Ok(text) = resolve_text(&scope.repo_root, &metadata) else {
             continue;
         };
-        let count = text.to_lowercase().matches(&needle).count();
-        if count > 0 {
-            scored.push((count, metadata, text));
+        let lower = text.to_lowercase();
+        let mut score = 0.0_f32;
+        for (needle, weight) in &needles {
+            let count = lower.matches(needle.as_str()).count() as f32;
+            score += count * weight;
+        }
+        if score > 0.0 {
+            scored.push((score, metadata, text));
         }
     }
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
     scored.truncate(top_k);
 
     scored
         .into_iter()
-        .filter_map(|(count, metadata, text)| {
+        .filter_map(|(score, metadata, text)| {
             let access_path = to_access_relative(scope, &metadata.file_id.0)?;
             Some(ToolMatch {
                 path: access_path,
                 snippet: truncate_snippet(&text),
-                score: count as f32,
+                score,
                 start_byte: metadata.start_byte,
                 end_byte: metadata.end_byte,
                 qualified_name: metadata.qualified_name,
@@ -3029,38 +3085,172 @@ fn lexical_matches(
         .collect()
 }
 
-/// Cheapest tier: an exact (case-insensitive) symbol-name match, no disk
-/// I/O beyond a best-effort snippet read. Always tried first, regardless
-/// of whether the embedding index is ready.
+/// Score for an exact symbol-name hit.
+const SYMBOL_NAME_SCORE: f32 = 1.0;
+/// Score for a stem/fuzzy symbol-name hit (e.g. notifications ⊂ NotificationService).
+const SYMBOL_STEM_SCORE: f32 = 0.95;
+/// Score for a path-segment match (slightly below stem).
+const SYMBOL_PATH_SCORE: f32 = 0.9;
+
+/// Cheapest tier: exact (case-insensitive) symbol-name matches for each
+/// extracted token, stem/fuzzy symbol matches, plus path-segment matches
+/// against indexed file paths. Always tried first, regardless of whether
+/// the embedding index is ready.
 fn symbol_matches(
     repo_index: &RepositoryIndex,
     scope: &ToolScope,
     query: &str,
     top_k: usize,
 ) -> Vec<ToolMatch> {
-    repo_index
-        .find_symbol(query)
-        .into_iter()
-        .filter(|(file_id, _)| scope.allows_search_result(file_id))
-        .take(top_k)
-        .filter_map(|(file_id, symbol)| {
-            let access_path = to_access_relative(scope, &file_id.0)?;
-            let all_symbols = repo_index.get(&file_id)?.symbols;
+    let mut tokens = extract_search_tokens(query);
+    // Backward compat: a single exact name with no separators still works
+    // even when extract yields nothing unusual (e.g. "UserService" is
+    // PascalCase and is extracted; "userservice" all-lowercase plain ≥ 3
+    // is also extracted). If the whole trimmed query is a single ASCII
+    // word not already listed, include it so `find_symbol` still sees it.
+    let trimmed = query.trim();
+    if !trimmed.is_empty()
+        && trimmed.chars().all(|c| c.is_ascii_alphanumeric())
+        && !tokens.iter().any(|t| t.eq_ignore_ascii_case(trimmed))
+    {
+        tokens.push(trimmed.to_string());
+    }
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+
+    // Dedupe key: (access_path, start_byte). Exact (1.0) > stem (0.95) >
+    // path (0.9) for the same range/file.
+    let mut best: std::collections::HashMap<(String, u32), ToolMatch> =
+        std::collections::HashMap::new();
+
+    let insert_candidate =
+        |best: &mut std::collections::HashMap<(String, u32), ToolMatch>, candidate: ToolMatch| {
+            let key = (candidate.path.clone(), candidate.start_byte);
+            best.entry(key)
+                .and_modify(|existing| {
+                    if candidate.score > existing.score {
+                        *existing = candidate.clone();
+                    }
+                })
+                .or_insert(candidate);
+        };
+
+    // Exact name lookups (fast path via index).
+    for token in &tokens {
+        for (file_id, symbol) in repo_index.find_symbol(token) {
+            if !scope.allows_search_result(&file_id) {
+                continue;
+            }
+            let Some(access_path) = to_access_relative(scope, &file_id.0) else {
+                continue;
+            };
+            let all_symbols = match repo_index.get(&file_id) {
+                Some(f) => f.symbols,
+                None => continue,
+            };
             let qualified_name =
                 qualified_name_for(&symbol, &all_symbols).or_else(|| Some(symbol.name.clone()));
             let snippet =
                 read_symbol_snippet(&scope.repo_root, &file_id, &symbol).unwrap_or_default();
-            Some(ToolMatch {
-                path: access_path,
-                snippet,
-                score: 1.0,
-                start_byte: symbol.start_byte,
-                end_byte: symbol.end_byte,
-                qualified_name,
-                source: MatchSource::Symbol,
-            })
-        })
-        .collect()
+            insert_candidate(
+                &mut best,
+                ToolMatch {
+                    path: access_path,
+                    snippet,
+                    score: SYMBOL_NAME_SCORE,
+                    start_byte: symbol.start_byte,
+                    end_byte: symbol.end_byte,
+                    qualified_name,
+                    source: MatchSource::Symbol,
+                },
+            );
+        }
+    }
+
+    // Stem/fuzzy: walk indexed symbols once per token that wasn't an exact
+    // hit for every possible name (notifications → CollectNotificationService).
+    for token in &tokens {
+        for (file_id, indexed) in repo_index.all_files() {
+            if !scope.allows_search_result(&file_id) {
+                continue;
+            }
+            let Some(access_path) = to_access_relative(scope, &file_id.0) else {
+                continue;
+            };
+            for symbol in &indexed.symbols {
+                match symbol_name_matches_token(&symbol.name, token) {
+                    MatchTightness::None | MatchTightness::Exact => continue,
+                    MatchTightness::Stem => {}
+                }
+                let qualified_name = qualified_name_for(symbol, &indexed.symbols)
+                    .or_else(|| Some(symbol.name.clone()));
+                let snippet =
+                    read_symbol_snippet(&scope.repo_root, &file_id, symbol).unwrap_or_default();
+                insert_candidate(
+                    &mut best,
+                    ToolMatch {
+                        path: access_path.clone(),
+                        snippet,
+                        score: SYMBOL_STEM_SCORE,
+                        start_byte: symbol.start_byte,
+                        end_byte: symbol.end_byte,
+                        qualified_name,
+                        source: MatchSource::Symbol,
+                    },
+                );
+            }
+        }
+    }
+
+    // Path-segment matches — only for files not already covered by a
+    // symbol hit at any byte range.
+    for token in &tokens {
+        for (file_id, _indexed) in repo_index.all_files() {
+            if !scope.allows_search_result(&file_id) {
+                continue;
+            }
+            if !path_segment_matches(&file_id.0, token) {
+                continue;
+            }
+            let Some(access_path) = to_access_relative(scope, &file_id.0) else {
+                continue;
+            };
+            if best.keys().any(|(p, _)| p == &access_path) {
+                continue;
+            }
+            let snippet =
+                read_file_first_line_snippet(&scope.repo_root, &file_id).unwrap_or_default();
+            insert_candidate(
+                &mut best,
+                ToolMatch {
+                    path: access_path,
+                    snippet,
+                    score: SYMBOL_PATH_SCORE,
+                    start_byte: 0,
+                    end_byte: 0,
+                    qualified_name: None,
+                    source: MatchSource::Symbol,
+                },
+            );
+        }
+    }
+
+    let mut out: Vec<ToolMatch> = best.into_values().collect();
+    out.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    out.truncate(top_k);
+    out
+}
+
+/// Best-effort first line of a file for path-segment symbol hits.
+fn read_file_first_line_snippet(scope_root: &Path, file_id: &FileId) -> Option<String> {
+    let path = scope_root.join(&file_id.0);
+    let content = fs::read_to_string(&path).ok()?;
+    let line = content.lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        return None;
+    }
+    Some(truncate_snippet(line))
 }
 
 /// Best-effort slice of `[symbol.start_byte..symbol.end_byte)` off whatever
@@ -4894,6 +5084,94 @@ mod tests {
     }
 
     #[test]
+    fn symbol_matches_extracts_tokens_from_natural_language_query() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/CollectNotificationService.java"),
+            "public class CollectNotificationService {\n    public void run() {}\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(
+            &repo_index,
+            &scope,
+            "алгоритм формирования списка уведомлений для подачи notifications",
+            10,
+        );
+        assert!(!matches.is_empty());
+        assert!(matches.iter().any(|m| m.path.contains("CollectNotificationService")));
+        assert!(matches.iter().all(|m| m.source == MatchSource::Symbol));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_finds_multiple_identifiers_in_one_query() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/CollectNotificationService.java"),
+            "public class CollectNotificationService {}\n",
+        )
+        .unwrap();
+        fs::write(
+            docs.join("getPatentNotifications.adoc"),
+            "= getPatentNotifications\n",
+        )
+        .unwrap();
+        // AsciiDoc section may or may not index as a symbol named
+        // getPatentNotifications — path match still covers the folder/file.
+        fs::create_dir_all(docs.join("getPatentNotifications")).unwrap();
+        fs::write(
+            docs.join("getPatentNotifications/getPatentNotifications.adoc"),
+            "= Method\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(
+            &repo_index,
+            &scope,
+            "CollectNotificationService getPatentNotifications",
+            10,
+        );
+        assert!(matches.iter().any(|m| m.path.contains("CollectNotificationService")));
+        assert!(matches.iter().any(|m| m.path.contains("getPatentNotifications")));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_dedupes_symbol_over_path_for_same_file() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/UserService.java"),
+            "public class UserService {\n    public String getName() { return null; }\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(&repo_index, &scope, "UserService", 10);
+        let path_hits: Vec<_> = matches
+            .iter()
+            .filter(|m| m.path.ends_with("UserService.java"))
+            .collect();
+        assert_eq!(path_hits.len(), 1);
+        assert_eq!(path_hits[0].score, 1.0);
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn symbol_matches_is_empty_for_an_unknown_name() {
         let (repo, docs) = fixture_repo();
         let repo_index = RepositoryIndex::new();
@@ -4901,6 +5179,51 @@ mod tests {
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
         assert!(symbol_matches(&repo_index, &scope, "NoSuchSymbol", 10).is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_cyrillic_only_query_finds_via_ru_en() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/CollectNotificationService.java"),
+            "public class CollectNotificationService {}\n",
+        )
+        .unwrap();
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(
+            &repo_index,
+            &scope,
+            "алгоритм формирования списка уведомлений",
+            10,
+        );
+        assert!(
+            matches.iter().any(|m| m.path.contains("CollectNotificationService")),
+            "RU→EN Notification + stem should find CollectNotificationService"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_stem_finds_notification_service() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/CollectNotificationService.java"),
+            "public class CollectNotificationService {}\n",
+        )
+        .unwrap();
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(&repo_index, &scope, "notifications", 10);
+        assert!(matches.iter().any(|m| m.path.contains("CollectNotificationService")));
+        assert!(matches.iter().any(|m| (m.score - 0.95).abs() < 0.01 || m.score >= 0.95));
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -4941,6 +5264,36 @@ mod tests {
         assert!(!matches.is_empty());
         assert_eq!(matches[0].source, MatchSource::Lexical);
         assert!(matches[0].snippet.to_lowercase().contains("needle"));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn lexical_matches_tokenizes_natural_language_query() {
+        use crate::domain::chunk_index::ChunkBuildOptions;
+        use crate::services::chunk_builder::ChunkBuilder;
+
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("docs/guide.adoc"),
+            "= Guide\n\nHere we describe notifications for patent submit.\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let chunk_index = ChunkIndex::new();
+        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = lexical_matches(
+            &chunk_index,
+            &scope,
+            "алгоритм формирования списка уведомлений notifications",
+            10,
+        );
+        assert!(!matches.is_empty());
+        assert!(matches[0].snippet.to_lowercase().contains("notifications"));
 
         fs::remove_dir_all(&repo).ok();
     }

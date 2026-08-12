@@ -33,8 +33,8 @@ export type MatchSource = "semantic" | "lexical" | "symbol";
 
 // Mirrors `domain::ai_tools::ToolMatch`. `score` is only comparable within
 // the same `source`: `"semantic"` is `1 - cosineDistance` (higher is
-// better), `"lexical"` is a raw substring-occurrence count, `"symbol"` is
-// always `1`.
+// better), `"lexical"` is a weighted token-occurrence score, `"symbol"` is
+// `1` for an exact name match or `0.9` for a path-segment match.
 export type ToolMatch = {
   path: string;
   snippet: string;
@@ -44,6 +44,55 @@ export type ToolMatch = {
   qualifiedName: string | null;
   source: MatchSource;
 };
+
+/** Mirrors `domain::ai_tools::SemanticSearchMeta`. */
+export type SemanticSearchMeta = {
+  tiersUsed: string[];
+  symbolHits: number;
+  extractedTokens: string[];
+  weak: boolean;
+  hint: string | null;
+};
+
+/** Mirrors `domain::ai_tools::SemanticSearchPayload`. */
+export type SemanticSearchPayload = {
+  matches: ToolMatch[];
+  meta: SemanticSearchMeta;
+};
+
+/**
+ * Normalize a `semanticSearchResults` payload — older chats stored a bare
+ * `ToolMatch[]`; current wire shape is `{ matches, meta }`.
+ */
+export function normalizeSemanticSearchResult(
+  result: ToolMatch[] | SemanticSearchPayload,
+): SemanticSearchPayload {
+  if (Array.isArray(result)) {
+    const counts = new Map<MatchSource, number>();
+    for (const m of result) counts.set(m.source, (counts.get(m.source) ?? 0) + 1);
+    const symbolHits = counts.get("symbol") ?? 0;
+    const onlyLexical =
+      result.length > 0 &&
+      result.every((m) => m.source === "lexical") &&
+      symbolHits === 0;
+    const weak = result.length === 0 || onlyLexical;
+    return {
+      matches: result,
+      meta: {
+        tiersUsed: [...counts.keys()],
+        symbolHits,
+        extractedTokens: [],
+        weak,
+        hint: weak
+          ? result.length === 0
+            ? "Ничего не найдено. Добавьте английские имена методов/классов (camelCase) и повторите поиск."
+            : "Поиск шёл по тексту без совпадений по именам. Уточните query английскими терминами или дождитесь синхронизации эмбеддингов."
+          : null,
+      },
+    };
+  }
+  return result;
+}
 
 // Mirrors the Rust `ToolCall`/`ToolResult` enums in
 // `src-tauri/src/domain/ai_tools.rs` (adjacently tagged:
@@ -198,7 +247,7 @@ export type AsciidocTemplateEntry = {
 export type ToolResult =
   | { tool: "file"; result: { content: string; startLine: number; endLine: number; totalLines: number } }
   | { tool: "fileList"; result: ToolFileEntry[] }
-  | { tool: "semanticSearchResults"; result: ToolMatch[] }
+  | { tool: "semanticSearchResults"; result: ToolMatch[] | SemanticSearchPayload }
   | { tool: "grepResults"; result: { matches: GrepMatch[]; truncated: boolean } }
   | { tool: "gitDiff"; result: { path: string; label: string; diff: FileDiffStats; isBinary: boolean } }
   | { tool: "gitBlame"; result: { path: string; hunks: GitBlameHunk[]; truncated: boolean } }

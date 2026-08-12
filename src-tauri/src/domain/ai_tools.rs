@@ -493,14 +493,36 @@ pub struct ToolMatch {
     pub path: String,
     pub snippet: String,
     /// Only comparable within the same `source`: `Semantic` is
-    /// `1.0 - cosine_distance` (higher is better), `Lexical` is a raw
-    /// substring-occurrence count, `Symbol` is a fixed `1.0` (exact name
-    /// match).
+    /// `1.0 - cosine_distance` (higher is better), `Lexical` is a weighted
+    /// token-occurrence score, `Symbol` is `1.0` for an exact name match or
+    /// `0.9` for a path-segment match.
     pub score: f32,
     pub start_byte: u32,
     pub end_byte: u32,
     pub qualified_name: Option<String>,
     pub source: MatchSource,
+}
+
+/// Diagnostics attached to a settled `SemanticSearch` — which cascade tiers
+/// ran, which tokens were extracted from the query, and an optional Russian
+/// hint when the search looks weak (for the model and the UI).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticSearchMeta {
+    pub tiers_used: Vec<String>,
+    pub symbol_hits: u32,
+    pub extracted_tokens: Vec<String>,
+    pub weak: bool,
+    pub hint: Option<String>,
+}
+
+/// Settled `SemanticSearch` payload — matches plus `meta` so the model can
+/// refine a weak query without a second broad search.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SemanticSearchPayload {
+    pub matches: Vec<ToolMatch>,
+    pub meta: SemanticSearchMeta,
 }
 
 /// One call into the tool executor. This — not the individual `ToolName`
@@ -614,7 +636,8 @@ pub enum ToolResult {
         total_lines: u32,
     },
     FileList(Vec<ToolFileEntry>),
-    SemanticSearchResults(Vec<ToolMatch>),
+    /// Settled `semanticSearch` — matches plus weak-search `meta`.
+    SemanticSearchResults(SemanticSearchPayload),
     /// Settled `grep` — line-oriented regex hits under `scope.root`.
     /// `truncated` is true when the match cap was hit before the walk finished.
     #[serde(rename_all = "camelCase")]

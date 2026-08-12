@@ -240,6 +240,16 @@ impl RepositoryIndex {
         self.files.get(id).map(|entry| entry.value().clone())
     }
 
+    /// Snapshot of every indexed `(FileId, IndexedFile)` — used by
+    /// `SemanticSearch`'s symbol-tier path-segment match without holding
+    /// `DashMap` guards across nested lookups.
+    pub fn all_files(&self) -> Vec<(FileId, IndexedFile)> {
+        self.files
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
+
     pub fn files_for_language(&self, language: Language) -> Vec<IndexedFile> {
         self.files
             .iter()

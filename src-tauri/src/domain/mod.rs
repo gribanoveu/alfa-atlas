@@ -18,6 +18,7 @@ pub mod paths;
 pub mod plan;
 pub mod project_config;
 pub mod repo_index;
+pub mod search_query;
 pub mod settings;
 pub mod spellcheck;
 pub mod standards;

@@ -2,6 +2,7 @@ import { AlertCircle, Bot, Check, ChevronDown, ChevronRight, Clock, File, Folder
 import { useState } from "react";
 import { describeMatchSource, describeToolActivity, describeToolResult, formatToolArguments } from "../../lib/assistantConfig";
 import type { FileDiffStats, Task, ToolResult, TodoStatus } from "../../lib/aiTools";
+import { normalizeSemanticSearchResult } from "../../lib/aiTools";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
 
 /** A file's content can be arbitrarily large — this caps how much of it the
@@ -315,15 +316,21 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
           </pre>
         </div>
       );
-    case "semanticSearchResults":
+    case "semanticSearchResults": {
+      const { matches, meta } = normalizeSemanticSearchResult(result.result);
+      const hintText =
+        meta.hint ??
+        (meta.weak
+          ? "Поиск дал слабые результаты — уточните запрос английскими именами методов/классов."
+          : null);
       return (
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Результаты</div>
-          {result.result.length === 0 ? (
+          {matches.length === 0 ? (
             <p className="assistant-tool-call-detail-empty">Ничего не найдено</p>
           ) : (
             <ul className="assistant-tool-call-detail-list assistant-tool-call-detail-matches">
-              {result.result.map((match, i) => {
+              {matches.map((match, i) => {
                 const source = describeMatchSource(match.source);
                 return (
                   <li key={`${match.path}-${match.startByte}-${i}`}>
@@ -336,14 +343,26 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
                         {source.label}
                       </span>
                     </div>
+                    {match.qualifiedName ? (
+                      <div className="assistant-tool-call-detail-match-qualified">
+                        {match.qualifiedName}
+                      </div>
+                    ) : null}
                     <div className="assistant-tool-call-detail-match-snippet">{match.snippet}</div>
                   </li>
                 );
               })}
             </ul>
           )}
+          {hintText ? (
+            <p className="assistant-tool-call-detail-hint">
+              <AlertCircle size={14} strokeWidth={1.75} aria-hidden />
+              <span>{hintText}</span>
+            </p>
+          ) : null}
         </div>
       );
+    }
     case "grepResults": {
       const { matches, truncated } = result.result;
       return (

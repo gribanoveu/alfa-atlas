@@ -2320,6 +2320,48 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   color: var(--text-1);
 }
 
+.assistant-tool-call-detail-match-qualified {
+  margin: 2px 0 0;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  font-family:
+    "JetBrains Mono",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+
+  font-size: 0.78em;
+
+  color: var(--text-2);
+}
+
+.assistant-tool-call-detail-hint {
+  display: flex;
+  align-items: flex-start;
+
+  margin: 10px 0 0;
+
+  gap: 6px;
+
+  font-size: 0.85em;
+  font-style: italic;
+  line-height: 1.4;
+
+  color: var(--text-2);
+}
+
+.assistant-tool-call-detail-hint svg {
+  flex-shrink: 0;
+
+  margin-top: 2px;
+
+  opacity: 0.85;
+}
+
 
 /* =========================================================
    Search snippet
