@@ -62,13 +62,17 @@ mod tests {
     }
 
     #[test]
-    fn bundled_embedding_preset_has_null_fields() {
+    fn bundled_embedding_trust_cert_is_present_and_parses() {
         let preset = system_embedding_preset();
-        assert_eq!(preset.base_url, None);
-        assert_eq!(preset.model, None);
-        assert_eq!(preset.dimensions, None);
-        assert_eq!(preset.trusted_cert_pem, None);
-        assert!(!preset_implies_remote(preset));
+        let pem = preset
+            .trusted_cert_pem
+            .as_deref()
+            .expect("embedding preset ships with a trusted cert");
+        assert!(pem.contains("BEGIN CERTIFICATE"));
+        assert!(
+            crate::infra::http_agent::build_agent(Some(pem)).is_ok(),
+            "bundled embedding trust cert must be valid, parseable PEM"
+        );
     }
 
     #[test]

@@ -8,6 +8,9 @@
 //! Uses a per-provider `ureq::Agent` (via `infra::http_agent`) so a
 //! corporate internal CA from the bundled embedding preset — or a user
 //! override — can replace the agent's trust store, same as the LLM client.
+//!
+//! When `system_id` is configured, sends the vendor-specific `systemId` and
+//! a fresh `messageId` (UUID) headers on each request.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +21,7 @@ use crate::infra::http_agent;
 struct EmbeddingsRequest<'a> {
     input: &'a [&'a str],
     model: &'a str,
+    encoding_format: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +40,7 @@ pub struct RemoteEmbeddingProvider {
     model: String,
     api_key: String,
     dimensions: usize,
+    system_id: Option<String>,
 }
 
 impl RemoteEmbeddingProvider {
@@ -45,8 +50,10 @@ impl RemoteEmbeddingProvider {
         api_key: String,
         dimensions: usize,
         trusted_cert_pem: Option<&str>,
+        system_id: Option<String>,
+        disable_tls_verification: bool,
     ) -> Result<Self, EmbeddingError> {
-        let agent = http_agent::build_agent(trusted_cert_pem)
+        let agent = http_agent::build_agent_with_options(trusted_cert_pem, disable_tls_verification)
             .map_err(|e| EmbeddingError::Tls(e.0))?;
         Ok(Self {
             agent,
@@ -54,6 +61,7 @@ impl RemoteEmbeddingProvider {
             model,
             api_key,
             dimensions,
+            system_id,
         })
     }
 
@@ -67,12 +75,23 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
         let body = EmbeddingsRequest {
             input: texts,
             model: &self.model,
+            encoding_format: "float",
         };
 
-        let mut response = self
+        let mut request = self
             .agent
             .post(self.embeddings_url())
             .header("Authorization", &format!("Bearer {}", self.api_key))
+            .header("accept", "application/json");
+
+        if let Some(system_id) = &self.system_id {
+            let message_id = uuid::Uuid::new_v4().to_string();
+            request = request
+                .header("systemId", system_id.as_str())
+                .header("messageId", message_id.as_str());
+        }
+
+        let mut response = request
             .send_json(&body)
             .map_err(|e| EmbeddingError::Http(e.to_string()))?;
 
@@ -115,6 +134,8 @@ mod tests {
             "key".to_string(),
             1536,
             None,
+            None,
+            false,
         )
         .unwrap()
     }
@@ -134,16 +155,17 @@ mod tests {
     }
 
     #[test]
-    fn request_serializes_with_input_and_model() {
+    fn request_serializes_with_input_model_and_encoding_format() {
         let texts = ["a", "b"];
         let req = EmbeddingsRequest {
             input: &texts,
             model: "text-embedding-3-small",
+            encoding_format: "float",
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(
             json,
-            r#"{"input":["a","b"],"model":"text-embedding-3-small"}"#
+            r#"{"input":["a","b"],"model":"text-embedding-3-small","encoding_format":"float"}"#
         );
     }
 
@@ -155,6 +177,8 @@ mod tests {
             "key".to_string(),
             1536,
             Some("not a pem"),
+            None,
+            false,
         );
         assert!(matches!(result, Err(EmbeddingError::Tls(_))));
     }

@@ -17,6 +17,16 @@ pub struct TlsError(pub String);
 /// keep the default `RootCerts::WebPki`, and since every provider gets its
 /// own `Agent`, there's no cross-provider trust interference either way.
 pub fn build_agent(trusted_cert_pem: Option<&str>) -> Result<ureq::Agent, TlsError> {
+    build_agent_with_options(trusted_cert_pem, false)
+}
+
+/// When `disable_verification` is true, accepts any server certificate —
+/// including expired or self-signed ones. Intended for internal sandboxes
+/// only; never use against production endpoints.
+pub fn build_agent_with_options(
+    trusted_cert_pem: Option<&str>,
+    disable_verification: bool,
+) -> Result<ureq::Agent, TlsError> {
     // Disables ureq's default behavior of turning a non-2xx status into a
     // bare `Error::StatusCode(code)` *before* the caller can read the
     // response body — that's exactly what made a provider error like a
@@ -24,7 +34,12 @@ pub fn build_agent(trusted_cert_pem: Option<&str>) -> Result<ureq::Agent, TlsErr
     // undiagnosable "http status: 500" with no detail. Callers that want
     // the body fold it into their own error type after reading.
     let mut builder = ureq::Agent::config_builder().http_status_as_error(false);
-    if let Some(pem) = trusted_cert_pem {
+    if disable_verification {
+        let tls_config = ureq::tls::TlsConfig::builder()
+            .disable_verification(true)
+            .build();
+        builder = builder.tls_config(tls_config);
+    } else if let Some(pem) = trusted_cert_pem {
         let certs = parse_trusted_certs(pem)?;
         let tls_config = ureq::tls::TlsConfig::builder()
             .root_certs(ureq::tls::RootCerts::Specific(std::sync::Arc::new(certs)))
@@ -112,6 +127,11 @@ EdPIXI8UYm6De+fhi7iXIFRjHoYWcm15gr/A2hpb2/f6fBdcsn5l9F15iScu6tF3\n\
 92SNkKhKb3b+I32HzRrFoLoL/QQHUOC0SGhXVbcyQ8FdYs45/WFkuFUvS2NkqT+C\n\
 YoQlQIWF38mOPRxLRBxKA7g=\n\
 -----END CERTIFICATE-----\n";
+
+    #[test]
+    fn build_agent_with_disabled_verification_succeeds() {
+        assert!(build_agent_with_options(None, true).is_ok());
+    }
 
     #[test]
     fn build_agent_succeeds_with_no_trust_cert_override() {

@@ -34,6 +34,8 @@ pub fn provider_for(
                 api_key,
                 dimensions,
                 config.remote_trusted_cert_pem.as_deref(),
+                config.remote_system_id.clone(),
+                config.remote_disable_tls_verification,
             )?))
         }
     }
@@ -67,6 +69,8 @@ mod tests {
             remote_model: Some("text-embedding-3-small".to_string()),
             remote_dimensions: None,
             remote_trusted_cert_pem: None,
+            remote_system_id: None,
+            remote_disable_tls_verification: false,
         }
     }
 
@@ -78,6 +82,8 @@ mod tests {
             remote_model: Some("m".into()),
             remote_dimensions: None,
             remote_trusted_cert_pem: None,
+            remote_system_id: None,
+            remote_disable_tls_verification: false,
         };
         let Err(err) = provider_for(&config, Some("key".to_string())) else {
             panic!("expected an error");

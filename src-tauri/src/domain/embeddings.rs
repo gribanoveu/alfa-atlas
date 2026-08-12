@@ -54,6 +54,13 @@ pub struct EmbeddingPreset {
     pub dimensions: Option<usize>,
     #[serde(default)]
     pub trusted_cert_pem: Option<String>,
+    /// Alfa internal API: required `systemId` header on `/embeddings`.
+    #[serde(default)]
+    pub system_id: Option<String>,
+    /// Skip TLS certificate validation — sandbox-only escape hatch when the
+    /// server leaf cert is expired but the endpoint is still reachable.
+    #[serde(default)]
+    pub disable_tls_verification: Option<bool>,
 }
 
 /// Persisted globally (`AppSettings.embedding`) as an **override** layer on
@@ -86,6 +93,10 @@ pub struct EmbeddingProviderConfig {
     pub remote_dimensions: Option<usize>,
     #[serde(default)]
     pub remote_trusted_cert_pem: Option<String>,
+    #[serde(default)]
+    pub remote_system_id: Option<String>,
+    #[serde(default)]
+    pub remote_disable_tls_verification: Option<bool>,
 }
 
 /// Merged, ready-to-use view of the embedding provider — bundled preset
@@ -100,6 +111,8 @@ pub struct ResolvedEmbeddingConfig {
     pub remote_model: Option<String>,
     pub remote_dimensions: Option<usize>,
     pub remote_trusted_cert_pem: Option<String>,
+    pub remote_system_id: Option<String>,
+    pub remote_disable_tls_verification: bool,
 }
 
 impl Default for ResolvedEmbeddingConfig {
@@ -110,6 +123,8 @@ impl Default for ResolvedEmbeddingConfig {
             remote_model: None,
             remote_dimensions: None,
             remote_trusted_cert_pem: None,
+            remote_system_id: None,
+            remote_disable_tls_verification: false,
         }
     }
 }

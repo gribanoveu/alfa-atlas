@@ -55,6 +55,14 @@ pub fn resolve_with(
             .remote_trusted_cert_pem
             .clone()
             .or_else(|| preset.trusted_cert_pem.clone()),
+        remote_system_id: settings
+            .remote_system_id
+            .clone()
+            .or_else(|| preset.system_id.clone()),
+        remote_disable_tls_verification: settings
+            .remote_disable_tls_verification
+            .or(preset.disable_tls_verification)
+            .unwrap_or(false),
     }
 }
 
@@ -72,6 +80,7 @@ mod tests {
             model: Some("emb-model".into()),
             dimensions: Some(1024),
             trusted_cert_pem: Some("-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n".into()),
+            ..Default::default()
         }
     }
 
@@ -134,9 +143,23 @@ mod tests {
     }
 
     #[test]
-    fn bundled_null_preset_resolves_to_local_via_public_api() {
-        // Smoke: real bundled file has null embedding fields.
-        let resolved = resolve_embedding_config().unwrap();
-        assert_eq!(resolved.kind, EmbeddingProviderKind::Local);
+    fn bundled_preset_merges_with_empty_override() {
+        let preset = embedding_provider_manifest::system_embedding_preset();
+        let resolved = resolve_with(preset, &EmbeddingProviderConfig::default());
+        let expected_kind = if embedding_provider_manifest::preset_implies_remote(preset) {
+            EmbeddingProviderKind::Remote
+        } else {
+            EmbeddingProviderKind::Local
+        };
+        assert_eq!(resolved.kind, expected_kind);
+        assert_eq!(resolved.remote_base_url, preset.base_url.clone());
+        assert_eq!(resolved.remote_model, preset.model.clone());
+        assert_eq!(resolved.remote_dimensions, preset.dimensions);
+        assert_eq!(resolved.remote_trusted_cert_pem, preset.trusted_cert_pem.clone());
+        assert_eq!(resolved.remote_system_id, preset.system_id.clone());
+        assert_eq!(
+            resolved.remote_disable_tls_verification,
+            preset.disable_tls_verification.unwrap_or(false)
+        );
     }
 }

@@ -1496,6 +1496,8 @@ mod tests {
             remote_model: Some(model.to_string()),
             remote_dimensions: Some(768),
             remote_trusted_cert_pem: None,
+            remote_system_id: None,
+            remote_disable_tls_verification: false,
         }
     }
 

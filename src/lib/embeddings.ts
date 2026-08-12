@@ -11,6 +11,8 @@ export type ResolvedEmbeddingConfig = {
   remoteModel: string | null;
   remoteDimensions: number | null;
   remoteTrustedCertPem: string | null;
+  remoteSystemId: string | null;
+  remoteDisableTlsVerification: boolean;
 };
 
 // Mirrors `domain::embeddings::EmbeddingProviderConfig` — the settings-layer
@@ -22,6 +24,8 @@ export type EmbeddingProviderConfig = {
   remoteModel: string | null;
   remoteDimensions: number | null;
   remoteTrustedCertPem: string | null;
+  remoteSystemId: string | null;
+  remoteDisableTlsVerification: boolean | null;
 };
 
 // Mirrors `domain::embeddings::ModelStatus` (adjacently tagged,

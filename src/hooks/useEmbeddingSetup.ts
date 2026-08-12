@@ -212,6 +212,8 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
         remoteModel: next.remoteModel,
         remoteDimensions: next.remoteDimensions,
         remoteTrustedCertPem: next.remoteTrustedCertPem,
+        remoteSystemId: next.remoteSystemId,
+        remoteDisableTlsVerification: next.remoteDisableTlsVerification,
       };
       setConfigState(next);
       setBusy(true);

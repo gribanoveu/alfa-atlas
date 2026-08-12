@@ -61,6 +61,7 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
   const [dimensions, setDimensions] = useState("");
+  const [systemId, setSystemId] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -70,6 +71,7 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
     setBaseUrl(config.remoteBaseUrl ?? "");
     setModel(config.remoteModel ?? "");
     setDimensions(config.remoteDimensions != null ? String(config.remoteDimensions) : "");
+    setSystemId(config.remoteSystemId ?? "");
   }, [config]);
 
   if (!config) {
@@ -228,6 +230,18 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
                   remoteDimensions: dimensions.trim() && Number.isFinite(parsed) ? parsed : null,
                 });
               }}
+            />
+          </label>
+          <label className="clone-modal-field">
+            <span className="clone-modal-label">System ID</span>
+            <input
+              className="clone-modal-input"
+              type="text"
+              placeholder="sanduser (если требует API)"
+              value={systemId}
+              disabled={busy}
+              onChange={(event) => setSystemId(event.target.value)}
+              onBlur={() => void updateConfig({ remoteSystemId: systemId.trim() || null })}
             />
           </label>
           <label className="clone-modal-field">
