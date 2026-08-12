@@ -61,7 +61,7 @@ pub struct SemanticSearchArgs {
 }
 
 /// Exact regex content search across files under the tool scope root —
-/// read-only, complementary to `SemanticSearch` (precision vs similarity).
+/// read-only, secondary to `SemanticSearch` (precision vs similarity).
 /// See `services::ai_tools::grep`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

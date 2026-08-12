@@ -934,14 +934,14 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "semanticSearch".to_string(),
             description:
-                "Search the project's documentation/code for content relevant to a natural-language query. Use for semantic discovery: finding documents related to a concept, locating terminology, finding related implementations, or discovering potentially relevant files when the exact location is unknown. Results are useful for discovery but may not be sufficient evidence for precise claims — verify with readFile when precise details matter. For exact symbol/string/regex matches (e.g. \"find every call site of X\"), use grep instead — grep provides precision over similarity."
+                "Default search tool — use this first whenever you need to find something in the project and the exact file or line is not already known. Searches documentation/code for content relevant to a natural-language query via symbol lookup, semantic similarity, and lexical fallback. Use for discovery: concepts, terminology, related implementations, or locating files when the path is unknown. Prefer this over grep for exploratory search even when you have a specific keyword. Project docs are in Russian, code/identifiers in English — compose queries with English terms (class/method/API names) plus Russian semantic context (what it does, business meaning). Results are useful for discovery but may not be sufficient evidence for precise claims — verify with readFile when precise details matter. Use grep only afterward when you need an exhaustive list of every exact line match."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural-language search query."
+                        "description": "Natural-language search query. Docs are Russian, code/identifiers English — include English technical terms (class/method/API names) and Russian semantic context (purpose, business meaning)."
                     },
                     "topK": {
                         "type": ["integer", "null"],
@@ -957,7 +957,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "grep".to_string(),
             description:
-                "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Use when you need precision — every call site of a symbol, every occurrence of a literal string, or a regex pattern — not conceptual similarity. Prefer this over semanticSearch for \"find all places where X is used\". Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Honors .gitignore; skips binary and oversized files. Returned paths are already relative to the same root readFile uses — pass them to readFile unchanged, no prefix needed."
+                "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Secondary tool — do not use as the first search step; call semanticSearch first for discovery. Use grep only when semanticSearch is insufficient: you need every call site of a symbol, every occurrence of a literal string, or a regex pattern across files, and you already know what to match. Not for conceptual or exploratory search. Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Honors .gitignore; skips binary and oversized files. Returned paths are already relative to the same root readFile uses — pass them to readFile unchanged, no prefix needed."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
