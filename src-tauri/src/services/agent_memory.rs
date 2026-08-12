@@ -149,6 +149,8 @@ fn next_nap(store: &OptMemStore, t: usize) -> Result<Option<String>, AgentMemory
     Ok(Some(nap_prompt(store, lo, hi, left)?))
 }
 
+/// Prompt for harness-side compression (no tool-call instructions — the
+/// summarizer returns one line that `drain_pending_naps` writes via `nap`).
 fn nap_prompt(
     store: &OptMemStore,
     lo: usize,
@@ -188,11 +190,10 @@ fn nap_prompt(
     };
     Ok(format!(
         "Compress memories #{lo}-{} into one line of at most {entry_chars} bytes.\n\
-         Keep what has lasting effect, drop what does not. Invent nothing.\n\n\
-         {body}{tail}\n\
-         Then call memory with op \"nap\", scope matching this store, block \"{lo}-{}\", and text set to the summary.",
+         Keep what has lasting effect, drop what does not. Invent nothing.\n\
+         Reply with ONLY the summary line — no quotes, no prefixes, no explanation.\n\n\
+         {body}{tail}",
         hi - 1,
-        hi - 1
     ))
 }
 
@@ -294,50 +295,64 @@ fn wake_from_store(
         store.knobs().part_chars,
         store.knobs().part_lines,
     );
-    if !(1..=parts.len()).contains(&k) {
-        return Err(AgentMemoryError::Message(format!(
-            "No part {k}: the memory has {}. Run wake.",
-            plural(parts.len(), "part")
-        )));
-    }
 
-    let mut out = Vec::new();
-    if parts.len() > 1 {
-        out.push(format!(
-            "[{}] Your memory, part {k} of {}, oldest first ({}).",
-            scope.as_str(),
-            parts.len(),
-            plural(t, "memory")
-        ));
-    } else {
-        out.push(format!("[{}] Your memory ({}):", scope.as_str(), plural(t, "memory")));
-    }
-    out.extend(parts[k - 1].iter().cloned());
-    if k < parts.len() {
-        out.push(format!(
-            "Not awake yet. Call memory op \"wake\" with part={} and snapshotT={t}.",
-            k + 1
-        ));
-    } else {
-        out.push("You are awake.".to_string());
-        match mode {
-            WakeMode::Tool => {
+    // Inject mode concatenates every part so the model never needs wake
+    // pagination. Tool mode (internal / tests) still paginates.
+    match mode {
+        WakeMode::Inject => {
+            let mut out = Vec::new();
+            out.push(format!(
+                "[{}] Your memory ({}):",
+                scope.as_str(),
+                plural(t, "memory")
+            ));
+            for part_lines in &parts {
+                out.extend(part_lines.iter().cloned());
+            }
+            out.push("You are awake.".to_string());
+            if pending_compressions > 0 {
+                out.push(format!(
+                    "({} not compressed yet — harness will rebuild summaries.)",
+                    plural(pending_compressions, "block")
+                ));
+            }
+            Ok(out.join("\n"))
+        }
+        WakeMode::Tool => {
+            if !(1..=parts.len()).contains(&k) {
+                return Err(AgentMemoryError::Message(format!(
+                    "No part {k}: the memory has {}. Run wake.",
+                    plural(parts.len(), "part")
+                )));
+            }
+
+            let mut out = Vec::new();
+            if parts.len() > 1 {
+                out.push(format!(
+                    "[{}] Your memory, part {k} of {}, oldest first ({}).",
+                    scope.as_str(),
+                    parts.len(),
+                    plural(t, "memory")
+                ));
+            } else {
+                out.push(format!("[{}] Your memory ({}):", scope.as_str(), plural(t, "memory")));
+            }
+            out.extend(parts[k - 1].iter().cloned());
+            if k < parts.len() {
+                out.push(format!(
+                    "Not awake yet. Call memory op \"wake\" with part={} and snapshotT={t}.",
+                    k + 1
+                ));
+            } else {
+                out.push("You are awake.".to_string());
                 if let Some(nap) = next_nap(store, t)? {
                     out.push(String::new());
                     out.push(nap);
                 }
             }
-            WakeMode::Inject => {
-                if pending_compressions > 0 {
-                    out.push(format!(
-                        "({} not compressed yet — call memory wake/nap to rebuild summaries.)",
-                        plural(pending_compressions, "block")
-                    ));
-                }
-            }
+            Ok(out.join("\n"))
         }
     }
-    Ok(out.join("\n"))
 }
 
 /// Wake one scope for chat injection. `Ok(None)` when the store is missing
@@ -397,7 +412,8 @@ pub fn wake_context(repo_root: &Path) -> Result<String, AgentMemoryError> {
         "## Agent memory (OptMem)\n\n\
          {}\n\n\
          Use the `memory` tool to note new lasting facts (scope \"project\" for this repo, \
-         \"global\" for preferences across projects). If a note asks for compression, call nap before your next action.",
+         \"global\" for preferences across projects), recall with a regex, or forget a bad \
+         summary block when asked. Wake and tree compression are harness-managed.",
         sections.join("\n\n")
     ))
 }
@@ -406,12 +422,9 @@ pub fn note(scope: MemoryScope, repo_root: &Path, text: &str) -> Result<String, 
     let store = open_store(scope, repo_root)?;
     let text = validate_entry(&store, text)?;
     let i = store.log_append(&[(today(), text)])?;
-    let mut out = format!("[{}] Saved as #{i}.", scope.as_str());
-    if let Some(nap) = next_nap(&store, i + 1)? {
-        out.push_str("\n\n");
-        out.push_str(&nap);
-    }
-    Ok(out)
+    // Pending TREE compressions are drained by the harness (`drain_pending_naps`)
+    // after this tool returns — do not ask the model to call `nap`.
+    Ok(format!("[{}] Saved as #{i}.", scope.as_str()))
 }
 
 pub fn nap(
@@ -598,7 +611,7 @@ pub fn forget(scope: MemoryScope, repo_root: &Path, block: &str) -> Result<Strin
         )));
     }
     Ok(format!(
-        "[{}] Forgot {}, from {}-{} up. Call nap to rebuild.",
+        "[{}] Forgot {}, from {}-{} up. Harness will rebuild summaries.",
         scope.as_str(),
         plural(gone.len(), "summary"),
         gone[0].lo,
@@ -668,7 +681,66 @@ fn validate_knob(name: &str, value: usize) -> Result<(), AgentMemoryError> {
     Ok(())
 }
 
-/// Dispatch a memory op — shared by the AI tool and IPC wake-context.
+/// Cap on harness-side compressions per drain (after one note/forget).
+const MAX_NAPS_PER_DRAIN: usize = 16;
+
+/// Drain pending TREE compressions using a caller-supplied summarizer
+/// (typically a tool-free `LlmProvider::chat` call). Best-effort: on
+/// summarizer/parse failure, stop and leave remaining blocks pending —
+/// inject wake already tolerates missing summaries. Returns how many
+/// summaries were written.
+pub fn drain_pending_naps<F>(
+    scope: MemoryScope,
+    repo_root: &Path,
+    mut summarize: F,
+) -> Result<usize, AgentMemoryError>
+where
+    F: FnMut(&str) -> Result<String, String>,
+{
+    let Some(store) = try_open_store(scope, repo_root)? else {
+        return Ok(0);
+    };
+    let mut written = 0usize;
+    for _ in 0..MAX_NAPS_PER_DRAIN {
+        let t = store.log_len()?;
+        let map = level_lens(&store, t)?;
+        let level = level_len_fn(&map);
+        let todo = pending(t, &level, Some(1));
+        if todo.is_empty() {
+            break;
+        }
+        let BlockRange { lo, hi } = todo[0];
+        let left = pending_count(t, &level).saturating_sub(1);
+        let prompt = nap_prompt(&store, lo, hi, left)?;
+        let raw = match summarize(&prompt) {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+        let line = first_summary_line(&raw);
+        if line.is_empty() {
+            break;
+        }
+        let summary = match validate_entry(&store, line) {
+            Ok(s) => s,
+            Err(_) => break,
+        };
+        if !store.tree_put(lo, hi, &summary)? {
+            break;
+        }
+        written += 1;
+    }
+    Ok(written)
+}
+
+fn first_summary_line(raw: &str) -> &str {
+    raw.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+}
+
+/// Dispatch a model-facing memory op. Wake/nap/zoom/config are harness-managed
+/// and rejected here with a clear error — use the internal functions instead.
 pub fn run_op(
     scope: MemoryScope,
     repo_root: &Path,
@@ -676,30 +748,25 @@ pub fn run_op(
     text: Option<&str>,
     pattern: Option<&str>,
     block: Option<&str>,
-    knob: Option<&str>,
-    part: Option<usize>,
-    snapshot_t: Option<usize>,
+    _knob: Option<&str>,
+    _part: Option<usize>,
+    _snapshot_t: Option<usize>,
 ) -> Result<String, AgentMemoryError> {
     match op {
-        "wake" => wake(scope, repo_root, part, snapshot_t),
+        "wake" | "nap" | "zoom" | "config" => Err(AgentMemoryError::Message(format!(
+            "op \"{op}\" is harness-managed; use note, recall, or forget"
+        ))),
         "note" => {
             let text = text.ok_or_else(|| {
                 AgentMemoryError::Message("op \"note\" requires `text`".into())
             })?;
             note(scope, repo_root, text)
         }
-        "nap" => nap(scope, repo_root, block, text),
         "recall" => {
             let pattern = pattern.ok_or_else(|| {
                 AgentMemoryError::Message("op \"recall\" requires `pattern`".into())
             })?;
             recall(scope, repo_root, pattern)
-        }
-        "zoom" => {
-            let block = block.ok_or_else(|| {
-                AgentMemoryError::Message("op \"zoom\" requires `block`".into())
-            })?;
-            zoom(scope, repo_root, block)
         }
         "forget" => {
             let block = block.ok_or_else(|| {
@@ -707,9 +774,8 @@ pub fn run_op(
             })?;
             forget(scope, repo_root, block)
         }
-        "config" => config(scope, repo_root, knob),
         other => Err(AgentMemoryError::Message(format!(
-            "unknown memory op: \"{other}\" (expected wake|note|nap|recall|zoom|forget|config)"
+            "unknown memory op: \"{other}\" (expected note|recall|forget)"
         ))),
     }
 }
@@ -828,6 +894,76 @@ mod tests {
             let long = "a".repeat(RECALL_PATTERN_MAX + 1);
             let err = recall(MemoryScope::Project, &repo, &long).unwrap_err();
             assert!(matches!(err, AgentMemoryError::Message(_)));
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
+    fn run_op_rejects_harness_managed_ops() {
+        with_temp_home(|| {
+            let repo = temp_repo();
+            for op in ["wake", "nap", "zoom", "config"] {
+                let err = run_op(
+                    MemoryScope::Project,
+                    &repo,
+                    op,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap_err();
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("harness-managed"),
+                    "op {op}: {msg}"
+                );
+            }
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
+    fn note_result_does_not_ask_model_to_nap() {
+        with_temp_home(|| {
+            let repo = temp_repo();
+            note(MemoryScope::Project, &repo, "alpha").unwrap();
+            let out = note(MemoryScope::Project, &repo, "beta").unwrap();
+            assert!(out.contains("Saved as #1"));
+            assert!(!out.contains("Compress"));
+            assert!(!out.contains("op \"nap\""));
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
+    fn drain_pending_naps_writes_summaries_via_summarizer() {
+        with_temp_home(|| {
+            let repo = temp_repo();
+            note(MemoryScope::Project, &repo, "alpha").unwrap();
+            note(MemoryScope::Project, &repo, "beta").unwrap();
+            let written = drain_pending_naps(MemoryScope::Project, &repo, |_prompt| {
+                Ok("alpha and beta".to_string())
+            })
+            .unwrap();
+            assert!(written >= 1);
+            let wake_out = wake_context(&repo).unwrap();
+            assert!(wake_out.contains("alpha and beta") || wake_out.contains("awake"));
+            assert!(!wake_out.contains("not compressed yet"));
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
+    fn wake_context_footer_does_not_mention_nap() {
+        with_temp_home(|| {
+            let repo = temp_repo();
+            note(MemoryScope::Project, &repo, "only-project").unwrap();
+            let ctx = wake_context(&repo).unwrap();
+            assert!(ctx.contains("harness-managed") || ctx.contains("note"));
+            assert!(!ctx.contains("call nap"));
             fs::remove_dir_all(&repo).ok();
         });
     }

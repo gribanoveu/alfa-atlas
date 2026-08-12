@@ -442,13 +442,15 @@ pub struct TodoUpdateArgs {
     pub note: Option<String>,
 }
 
-/// Permanent OptMem-style agent memory. One tool, multiple ops — see
-/// `services::agent_memory`. `scope` selects project
+/// Permanent OptMem-style agent memory. One tool, model-facing ops
+/// `note` | `recall` | `forget` — see `services::agent_memory`. Wake inject
+/// and TREE compression (`nap`) are harness-managed. `scope` selects project
 /// (`{repo}/.atlas/memory`) or global (`~/.atlas/memory`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryArgs {
-    /// `wake` | `note` | `nap` | `recall` | `zoom` | `forget` | `config`
+    /// Model-facing: `note` | `recall` | `forget`. Retired ops
+    /// (`wake`/`nap`/`zoom`/`config`) are rejected at dispatch.
     pub op: String,
     /// `project` | `global`
     pub scope: String,
@@ -456,16 +458,16 @@ pub struct MemoryArgs {
     pub text: Option<String>,
     #[serde(default)]
     pub pattern: Option<String>,
-    /// Inclusive block id as wake prints it, e.g. `"0-15"`.
+    /// Inclusive block id as wake prints it, e.g. `"0-15"` (for `forget`).
     #[serde(default)]
     pub block: Option<String>,
-    /// `NAME=VALUE` for `config` (empty value restores default).
+    /// Legacy `config` field — ignored; retained for serde leniency.
     #[serde(default)]
     pub knob: Option<String>,
-    /// 1-based wake part index.
+    /// Legacy `wake` field — ignored; retained for serde leniency.
     #[serde(default)]
     pub part: Option<u32>,
-    /// Wake snapshot T (memory count) for multi-part continuation.
+    /// Legacy `wake` field — ignored; retained for serde leniency.
     #[serde(default)]
     pub snapshot_t: Option<u32>,
 }

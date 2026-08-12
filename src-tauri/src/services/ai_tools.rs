@@ -1267,13 +1267,13 @@ pub fn llm_tool_definitions(
     if visible(ToolName::Memory) {
         defs.push(LlmToolDefinition {
             name: "memory".to_string(),
-            description: "Permanent OptMem-style agent memory that outlives sessions and compaction. Two scopes: \"project\" (`{repo}/.atlas/memory`, shareable via git) for repo/docs facts and decisions; \"global\" (`~/.atlas/memory`) for user preferences across projects. Ops: \"wake\" reads the compressed context (also auto-injected at the start of each turn when this tool is allowed — call again only to continue a multi-part wake or after finishing pending naps); \"note\" appends one lasting fact as a dense telegram-style line (prefer ≤ ~120 UTF-8 bytes / ~60 Cyrillic chars; hard cap ~560 bytes) — never a paragraph or stack dump; split multiple facts into multiple notes; do not note redundant memories; pauses for user approval unless the user previously chose \"always allow\" for memory, and the user may deny a note (do not retry automatically after a denial); \"nap\" saves a compression summary the previous note/wake asked for (`block` like \"0-15\" and `text` = the one-line summary) and runs without a confirmation pause; \"recall\" searches every raw memory with a regex; \"zoom\" opens a tree node `#a-b` into its two halves; \"forget\" drops a bad summary so the next nap rebuilds it (the raw log is never deleted) — requires approval like note; \"config\" shows sizes, or sets WAKE_LINES/ENTRY_CHARS/PART_CHARS/PART_LINES via `knob` \"NAME=VALUE\" (setting a knob requires approval). If note/wake asks for a compression, do nap before your next action.".to_string(),
+            description: "Permanent OptMem-style agent memory that outlives sessions and compaction. Two scopes: \"project\" (`{repo}/.atlas/memory`, shareable via git) for repo/docs facts and decisions; \"global\" (`~/.atlas/memory`) for user preferences across projects. A combined wake of both scopes is auto-injected at the start of each turn — treat it as already-read; do not request wake. Tree compression after note/forget is handled by the harness automatically — do not request nap/zoom/config. Ops: \"note\" appends one lasting fact as a dense telegram-style line (prefer ≤ ~120 UTF-8 bytes / ~60 Cyrillic chars; hard cap ~560 bytes) — never a paragraph or stack dump; split multiple facts into multiple notes; do not note redundant memories; pauses for user approval unless the user previously chose \"always allow\" for memory, and the user may deny a note (do not retry automatically after a denial); \"recall\" searches every raw memory with a regex; \"forget\" drops TREE summaries for a block (e.g. when the user asks to forget something, or a summary is wrong) so the harness can rebuild — the raw log is never deleted; requires approval like note.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "op": {
                         "type": "string",
-                        "enum": ["wake", "note", "nap", "recall", "zoom", "forget", "config"],
+                        "enum": ["note", "recall", "forget"],
                         "description": "Memory operation."
                     },
                     "scope": {
@@ -1283,7 +1283,7 @@ pub fn llm_tool_definitions(
                     },
                     "text": {
                         "type": ["string", "null"],
-                        "description": "For note: the one-line memory. For nap: the compression summary."
+                        "description": "For note: the one-line memory."
                     },
                     "pattern": {
                         "type": ["string", "null"],
@@ -1291,19 +1291,7 @@ pub fn llm_tool_definitions(
                     },
                     "block": {
                         "type": ["string", "null"],
-                        "description": "For nap/zoom/forget: inclusive block id as wake prints it, e.g. \"0-15\"."
-                    },
-                    "knob": {
-                        "type": ["string", "null"],
-                        "description": "For config: \"NAME=VALUE\" (empty value restores default). Omit to only show sizes."
-                    },
-                    "part": {
-                        "type": ["integer", "null"],
-                        "description": "For wake: 1-based part index when the context is paginated."
-                    },
-                    "snapshotT": {
-                        "type": ["integer", "null"],
-                        "description": "For wake: snapshot memory count T when continuing a multi-part wake."
+                        "description": "For forget: inclusive block id as wake prints it, e.g. \"0-15\"."
                     }
                 },
                 "required": ["op", "scope"]
@@ -6187,6 +6175,15 @@ mod tests {
             serde_json::from_value(serde_json::json!({"kind": "standards"})).unwrap();
         assert_eq!(standards_args.kind, CheckKind::Standards);
         assert_eq!(standards_args.path, None);
+
+        let memory = defs.iter().find(|d| d.name == "memory").unwrap();
+        assert_eq!(
+            memory.parameters["properties"]["op"]["enum"],
+            serde_json::json!(["note", "recall", "forget"])
+        );
+        assert!(memory.parameters["properties"].get("knob").is_none());
+        assert!(memory.parameters["properties"].get("part").is_none());
+        assert!(memory.parameters["properties"].get("snapshotT").is_none());
 
         fs::remove_dir_all(&repo).ok();
     }

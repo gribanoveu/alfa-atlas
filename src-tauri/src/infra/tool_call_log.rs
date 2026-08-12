@@ -304,14 +304,10 @@ pub fn redact_args(call: &ToolCall) -> serde_json::Value {
 /// this result settled, extracted by the caller before it's moved into
 /// `execute_tool`) — needed because whether a `memory` result is safe to
 /// keep depends on which op produced it, not just the result's shape.
-/// Every op except `"config"` is redacted: `wake`/`recall`/`zoom` embed raw
-/// memory lines directly, and `note`/`nap`/`forget`'s own confirmation text
-/// routinely gets a compression-prompt continuation appended that lists raw
-/// entries too — a per-op partial redaction would mean fragile parsing of
-/// that continuation for little gain. `config`'s result is always just knob
-/// name/value/description lines — it never touches the log/tree data — so
-/// it's the one op safe to leave unredacted, which keeps the log useful for
-/// diagnosing config issues (e.g. "why didn't my WAKE_LINES override apply").
+/// Model-facing ops (`note`/`recall`/`forget`) and retired harness ops
+/// (`wake`/`nap`/`zoom`) are redacted — they embed or touch raw memory
+/// lines. Legacy `"config"` results (knob sizes only) stay unredacted so
+/// older transcripts remain diagnosable.
 pub fn redact_result(result: &ToolResult, memory_op: Option<&str>) -> serde_json::Value {
     let mut value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
     let Some(inner) = value.get_mut("result") else {

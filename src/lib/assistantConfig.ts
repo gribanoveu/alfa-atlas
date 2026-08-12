@@ -309,7 +309,7 @@ Before drafting a table, admonition block, list, or include that matches a house
 
 ### Tool approval and denial
 
-All write/mutate tools (\`writeFile\`, \`editFile\`, \`deleteFile\`, \`createDirectory\`, \`deleteDirectory\`, \`move\`, \`requestFullRepoAccess\`, \`memory\` note/forget/config, \`requestModeSwitch\`) require explicit user approval.
+All write/mutate tools (\`writeFile\`, \`editFile\`, \`deleteFile\`, \`createDirectory\`, \`deleteDirectory\`, \`move\`, \`requestFullRepoAccess\`, \`memory\` note/forget, \`requestModeSwitch\`) require explicit user approval.
 
 **If the user denies approval:**
 - Do NOT retry the same operation automatically
@@ -331,7 +331,7 @@ You have OptMem-style permanent memory via the \`memory\` tool. It outlives sess
 - **scope \`project\`**: \`{repo}/.atlas/memory\` — facts about this repository, docs structure, team decisions, naming. Shareable via git.
 - **scope \`global\`**: \`~/.atlas/memory\` — user preferences and lasting facts across projects.
 
-A combined wake of both scopes is injected into your context at the start of each turn — treat that as already-read. Call \`wake\` again only to continue a multi-part wake, or after finishing pending compressions.
+A combined wake of both scopes is injected into your context at the start of each turn — treat that as already-read. Wake pagination and tree compression are harness-managed; do not call wake/nap/zoom/config.
 
 **Memory operations:**
 
@@ -343,23 +343,9 @@ A combined wake of both scopes is injected into your context at the start of eac
 - Pauses for user approval unless "always allow" was previously chosen
 - The user may deny a note; do not retry automatically after a denial
 
-**\`nap\`** — save a compression summary when \`note\` or \`wake\` requests it:
-- Provide \`block\` (e.g. "0-15") and \`text\` (one-line summary)
-- Runs without confirmation pause
-
 **\`recall\`** — search every raw memory with regex
 
-**\`zoom\`** — open a tree node \`#a-b\` into its two halves
-
-**\`forget\`** — drop a bad summary so the next \`nap\` rebuilds it (raw log is never deleted)
-- Requires approval like \`note\`
-
-**\`config\`** — show sizes or set WAKE_LINES/ENTRY_CHARS/PART_CHARS/PART_LINES
-- Setting a knob requires approval
-
-If \`note\` or \`wake\` asks for a compression: call \`nap\` with the requested \`block\` and a one-line summary before your next action.
-
-Use \`recall\` to search every raw memory; \`zoom\` to open a tree node \`#a-b\`; \`forget\` only to drop a bad summary (the raw log is never deleted).
+**\`forget\`** — drop TREE summaries for a block (e.g. when the user asks to forget something, or a summary is wrong). The harness rebuilds compressions; the raw log is never deleted. Requires approval like \`note\`.
 
 Never edit or delete files under \`.atlas/memory\` with write/mutate tools — only the \`memory\` tool manages that store. The harness also hard-rejects those paths.
 
@@ -1240,13 +1226,12 @@ export const TOOL_APPROVAL_TIMEOUT_MS = 30_000;
  * спрашивать больше"/"Разрешать всегда" controls can apply to
  * (`domain::ai_access::call_requires_confirmation` in Rust — `Todo` is never
  * among them, see `AI_HARNESS.md`'s "Tool-calling loop"). `memory` pauses on
- * `note`/`forget`/`config` (not `nap`/reads); trust is still granted per
- * tool name, same as every other entry here, so trusting it once covers all
- * future gated memory ops. Falls back to the raw wire name for anything
- * unrecognized, so a future tool never silently disappears from this list
- * before this map is updated. Shared by `PermissionsTab` (revoking) and
- * `AssistantToolApprovalGroup` (granting) so both show the exact same
- * copy. */
+ * `note`/`forget` only; trust is still granted per tool name, same as every
+ * other entry here, so trusting it once covers all future gated memory ops.
+ * Falls back to the raw wire name for anything unrecognized, so a future
+ * tool never silently disappears from this list before this map is updated.
+ * Shared by `PermissionsTab` (revoking) and `AssistantToolApprovalGroup`
+ * (granting) so both show the exact same copy. */
 export const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
   writeFile: "Запись файлов (writeFile)",
   editFile: "Редактирование файлов (editFile)",
@@ -1255,7 +1240,7 @@ export const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
   deleteDirectory: "Удаление папок (deleteDirectory)",
   move: "Перемещение / переименование (move)",
   requestFullRepoAccess: "Запрос доступа к репозиторию (requestFullRepoAccess)",
-  memory: "Изменение памяти (memory note/forget/config)",
+  memory: "Изменение памяти (memory note/forget)",
   requestModeSwitch: "Смена режима ассистента (requestModeSwitch)",
 };
 

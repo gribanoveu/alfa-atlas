@@ -59,11 +59,12 @@ impl ToolName {
     /// directory itself carries less risk than overwriting or deleting a
     /// file.
     ///
-    /// `Memory` is *not* in this list even though `note`/`nap`/`forget` do
-    /// write to the on-disk OptMem store — its gate depends on which `op`
-    /// the call carries (only `note` needs approval), which this
+    /// `Memory` is *not* in this list even though `note`/`forget` do write
+    /// to the on-disk OptMem store — its gate depends on which `op` the
+    /// call carries (only `note`/`forget` need approval), which this
     /// per-`ToolName` bool can't express. See `call_requires_confirmation`,
-    /// the actual gate used by `commands::llm`.
+    /// the actual gate used by `commands::llm`. Harness-managed ops
+    /// (`wake`/`nap`/…) are not model-callable.
     ///
     /// `RequestModeSwitch` is gated the same way as `RequestFullRepoAccess`
     /// — it doesn't mutate anything itself, but it's a model-initiated
@@ -176,12 +177,10 @@ impl ToolName {
 /// The actual confirmation gate `commands::llm`'s tool-calling loop uses —
 /// unlike `ToolName::requires_confirmation`, this can see a call's raw
 /// (not yet validated) `arguments` JSON, which `Memory` needs: `op: "note"`
-/// writes a new, previously-unreviewed line; `forget` drops TREE summaries;
-/// `config` changes store knobs that affect auto-injected context size. Those
-/// three pause for approval (or are covered by the user's "always allow" trust
-/// for the `memory` tool). `nap` stays auto-executing — it only writes a
-/// compression summary the model was explicitly asked to produce earlier in
-/// the same turn. Reads (`wake`/`recall`/`zoom`) never pause.
+/// writes a new, previously-unreviewed line; `forget` drops TREE summaries.
+/// Those two pause for approval (or are covered by the user's "always allow"
+/// trust for the `memory` tool). Reads (`recall`) never pause. Wake inject
+/// and TREE compression (`nap`) are harness-managed and not model-callable.
 ///
 /// A call whose `arguments` don't parse is never gated here — `false`, same
 /// as an unrecognized `name` — because `services::ai_tools::parse_tool_call`
@@ -199,20 +198,11 @@ fn memory_op_requires_confirmation(arguments: &str) -> bool {
     #[derive(Deserialize)]
     struct OpFields {
         op: Option<String>,
-        knob: Option<String>,
     }
     let Ok(parsed) = serde_json::from_str::<OpFields>(arguments) else {
         return false;
     };
-    match parsed.op.as_deref() {
-        Some("note" | "forget") => true,
-        // Read-only `config` (no knob) just prints sizes — no pause.
-        Some("config") => parsed
-            .knob
-            .as_deref()
-            .is_some_and(|k| !k.trim().is_empty()),
-        _ => false,
-    }
+    matches!(parsed.op.as_deref(), Some("note" | "forget"))
 }
 
 /// Tools available when a project hasn't customized its allowlist
@@ -394,25 +384,18 @@ mod tests {
             "memory",
             r#"{"op":"forget","scope":"project","block":"0-1"}"#
         ));
-        assert!(call_requires_confirmation(
-            "memory",
-            r#"{"op":"config","scope":"project","knob":"WAKE_LINES=32"}"#
-        ));
-        assert!(!call_requires_confirmation(
-            "memory",
-            r#"{"op":"config","scope":"project"}"#
-        ));
-        assert!(!call_requires_confirmation(
-            "memory",
-            r#"{"op":"config","scope":"project","knob":null}"#
-        ));
-        for op in ["wake", "nap", "recall", "zoom"] {
+        // Retired ops (and recall) never pause — harness-managed or read-only.
+        for op in ["wake", "nap", "recall", "zoom", "config"] {
             let args = format!(r#"{{"op":"{op}","scope":"project"}}"#);
             assert!(
                 !call_requires_confirmation("memory", &args),
                 "op {op} should not require confirmation"
             );
         }
+        assert!(!call_requires_confirmation(
+            "memory",
+            r#"{"op":"config","scope":"project","knob":"WAKE_LINES=32"}"#
+        ));
     }
 
     #[test]
