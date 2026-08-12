@@ -33,7 +33,8 @@
 //! default, toggled from the LLM settings tab. This is what makes an
 //! opaque provider error (e.g. a 500 with only a trace id in its body)
 //! diagnosable after the fact: the exact `ChatRequest` that produced it is
-//! sitting in `~/.atlas/logs/llm.jsonl`.
+//! sitting in `~/.atlas/logs/llm.jsonl`. Covers both the tool-calling loop
+//! and one-shot `llm_chat_once` / memory auto-nap callers.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -338,9 +339,23 @@ pub async fn llm_chat_once(
         let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
         let model = llm_config::effective_model(&resolved, provider.as_ref())
             .map_err(|e| e.to_string())?;
-        provider
-            .chat(ChatRequest { messages, tools: Vec::new(), model })
-            .map_err(|e| e.to_string())
+        let request = ChatRequest {
+            messages,
+            tools: Vec::new(),
+            model,
+        };
+        // Same debug log as the tool-calling loop — selection-AI ("Сократить")
+        // and history compaction both go through here; previously only
+        // `run_tool_loop` wrote to `llm.jsonl`, so one-shot failures were invisible.
+        llm_debug_log::log_request(
+            settings.debug_logging,
+            &provider_id,
+            llm_debug_log::ONCE_ROUND,
+            &request,
+        );
+        let outcome = provider.chat(request).map_err(|e| e.to_string());
+        llm_debug_log::log_chat_once_result(settings.debug_logging, &provider_id, &outcome);
+        outcome
     })
     .await
     .map_err(|e| e.to_string())?
@@ -742,20 +757,28 @@ fn run_tool_loop(
                 if let Some(mem_scope) = memory_op_scope_for_drain(call) {
                     let provider = ctx.provider;
                     let model = ctx.model;
+                    let debug = ctx.settings.debug_logging;
+                    let provider_id = ctx.provider_id;
                     let _ = agent_memory::drain_pending_naps(mem_scope, &scope.repo_root, |prompt| {
-                        let resp = provider
-                            .chat(ChatRequest {
-                                messages: vec![LlmMessage {
-                                    role: LlmRole::User,
-                                    content: Some(prompt.to_string()),
-                                    tool_call_id: None,
-                                    tool_calls: vec![],
-                                }],
-                                tools: Vec::new(),
-                                model: model.to_string(),
-                            })
-                            .map_err(|e| e.to_string())?;
-                        Ok(resp.content.unwrap_or_default())
+                        let request = ChatRequest {
+                            messages: vec![LlmMessage {
+                                role: LlmRole::User,
+                                content: Some(prompt.to_string()),
+                                tool_call_id: None,
+                                tool_calls: vec![],
+                            }],
+                            tools: Vec::new(),
+                            model: model.to_string(),
+                        };
+                        llm_debug_log::log_request(
+                            debug,
+                            provider_id,
+                            llm_debug_log::ONCE_ROUND,
+                            &request,
+                        );
+                        let outcome = provider.chat(request).map_err(|e| e.to_string());
+                        llm_debug_log::log_chat_once_result(debug, provider_id, &outcome);
+                        outcome.map(|resp| resp.content.unwrap_or_default())
                     });
                 }
             }

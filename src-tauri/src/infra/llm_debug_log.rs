@@ -5,14 +5,12 @@
 //! user may not want written to disk.
 //!
 //! Appends JSON Lines to `~/.atlas/logs/llm.jsonl`, one entry per request
-//! or response/error, each stamped with which tool-calling round (see
-//! `commands::llm::llm_chat_stream`) it belongs to — so a provider error
-//! (e.g. an opaque `traceId` in a 500 body) can be correlated with the
-//! exact `ChatRequest` that produced it. Logs the already-typed
-//! `ChatRequest`/`ChatStreamResult` domain values (not raw HTTP bytes) —
-//! that's every field a request/response actually carries (messages,
-//! tools, tool calls, usage), and avoids duplicating wire-format parsing
-//! into a second, HTTP-client-specific logging path.
+//! or response/error. Tool-calling rounds use `round >= 1` (see
+//! `commands::llm::llm_chat_stream`); one-shot callers (`llm_chat_once` for
+//! selection-AI / history compaction, memory auto-nap) use `round: 0`.
+//! Logs the already-typed domain values (not raw HTTP bytes) — that's every
+//! field a request/response actually carries, and avoids duplicating
+//! wire-format parsing into a second, HTTP-client-specific logging path.
 
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -21,11 +19,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::domain::llm::{ChatRequest, ChatStreamResult, LlmError};
+use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmError};
 use crate::domain::settings::SettingsError;
 use crate::infra::settings_store;
 
 const LOG_FILE_NAME: &str = "llm.jsonl";
+
+/// `round` value for one-shot `chat()` callers that are not part of the
+/// tool-calling loop (`llm_chat_once`, memory auto-nap, …).
+pub const ONCE_ROUND: u32 = 0;
 
 #[derive(Serialize)]
 struct LogEntry {
@@ -64,6 +66,24 @@ pub fn log_response(enabled: bool, provider_id: &str, round: u32, result: &Resul
     match result {
         Ok(response) => append(&path, provider_id, round, "response", response),
         Err(error) => append(&path, provider_id, round, "error", &error.to_string()),
+    }
+}
+
+/// Logs the outcome of a one-shot `LlmProvider::chat` call (`llm_chat_once`,
+/// memory auto-nap). Uses [`ONCE_ROUND`]. `Err` is already a display string
+/// (same shape `llm_chat_once` returns to the frontend).
+pub fn log_chat_once_result(
+    enabled: bool,
+    provider_id: &str,
+    result: &Result<ChatResponse, String>,
+) {
+    if !enabled {
+        return;
+    }
+    let Ok(path) = default_log_path() else { return };
+    match result {
+        Ok(response) => append(&path, provider_id, ONCE_ROUND, "response", response),
+        Err(error) => append(&path, provider_id, ONCE_ROUND, "error", error),
     }
 }
 

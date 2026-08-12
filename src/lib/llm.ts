@@ -28,10 +28,10 @@ export type ModelLimit = {
 export type LlmSettings = {
   activeProviderId: string | null;
   providers: LlmProviderConfig[];
-  /** Off by default. When on, `llm_chat_stream` appends every request/
-   * response (or error) of every tool-calling round to
-   * `~/.atlas/logs/llm.jsonl` — see `infra::llm_debug_log` on the Rust
-   * side. Toggled from the LLM settings tab. */
+  /** Off by default. When on, LLM calls append request/response (or error)
+   * lines to `~/.atlas/logs/llm.jsonl` — tool-calling rounds from
+   * `llm_chat_stream` and one-shot `llm_chat_once` / memory auto-nap (see
+   * `infra::llm_debug_log`). Toggled from the LLM settings tab. */
   debugLogging: boolean;
   /** When true, hides the follow-up suggestion chips shown above the chat
    * after picking a branching suggestion. Never affects the initial
