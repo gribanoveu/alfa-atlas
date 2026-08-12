@@ -1,0 +1,219 @@
+.docs-search-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 52px 16px 24px;
+}
+
+.docs-search-panel {
+  width: min(720px, 100%);
+  max-height: min(60vh, 560px);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.docs-search-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.docs-search-head-icon {
+  color: var(--text-2);
+  flex: none;
+}
+
+.docs-search-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.docs-search-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.docs-search-close:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.docs-search-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.docs-search-query-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.docs-search-input,
+.docs-search-glob {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-0);
+  padding: 8px 10px;
+  font-size: var(--font-ui);
+}
+
+.docs-search-input:focus,
+.docs-search-glob:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.docs-search-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-0);
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.docs-search-toggle:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.docs-search-toggle.is-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-0));
+}
+
+.docs-search-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 0 8px;
+}
+
+.docs-search-error {
+  margin: 8px 12px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--danger, #c44) 14%, var(--bg-0));
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+}
+
+.docs-search-truncated {
+  padding: 8px 12px 4px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.docs-search-file-group {
+  margin-top: 4px;
+}
+
+.docs-search-file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-1);
+  border-bottom: 1px solid transparent;
+}
+
+.docs-search-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.docs-search-file-count {
+  flex: none;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.docs-search-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.docs-search-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 4px 12px 4px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-1);
+  font-size: var(--font-ui-sm);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.docs-search-item:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.docs-search-item-loc {
+  flex: none;
+  min-width: 2.5em;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.docs-search-item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}

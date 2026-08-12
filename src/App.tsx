@@ -15,6 +15,7 @@ import { DeleteBranchConfirmModal } from "./components/Git/DeleteBranchConfirmMo
 import { DiscardStashConfirmModal } from "./components/Git/DiscardStashConfirmModal";
 import { GitStashPreviewModal } from "./components/Git/GitStashPreviewModal";
 import { RightDock } from "./components/RightDock/RightDock";
+import { DocsSearchOverlay } from "./components/Search/DocsSearchOverlay";
 import { NewFileModal } from "./components/Sidebar/NewFileModal";
 import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
 import { DeleteConfirmModal } from "./components/Sidebar/DeleteConfirmModal";
@@ -399,6 +400,7 @@ function App() {
     column: number;
     severity: "error" | "warning";
   } | null>(null);
+  const [docsSearchOpen, setDocsSearchOpen] = useState(false);
   const [insertRequest, setInsertRequest] = useState<{
     id: number;
     tabId: string;
@@ -1363,6 +1365,24 @@ function App() {
     ],
   );
 
+  const openDocsSearchHit = useCallback(
+    async (path: string, line: number) => {
+      try {
+        await editor.openFile(path);
+        revealCounter.current += 1;
+        setRevealRequest({
+          id: revealCounter.current,
+          line,
+          column: 1,
+          severity: "warning",
+        });
+      } catch {
+        // Missing / unsupported file — leave the search overlay open.
+      }
+    },
+    [editor],
+  );
+
   /**
    * Открывает `relPath` (относительно docsRoot) и, если передан `anchor`,
    * прокручивает редактор к его строке через `findAnchors`. Общая для клика
@@ -1447,6 +1467,15 @@ function App() {
             if (ok) git.scheduleRefresh();
           });
         }
+        return;
+      }
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "f"
+      ) {
+        event.preventDefault();
+        if (hasProject) setDocsSearchOpen(true);
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.altKey) {
@@ -1582,6 +1611,7 @@ function App() {
         onPush={() => void runPush()}
         onGoBack={() => void editor.goBack()}
         onGoForward={() => void editor.goForward()}
+        onFindInDocs={() => setDocsSearchOpen(true)}
         canGoBack={editor.canGoBack}
         canGoForward={editor.canGoForward}
         syncPillState={syncPillState}
@@ -2096,6 +2126,15 @@ function App() {
           onClose={() => setGitAlert(null)}
         />
       ) : null}
+
+      <DocsSearchOverlay
+        open={docsSearchOpen}
+        docsRoot={project.docsRoot}
+        onClose={() => setDocsSearchOpen(false)}
+        onOpenHit={(path, line) => {
+          void openDocsSearchHit(path, line);
+        }}
+      />
 
       {activeToast ? (
         <div

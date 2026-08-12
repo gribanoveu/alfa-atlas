@@ -44,6 +44,7 @@ type TopBarProps = {
   onPush: () => void;
   onGoBack?: () => void;
   onGoForward?: () => void;
+  onFindInDocs?: () => void;
   canGoBack?: boolean;
   canGoForward?: boolean;
   syncPillState: SyncPillState;
@@ -82,6 +83,7 @@ export function TopBar({
   onPush,
   onGoBack,
   onGoForward,
+  onFindInDocs,
   canGoBack = false,
   canGoForward = false,
   syncPillState,
@@ -162,6 +164,9 @@ export function TopBar({
         case "nav.goForward":
           onGoForward?.();
           break;
+        case "nav.findInDocs":
+          if (hasProject) onFindInDocs?.();
+          break;
         case "git.toggleCommit":
           if (hasProject) onToggleGit();
           break;
@@ -203,6 +208,7 @@ export function TopBar({
       onCloseProject,
       onGoBack,
       onGoForward,
+      onFindInDocs,
       onOpenFolder,
       onPull,
       onPush,

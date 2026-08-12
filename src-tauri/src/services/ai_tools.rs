@@ -18,7 +18,7 @@ use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
     AsciidocTemplateEntry, CheckArgs, CheckKind, CreateDirectoryArgs, CreatePlanArgs,
     DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileDiffStats, FileEdit,
-    GetAsciidocTemplatesArgs, GitBlameArgs, GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs,
+    GetAsciidocTemplatesArgs, GitBlameArgs, GitDiffArgs, GrepArgs, ListFilesArgs,
     MatchSource, MemoryArgs, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
     RequestModeSwitchArgs, AskUserArgs, SemanticSearchArgs, SemanticSearchMeta,
     SemanticSearchPayload, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs,
@@ -45,6 +45,7 @@ use crate::domain::workspace_index::DocumentId;
 use crate::infra::{embedding_credentials_store, embedding_providers, project_store, workspace_scanner};
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::chunk_text::resolve_text;
+use crate::services::docs_search;
 use crate::services::reference_rewrite;
 use crate::services::repo_index::RepositoryIndex;
 use crate::services::workspace_index::WorkspaceIndex;
@@ -67,8 +68,6 @@ const MAX_TODO_TASKS: usize = 20;
 /// tool-message payload bounded for large files. Ranges past this are
 /// clamped and flagged `truncated: true`.
 const MAX_BLAME_LINES: u32 = 400;
-const DEFAULT_GREP_RESULTS: usize = 50;
-const MAX_GREP_RESULTS: usize = 200;
 /// Cap on how many diagnostics a single `check` call may return — keeps the
 /// tool-message payload bounded for a large docs tree.
 const MAX_CHECK_DIAGNOSTICS: usize = 200;
@@ -78,13 +77,6 @@ const MAX_CHECK_DIAGNOSTICS: usize = 200;
 /// `check_doc_standards`), so a truncated response still surfaces the
 /// folders most worth the model's attention.
 const MAX_STANDARDS_FOLDERS: usize = 100;
-/// Skip files larger than this when grepping — keeps a pathological repo
-/// from blowing the tool budget on one huge artifact.
-const MAX_GREP_FILE_BYTES: u64 = 1_048_576;
-/// NUL in the first N bytes → treat as binary and skip.
-const GREP_BINARY_SNIFF_BYTES: usize = 8_192;
-/// Cap on a single match line's `text` field in the tool result.
-const GREP_LINE_MAX_CHARS: usize = 300;
 
 /// The embedding/chunk/repo-index/workspace-index state `SemanticSearch`/
 /// `Move` need to reach — `execute_tool` is otherwise a pure function with
@@ -1610,88 +1602,16 @@ fn compile_glob(pattern: &str) -> Result<globset::GlobMatcher, ToolError> {
         .map_err(|e| ToolError::InvalidPattern(e.to_string()))
 }
 
-/// Exact regex content search under `scope.root` — walk via
-/// `workspace_scanner::scan_all_with_depth` (gitignore-aware), then match
-/// line-by-line. Complementary to `semantic_search`: precision, not
-/// similarity. Paths in results are scope-root-relative so they round-trip
-/// into `readFile`.
+/// Exact regex content search under `scope.root` — delegates to
+/// `services::docs_search::search_under_root` (shared with the user-facing
+/// `docs_search` IPC). Paths in results are scope-root-relative so they
+/// round-trip into `readFile`.
 fn grep(scope: &ToolScope, args: GrepArgs) -> Result<ToolResult, ToolError> {
-    let max_results = args
-        .max_results
-        .unwrap_or(DEFAULT_GREP_RESULTS)
-        .clamp(1, MAX_GREP_RESULTS);
-
-    let mut builder = regex::RegexBuilder::new(&args.pattern);
-    builder.case_insensitive(args.case_insensitive.unwrap_or(false));
-    let re = builder
-        .build()
-        .map_err(|e| ToolError::InvalidPattern(e.to_string()))?;
-
-    let glob = match args.glob.as_deref() {
-        Some(p) if !p.is_empty() => Some(compile_glob(p)?),
-        _ => None,
-    };
-
-    let subdir = resolve_subdir(scope, args.path.as_deref())?;
-    let scan_root = subdir
-        .as_ref()
-        .map(|(_, abs)| abs.clone())
-        .unwrap_or_else(|| scope.root.clone());
-
-    let files = workspace_scanner::scan_all_with_depth(&scan_root, None)?;
-    let mut matches = Vec::new();
-    let mut truncated = false;
-
-    'files: for scanned in files {
-        if scanned.size > MAX_GREP_FILE_BYTES {
-            continue;
-        }
-        let rel = match paths::relative_to(&scope.root, &scanned.path) {
-            Ok(r) => r.replace('\\', "/"),
-            Err(_) => continue,
-        };
-        if let Some(ref matcher) = glob {
-            if !matcher.is_match(basename(&rel)) {
-                continue;
-            }
-        }
-
-        let Ok(bytes) = fs::read(&scanned.path) else {
-            continue;
-        };
-        let sniff_len = GREP_BINARY_SNIFF_BYTES.min(bytes.len());
-        if bytes[..sniff_len].contains(&0) {
-            continue;
-        }
-        let Ok(content) = String::from_utf8(bytes) else {
-            continue;
-        };
-
-        for (idx, line) in content.lines().enumerate() {
-            if !re.is_match(line) {
-                continue;
-            }
-            if matches.len() >= max_results {
-                truncated = true;
-                break 'files;
-            }
-            matches.push(GrepMatch {
-                path: rel.clone(),
-                line: (idx + 1) as u32,
-                text: truncate_grep_line(line),
-            });
-        }
-    }
-
-    Ok(ToolResult::GrepResults { matches, truncated })
-}
-
-fn truncate_grep_line(line: &str) -> String {
-    if line.chars().count() <= GREP_LINE_MAX_CHARS {
-        return line.to_string();
-    }
-    let truncated: String = line.chars().take(GREP_LINE_MAX_CHARS).collect();
-    format!("{truncated}…")
+    let payload = docs_search::search_under_root(&scope.root, &args)?;
+    Ok(ToolResult::GrepResults {
+        matches: payload.matches,
+        truncated: payload.truncated,
+    })
 }
 
 /// One directory level of the tree `render_file_tree` builds out of a flat

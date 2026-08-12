@@ -12,6 +12,7 @@ export type MenuActionId =
   | "view.toggleBottom"
   | "nav.goBack"
   | "nav.goForward"
+  | "nav.findInDocs"
   | "git.toggleCommit"
   | "git.createBranch"
   | "git.cloneRepo"

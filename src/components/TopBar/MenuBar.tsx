@@ -21,6 +21,7 @@ import {
   Save,
   Scissors,
   ScrollText,
+  Search,
   Settings2,
   Undo2,
 } from "lucide-react";
@@ -153,6 +154,14 @@ const MENUS: MenuDef[] = [
     items: [
       {
         type: "item",
+        id: "find-in-docs",
+        label: "Найти в документации…",
+        action: "nav.findInDocs",
+        icon: Search,
+      },
+      { type: "separator" },
+      {
+        type: "item",
         id: "settings",
         label: "Настройки…",
         action: "tools.settings",
@@ -247,6 +256,18 @@ export function MenuBar({
           // "is a document open" rather than the exact stack state; an
           // Undo/Redo click with nothing to do is a harmless no-op.
           return { ...item, disabled: !hasActiveTab };
+        }),
+      };
+    }
+    if (menu.id === "tools") {
+      return {
+        ...menu,
+        items: menu.items.map((item) => {
+          if (item.type !== "item") return item;
+          if (item.id === "find-in-docs") {
+            return { ...item, disabled: !hasProject };
+          }
+          return item;
         }),
       };
     }

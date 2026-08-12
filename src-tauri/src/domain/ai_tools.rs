@@ -62,12 +62,12 @@ pub struct SemanticSearchArgs {
 
 /// Exact regex content search across files under the tool scope root —
 /// read-only, secondary to `SemanticSearch` (precision vs similarity).
-/// See `services::ai_tools::grep`.
+/// See `services::docs_search` / `services::ai_tools::grep`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrepArgs {
     /// Rust `regex` pattern (no backreferences). Invalid patterns surface
-    /// as `ToolError::InvalidPattern`.
+    /// as `ToolError::InvalidPattern` / `DocsSearchError::InvalidPattern`.
     pub pattern: String,
     /// Optional subdirectory relative to the scope root (same as
     /// `ListFilesArgs::path`).
@@ -77,7 +77,7 @@ pub struct GrepArgs {
     /// Default `false` — exact case-sensitive match unless opted in.
     pub case_insensitive: Option<bool>,
     /// Cap on returned matches; `None` → default, clamped to a hard max
-    /// (see `services::ai_tools`).
+    /// (see `services::docs_search`).
     pub max_results: Option<usize>,
 }
 
@@ -948,6 +948,17 @@ impl From<WorkspaceIndexError> for ToolError {
             WorkspaceIndexError::Io(e) => ToolError::Io(e),
             WorkspaceIndexError::PathEscape(p) => ToolError::PathEscape(p),
             other => ToolError::Io(std::io::Error::other(other.to_string())),
+        }
+    }
+}
+
+impl From<super::docs_search::DocsSearchError> for ToolError {
+    fn from(err: super::docs_search::DocsSearchError) -> Self {
+        match err {
+            super::docs_search::DocsSearchError::InvalidPattern(p) => ToolError::InvalidPattern(p),
+            super::docs_search::DocsSearchError::PathEscape(p) => ToolError::PathEscape(p),
+            super::docs_search::DocsSearchError::NotFound(p) => ToolError::NotFound(p),
+            super::docs_search::DocsSearchError::Io(e) => ToolError::Io(e),
         }
     }
 }

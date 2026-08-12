@@ -6,6 +6,7 @@ pub mod asciidoc_templates;
 pub mod chat;
 pub mod chunk_index;
 pub mod conversation_mode;
+pub mod docs_search;
 pub mod embeddings;
 pub mod git;
 pub mod git_action_log;
