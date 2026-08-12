@@ -50,7 +50,7 @@ export function buildAssistantSystemPrompt(
 
   const modeDescription =
     mode === "fullRepo"
-      ? "**Full-repo** — read access to the entire repository. Write/delete/move/create tools still target only the documentation root (see Path resolution)."
+      ? "**Full-repo** — read access to the entire repository. Write/mutate tools use the same path namespace as reads, but only succeed for paths under the documentation tree (see Path resolution)."
       : "**Docs-only** — access only to documentation files and their git history. No access to source code, configuration, secrets, CI/CD, or infrastructure.";
 
   const projectTypeDescription = specsRepoInfo
@@ -68,8 +68,8 @@ export function buildAssistantSystemPrompt(
     ? `The documentation root in this project is \`${docsRootRelativeToRepo}\`. For the file \`architecture/system.adoc\` within it:`
     : `The documentation root in this project coincides with the repository root (or is not yet known — use listFiles to confirm). Using the placeholder \`<docs-root>\` below is illustrative only, not a literal path — for the file \`architecture/system.adoc\` within it:`;
   const openApiPathLine = docsRootRelativeToRepo
-    ? `For OpenAPI projects, the spec directory is the documentation root: write paths never include \`specs/\`. Read paths in Full-repo mode use \`${docsRootRelativeToRepo}\`.`
-    : `For OpenAPI projects, the spec directory is the documentation root: write paths never include \`specs/\`. Read paths in Full-repo mode use the full path — discover it with \`listFiles\` if unknown.`;
+    ? `For OpenAPI projects, the spec directory is the documentation root (\`${docsRootRelativeToRepo}\`). In Full-repo mode tool paths include that prefix; in Docs-only they do not.`
+    : `For OpenAPI projects, the spec directory is the documentation root. In Full-repo mode tool paths include the docs prefix; in Docs-only they do not.`;
 
   const toolUsageSection =
     toolDefinitions.length === 0
@@ -206,23 +206,16 @@ Implementation can verify: API signatures, model fields, validation, defaults, s
 
 ## Path resolution
 
-Two different roots exist for tool paths — this split is intentional and does not change based on access mode for write/mutate tools:
+All tool path arguments and path fields in tool results use the **same access-mode root**:
+the documentation root in Docs-only, the repository root in Full-repo.
 
-- **Read tools** (\`listFiles\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`): resolve \`path\` relative to the **access-mode root** (documentation root in Docs-only, repository root in Full-repo).
-- **Write/mutate tools** (\`writeFile\`, \`editFile\`, \`deleteFile\`, \`createDirectory\`, \`deleteDirectory\`, \`move\`): always resolve \`path\` relative to the **documentation root**, in any mode including Full-repo.
-- **\`check\`**: optional \`path\` is always **documentation-root-relative** (like write tools). Findings' \`document\` fields and paths inside messages are **repository-root-relative** (same as the Problems panel). Convert back to docs-relative before \`readFile\`/\`editFile\`/\`writeFile\`. Only supported indexed documentation types — not arbitrary source files.
-
-In Docs-only mode both roots coincide, so the distinction has no effect.
-
-Any example path shown in a tool description (including \`check\`'s "e.g. ..." path) is schematic, not a literal path in this project — never copy it verbatim into a tool call. The actual documentation root for this project is given below (or discover it with \`listFiles\` if it isn't).
+- Pass paths between tools unchanged — a \`listFiles\`/\`readFile\`/\`grep\`/\`semanticSearch\`/\`check\` path is already valid for \`writeFile\`/\`editFile\`/\`move\`/\`check\` in the same mode.
+- Write/mutate/\`check\` still only succeed for paths under the documentation tree. A path outside it (e.g. source code in Full-repo) fails immediately with an error — do not retry the same path, and do not ask the user to approve an impossible write.
 
 ${pathExampleIntro}
 
-- \`listFiles\`/\`readFile\`/\`grep\`/\`gitDiff\`/\`gitBlame\` in Full-repo: \`${pathExamplePrefix}/architecture/system.adoc\`
-- Any write/mutate tool or \`check\` path arg in any mode: \`architecture/system.adoc\`
-- \`check\` result \`document\`: \`${pathExamplePrefix}/architecture/system.adoc\`
-
-Never pass a path from \`listFiles\`/\`readFile\`/\`grep\`/\`gitDiff\`/\`gitBlame\` in Full-repo mode unchanged into a write tool — strip the documentation root segment (\`${pathExamplePrefix}/\`) first. Same for \`check\` result paths. Treat each tool's root as \`.\`.
+- Docs-only (any tool): \`architecture/system.adoc\`
+- Full-repo (any tool): \`${pathExamplePrefix}/architecture/system.adoc\`
 
 ${openApiPathLine}
 
@@ -426,9 +419,9 @@ For ASCII directory/file trees and any pre-formatted diagram using \`├──\`
 - NEVER output trees as plain paragraph text.
 - If in doubt, use \`text\`.
 
-## Path resolution (for read tools only)
+## Path resolution
 
-Read tools (\`listFiles\`, \`readFile\`, \`grep\`) resolve \`path\` relative to the **access-mode root**: the documentation root in Docs-only mode, the repository root in Full-repo mode.
+All tool paths use the **access-mode root**: the documentation root in Docs-only, the repository root in Full-repo. Pass paths between tools unchanged.
 
 ${pathExampleIntro}
 
@@ -530,9 +523,9 @@ You cannot execute changes or draft a structured plan in this mode. If the reque
 
 Do not use \`askUser\` to request a mode change — that is \`requestModeSwitch\`'s job. Always include a \`reason\`. User approval is required and may be denied — if denied, answer as best you can within Question mode instead of retrying the switch.
 
-## Path resolution (for read tools only)
+## Path resolution
 
-Read tools (\`listFiles\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`) resolve \`path\` relative to the **access-mode root**: the documentation root in Docs-only mode, the repository root in Full-repo mode.
+All tool paths use the **access-mode root**: the documentation root in Docs-only, the repository root in Full-repo. Pass paths between tools unchanged.
 
 ${pathExampleIntro}
 
@@ -615,18 +608,14 @@ export function buildAccessModeChangeNotice(
   mode: AiAccessMode,
   docsRootRelativeToRepo: string | null,
 ): string {
-  // This is the moment of highest attention for the read/write root split
-  // (see `buildAssistantSystemPrompt`'s "## Path resolution") — state the
-  // real documentation-root prefix directly here too, when known, rather
-  // than only in the system prompt the model may already be discounting.
   const docsRootLine = docsRootRelativeToRepo
-    ? ` The documentation root is \`${docsRootRelativeToRepo}\` — strip that prefix from a \`listFiles\`/\`readFile\` path before passing it to a write/mutate tool.`
+    ? ` The documentation root is \`${docsRootRelativeToRepo}\` — in Full-repo, tool paths for files under it include that prefix; in Docs-only they do not.`
     : "";
 
   const modeDescription =
     mode === "fullRepo"
-      ? `**Full-repo** — you now have READ access to the entire repository: code, configs, database schemas, tests, CI pipelines, in addition to the documentation. Write/delete/move/create tools (writeFile, editFile, deleteFile, createDirectory, deleteDirectory, move) are UNCHANGED by this: they still resolve paths relative to the documentation root only, never the repository root. Only read tool paths (listFiles, readFile) now resolve relative to the repository root instead of the documentation root — do not reuse a path from those tools as-is in a write/mutate tool call.${docsRootLine}`
-      : "**Docs-only** — you now have access only to documentation files and their git history. You no longer have access to source code, configuration, secrets, CI/CD, or infrastructure.";
+      ? `**Full-repo** — you now have READ access to the entire repository: code, configs, database schemas, tests, CI pipelines, in addition to the documentation. All tool path arguments (read and write) now use the repository root. Write/mutate/\`check\` still only succeed for paths under the documentation tree — a path outside it fails with an error (no confirmation card). Pass paths between tools unchanged.${docsRootLine}`
+      : "**Docs-only** — you now have access only to documentation files and their git history. You no longer have access to source code, configuration, secrets, CI/CD, or infrastructure. Tool paths are relative to the documentation root again.";
 
   return `[System notice] The user just switched your access mode. Current access mode: ${modeDescription} Disregard any earlier statement you made in this conversation about your access — it may no longer be accurate.`;
 }
@@ -672,14 +661,12 @@ export function buildTodoContextBlock(tasks: Task[]): string | null {
  * `null` when no editor tab is active, so a chat opened with nothing open
  * sends no extra message at all.
  *
- * `path` is already docs-root-relative — same convention `writeFile`/
- * `editFile`/`check`'s `path` argument use (see "## Path resolution" in the
- * mode prompts) — so it can be used as a write-tool path directly, or
- * prefixed with the documentation root for a read-tool path in Full-repo
- * mode. Framed explicitly as a hint, not an instruction: it disambiguates
- * "this file"/"here" without implying the open file is itself part of the
- * request, and without the model treating it as something to read or act on
- * unprompted. */
+ * `path` must already be **access-mode-relative** (Docs-only: docs-relative;
+ * Full-repo: repo-relative) — the same namespace every tool uses — so it can
+ * be passed to read or write tools unchanged. Framed explicitly as a hint,
+ * not an instruction: it disambiguates "this file"/"here" without implying
+ * the open file is itself part of the request, and without the model
+ * treating it as something to read or act on unprompted. */
 export function buildActiveFileContextBlock(path: string | null): string | null {
   if (!path) return null;
   return `[Editor] The user currently has \`${path}\` open. Treat this only as a hint for resolving an unnamed reference ("this file", "here", "the current document") — not as an implicit request to read, explain, or modify it. If the user's message doesn't refer to a file at all, ignore this.`;

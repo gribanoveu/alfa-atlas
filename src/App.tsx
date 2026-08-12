@@ -1208,20 +1208,25 @@ function App() {
     ({ tool, path }: { tool: string; path: string }) => {
       void tree.refresh();
       if (openApiBundle.bundle) void openApiBundle.reload();
+      // Tool results use access-mode-relative paths; editor tabs are docs-relative.
+      const docsPath =
+        project.repoRoot && project.docsRoot
+          ? toDocsRelativePath(path, project.repoRoot, project.docsRoot)
+          : path;
       switch (tool) {
         case "writeFile":
         case "editFile":
-          void editor.reloadTabFromDisk(path);
+          void editor.reloadTabFromDisk(docsPath);
           break;
         case "deleteFile":
         case "deleteDirectory":
-          editor.discardTabsUnder(path);
+          editor.discardTabsUnder(docsPath);
           break;
         default:
           break;
       }
     },
-    [tree, editor, openApiBundle],
+    [tree, editor, openApiBundle, project.repoRoot, project.docsRoot],
   );
 
   // Same idea as `handleAssistantFileWritten`, but a `move` tool call has
@@ -1234,15 +1239,26 @@ function App() {
   // one) get reloaded and reported the same way a manual rename does.
   const handleAssistantFileMoved = useCallback(
     ({ from, to, updatedFiles }: { from: string; to: string; updatedFiles: UpdatedReference[] }) => {
-      editor.remapTabsUnder(from, to);
-      session.remapExpandedUnder(from, to);
-      session.ensureExpanded(dirnameOf(to));
+      const toDocs = (p: string) =>
+        project.repoRoot && project.docsRoot
+          ? toDocsRelativePath(p, project.repoRoot, project.docsRoot)
+          : p;
+      const docsFrom = toDocs(from);
+      const docsTo = toDocs(to);
+      editor.remapTabsUnder(docsFrom, docsTo);
+      session.remapExpandedUnder(docsFrom, docsTo);
+      session.ensureExpanded(dirnameOf(docsTo));
       void tree.refresh();
       if (openApiBundle.bundle) void openApiBundle.reload();
       git.scheduleRefresh();
-      void applyRenameReport({ updatedFiles });
+      void applyRenameReport({
+        updatedFiles: updatedFiles.map((f) => ({
+          docsRelativePath: toDocs(f.docsRelativePath),
+          count: f.count,
+        })),
+      });
     },
-    [editor, session, tree, git, applyRenameReport, openApiBundle],
+    [editor, session, tree, git, applyRenameReport, openApiBundle, project.repoRoot, project.docsRoot],
   );
 
   const handleGitDiscard = useCallback(

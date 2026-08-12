@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { basename, TOOL_APPROVAL_TIMEOUT_MS } from "../../lib/assistantConfig";
 import type { FileEdit } from "../../lib/aiTools";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
+import { toDocsRelativePath } from "../../lib/paths";
 import { DeleteDirectoryReview } from "./DeleteDirectoryReview";
 import { DeleteFileReview } from "./DeleteFileReview";
 import { EditFileDiffReview } from "./EditFileDiffReview";
@@ -92,31 +93,36 @@ export function editCountBadge(block: ToolCallBlock): string | null {
 export function ToolApprovalPreview({
   block,
   docsRoot,
+  repoRoot,
   expanded,
 }: {
   block: ToolCallBlock;
   docsRoot: string;
+  /** Repository root — used to convert access-mode-relative tool paths
+   * (Full-repo) into docs-relative paths the review components read. */
+  repoRoot: string;
   expanded: boolean;
 }) {
   const args = parseArgs(block.argumentsJson);
+  const docsPath = (path: string) => toDocsRelativePath(path, repoRoot, docsRoot);
 
   return block.name === "writeFile" && typeof args.path === "string" && typeof args.content === "string" ? (
     expanded ? (
       <div className="assistant-tool-call-detail-section">
-        <WriteFileDiffReview docsRoot={docsRoot} path={args.path} content={args.content} />
+        <WriteFileDiffReview docsRoot={docsRoot} path={docsPath(args.path)} content={args.content} />
       </div>
     ) : null
   ) : block.name === "editFile" && typeof args.path === "string" && isFileEditArray(args.edits) ? (
     expanded ? (
       <div className="assistant-tool-call-detail-section">
-        <EditFileDiffReview docsRoot={docsRoot} path={args.path} edits={args.edits} />
+        <EditFileDiffReview docsRoot={docsRoot} path={docsPath(args.path)} edits={args.edits} />
       </div>
     ) : null
   ) : block.name === "createDirectory" && typeof args.path === "string" && args.template === "restEndpoint" ? (
     <div className="assistant-tool-call-detail-section">
       <div className="assistant-tool-call-detail-label">Будут созданы файлы</div>
       <ul className="assistant-tool-call-detail-list">
-        {restEndpointPreviewFiles(args.path).map((file) => (
+        {restEndpointPreviewFiles(docsPath(args.path)).map((file) => (
           <li key={file} title={file}>
             <File className="assistant-tool-call-detail-icon" size={12} aria-hidden />
             <span>{basename(file)}</span>
@@ -127,13 +133,13 @@ export function ToolApprovalPreview({
   ) : block.name === "deleteFile" && typeof args.path === "string" ? (
     expanded ? (
       <div className="assistant-tool-call-detail-section">
-        <DeleteFileReview docsRoot={docsRoot} path={args.path} />
+        <DeleteFileReview docsRoot={docsRoot} path={docsPath(args.path)} />
       </div>
     ) : null
   ) : block.name === "deleteDirectory" && typeof args.path === "string" ? (
     expanded ? (
       <div className="assistant-tool-call-detail-section">
-        <DeleteDirectoryReview docsRoot={docsRoot} path={args.path} />
+        <DeleteDirectoryReview docsRoot={docsRoot} path={docsPath(args.path)} />
       </div>
     ) : null
   ) : block.name === "move" && typeof args.path === "string" && typeof args.newPath === "string" ? (

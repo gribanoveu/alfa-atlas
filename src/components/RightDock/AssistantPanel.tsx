@@ -333,6 +333,7 @@ export function AssistantPanel({
                 toolDefinitions={toolDefinitions}
                 docsRootRelativeToRepo={docsRootPrefix}
                 docsRoot={docsRoot}
+                repoRoot={repoRoot ?? ""}
                 activeFilePath={activeFilePath}
                 onFileWritten={onFileWritten}
                 onFileMoved={onFileMoved}

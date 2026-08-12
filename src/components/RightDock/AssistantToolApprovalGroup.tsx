@@ -9,6 +9,7 @@ type AssistantToolApprovalGroupProps = {
   /** The open project's docs root — forwarded to each item's
    * `ToolApprovalPreview` for its diff fetch. */
   docsRoot: string;
+  repoRoot: string;
   /** Called once per block on submit — see `useLlmChat`'s `decideToolCall`. */
   onDecide: (id: string, approved: boolean, trust: boolean) => void;
 };
@@ -31,7 +32,7 @@ type AssistantToolApprovalGroupProps = {
  *
  * Always used even for a round with exactly one confirmable call — no
  * separate one-item code path, see `groupBlocksForRender`. */
-export function AssistantToolApprovalGroup({ blocks, docsRoot, onDecide }: AssistantToolApprovalGroupProps) {
+export function AssistantToolApprovalGroup({ blocks, docsRoot, repoRoot, onDecide }: AssistantToolApprovalGroupProps) {
   const [included, setIncluded] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(blocks.map((b) => [b.id, true])),
   );
@@ -99,7 +100,7 @@ export function AssistantToolApprovalGroup({ blocks, docsRoot, onDecide }: Assis
                 )}
               </div>
               <div className="assistant-tool-approval-group-item-preview">
-                <ToolApprovalPreview block={block} docsRoot={docsRoot} expanded={isExpanded} />
+                <ToolApprovalPreview block={block} docsRoot={docsRoot} repoRoot={repoRoot} expanded={isExpanded} />
               </div>
             </li>
           );

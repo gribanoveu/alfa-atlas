@@ -22,7 +22,10 @@
 //! `domain::ai_access::call_requires_confirmation` flags (per tool identity
 //! for most tools, per-`op` for `memory`) resolves as
 //! `ChatStreamOutcome::PendingApproval` instead, with nothing in
-//! that round executed — the frontend collects a user decision and calls
+//! that round executed yet — except path-preflight failures
+//! (`services::ai_tools::preflight_tool_call`), which return a tool error
+//! immediately so an impossible write outside the documentation root never
+//! shows a confirmation card. The frontend collects a user decision and calls
 //! `llm_chat_stream_resume` to continue.
 //!
 //! Every round's request/response (or error) is optionally recorded via
@@ -520,14 +523,59 @@ fn run_tool_loop(
                 // matching comment on the resumed branch above.
                 budget_used += round_cost(&result.tool_calls);
 
-                let pending: Vec<PendingToolCall> = result
-                    .tool_calls
+                // Path-containment preflight before any approval UI: a write
+                // outside the documentation root must fail as a tool error
+                // immediately, not show a confirmation card for an impossible
+                // operation. Successful calls stay in `remaining` for the
+                // normal confirm-or-execute path.
+                let mut remaining_calls: Vec<LlmToolCall> = Vec::new();
+                for call in &result.tool_calls {
+                    if let Err(e) = ai_tools::preflight_tool_call(&scope, call) {
+                        let _ = ctx.app.emit(
+                            TOOL_CALL_EVENT,
+                            ToolCallEventPayload {
+                                id: call.id.clone(),
+                                name: call.name.clone(),
+                                arguments: call.arguments.clone(),
+                            },
+                        );
+                        let err_str = e.to_string();
+                        let _ = ctx.app.emit(
+                            TOOL_RESULT_EVENT,
+                            ToolResultEventPayload {
+                                id: call.id.clone(),
+                                result: None,
+                                error: Some(err_str.clone()),
+                            },
+                        );
+                        history.push(LlmMessage {
+                            role: LlmRole::Tool,
+                            content: Some(format!("Ошибка: {err_str}")),
+                            tool_call_id: Some(call.id.clone()),
+                            tool_calls: vec![],
+                        });
+                    } else {
+                        remaining_calls.push(call.clone());
+                    }
+                }
+
+                if remaining_calls.is_empty() {
+                    // Every call in this round failed preflight — no card,
+                    // let the model react to the tool errors on the next
+                    // round.
+                    continue;
+                }
+
+                let pending: Vec<PendingToolCall> = remaining_calls
                     .iter()
                     .map(|call| PendingToolCall {
                         id: call.id.clone(),
                         name: call.name.clone(),
                         arguments: call.arguments.clone(),
-                        requires_confirmation: call_requires_confirmation(&call.name, &call.arguments),
+                        requires_confirmation: call_requires_confirmation(
+                            &call.name,
+                            &call.arguments,
+                        ),
                     })
                     .collect();
                 if pending.iter().any(|c| c.requires_confirmation) {
@@ -540,7 +588,7 @@ fn run_tool_loop(
                     }));
                 }
 
-                (result.tool_calls, Vec::new())
+                (remaining_calls, Vec::new())
             };
 
         let log_ctx = ToolCallLogContext {

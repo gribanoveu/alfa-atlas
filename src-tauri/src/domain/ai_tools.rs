@@ -98,9 +98,12 @@ pub struct GrepMatch {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteFileArgs {
-    /// File path relative to the docs root — always the docs subtree,
-    /// regardless of `AiAccessMode`, and always restricted to recognized
-    /// document file types (see `services::ai_tools::write_file`).
+    /// File path relative to the current access-mode root (`ToolScope.root`
+    /// — documentation root in Docs-only, repository root in Full-repo),
+    /// same namespace as `readFile`/`listFiles`. The executor still requires
+    /// the resolved path to lie under the documentation root (see
+    /// `services::ai_tools::resolve_mutable_docs_path`); only recognized
+    /// document file types may be written.
     pub path: String,
     pub content: String,
 }
@@ -120,8 +123,8 @@ pub struct FileEdit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditFileArgs {
-    /// File path relative to the docs root — same containment/target rules
-    /// as `WriteFileArgs::path`, but the file must already exist (see
+    /// File path relative to the access-mode root — same rules as
+    /// `WriteFileArgs::path`, but the file must already exist (see
     /// `services::ai_tools::edit_file`); creating new files stays
     /// `WriteFile`'s job.
     pub path: String,
@@ -131,18 +134,17 @@ pub struct EditFileArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteFileArgs {
-    /// File path relative to the docs root — same containment/target rules
-    /// as `WriteFileArgs::path`. See `services::ai_tools::delete_file`.
+    /// File path relative to the access-mode root — same rules as
+    /// `WriteFileArgs::path`. See `services::ai_tools::delete_file`.
     pub path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateDirectoryArgs {
-    /// Directory path relative to the docs root — same containment rules
-    /// as `WriteFileArgs::path` (always the docs subtree, regardless of
-    /// `AiAccessMode`; see `services::ai_tools::create_directory`). Parent
-    /// directories are created as needed.
+    /// Directory path relative to the access-mode root — same rules as
+    /// `WriteFileArgs::path` (see `services::ai_tools::create_directory`).
+    /// Parent directories are created as needed.
     pub path: String,
     /// Optional folder scaffold. `"restEndpoint"` populates the directory
     /// with the same REST-method template set the Sidebar "Новая папка"
@@ -155,8 +157,8 @@ pub struct CreateDirectoryArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteDirectoryArgs {
-    /// Directory path relative to the docs root — same containment rules
-    /// as `WriteFileArgs::path`.
+    /// Directory path relative to the access-mode root — same rules as
+    /// `WriteFileArgs::path`.
     pub path: String,
     /// `None`/omitted means `false`: a non-empty directory is refused
     /// rather than silently deleted — see
@@ -171,10 +173,10 @@ pub struct DeleteDirectoryArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MoveArgs {
-    /// Current path, relative to the docs root.
+    /// Current path, relative to the access-mode root.
     pub path: String,
-    /// New path, relative to the docs root. Fails if something already
-    /// exists there.
+    /// New path, relative to the access-mode root. Fails if something
+    /// already exists there.
     pub new_path: String,
 }
 
@@ -357,9 +359,9 @@ pub enum CheckKind {
 #[serde(rename_all = "camelCase")]
 pub struct CheckArgs {
     pub kind: CheckKind,
-    /// Optional docs-root-relative file path. `None`/omit = all indexed
-    /// documents. Always docs-relative (like `writeFile`), even in
-    /// Full-repo mode — diagnostics only cover documentation.
+    /// Optional path relative to the access-mode root (same as
+    /// `writeFile`). `None`/omit = all indexed documents. Must resolve
+    /// under the documentation root — diagnostics only cover documentation.
     #[serde(default)]
     pub path: Option<String>,
 }
@@ -639,9 +641,10 @@ pub enum ToolResult {
         hunks: Vec<crate::domain::git::GitBlameHunk>,
         truncated: bool,
     },
-    /// Settled `check` — `diagnostics` reuse the same `Diagnostic` wire
-    /// shape as the Problems panel (`document` / message paths are
-    /// repo-relative). `truncated` when the per-call cap was hit.
+    /// Settled `check` — `diagnostics` reuse the Problems panel
+    /// `Diagnostic` shape, but `document` paths are rewritten to the
+    /// access-mode root (same namespace as other tool paths) before the
+    /// result reaches the model. `truncated` when the per-call cap was hit.
     #[serde(rename_all = "camelCase")]
     CheckResults {
         kind: CheckKind,
@@ -772,6 +775,14 @@ pub enum ToolError {
     NotAllowed(ToolName),
     #[error("path escapes tool root: {0}")]
     PathEscape(String),
+    /// A mutate/`check` path resolved under the access-mode root but not
+    /// under the documentation root — Full-repo widens reads, not writes.
+    /// Surfaced to the model before any approval UI (see
+    /// `services::ai_tools::preflight_tool_call`).
+    #[error(
+        "path is outside the documentation root (only documentation files can be written/edited/deleted/checked): {0}"
+    )]
+    OutsideDocumentation(String),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("not a file: {0}")]
@@ -935,11 +946,14 @@ pub struct ToolScope {
     /// (incorrectly) reusing `root`.
     pub repo_root: PathBuf,
     /// Always the real docs subtree, independent of `mode` — unlike `root`,
-    /// which is `repo_root` in `FullRepo` mode. `WriteFile` always resolves
-    /// against this (never `root`): `FullRepo` grants broader *read*
-    /// context so the assistant can write better docs, not license to
-    /// mutate arbitrary repo files, so writes stay confined to the docs
-    /// subtree regardless of which read boundary is currently active.
+    /// which is `repo_root` in `FullRepo` mode. `WriteFile`/other mutate
+    /// tools resolve the model's path against `root` first (same namespace
+    /// as reads), then require containment under this
+    /// (`services::ai_tools::resolve_mutable_docs_path`): `FullRepo` grants
+    /// broader *read* context so the assistant can write better docs, not
+    /// license to mutate arbitrary repo files, so writes stay confined to
+    /// the docs subtree regardless of which read boundary is currently
+    /// active.
     pub docs_root: PathBuf,
     /// `None` when a search result needs no filtering (`FullRepo` mode, or
     /// a `DocsOnly` project whose `docs_root` *is* the repo root) — `Some`

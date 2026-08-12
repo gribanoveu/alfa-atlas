@@ -172,6 +172,7 @@ type AssistantConversationProps = {
    * prefix instead of a generic illustrative example. */
   docsRootRelativeToRepo: string | null;
   docsRoot: string;
+  repoRoot: string;
   /** The currently-open editor tab's path (docs-root-relative, same
    * convention `readProjectFile`/`writeProjectFile` already use), or `null`
    * when nothing's open — forwarded into `useLlmChat` so `SemanticSearch`
@@ -226,6 +227,7 @@ export function AssistantConversation({
   toolDefinitions,
   docsRootRelativeToRepo,
   docsRoot,
+  repoRoot,
   activeFilePath,
   onFileWritten,
   onFileMoved,
@@ -602,6 +604,7 @@ export function AssistantConversation({
                             key={item.blocks[0]!.id}
                             blocks={item.blocks}
                             docsRoot={docsRoot}
+                            repoRoot={repoRoot}
                             onDecide={decideToolCall}
                           />
                         ) : item.block.type === "reasoning" ? (

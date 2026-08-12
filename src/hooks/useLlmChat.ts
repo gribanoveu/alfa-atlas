@@ -575,7 +575,14 @@ export function useLlmChat(
       lastSentConversationModeRef.current = conversationMode;
 
       const todoBlock = buildTodoContextBlock(todoListRef.current);
-      const activeFileBlock = buildActiveFileContextBlock(activeFilePath);
+      // Editor tabs store docs-relative paths; the model sees access-mode
+      // paths (repo-relative in Full-repo). Backend `activeFilePath` stays
+      // docs-relative for FileId conversion.
+      const activeFileForPrompt =
+        accessMode === "fullRepo" && docsRootRelativeToRepo && activeFilePath
+          ? `${docsRootRelativeToRepo}/${activeFilePath}`
+          : activeFilePath;
+      const activeFileBlock = buildActiveFileContextBlock(activeFileForPrompt);
       const activePlanBlock = buildActivePlanContextBlock(activePlanIdRef.current);
 
       let memoryBlock: string | null = null;
