@@ -934,7 +934,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "semanticSearch".to_string(),
             description:
-                "Search the project's documentation/code for content relevant to a natural-language query. Use for semantic discovery: finding documents related to a concept, locating terminology, finding related implementations, or discovering potentially relevant files when the exact location is unknown. Results are useful for discovery but may not be sufficient evidence for precise claims — verify with readFile when precise details matter. For exact symbol/string/regex matches (e.g. \"find every call site of X\"), use grep instead."
+                "Search the project's documentation/code for content relevant to a natural-language query. Use for semantic discovery: finding documents related to a concept, locating terminology, finding related implementations, or discovering potentially relevant files when the exact location is unknown. Results are useful for discovery but may not be sufficient evidence for precise claims — verify with readFile when precise details matter. For exact symbol/string/regex matches (e.g. \"find every call site of X\"), use grep instead — grep provides precision over similarity."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -992,7 +992,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "gitDiff".to_string(),
             description:
-                "Show the git diff for one file — recent local changes (unstaged working-tree vs index/HEAD, or staged index vs HEAD) or the change introduced by a specific commit. Path is relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Use this to reason about what changed recently, not just the current file content. Returns a unified diff (truncated for large changes) plus +/- line counts."
+                "Show the git diff for one file — recent local changes (unstaged working-tree vs index/HEAD, or staged index vs HEAD) or the change introduced by a specific commit. Path is relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Use this to reason about what changed recently, not just the current file content. Combine with readFile to understand both current state and history. Returns a unified diff (truncated for large changes) plus +/- line counts."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1019,7 +1019,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "gitBlame".to_string(),
             description:
-                "Show line authorship (git blame) for one file as contiguous hunks sharing the same commit — who last changed which lines, when, and the commit summary. Path is relative to the current access-mode root. Optionally restrict to a 1-indexed inclusive line range; large ranges are capped. Use this to understand the history behind specific lines, not just their current content."
+                "Show line authorship (git blame) for one file as contiguous hunks sharing the same commit — who last changed which lines, when, and the commit summary. Path is relative to the current access-mode root. Optionally restrict to a 1-indexed inclusive line range; large ranges are capped. Use this to understand the history behind specific lines, not just their current content — investigate when a particular piece of content was introduced, or trace the origin of a decision or implementation detail. Combine with readFile to understand both current state and history."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1047,7 +1047,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "check".to_string(),
             description:
-                "Run a documentation verification and return findings. Two kinds are available. kind \"problems\": the same list the editor's Problems panel shows — broken xref/include/image targets, missing anchors, duplicate anchors, circular includes, and parse errors. Checks cover ONLY supported indexed documentation file types under the documentation root (.adoc/.asciidoc, .md/.markdown, .json, .yaml/.yml, .txt, .puml/.plantuml, .mmd/.mermaid) — not arbitrary repository source code or unsupported extensions. Recomputes diagnostics before returning so results are fresh. Optional `path` and every finding's `document` field use the current access-mode root (same as readFile/writeFile) — pass them between tools unchanged. kind \"standards\": checks API-method documentation folders against the corporate documentation standard (К.1.1–К.7.1, weighted criteria, 80% pass threshold per method folder). Purely local file reads, no network access — link-correctness (К.1.3) is out of scope. Folder paths in the report also use the access-mode root."
+                "Run a documentation verification and return findings. Two kinds are available:\n\nkind \"problems\": the same list the editor's Problems panel shows — broken xref/include/image targets, missing anchors, duplicate anchors, circular includes, and parse errors. Checks cover ONLY supported indexed documentation file types under the documentation root (.adoc/.asciidoc, .md/.markdown, .json, .yaml/.yml, .txt, .puml/.plantuml, .mmd/.mermaid) — not arbitrary repository source code or unsupported extensions. Recomputes diagnostics before returning so results are fresh. Use this to verify documentation integrity before and after edits.\n\nkind \"standards\": checks API-method documentation folders against the corporate documentation standard (К.1.1–К.7.1, weighted criteria, 80% pass threshold per method folder). Purely local file reads, no network access — link-correctness (К.1.3) is out of scope. Use this to audit API documentation quality.\n\nOptional `path` and every finding's `document` field use the current access-mode root (same as readFile/writeFile) — pass them between tools unchanged."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1055,7 +1055,7 @@ pub fn llm_tool_definitions(
                     "kind": {
                         "type": "string",
                         "enum": ["problems", "standards"],
-                        "description": "Which verification to run. \"problems\" = workspace diagnostics (Problems panel). \"standards\" = API-documentation corporate standard compliance (К.1.1–К.7.1, weighted, 80% pass threshold per method folder)."
+                        "description": "Which verification to run. \"problems\" = workspace diagnostics (Problems panel) for integrity checks. \"standards\" = API-documentation corporate standard compliance (К.1.1–К.7.1, weighted, 80% pass threshold per method folder)."
                     },
                     "path": {
                         "type": ["string", "null"],
@@ -1092,7 +1092,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "editFile".to_string(),
             description:
-                "Make one or more precise, targeted edits to an existing documentation file by replacing exact snippets of its current content, given its path relative to the current access-mode root (same as readFile/listFiles). The path must resolve under the documentation tree — paths outside it are rejected with an error. Each edit's `old` text should match the file's CURRENT content exactly once, and all edits in one call are validated against the file's original content and applied together, or none are — they are independent of each other and of their order. If an edit's `old` doesn't match exactly (whitespace/formatting drift, or you're recalling the content from memory rather than a fresh read), the call may be rejected; some sessions may attempt automatic reconciliation, but treat exact matching as the contract and add a few more surrounding lines to `old` to make it unique and exact. Prefer this over writeFile for small, localized changes: it's cheaper and safer than resending the whole file. Always requires explicit user approval before anything is written."
+                "Make one or more precise, targeted edits to an existing documentation file by replacing exact snippets of its current content, given its path relative to the current access-mode root (same as readFile/listFiles). The path must resolve under the documentation tree — paths outside it are rejected with an error. Each edit's `old` text should match the file's CURRENT content exactly once, and all edits in one call are validated against the file's original content and applied together, or none are — they are independent of each other and of their order (atomic application). If an edit's `old` doesn't match exactly (whitespace/formatting drift, or you're recalling the content from memory rather than a fresh read), the call may be rejected; some sessions may attempt automatic reconciliation, but treat exact matching as the contract and add a few more surrounding lines to `old` to make it unique and exact. Prefer this over writeFile for small, localized changes: it's cheaper and safer than resending the whole file. Always requires explicit user approval before anything is written."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1118,7 +1118,7 @@ pub fn llm_tool_definitions(
                             },
                             "required": ["old", "new"]
                         },
-                        "description": "One or more find-and-replace edits, applied together against the file's original content, not sequentially against each other's output."
+                        "description": "One or more find-and-replace edits, applied together against the file's original content (atomic), not sequentially against each other's output."
                     }
                 },
                 "required": ["path", "edits"]
