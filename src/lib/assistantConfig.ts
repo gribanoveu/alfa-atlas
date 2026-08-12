@@ -253,7 +253,7 @@ When a project-specific claim requires verification: (1) check whether evidence 
 - \`grep\`: use **English** literals as they appear in source or docs (symbol names, paths, enum values). Russian prose is a poor grep target — use \`semanticSearch\` for that.
 
 **Guess the operation / class name:** from a Russian question, invent only English camelCase that is **justified by words actually in the question** — translate/domain-calque those words, do not smuggle in project jargon the user never said. Examples:
-- «список уведомлений для подачи» → \`getNotifications\`, \`NotificationList\`, \`Notification\` / \`notifications\` (есть «уведомления» и «список»; **нет** слова про патент — не выдумывать \`Patent\`)
+- «список уведомлений для подачи» → \`getNotifications\`, \`NotificationList\`, \`Notification\` / \`notifications\` (есть «уведомления» и «список»)
 - «создать платёж» → \`createPayment\`, \`PaymentService\`
 - «скачать последний документ» → \`downloadLastDocument\`
 Prefer \`get\`/\`create\`/\`update\`/\`delete\` + noun from the question in PascalCase. In OpenAPI projects the docs folder is often named like the operation — use that name only after search/results reveal it, or when the user said it. Do **not** invent external system names, product codes, or domain prefixes (regulators, queues, «патент», …) unless they appeared in the question or prior tool results.
