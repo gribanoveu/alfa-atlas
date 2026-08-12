@@ -10,6 +10,14 @@ export default defineConfig(async () => ({
   optimizeDeps: {
     include: ["monaco-editor"],
   },
+  build: process.env.CI
+    ? {
+        // macOS CI runners have ~7 GiB RAM; heavy deps (monaco, shiki, mermaid) need a lower peak.
+        rollupOptions: {
+          maxParallelFileOps: 2,
+        },
+      }
+    : undefined,
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
