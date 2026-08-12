@@ -16,12 +16,13 @@ use crate::commands::embeddings::{
 };
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
-    AsciidocTemplateEntry, CheckArgs, CheckKind, CreateDirectoryArgs, DeleteDirectoryArgs,
-    DeleteFileArgs, EditFileArgs, FileDiffStats, FileEdit, GetAsciidocTemplatesArgs, GitBlameArgs,
-    GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs, MatchSource, MemoryArgs, MoveArgs,
-    ReadFileArgs, RequestFullRepoAccessArgs, RequestModeSwitchArgs, AskUserArgs, SemanticSearchArgs, Task,
-    TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError,
-    ToolFileEntry, ToolMatch, ToolResult, ToolScope, WriteFileArgs,
+    AsciidocTemplateEntry, CheckArgs, CheckKind, CreateDirectoryArgs, CreatePlanArgs,
+    DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileDiffStats, FileEdit,
+    GetAsciidocTemplatesArgs, GitBlameArgs, GitDiffArgs, GrepArgs, GrepMatch, ListFilesArgs,
+    MatchSource, MemoryArgs, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
+    RequestModeSwitchArgs, AskUserArgs, SemanticSearchArgs, Task, TodoStatus, TodoUpdateArgs,
+    TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult,
+    ToolScope, UpdatePlanArgs, UpdatePlanTodoArgs, WriteFileArgs,
 };
 use crate::domain::asciidoc_element_templates::{
     find_many as find_asciidoc_templates, ASCIIDOC_ELEMENT_TEMPLATES,
@@ -222,6 +223,10 @@ pub fn execute_tool(
             tool: "askUser".to_string(),
             reason: "askUser must be answered via resume, not execute_tool".to_string(),
         }),
+        ToolCall::CreatePlan(args) => create_plan(args),
+        ToolCall::UpdatePlan(args) => update_plan(args),
+        ToolCall::ReadPlan(args) => read_plan(args),
+        ToolCall::UpdatePlanTodo(args) => update_plan_todo(args),
     }
 }
 
@@ -363,6 +368,74 @@ fn memory(scope: &ToolScope, args: MemoryArgs) -> Result<String, ToolError> {
     .map_err(|e| ToolError::Memory(e.to_string()))
 }
 
+fn create_plan(args: CreatePlanArgs) -> Result<ToolResult, ToolError> {
+    let todos: Vec<(String, String)> = args
+        .todos
+        .into_iter()
+        .map(|t| (t.id, t.content))
+        .collect();
+    let record = crate::services::plans::create_plan(
+        args.name,
+        args.overview,
+        args.plan,
+        todos,
+        None,
+    )?;
+    Ok(ToolResult::PlanCreated {
+        plan_id: record.id,
+        name: record.name,
+        overview: record.overview,
+        todo_count: record.todos.len() as u32,
+        todos: record.todos,
+    })
+}
+
+fn update_plan(args: UpdatePlanArgs) -> Result<ToolResult, ToolError> {
+    let todos = args.todos.map(|list| {
+        list.into_iter()
+            .map(|t| (t.id, t.content))
+            .collect::<Vec<_>>()
+    });
+    let record = crate::services::plans::update_plan(
+        &args.plan_id,
+        args.name,
+        args.overview,
+        args.plan,
+        todos,
+    )?;
+    Ok(ToolResult::PlanUpdated {
+        plan_id: record.id,
+        name: record.name,
+        overview: record.overview,
+        todo_count: record.todos.len() as u32,
+        todos: record.todos,
+    })
+}
+
+fn read_plan(args: ReadPlanArgs) -> Result<ToolResult, ToolError> {
+    let record = crate::services::plans::read_plan(&args.plan_id)?;
+    Ok(ToolResult::PlanRead {
+        plan_id: record.id,
+        name: record.name,
+        overview: record.overview,
+        plan: record.plan,
+        todos: record.todos,
+    })
+}
+
+fn update_plan_todo(args: UpdatePlanTodoArgs) -> Result<ToolResult, ToolError> {
+    let record = crate::services::plans::update_plan_todo(
+        &args.plan_id,
+        &args.id,
+        args.status,
+        args.note,
+    )?;
+    Ok(ToolResult::PlanTodoUpdated {
+        plan_id: record.id,
+        todos: record.todos,
+    })
+}
+
 /// The one shared invariant-enforcement function, run at the end of both
 /// `todo_write` (a fresh append may leave the whole list without an
 /// `InProgress` task — e.g. the very first write ever) and `todo_update`
@@ -438,8 +511,7 @@ pub fn set_tool_auto_approved(tool: ToolName, auto_approved: bool) -> Result<(),
 pub fn allowed_tools() -> Result<HashSet<ToolName>, ProjectError> {
     let opened = project_open::get_project()?
         .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
-    let config = project_store::load(&opened.root)?
-        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    let config = load_project_config_migrated(&opened.root, &opened.docs_root)?;
     Ok(config
         .ai_allowed_tools
         .clone()
@@ -456,8 +528,7 @@ pub fn allowed_tools() -> Result<HashSet<ToolName>, ProjectError> {
 pub fn set_tool_allowed(tool: ToolName, allowed: bool) -> Result<(), ProjectError> {
     let opened = project_open::get_project()?
         .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
-    let mut config = project_store::load(&opened.root)?
-        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    let mut config = load_project_config_migrated(&opened.root, &opened.docs_root)?;
     let mut set: HashSet<ToolName> = config
         .ai_allowed_tools
         .clone()
@@ -470,6 +541,58 @@ pub fn set_tool_allowed(tool: ToolName, allowed: bool) -> Result<(), ProjectErro
     }
     config.ai_allowed_tools = Some(set.into_iter().collect());
     project_store::save(&opened.root, &config)
+}
+
+/// `ToolName` variants introduced by the plan-mode feature. A project whose
+/// `ai_allowed_tools` was customized (Settings → Permissions) before these
+/// variants existed cannot have intentionally revoked them — they weren't
+/// yet options to revoke. See `migrate_plan_tools_into_allowlist`.
+const PLAN_TOOLS_MIGRATION: [ToolName; 4] = [
+    ToolName::CreatePlan,
+    ToolName::UpdatePlan,
+    ToolName::ReadPlan,
+    ToolName::UpdatePlanTodo,
+];
+
+/// Backfills `config.ai_allowed_tools` with any `PLAN_TOOLS_MIGRATION` tool
+/// missing from an already-customized list, so a project saved before this
+/// feature shipped doesn't permanently lose access to it — `ToolName`
+/// variants added later never automatically widen a customized allowlist
+/// (see `default_allowed_tools`'s doc comment), so without this a
+/// customized project would need the user to manually re-enable each new
+/// tool in Settings. No-op when `ai_allowed_tools` is `None` — an
+/// uncustomized project already resolves through `default_allowed_tools`,
+/// which includes these. Returns whether anything changed, so the caller
+/// knows whether to persist.
+fn migrate_plan_tools_into_allowlist(config: &mut ProjectConfig) -> bool {
+    let Some(list) = config.ai_allowed_tools.as_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    for tool in PLAN_TOOLS_MIGRATION {
+        if !list.contains(&tool) {
+            list.push(tool);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Shared "load this project's config, catching it up on any pending
+/// allowlist migration" used by every call site that resolves
+/// `ai_allowed_tools` (`allowed_tools`, `set_tool_allowed`, `current_scope`)
+/// — replaces their previous direct
+/// `project_store::load(...).unwrap_or_else(...)` so a project's allowlist
+/// only needs to catch up once, on whichever of the three runs first.
+/// Persists immediately when migration changed anything (mirrors
+/// `infra::chat_store`'s ALTER-on-open precedent, just at the project.json
+/// layer).
+fn load_project_config_migrated(root: &str, docs_root_fallback: &str) -> Result<ProjectConfig, ProjectError> {
+    let mut config = project_store::load(root)?.unwrap_or_else(|| ProjectConfig::new(docs_root_fallback));
+    if migrate_plan_tools_into_allowlist(&mut config) {
+        project_store::save(root, &config)?;
+    }
+    Ok(config)
 }
 
 /// Resolves a `ToolScope` from a project's persisted config — the one place
@@ -495,8 +618,7 @@ pub fn scope_for_config(repo_root: &Path, docs_root: &Path, config: &ProjectConf
 pub fn current_scope() -> Result<ToolScope, ProjectError> {
     let opened = project_open::get_project()?
         .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
-    let config = project_store::load(&opened.root)?
-        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    let config = load_project_config_migrated(&opened.root, &opened.docs_root)?;
     Ok(scope_for_config(
         Path::new(&opened.root),
         Path::new(&opened.docs_root),
@@ -571,6 +693,18 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "askUser" => lenient_json_object::<AskUserArgs>(&call.arguments)
             .and_then(|args| validate_ask_user_args(args).map_err(|reason| reason))
             .map(ToolCall::AskUser)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "createPlan" => lenient_json_object::<CreatePlanArgs>(&call.arguments)
+            .map(ToolCall::CreatePlan)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "updatePlan" => lenient_json_object::<UpdatePlanArgs>(&call.arguments)
+            .map(ToolCall::UpdatePlan)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "readPlan" => lenient_json_object::<ReadPlanArgs>(&call.arguments)
+            .map(ToolCall::ReadPlan)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "updatePlanTodo" => lenient_json_object::<UpdatePlanTodoArgs>(&call.arguments)
+            .map(ToolCall::UpdatePlanTodo)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
@@ -1275,6 +1409,143 @@ pub fn llm_tool_definitions(
                     }
                 },
                 "required": ["questions"]
+            }),
+        });
+    }
+    if visible(ToolName::CreatePlan) {
+        defs.push(LlmToolDefinition {
+            name: "createPlan".to_string(),
+            description:
+                "Create a persisted work plan as the final deliverable of Plan mode. Call this AFTER research with read-only tools — do not dump the full plan as chat prose; the UI shows a plan card from this tool result. `name` is a short 3–4 word title; `overview` is 1–2 sentences; `plan` is the full markdown body (first line MUST be a `# Title` heading); `todos` is an array of at least 2 concrete checklist items with stable slug `id`s (e.g. \"setup-auth\") and imperative `content`. Returns `planId` — remember it for later `updatePlan` calls in this session. After success, reply with a brief 1–3 sentence summary only; the card has «Открыть» / «Начать» buttons."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Short plan title, 3–4 words."
+                    },
+                    "overview": {
+                        "type": "string",
+                        "description": "1–2 sentence summary of the goal."
+                    },
+                    "plan": {
+                        "type": "string",
+                        "description": "Full markdown plan body; first line must be `# Title`."
+                    },
+                    "todos": {
+                        "type": "array",
+                        "minItems": 2,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "Stable slug id (e.g. \"update-controller\")."
+                                },
+                                "content": {
+                                    "type": "string",
+                                    "description": "Imperative step description."
+                                }
+                            },
+                            "required": ["id", "content"]
+                        },
+                        "description": "Checklist of concrete implementation steps (min 2)."
+                    }
+                },
+                "required": ["name", "overview", "plan", "todos"]
+            }),
+        });
+    }
+    if visible(ToolName::UpdatePlan) {
+        defs.push(LlmToolDefinition {
+            name: "updatePlan".to_string(),
+            description:
+                "Update an existing plan created earlier in this Plan-mode session (same `planId` from `createPlan`). Pass only the fields that change. When replacing `todos`, supply the full new checklist (min 2 items) — statuses reset. Do not create a second plan for refinements."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "planId": {
+                        "type": "string",
+                        "description": "Id returned by createPlan."
+                    },
+                    "name": {
+                        "type": ["string", "null"],
+                        "description": "Optional new short title."
+                    },
+                    "overview": {
+                        "type": ["string", "null"],
+                        "description": "Optional new overview."
+                    },
+                    "plan": {
+                        "type": ["string", "null"],
+                        "description": "Optional new full markdown body."
+                    },
+                    "todos": {
+                        "type": ["array", "null"],
+                        "minItems": 2,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string" },
+                                "content": { "type": "string" }
+                            },
+                            "required": ["id", "content"]
+                        },
+                        "description": "Optional full replacement checklist."
+                    }
+                },
+                "required": ["planId"]
+            }),
+        });
+    }
+    if visible(ToolName::ReadPlan) {
+        defs.push(LlmToolDefinition {
+            name: "readPlan".to_string(),
+            description:
+                "Load a persisted plan by `planId` — full markdown body and current todo statuses. Use in Agent mode before executing an approved plan, or in Plan mode to refresh context before `updatePlan`."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "planId": {
+                        "type": "string",
+                        "description": "Plan id to load."
+                    }
+                },
+                "required": ["planId"]
+            }),
+        });
+    }
+    if visible(ToolName::UpdatePlanTodo) {
+        defs.push(LlmToolDefinition {
+            name: "updatePlanTodo".to_string(),
+            description:
+                "Mark one step of a persisted plan as `completed` or `cancelled` while executing it in Agent mode. Runtime auto-promotes the next pending step to in_progress. Use the todo `id` from `readPlan` / `createPlan` exactly. Optional `note` for a brief result or cancellation reason."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "planId": {
+                        "type": "string",
+                        "description": "Plan id."
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "Todo id within that plan."
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["completed", "cancelled"],
+                        "description": "New status — only completed or cancelled."
+                    },
+                    "note": {
+                        "type": ["string", "null"],
+                        "description": "Optional short note."
+                    }
+                },
+                "required": ["planId", "id", "status"]
             }),
         });
     }
@@ -3601,14 +3872,14 @@ mod tests {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
-        // Unlike `write_project_file`, `create_project_dir` runs
-        // `validate_relative_name` first, which rejects a `..` component
-        // itself (`ProjectError::InvalidName`) before `join_relative` ever
-        // gets a chance to produce `PathEscape` — still safely rejected,
-        // just via the generic `Io` catch-all in the `ProjectError` ->
-        // `ToolError` mapping, since `InvalidName` has no dedicated arm.
+        // `reject_atlas_memory_path` runs before `create_project_dir` and
+        // itself calls `paths::join_relative` on the raw arg, which rejects
+        // a `..` component with `ProjectError::PathEscape` — mapped
+        // directly to `ToolError::PathEscape` by `From<ProjectError> for
+        // ToolError`, so `create_project_dir`'s own
+        // `validate_relative_name`/`InvalidName` path is never reached.
         let err = create_dir(&scope, "../outside-dir").unwrap_err();
-        assert!(matches!(err, ToolError::Io(_)));
+        assert!(matches!(err, ToolError::PathEscape(_)));
         assert!(!repo.join("outside-dir").exists());
 
         fs::remove_dir_all(&repo).ok();
@@ -3904,11 +4175,13 @@ mod tests {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
-        // Same `validate_relative_name`-first shape as the other mutating
-        // tools' path-escape tests — `..` is rejected as `InvalidName`
-        // before `join_relative` ever gets a chance to produce `PathEscape`.
+        // `reject_atlas_memory_path` runs before `move_path`'s own path
+        // handling and itself calls `paths::join_relative` on the raw arg,
+        // which rejects a `..` component with `ProjectError::PathEscape` —
+        // mapped directly to `ToolError::PathEscape` (see the matching
+        // `create_directory_rejects_path_escape` comment).
         let err = move_it(&scope, "../outside.adoc", "new-name.adoc").unwrap_err();
-        assert!(matches!(err, ToolError::Io(_)));
+        assert!(matches!(err, ToolError::PathEscape(_)));
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -4398,6 +4671,37 @@ mod tests {
         assert!(list(&scope, None).is_ok());
 
         fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn migrate_plan_tools_into_allowlist_backfills_only_missing_plan_tools() {
+        let mut config = ProjectConfig::new(".");
+        config.ai_allowed_tools = Some(vec![ToolName::ListFiles, ToolName::ReadPlan]);
+
+        let changed = migrate_plan_tools_into_allowlist(&mut config);
+
+        assert!(changed);
+        let list = config.ai_allowed_tools.unwrap();
+        assert!(list.contains(&ToolName::CreatePlan));
+        assert!(list.contains(&ToolName::UpdatePlan));
+        assert_eq!(list.iter().filter(|t| **t == ToolName::ReadPlan).count(), 1);
+        assert!(list.contains(&ToolName::UpdatePlanTodo));
+        assert!(!list.contains(&ToolName::WriteFile));
+    }
+
+    #[test]
+    fn migrate_plan_tools_into_allowlist_is_noop_when_unset() {
+        let mut config = ProjectConfig::new(".");
+        assert!(!migrate_plan_tools_into_allowlist(&mut config));
+        assert!(config.ai_allowed_tools.is_none());
+    }
+
+    #[test]
+    fn migrate_plan_tools_into_allowlist_is_idempotent() {
+        let mut config = ProjectConfig::new(".");
+        config.ai_allowed_tools = Some(vec![ToolName::ListFiles]);
+        assert!(migrate_plan_tools_into_allowlist(&mut config));
+        assert!(!migrate_plan_tools_into_allowlist(&mut config));
     }
 
     #[test]
@@ -5500,7 +5804,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_nineteen_in_agent_mode_by_default() {
+    fn llm_tool_definitions_includes_all_twenty_one_in_agent_mode_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -5528,6 +5832,8 @@ mod tests {
                 "requestModeSwitch",
                 "getAsciidocTemplates",
                 "askUser",
+                "readPlan",
+                "updatePlanTodo",
             ]
         );
 
@@ -5558,10 +5864,14 @@ mod tests {
             .collect();
         assert!(!plan_names.contains("writeFile"));
         assert!(!plan_names.contains("todo"));
+        assert!(!plan_names.contains("updatePlanTodo"));
         assert!(plan_names.contains("requestFullRepoAccess"));
         assert!(plan_names.contains("requestModeSwitch"));
         assert!(plan_names.contains("getAsciidocTemplates"));
         assert!(plan_names.contains("askUser"));
+        assert!(plan_names.contains("createPlan"));
+        assert!(plan_names.contains("updatePlan"));
+        assert!(plan_names.contains("readPlan"));
 
         let question_names: HashSet<String> = llm_tool_definitions(&scope, ConversationMode::Question)
             .into_iter()

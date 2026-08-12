@@ -136,6 +136,43 @@
 
 /* ── View mode switch ────────────────────────────────────────────── */
 
+.tabs-bar-trailing {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 0;
+  border-left: 1px solid var(--border);
+}
+
+.plan-tab-start-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  margin: 0 6px 0 8px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: var(--font-ui-sm, 12px);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.plan-tab-start-btn:hover {
+  filter: brightness(1.06);
+}
+
+.plan-tab-preview {
+  height: 100%;
+  overflow: auto;
+  padding: 20px 28px 32px;
+  box-sizing: border-box;
+}
+
 .view-mode-switch {
   display: flex;
   align-items: center;

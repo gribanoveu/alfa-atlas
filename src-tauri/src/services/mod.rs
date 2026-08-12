@@ -18,6 +18,7 @@ pub mod index_store_ensure;
 pub mod index_watcher;
 pub mod llm_config;
 pub mod openapi;
+pub mod plans;
 pub mod project_layout;
 pub mod project_open;
 pub mod reference_rewrite;

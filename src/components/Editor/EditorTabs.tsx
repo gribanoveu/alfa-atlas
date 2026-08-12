@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import { Columns2, Code, Eye } from "lucide-react";
 import type { EditorViewMode } from "../../types/viewMode";
@@ -28,6 +29,10 @@ type EditorTabsProps = {
   onViewModeChange: (mode: EditorViewMode) => void;
   /** Hide source/split/render switch (e.g. image preview tabs). */
   hideViewMode?: boolean;
+  /** Subset of view modes to offer; defaults to all three. */
+  allowedViewModes?: readonly EditorViewMode[];
+  /** Extra controls rendered before the view-mode switch (e.g. plan «Начать»). */
+  actions?: ReactNode;
 };
 
 const VIEW_MODE_BUTTONS: {
@@ -59,9 +64,28 @@ export function EditorTabs({
   viewMode,
   onViewModeChange,
   hideViewMode = false,
+  allowedViewModes,
+  actions,
 }: EditorTabsProps) {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const modeSwitch =
+    hideViewMode ? null : (
+      <ViewModeSwitch
+        viewMode={viewMode}
+        onViewModeChange={onViewModeChange}
+        allowedModes={allowedViewModes}
+      />
+    );
+
+  const trailing =
+    actions || modeSwitch ? (
+      <div className="tabs-bar-trailing">
+        {actions}
+        {modeSwitch}
+      </div>
+    ) : null;
 
   useLayoutEffect(() => {
     if (!menu || !menuRef.current) return;
@@ -102,9 +126,7 @@ export function EditorTabs({
     return (
       <div className="tabs-bar">
         <div className="tabs tabs-empty" />
-        {hideViewMode ? null : (
-          <ViewModeSwitch viewMode={viewMode} onViewModeChange={onViewModeChange} />
-        )}
+        {trailing}
       </div>
     );
   }
@@ -200,9 +222,7 @@ export function EditorTabs({
           </div>
         ) : null}
       </div>
-      {hideViewMode ? null : (
-        <ViewModeSwitch viewMode={viewMode} onViewModeChange={onViewModeChange} />
-      )}
+      {trailing}
     </div>
   );
 }
@@ -210,13 +230,19 @@ export function EditorTabs({
 function ViewModeSwitch({
   viewMode,
   onViewModeChange,
+  allowedModes,
 }: {
   viewMode: EditorViewMode;
   onViewModeChange: (mode: EditorViewMode) => void;
+  allowedModes?: readonly EditorViewMode[];
 }) {
+  const buttons = allowedModes
+    ? VIEW_MODE_BUTTONS.filter((b) => allowedModes.includes(b.mode))
+    : VIEW_MODE_BUTTONS;
+
   return (
     <div className="view-mode-switch" role="group" aria-label="Режим просмотра">
-      {VIEW_MODE_BUTTONS.map(({ mode, icon: Icon, label }) => (
+      {buttons.map(({ mode, icon: Icon, label }) => (
         <button
           key={mode}
           type="button"

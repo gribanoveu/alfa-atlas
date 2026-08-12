@@ -42,6 +42,10 @@ pub enum ToolName {
     RequestModeSwitch,
     GetAsciidocTemplates,
     AskUser,
+    CreatePlan,
+    UpdatePlan,
+    ReadPlan,
+    UpdatePlanTodo,
 }
 
 impl ToolName {
@@ -114,6 +118,10 @@ impl ToolName {
             "requestModeSwitch" => Some(ToolName::RequestModeSwitch),
             "getAsciidocTemplates" => Some(ToolName::GetAsciidocTemplates),
             "askUser" => Some(ToolName::AskUser),
+            "createPlan" => Some(ToolName::CreatePlan),
+            "updatePlan" => Some(ToolName::UpdatePlan),
+            "readPlan" => Some(ToolName::ReadPlan),
+            "updatePlanTodo" => Some(ToolName::UpdatePlanTodo),
             _ => None,
         }
     }
@@ -157,6 +165,10 @@ impl ToolName {
             // even cheaper than a bare filesystem read.
             ToolName::GetAsciidocTemplates => 1,
             ToolName::AskUser => 1,
+            ToolName::CreatePlan => 1,
+            ToolName::UpdatePlan => 1,
+            ToolName::ReadPlan => 1,
+            ToolName::UpdatePlanTodo => 1,
         }
     }
 }
@@ -239,6 +251,10 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::RequestModeSwitch,
         ToolName::GetAsciidocTemplates,
         ToolName::AskUser,
+        ToolName::CreatePlan,
+        ToolName::UpdatePlan,
+        ToolName::ReadPlan,
+        ToolName::UpdatePlanTodo,
     ]
     .into_iter()
     .collect()
@@ -269,6 +285,10 @@ mod tests {
         assert!(ToolName::RequestModeSwitch.requires_confirmation());
         assert!(!ToolName::GetAsciidocTemplates.requires_confirmation());
         assert!(ToolName::AskUser.requires_confirmation());
+        assert!(!ToolName::CreatePlan.requires_confirmation());
+        assert!(!ToolName::UpdatePlan.requires_confirmation());
+        assert!(!ToolName::ReadPlan.requires_confirmation());
+        assert!(!ToolName::UpdatePlanTodo.requires_confirmation());
     }
 
     #[test]
@@ -301,6 +321,13 @@ mod tests {
             Some(ToolName::GetAsciidocTemplates)
         );
         assert_eq!(ToolName::from_wire_name("askUser"), Some(ToolName::AskUser));
+        assert_eq!(ToolName::from_wire_name("createPlan"), Some(ToolName::CreatePlan));
+        assert_eq!(ToolName::from_wire_name("updatePlan"), Some(ToolName::UpdatePlan));
+        assert_eq!(ToolName::from_wire_name("readPlan"), Some(ToolName::ReadPlan));
+        assert_eq!(
+            ToolName::from_wire_name("updatePlanTodo"),
+            Some(ToolName::UpdatePlanTodo)
+        );
         assert_eq!(ToolName::from_wire_name("somethingElse"), None);
     }
 
@@ -325,12 +352,16 @@ mod tests {
         assert_eq!(ToolName::RequestModeSwitch.loop_weight(), 1);
         assert_eq!(ToolName::GetAsciidocTemplates.loop_weight(), 1);
         assert_eq!(ToolName::AskUser.loop_weight(), 1);
+        assert_eq!(ToolName::CreatePlan.loop_weight(), 1);
+        assert_eq!(ToolName::UpdatePlan.loop_weight(), 1);
+        assert_eq!(ToolName::ReadPlan.loop_weight(), 1);
+        assert_eq!(ToolName::UpdatePlanTodo.loop_weight(), 1);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_nineteen() {
+    fn default_allowed_tools_includes_all_twenty_three() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 19);
+        assert_eq!(allowed.len(), 23);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
@@ -347,6 +378,10 @@ mod tests {
         assert!(allowed.contains(&ToolName::RequestModeSwitch));
         assert!(allowed.contains(&ToolName::GetAsciidocTemplates));
         assert!(allowed.contains(&ToolName::AskUser));
+        assert!(allowed.contains(&ToolName::CreatePlan));
+        assert!(allowed.contains(&ToolName::UpdatePlan));
+        assert!(allowed.contains(&ToolName::ReadPlan));
+        assert!(allowed.contains(&ToolName::UpdatePlanTodo));
     }
 
     #[test]
@@ -407,6 +442,10 @@ mod tests {
             ToolName::RequestModeSwitch,
             ToolName::GetAsciidocTemplates,
             ToolName::AskUser,
+            ToolName::CreatePlan,
+            ToolName::UpdatePlan,
+            ToolName::ReadPlan,
+            ToolName::UpdatePlanTodo,
         ] {
             let name = serde_json::to_value(tool)
                 .unwrap()

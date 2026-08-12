@@ -29,6 +29,7 @@ export function listChats(repoRoot: string, archived: boolean): Promise<ChatSumm
 export type LoadedChat = {
   messages: ChatMessage[];
   todos: Task[];
+  activePlanId: string | null;
 };
 
 /** One chat's full state — messages (save order) and its todo checklist —
@@ -46,8 +47,16 @@ export function saveChat(
   title: string,
   messages: ChatMessage[],
   todos: Task[],
+  activePlanId: string | null = null,
 ): Promise<ChatSummary> {
-  return invoke<ChatSummary>("chat_save", { repoRoot, chatId, title, messages, todos });
+  return invoke<ChatSummary>("chat_save", {
+    repoRoot,
+    chatId,
+    title,
+    messages,
+    todos,
+    activePlanId,
+  });
 }
 
 export function setChatArchived(chatId: string, archived: boolean): Promise<void> {

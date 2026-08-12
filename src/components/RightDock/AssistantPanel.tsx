@@ -322,6 +322,7 @@ export function AssistantPanel({
                 key={chatHistory.currentChatId}
                 initialMessages={chatHistory.currentMessages}
                 initialTodos={chatHistory.currentTodos}
+                initialActivePlanId={chatHistory.currentActivePlanId}
                 onTurnSettled={chatHistory.saveTurn}
                 onSendingChange={setConversationSending}
                 providerId={activeProviderId}

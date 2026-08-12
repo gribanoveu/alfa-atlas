@@ -249,6 +249,57 @@ pub struct AskUserAnswerPayload {
     pub answers: Vec<AskUserAnswer>,
 }
 
+/// One todo item supplied by the model when creating/updating a plan —
+/// status is assigned by the runtime, not the model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePlanTodoInput {
+    pub id: String,
+    pub content: String,
+}
+
+/// Final step of Plan mode — persist a structured work plan under
+/// `~/.atlas/plans/{repository_id}/`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePlanArgs {
+    pub name: String,
+    pub overview: String,
+    pub plan: String,
+    pub todos: Vec<CreatePlanTodoInput>,
+}
+
+/// Refine an existing plan (same `planId` across a Plan-mode session).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePlanArgs {
+    pub plan_id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub overview: Option<String>,
+    #[serde(default)]
+    pub plan: Option<String>,
+    #[serde(default)]
+    pub todos: Option<Vec<CreatePlanTodoInput>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadPlanArgs {
+    pub plan_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePlanTodoArgs {
+    pub plan_id: String,
+    pub id: String,
+    pub status: crate::domain::plan::PlanTodoUpdateStatus,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// Working-tree / index / commit file diff for the assistant — read-only.
 /// Paths are relative to the tool scope root (`docsRoot` in DocsOnly,
 /// `repoRoot` in FullRepo); the executor converts to a repo-relative path
@@ -476,6 +527,10 @@ pub enum ToolCall {
     RequestModeSwitch(RequestModeSwitchArgs),
     GetAsciidocTemplates(GetAsciidocTemplatesArgs),
     AskUser(AskUserArgs),
+    CreatePlan(CreatePlanArgs),
+    UpdatePlan(UpdatePlanArgs),
+    ReadPlan(ReadPlanArgs),
+    UpdatePlanTodo(UpdatePlanTodoArgs),
 }
 
 impl ToolCall {
@@ -501,6 +556,10 @@ impl ToolCall {
             ToolCall::RequestModeSwitch(_) => ToolName::RequestModeSwitch,
             ToolCall::GetAsciidocTemplates(_) => ToolName::GetAsciidocTemplates,
             ToolCall::AskUser(_) => ToolName::AskUser,
+            ToolCall::CreatePlan(_) => ToolName::CreatePlan,
+            ToolCall::UpdatePlan(_) => ToolName::UpdatePlan,
+            ToolCall::ReadPlan(_) => ToolName::ReadPlan,
+            ToolCall::UpdatePlanTodo(_) => ToolName::UpdatePlanTodo,
         }
     }
 }
@@ -658,6 +717,40 @@ pub enum ToolResult {
     /// on resume (never produced by `execute_tool` itself).
     #[serde(rename_all = "camelCase")]
     AskUser { answers: Vec<AskUserAnswer> },
+    /// Settled `createPlan` — enough for the chat card without reloading
+    /// the full markdown body (UI can `plan_get` for details).
+    #[serde(rename_all = "camelCase")]
+    PlanCreated {
+        plan_id: String,
+        name: String,
+        overview: String,
+        todo_count: u32,
+        todos: Vec<crate::domain::plan::PlanTodo>,
+    },
+    /// Settled `updatePlan`.
+    #[serde(rename_all = "camelCase")]
+    PlanUpdated {
+        plan_id: String,
+        name: String,
+        overview: String,
+        todo_count: u32,
+        todos: Vec<crate::domain::plan::PlanTodo>,
+    },
+    /// Settled `readPlan` — full record for the model.
+    #[serde(rename_all = "camelCase")]
+    PlanRead {
+        plan_id: String,
+        name: String,
+        overview: String,
+        plan: String,
+        todos: Vec<crate::domain::plan::PlanTodo>,
+    },
+    /// Settled `updatePlanTodo`.
+    #[serde(rename_all = "camelCase")]
+    PlanTodoUpdated {
+        plan_id: String,
+        todos: Vec<crate::domain::plan::PlanTodo>,
+    },
 }
 
 /// One catalog entry's wire shape for `ToolResult::AsciidocTemplates` — see
@@ -675,7 +768,7 @@ pub struct AsciidocTemplateEntry {
 
 #[derive(Debug, Error)]
 pub enum ToolError {
-    #[error("tool not allowed in this access mode: {0:?}")]
+    #[error("tool not allowed for this project: {0:?} (see Settings \u{2192} Разрешённые инструменты)")]
     NotAllowed(ToolName),
     #[error("path escapes tool root: {0}")]
     PathEscape(String),
@@ -768,6 +861,19 @@ pub enum ToolError {
     /// tool boundary.
     #[error("memory error: {0}")]
     Memory(String),
+    /// Plan store / validation failure.
+    #[error("plan error: {0}")]
+    Plan(String),
+}
+
+impl From<crate::domain::plan::PlanError> for ToolError {
+    fn from(err: crate::domain::plan::PlanError) -> Self {
+        match err {
+            crate::domain::plan::PlanError::NotFound(id) => ToolError::NotFound(format!("plan:{id}")),
+            crate::domain::plan::PlanError::TodoNotFound(id) => ToolError::TaskNotFound(id),
+            other => ToolError::Plan(other.to_string()),
+        }
+    }
 }
 
 impl From<EmbeddingError> for ToolError {

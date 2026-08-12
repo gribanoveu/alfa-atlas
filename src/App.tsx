@@ -219,6 +219,16 @@ function App() {
     setActiveKind("file");
   }, [editor.activeTabId]);
 
+  useEffect(() => {
+    const onOpenPlan = (event: Event) => {
+      const planId = (event as CustomEvent<{ planId?: string }>).detail?.planId;
+      if (!planId) return;
+      void editor.openPlan(planId);
+    };
+    window.addEventListener("atlas-open-plan", onOpenPlan);
+    return () => window.removeEventListener("atlas-open-plan", onOpenPlan);
+  }, [editor.openPlan]);
+
   const displayTabs: DisplayTab[] = useMemo(() => {
     const fileTabs: DisplayTab[] = editor.tabs.map((t) => ({
       id: t.id,

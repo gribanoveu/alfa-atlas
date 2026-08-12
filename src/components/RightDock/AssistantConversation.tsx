@@ -19,7 +19,9 @@ import { AssistantAskUserCard } from "./AssistantAskUserCard";
 import { AssistantReasoningBlock } from "./AssistantReasoningBlock";
 import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
+import { AssistantPlanCard, isPlanToolBlock } from "./AssistantPlanCard";
 import { TodoProgressWidget } from "./TodoProgressWidget";
+import { PlanProgressWidget } from "./PlanProgressWidget";
 
 const CHAT_MODE_OPTIONS: { value: ConversationMode; label: string; title: string }[] = [
   { value: "agent", label: "Агент", title: "Полный набор инструментов — исследует и вносит изменения." },
@@ -145,7 +147,8 @@ type AssistantConversationProps = {
   /** The chat's persisted todo checklist, seeding `useLlmChat`'s
    * `todoListRef` — same remount-driven reset as `initialMessages`. */
   initialTodos: Task[];
-  onTurnSettled: (messages: ChatMessage[], todos: Task[]) => void;
+  initialActivePlanId: string | null;
+  onTurnSettled: (messages: ChatMessage[], todos: Task[], activePlanId: string | null) => void;
   /** Bubbles `useLlmChat`'s `sending` up to the parent, which uses it to
    * disable chat-switching/new-chat while a turn (including a
    * `pendingApproval` pause) is in flight — see `AssistantPanel.tsx`'s own
@@ -212,6 +215,7 @@ type AssistantConversationProps = {
 export function AssistantConversation({
   initialMessages,
   initialTodos,
+  initialActivePlanId,
   onTurnSettled,
   onSendingChange,
   providerId,
@@ -246,6 +250,8 @@ export function AssistantConversation({
     answerAskUser,
     todos,
     clearTodos,
+    activePlanId,
+    setActivePlanId,
   } = useLlmChat(
     providerId,
     contextLimit,
@@ -256,11 +262,43 @@ export function AssistantConversation({
     docsRootRelativeToRepo,
     initialMessages,
     initialTodos,
+    initialActivePlanId,
     onTurnSettled,
     activeFilePath,
     taskDoneSoundEnabled,
     needAnswerSoundEnabled,
   );
+
+  const pendingStartPlanRef = useRef(false);
+
+  const startPlan = (planId: string) => {
+    setActivePlanId(planId);
+    if (conversationMode === "agent") {
+      // Already in Agent mode — the mode-change effect below never fires
+      // (onConversationModeChange("agent") is a same-value no-op), so send
+      // directly instead of leaving pendingStartPlanRef stuck true.
+      if (!sending) void sendMessage("Начни выполнение плана");
+      return;
+    }
+    pendingStartPlanRef.current = true;
+    onConversationModeChange("agent");
+  };
+
+  useEffect(() => {
+    if (conversationMode !== "agent" || !pendingStartPlanRef.current || sending) return;
+    pendingStartPlanRef.current = false;
+    void sendMessage("Начни выполнение плана");
+  }, [conversationMode, sending, sendMessage]);
+
+  useEffect(() => {
+    const onStart = (event: Event) => {
+      const planId = (event as CustomEvent<{ planId?: string }>).detail?.planId;
+      if (!planId || sending) return;
+      startPlan(planId);
+    };
+    window.addEventListener("atlas-start-plan", onStart);
+    return () => window.removeEventListener("atlas-start-plan", onStart);
+  }, [sending, setActivePlanId, onConversationModeChange]);
 
   useEffect(() => {
     onSendingChange(sending);
@@ -506,6 +544,7 @@ export function AssistantConversation({
   return (
     <>
       <TodoProgressWidget tasks={todos} onClearAll={sending ? undefined : clearTodos} />
+      {activePlanId ? <PlanProgressWidget planId={activePlanId} refreshKey={messages.length} /> : null}
       <div className="assistant-chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 ? (
           <div className="assistant-chat-placeholder">
@@ -576,6 +615,18 @@ export function AssistantConversation({
                             key={item.block.id}
                             content={item.block.content}
                             streaming={Boolean(m.streaming) && i === arr.length - 1}
+                          />
+                        ) : isPlanToolBlock(item.block) ? (
+                          <AssistantPlanCard
+                            key={item.block.id}
+                            block={item.block}
+                            startDisabled={sending}
+                            onOpenPlan={(planId) => {
+                              window.dispatchEvent(
+                                new CustomEvent("atlas-open-plan", { detail: { planId } }),
+                              );
+                            }}
+                            onStartPlan={startPlan}
                           />
                         ) : (
                           <AssistantToolCallBlock key={item.block.id} block={item.block} />

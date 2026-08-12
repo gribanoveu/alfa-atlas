@@ -15,6 +15,7 @@ pub mod onboarding;
 pub mod openapi;
 pub mod optmem;
 pub mod paths;
+pub mod plan;
 pub mod project_config;
 pub mod repo_index;
 pub mod settings;

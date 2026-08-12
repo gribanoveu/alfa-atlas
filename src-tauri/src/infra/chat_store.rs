@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS chats (
   title      TEXT NOT NULL DEFAULT '',
   archived   INTEGER NOT NULL DEFAULT 0,
   todos      TEXT NOT NULL DEFAULT '[]',
+  active_plan_id TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -79,6 +80,7 @@ fn open() -> Result<Connection, ChatStoreError> {
     let conn = Connection::open(path)?;
     conn.execute_batch(SCHEMA_SQL)?;
     migrate_add_todos_column(&conn)?;
+    migrate_add_active_plan_id_column(&conn)?;
     Ok(conn)
 }
 
@@ -102,6 +104,19 @@ fn migrate_add_todos_column(conn: &Connection) -> Result<(), ChatStoreError> {
         .any(|name| name == "todos");
     if !has_todos {
         conn.execute("ALTER TABLE chats ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'", [])?;
+    }
+    Ok(())
+}
+
+fn migrate_add_active_plan_id_column(conn: &Connection) -> Result<(), ChatStoreError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(chats)")?;
+    let has_col = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "active_plan_id");
+    if !has_col {
+        conn.execute("ALTER TABLE chats ADD COLUMN active_plan_id TEXT", [])?;
     }
     Ok(())
 }
@@ -174,7 +189,20 @@ pub fn load_chat(chat_id: &str) -> Result<LoadedChat, ChatStoreError> {
         None => Vec::new(),
     };
 
-    Ok(LoadedChat { messages, todos })
+    let active_plan_id: Option<String> = conn
+        .query_row(
+            "SELECT active_plan_id FROM chats WHERE id = ?1",
+            params![chat_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+
+    Ok(LoadedChat {
+        messages,
+        todos,
+        active_plan_id,
+    })
 }
 
 /// Upserts the `chats` row (title/`todos`/`updated_at` always overwritten;
@@ -190,6 +218,7 @@ pub fn save_chat(
     title: &str,
     messages: &[serde_json::Value],
     todos: &[Task],
+    active_plan_id: Option<&str>,
 ) -> Result<ChatSummary, ChatStoreError> {
     let mut conn = open()?;
     let now = now_millis();
@@ -197,10 +226,14 @@ pub fn save_chat(
     let tx = conn.transaction()?;
 
     tx.execute(
-        "INSERT INTO chats (id, repo_root, title, todos, archived, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, 0, ?5, ?5)
-         ON CONFLICT(id) DO UPDATE SET title = excluded.title, todos = excluded.todos, updated_at = excluded.updated_at",
-        params![chat_id, repo_root, title, todos_json, now],
+        "INSERT INTO chats (id, repo_root, title, todos, active_plan_id, archived, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)
+         ON CONFLICT(id) DO UPDATE SET
+           title = excluded.title,
+           todos = excluded.todos,
+           active_plan_id = excluded.active_plan_id,
+           updated_at = excluded.updated_at",
+        params![chat_id, repo_root, title, todos_json, active_plan_id, now],
     )?;
 
     tx.execute("DELETE FROM messages WHERE chat_id = ?1", params![chat_id])?;
@@ -246,7 +279,7 @@ mod tests {
     fn save_then_list_round_trips_a_new_chat() {
         with_temp_home(|| {
             let repo = "/repo/one";
-            let summary = save_chat(repo, "chat-1", "Первый вопрос", &[sample_message("hi")], &[]).unwrap();
+            let summary = save_chat(repo, "chat-1", "Первый вопрос", &[sample_message("hi")], &[], None).unwrap();
             assert_eq!(summary.id, "chat-1");
             assert_eq!(summary.repo_root, repo);
             assert_eq!(summary.title, "Первый вопрос");
@@ -262,7 +295,7 @@ mod tests {
     fn save_then_load_messages_preserves_order() {
         with_temp_home(|| {
             let messages = vec![sample_message("first"), sample_message("second"), sample_message("third")];
-            save_chat("/repo/one", "chat-1", "t", &messages, &[]).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &messages, &[], None).unwrap();
 
             let loaded = load_chat("chat-1").unwrap();
             assert_eq!(loaded.messages, messages);
@@ -272,10 +305,10 @@ mod tests {
     #[test]
     fn resaving_a_chat_replaces_its_messages_and_preserves_created_at() {
         with_temp_home(|| {
-            let first = save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[]).unwrap();
+            let first = save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
             let second =
-                save_chat("/repo/one", "chat-1", "t2", &[sample_message("a"), sample_message("b")], &[]).unwrap();
+                save_chat("/repo/one", "chat-1", "t2", &[sample_message("a"), sample_message("b")], &[], None).unwrap();
 
             assert_eq!(second.created_at, first.created_at);
             assert!(second.updated_at >= first.updated_at);
@@ -291,7 +324,7 @@ mod tests {
     fn archiving_moves_a_chat_between_active_and_archived_lists() {
         with_temp_home(|| {
             let repo = "/repo/one";
-            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[]).unwrap();
+            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
 
             set_archived("chat-1", true).unwrap();
             assert!(list_chats(repo, false).unwrap().is_empty());
@@ -314,8 +347,8 @@ mod tests {
     #[test]
     fn chats_are_scoped_to_their_repo_root() {
         with_temp_home(|| {
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[]).unwrap();
-            save_chat("/repo/two", "chat-2", "t", &[sample_message("a")], &[]).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
+            save_chat("/repo/two", "chat-2", "t", &[sample_message("a")], &[], None).unwrap();
 
             let repo_one = list_chats("/repo/one", false).unwrap();
             assert_eq!(repo_one.len(), 1);
@@ -331,11 +364,11 @@ mod tests {
     fn list_chats_orders_by_most_recently_updated_first() {
         with_temp_home(|| {
             let repo = "/repo/one";
-            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[]).unwrap();
+            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
-            save_chat(repo, "chat-2", "t", &[sample_message("a")], &[]).unwrap();
+            save_chat(repo, "chat-2", "t", &[sample_message("a")], &[], None).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
-            save_chat(repo, "chat-1", "t", &[sample_message("a"), sample_message("b")], &[]).unwrap();
+            save_chat(repo, "chat-1", "t", &[sample_message("a"), sample_message("b")], &[], None).unwrap();
 
             let active = list_chats(repo, false).unwrap();
             assert_eq!(active.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["chat-1", "chat-2"]);
@@ -347,7 +380,7 @@ mod tests {
         with_temp_home(|| {
             // save_chat on a brand-new id: the DELETE before insert matches
             // zero rows, which must not error.
-            let summary = save_chat("/repo/one", "chat-new", "t", &[], &[]).unwrap();
+            let summary = save_chat("/repo/one", "chat-new", "t", &[], &[], None).unwrap();
             assert_eq!(summary.id, "chat-new");
             assert!(load_chat("chat-new").unwrap().messages.is_empty());
         });
@@ -357,7 +390,7 @@ mod tests {
     fn save_then_load_todos_round_trips() {
         with_temp_home(|| {
             let todos = vec![sample_todo("t1", "Write the docs")];
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &todos).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &todos, None).unwrap();
             assert_eq!(load_chat("chat-1").unwrap().todos, todos);
         });
     }
@@ -365,8 +398,8 @@ mod tests {
     #[test]
     fn resaving_a_chat_replaces_its_todos() {
         with_temp_home(|| {
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t1", "first")]).unwrap();
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t2", "second")]).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t1", "first")], None).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t2", "second")], None).unwrap();
             assert_eq!(load_chat("chat-1").unwrap().todos, vec![sample_todo("t2", "second")]);
         });
     }
@@ -404,7 +437,7 @@ mod tests {
             assert!(loaded.todos.is_empty());
 
             let updated =
-                save_chat("/repo/one", "chat-old", "old chat", &[sample_message("a")], &[sample_todo("t1", "x")])
+                save_chat("/repo/one", "chat-old", "old chat", &[sample_message("a")], &[sample_todo("t1", "x")], None)
                     .unwrap();
             assert_eq!(updated.created_at, 1); // preserved across migration + upsert
             assert_eq!(load_chat("chat-old").unwrap().todos, vec![sample_todo("t1", "x")]);

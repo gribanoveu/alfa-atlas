@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { UpdatedReference } from "./project";
+import type { PlanTodo } from "./plans";
 import type { StandardsReport } from "./standards";
 import type { Diagnostic } from "./workspaceIndex";
 
@@ -118,6 +119,35 @@ export type ToolCall =
         part: number | null;
         snapshotT: number | null;
       };
+    }
+  | {
+      tool: "createPlan";
+      args: {
+        name: string;
+        overview: string;
+        plan: string;
+        todos: Array<{ id: string; content: string }>;
+      };
+    }
+  | {
+      tool: "updatePlan";
+      args: {
+        planId: string;
+        name: string | null;
+        overview: string | null;
+        plan: string | null;
+        todos: Array<{ id: string; content: string }> | null;
+      };
+    }
+  | { tool: "readPlan"; args: { planId: string } }
+  | {
+      tool: "updatePlanTodo";
+      args: {
+        planId: string;
+        id: string;
+        status: "completed" | "cancelled";
+        note: string | null;
+      };
     };
 
 // Mirrors Rust's `domain::ai_tools::FileDiffStats` — attached to a settled
@@ -199,6 +229,40 @@ export type ToolResult =
           customText: string | null;
         }>;
       };
+    }
+  | {
+      tool: "planCreated";
+      result: {
+        planId: string;
+        name: string;
+        overview: string;
+        todoCount: number;
+        todos: PlanTodo[];
+      };
+    }
+  | {
+      tool: "planUpdated";
+      result: {
+        planId: string;
+        name: string;
+        overview: string;
+        todoCount: number;
+        todos: PlanTodo[];
+      };
+    }
+  | {
+      tool: "planRead";
+      result: {
+        planId: string;
+        name: string;
+        overview: string;
+        plan: string;
+        todos: PlanTodo[];
+      };
+    }
+  | {
+      tool: "planTodoUpdated";
+      result: { planId: string; todos: PlanTodo[] };
     };
 
 /**

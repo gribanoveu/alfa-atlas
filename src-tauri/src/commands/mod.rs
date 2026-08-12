@@ -9,6 +9,7 @@ pub mod layout;
 pub mod llm;
 pub mod onboarding;
 pub mod openapi;
+pub mod plans;
 pub mod prefs;
 pub mod project;
 pub mod repo_index;

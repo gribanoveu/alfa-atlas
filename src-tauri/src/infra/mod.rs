@@ -21,6 +21,7 @@ pub mod llm_providers;
 pub mod onboarding_store;
 pub mod optmem_store;
 pub mod parsers;
+pub mod plan_store;
 pub mod project_store;
 pub mod repository_identity;
 pub mod settings_store;

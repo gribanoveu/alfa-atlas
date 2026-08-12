@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { GeneralPrefs } from "../lib/prefs";
 import { DEFAULT_GENERAL_PREFS } from "../lib/prefs";
+import { planGet } from "../lib/plans";
 import {
   readExternalTextFile,
   readProjectFile,
@@ -9,8 +10,8 @@ import {
 } from "../lib/project";
 import { isImageAsset, isSupportedFile, monacoLanguageFor } from "../lib/supportedFiles";
 
-export type EditorTabKind = "text" | "image";
-export type EditorTabOrigin = "project" | "external";
+export type EditorTabKind = "text" | "image" | "plan";
+export type EditorTabOrigin = "project" | "external" | "virtual";
 
 export type EditorTab = {
   id: string;
@@ -20,9 +21,10 @@ export type EditorTab = {
   savedContent: string;
   language: string;
   dirty: boolean;
-  /** Image tabs are preview-only — never read/write text content. */
+  /** Image tabs are preview-only; plan tabs are virtual markdown (not a repo file). */
   kind: EditorTabKind;
-  /** Project tabs use docs-root-relative paths; external use absolute OS paths. */
+  /** Project tabs use docs-root-relative paths; external use absolute OS paths;
+   * virtual tabs (plans) are not persisted to disk/session. */
   origin: EditorTabOrigin;
 };
 
@@ -42,6 +44,28 @@ function titleOf(relativePath: string): string {
 
 function externalTabId(absolutePath: string): string {
   return `external:${absolutePath}`;
+}
+
+export function planTabId(planId: string): string {
+  return `plan:${planId}`;
+}
+
+export function planIdFromTabId(tabId: string): string | null {
+  return tabId.startsWith("plan:") ? tabId.slice("plan:".length) : null;
+}
+
+function makePlanTab(planId: string, name: string, markdown: string): EditorTab {
+  return {
+    id: planTabId(planId),
+    path: planTabId(planId),
+    title: name,
+    content: markdown,
+    savedContent: markdown,
+    language: "markdown",
+    dirty: false,
+    kind: "plan",
+    origin: "virtual",
+  };
 }
 
 function makeImageTab(relativePath: string): EditorTab {
@@ -147,7 +171,9 @@ export function useEditorTabs(
     const root = docsRootRef.current;
     const tab = tabsRef.current.find((t) => t.id === id);
     if (!tab) return false;
-    if (tab.kind === "image") return true;
+    if (tab.kind === "image" || tab.kind === "plan" || tab.origin === "virtual") {
+      return true;
+    }
     if (!tab.dirty) return true;
     if (tab.origin === "project" && !root) return false;
 
@@ -251,12 +277,12 @@ export function useEditorTabs(
       const id = activeTabIdRef.current;
       if (!id) return;
       const tab = tabsRef.current.find((t) => t.id === id);
-      if (!tab?.dirty || tab.kind === "image") return;
+      if (!tab?.dirty || tab.kind === "image" || tab.kind === "plan") return;
       if (tab.origin === "external") {
         void writeExternalTextFile(tab.path, tab.content);
         return;
       }
-      if (!rootForSession) return;
+      if (tab.origin !== "project" || !rootForSession) return;
       void writeProjectFile(rootForSession, tab.path, tab.content);
     };
   }, [docsRoot, clearDebounce]);
@@ -370,6 +396,57 @@ export function useEditorTabs(
       try {
         const content = await readExternalTextFile(absolutePath);
         const tab = makeExternalTextTab(absolutePath, content);
+        await flushDebounce();
+        const currentId = activeTabIdRef.current;
+        if (currentId && prefsRef.current.saveOnTabSwitch) {
+          const current = tabsRef.current.find((t) => t.id === currentId);
+          if (current?.dirty) {
+            const ok = await saveTab(currentId);
+            if (!ok) return;
+          }
+        }
+        setTabs((prev) => {
+          const next = [...prev, tab];
+          tabsRef.current = next;
+          return next;
+        });
+        setActiveTabId(tab.id);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [flushDebounce, saveTab, switchToTab],
+  );
+
+  /** Open a persisted work plan as a read-only Markdown tab (Cursor-style). */
+  const openPlan = useCallback(
+    async (planId: string) => {
+      const id = planTabId(planId);
+      try {
+        const record = await planGet(planId);
+        const existing = tabsRef.current.find((tab) => tab.id === id);
+        if (existing) {
+          setTabs((prev) => {
+            const next = prev.map((tab) =>
+              tab.id === id
+                ? {
+                    ...tab,
+                    title: record.name,
+                    content: record.plan,
+                    savedContent: record.plan,
+                    dirty: false,
+                  }
+                : tab,
+            );
+            tabsRef.current = next;
+            return next;
+          });
+          await switchToTab(id);
+          setError(null);
+          return;
+        }
+        const tab = makePlanTab(planId, record.name, record.plan);
         await flushDebounce();
         const currentId = activeTabIdRef.current;
         if (currentId && prefsRef.current.saveOnTabSwitch) {
@@ -607,7 +684,7 @@ export function useEditorTabs(
     (content: string) => {
       if (!activeTabId) return;
       const active = tabsRef.current.find((t) => t.id === activeTabId);
-      if (!active || active.kind === "image") return;
+      if (!active || active.kind === "image" || active.kind === "plan") return;
       setTabs((prev) => {
         const next = prev.map((tab) =>
           tab.id === activeTabId
@@ -630,7 +707,7 @@ export function useEditorTabs(
         const id = activeTabIdRef.current;
         if (!id) return;
         const tab = tabsRef.current.find((t) => t.id === id);
-        if (!tab?.dirty || tab.kind === "image") return;
+        if (!tab?.dirty || tab.kind === "image" || tab.kind === "plan") return;
         void saveTab(id);
       }, delay);
     },
@@ -739,6 +816,7 @@ export function useEditorTabs(
     remapTabsUnder,
     openFile,
     openExternalFile,
+    openPlan,
     restoreTabs,
     updateActiveContent,
     saveActive,

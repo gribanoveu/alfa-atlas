@@ -17,7 +17,7 @@ use super::ai_access::ToolName;
 pub enum ConversationMode {
     /// Full harness: every tool, including all filesystem mutations.
     Agent,
-    /// Read-only research + a structured plan as the text response — no
+    /// Read-only research + a structured plan via `createPlan` — no
     /// mutation tools are even offered, so the model cannot attempt to
     /// execute a plan it just proposed (see `assistantConfig.ts`'s
     /// `buildPlanModeSystemPrompt`).
@@ -54,10 +54,10 @@ pub fn base_tools() -> HashSet<ToolName> {
 
 /// Tools added on top of `base_tools` for one specific mode. `Plan` gets
 /// `RequestFullRepoAccess` (a wider *read* boundary helps ground a plan in
-/// real code, not just docs) but deliberately not `Todo` — a plan is
-/// delivered as the turn's text response, not a todo checklist; `Todo` is a
-/// working-memory aid for actually executing a task, which only `Agent`
-/// does. `Question` gets nothing extra — the leanest tool set, for
+/// real code, not just docs), plus `CreatePlan`/`UpdatePlan`/`ReadPlan` for
+/// the structured plan artifact — deliberately not `Todo` (the chat
+/// working-memory checklist) or `UpdatePlanTodo` (execution tracking, Agent
+/// only). `Question` gets nothing extra — the leanest tool set, for
 /// lightweight point answers.
 pub fn extra_tools_for_mode(mode: ConversationMode) -> HashSet<ToolName> {
     match mode {
@@ -70,10 +70,19 @@ pub fn extra_tools_for_mode(mode: ConversationMode) -> HashSet<ToolName> {
             ToolName::Move,
             ToolName::RequestFullRepoAccess,
             ToolName::Todo,
+            ToolName::ReadPlan,
+            ToolName::UpdatePlanTodo,
         ]
         .into_iter()
         .collect(),
-        ConversationMode::Plan => [ToolName::RequestFullRepoAccess].into_iter().collect(),
+        ConversationMode::Plan => [
+            ToolName::RequestFullRepoAccess,
+            ToolName::CreatePlan,
+            ToolName::UpdatePlan,
+            ToolName::ReadPlan,
+        ]
+        .into_iter()
+        .collect(),
         ConversationMode::Question => HashSet::new(),
     }
 }
@@ -94,7 +103,7 @@ mod tests {
 
     #[test]
     fn agent_mode_has_every_tool() {
-        assert_eq!(mode_tools(ConversationMode::Agent).len(), 19);
+        assert_eq!(mode_tools(ConversationMode::Agent).len(), 21);
     }
 
     #[test]
@@ -108,12 +117,16 @@ mod tests {
             ToolName::DeleteDirectory,
             ToolName::Move,
             ToolName::Todo,
+            ToolName::UpdatePlanTodo,
         ] {
             assert!(!tools.contains(&mutating), "{mutating:?} should not be in Plan mode");
         }
         assert!(tools.contains(&ToolName::RequestFullRepoAccess));
         assert!(tools.contains(&ToolName::RequestModeSwitch));
         assert!(tools.contains(&ToolName::AskUser));
+        assert!(tools.contains(&ToolName::CreatePlan));
+        assert!(tools.contains(&ToolName::UpdatePlan));
+        assert!(tools.contains(&ToolName::ReadPlan));
     }
 
     #[test]

@@ -30,6 +30,7 @@ export function useChatHistory(repoRoot: string | null) {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [currentMessages, setCurrentMessages] = useState<ChatMessage[] | null>(null);
   const [currentTodos, setCurrentTodos] = useState<Task[] | null>(null);
+  const [currentActivePlanId, setCurrentActivePlanId] = useState<string | null>(null);
 
   // Guards against a stale async load (the initial repo scan, or a
   // `switchChat`) applying its result after a newer one has already
@@ -44,6 +45,7 @@ export function useChatHistory(repoRoot: string | null) {
     setCurrentChatId(null);
     setCurrentMessages(null);
     setCurrentTodos(null);
+    setCurrentActivePlanId(null);
     setArchivedChats(null);
     if (!repoRoot) {
       setActiveChats([]);
@@ -54,15 +56,21 @@ export function useChatHistory(repoRoot: string | null) {
       if (loadTokenRef.current !== token) return;
       setActiveChats(chats);
       if (chats.length > 0) {
-        const loaded = await loadChatMessages(chats[0].id).catch(() => ({ messages: [], todos: [] }));
+        const loaded = await loadChatMessages(chats[0].id).catch(() => ({
+          messages: [] as ChatMessage[],
+          todos: [] as Task[],
+          activePlanId: null as string | null,
+        }));
         if (loadTokenRef.current !== token) return;
         setCurrentChatId(chats[0].id);
         setCurrentMessages(loaded.messages);
         setCurrentTodos(loaded.todos);
+        setCurrentActivePlanId(loaded.activePlanId ?? null);
       } else {
         setCurrentChatId(crypto.randomUUID());
         setCurrentMessages([]);
         setCurrentTodos([]);
+        setCurrentActivePlanId(null);
       }
     })();
   }, [repoRoot]);
@@ -72,17 +80,20 @@ export function useChatHistory(repoRoot: string | null) {
     setCurrentChatId(chatId);
     setCurrentMessages(null);
     setCurrentTodos(null);
+    setCurrentActivePlanId(null);
     void loadChatMessages(chatId)
       .then((loaded) => {
         if (loadTokenRef.current === token) {
           setCurrentMessages(loaded.messages);
           setCurrentTodos(loaded.todos);
+          setCurrentActivePlanId(loaded.activePlanId ?? null);
         }
       })
       .catch(() => {
         if (loadTokenRef.current === token) {
           setCurrentMessages([]);
           setCurrentTodos([]);
+          setCurrentActivePlanId(null);
         }
       });
   }, []);
@@ -92,6 +103,7 @@ export function useChatHistory(repoRoot: string | null) {
     setCurrentChatId(crypto.randomUUID());
     setCurrentMessages([]);
     setCurrentTodos([]);
+    setCurrentActivePlanId(null);
   }, []);
 
   const loadArchived = useCallback(async () => {
@@ -143,10 +155,11 @@ export function useChatHistory(repoRoot: string | null) {
   // something that should interrupt an in-progress conversation — no error
   // UI, just a console note.
   const saveTurn = useCallback(
-    (messages: ChatMessage[], todos: Task[]) => {
+    (messages: ChatMessage[], todos: Task[], activePlanId: string | null = null) => {
       if (!repoRoot || !currentChatId || messages.length === 0) return;
       const title = deriveChatTitle(messages);
-      void saveChat(repoRoot, currentChatId, title, messages, todos)
+      setCurrentActivePlanId(activePlanId);
+      void saveChat(repoRoot, currentChatId, title, messages, todos, activePlanId)
         .then((summary) => {
           setActiveChats((prev) => [summary, ...prev.filter((c) => c.id !== summary.id)]);
         })
@@ -164,6 +177,7 @@ export function useChatHistory(repoRoot: string | null) {
     currentChatId,
     currentMessages,
     currentTodos,
+    currentActivePlanId,
     switchChat,
     newChat,
     archiveChat,

@@ -570,6 +570,12 @@ export function SettingsDialog({
                 </div>
                 <div className="settings-row">
                   <span className="settings-hint" style={{ paddingLeft: 0 }}>
+                    Планы (~/.atlas/plans)
+                  </span>
+                  <div className="settings-path">{paths?.plansDir ?? "…"}</div>
+                </div>
+                <div className="settings-row">
+                  <span className="settings-hint" style={{ paddingLeft: 0 }}>
                     Текущий / сохранённый проект
                   </span>
                   <div

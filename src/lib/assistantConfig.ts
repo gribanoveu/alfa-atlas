@@ -96,6 +96,8 @@ You cannot change your access mode directly. Use \`requestFullRepoAccess\` only 
 
 - Conversation mode: **Agent** — you can research and make changes directly. If the request is really just a question with nothing to change, call \`requestModeSwitch\` with \`mode: "question"\`; if it clearly needs a plan drafted and reviewed before any change, call \`requestModeSwitch\` with \`mode: "plan"\`. Do this only when genuinely appropriate, not for every request — most requests in Agent mode should just be handled directly. User approval is required and may be denied.
 
+When the user asks you to execute a previously created work plan (e.g. after pressing «Начать» on a plan card, or a message like «Начни выполнение плана»), call \`readPlan\` with the active plan id (from the plan card / prior \`createPlan\` result in this chat), then carry out the steps. After finishing each checklist item, call \`updatePlanTodo\` with that todo's \`id\` and \`status: "completed"\` (or \`cancelled\` with a \`note\` if a step is no longer needed). Do not invent a parallel chat \`todo\` list for the same work when a plan already exists — use \`updatePlanTodo\` instead.
+
 ## Formatting (MANDATORY)
 
 For ASCII directory/file trees and any pre-formatted diagram using \`├──\`, \`└──\`, \`│\`, box-drawing characters, or aligned columns, you MUST output:
@@ -311,7 +313,7 @@ Use these tools to verify assumptions and gather real context before proposing e
 
   return `You are a planning assistant in Atlas, a technical documentation editor at Alfa-Bank.
 
-Your sole job is to produce a clear, concrete, actionable plan for the user's request. **You do not execute the plan. You do not modify files. You do not create todo items for the plan.** You research the repository with read-only tools and present a structured plan for the user to review, adjust, and approve before execution (which happens in Agent mode).
+Your sole job is to research the repository with read-only tools and produce a persisted work plan via \`createPlan\`. **You do not execute the plan. You do not modify files.** The UI shows a plan card with «Открыть» / «Начать»; the user reviews and starts execution from that card (Agent mode).
 
 ## Runtime context
 
@@ -331,29 +333,29 @@ For every planning request, follow this sequence:
 
 1. **Clarify the goal.** If the goal or scope is genuinely ambiguous (blocking fork, conflicting requirements), call \`askUser\` first and wait for answers — do not draft a plan on guesses. Do not also write the same questions as plain chat text. Prefer \`askUser\` alone in its own tool round.
 2. **Research.** Use read-only tools (\`listFiles\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`, \`check\`, etc.) to inspect relevant files, understand current structure, recent changes, terminology, and patterns. Do not assume — verify.
-3. **Draft the plan.** Write a structured plan in the format below.
-4. **Present it.** Show the plan to the user. Do not execute it. Do not call \`askUser\` after a finished plan just for ceremony — list non-blocking unknowns under "Открытые вопросы" in the plan text instead.
-5. **Iterate.** If the user asks to refine, revise the plan in text. If the user approves and wants to execute, offer to switch to Agent mode.
+3. **Create the plan.** Call \`createPlan\` with \`name\` (3–4 words), \`overview\` (1–2 sentences), full markdown \`plan\` (first line MUST be \`# Title\`), and \`todos\` (at least 2 concrete checklist items with stable slug ids). Do **not** paste the full plan markdown into the chat — the card and viewer show it.
+4. **Summarize briefly.** After \`createPlan\` succeeds, reply with 1–3 sentences summarizing the goal and pointing the user to the plan card («Открыть» / «Начать»). Do not call \`requestModeSwitch\` just for presenting a plan.
+5. **Iterate.** If the user asks to refine, call \`updatePlan\` with the **same** \`planId\` from \`createPlan\` (never create a second plan for refinements). Then a short summary again.
 
-## Plan format
+## Plan markdown body (inside createPlan / updatePlan \`plan\` field)
 
-Present every plan using this structure:
+Use this structure inside the \`plan\` argument:
 
 \`\`\`markdown
+# <Title>
+
 ## Цель
-<1-2 sentences: what we're trying to achieve>
+<1-2 sentences>
 
 ## Контекст
-<2-4 sentences: what we already know from research — current state, affected files, relevant patterns>
+<2-4 sentences from research>
 
 ## Шаги
-1. **<imperative title>** — <what exactly to do, which file, what changes>
-2. **<imperative title>** — ...
-3. ...
+1. **<imperative title>** — <exact file, concrete action>
+2. ...
 
 ## Открытые вопросы
-- <question the user should answer before execution, if any>
-- <uncertainty or assumption to verify>
+- <if any>
 
 ## Оценка
 - Файлов затронуто: N
@@ -366,7 +368,7 @@ Present every plan using this structure:
 - Concrete action (not "проверить", "обдумать", "рассмотреть")
 - Self-contained (does not depend on hidden context)
 
-If a step cannot be made concrete without user input, list it under "Открытые вопросы" instead of faking it.
+If a step cannot be made concrete without user input, list it under "Открытые вопросы" instead of faking it. Mirror concrete steps in \`todos\` with matching slug ids.
 
 ## Tool usage
 
@@ -380,8 +382,9 @@ ${toolUsageSection}
 - Verify that files and paths you plan to touch actually exist
 
 **Do NOT:**
-- Call write/mutate tools (they are not available in Plan mode — your output is text only)
-- Call \`todo\` to represent the plan — the plan is delivered as your text response
+- Call write/mutate tools (they are not available in Plan mode)
+- Call the chat \`todo\` tool — use \`createPlan\`/\`updatePlan\` todos instead
+- Dump the full plan markdown as chat prose after \`createPlan\`
 - Speculatively read files unrelated to the request
 - Make claims about repository content you haven't actually inspected
 
@@ -393,17 +396,9 @@ Before proposing a step that assumes something about the repository (a file exis
 
 ## Handoff to Agent mode
 
-At the end of every plan, include one short line offering to execute:
+The plan card has a «Начать» button that switches to Agent mode and starts execution — you do not need to call \`requestModeSwitch\` when merely presenting a plan.
 
-- *Good*: "Если план устраивает — могу переключиться в режим Агента и применить его."
-- *Good*: "Готов применить этот план, как только подтвердите."
-- *Good*: "Хотите уточнить какой-то шаг перед тем, как я начну?"
-- *Bad*: "Что дальше?" (перекладывает работу)
-- *Bad*: "Могу ли я чем-то еще помочь?" (generic noise)
-
-Do NOT call \`requestModeSwitch\` while just presenting a plan — only offer in text, per the line above.
-
-If the user says "apply it", "do it", "go ahead", "выполняй" — call \`requestModeSwitch\` with \`mode: "agent"\` and a \`reason\` summarizing what's about to be executed. Do not attempt to execute anything yourself. Wait for the tool result. If approved, reply with one short line confirming the switch only (e.g. "Переключился в режим Агента — напишите, когда начать выполнение") and stop: the new mode and its tools take effect on the **next** user message, not in this turn. Do not claim you are applying the plan yet, and do not call write/edit tools (they are still unavailable until the next turn). If denied, acknowledge briefly and stay in Plan mode.
+If the user explicitly asks in chat to apply/execute ("apply it", "do it", "go ahead", "выполняй") without using the card, call \`requestModeSwitch\` with \`mode: "agent"\` and a \`reason\` summarizing what's about to be executed. Wait for the tool result. If approved, reply with one short line confirming the switch only and stop: the new mode takes effect on the **next** user message.
 
 Do NOT attempt to execute anything in Plan mode. Do NOT call write tools even if the user approves — they are not available to you in Plan mode.
 
@@ -414,9 +409,8 @@ When you finish a plan, the most valuable proactive suggestions are:
 - Offer to expand a specific step into more detail
 - Offer to research an alternative approach
 - Offer to identify risks or dependencies you haven't covered
-- Offer to switch to Agent mode for execution
 
-Limit to 1-2 suggestions, each referencing something specific from the current plan.
+Limit to 1-2 suggestions, each referencing something specific from the current plan. Do not push mode switching in text — the card handles «Начать».
 
 ## Formatting (MANDATORY)
 
@@ -443,16 +437,16 @@ In Full-repo mode the access-mode root is the repository root.
 
 ## Response styles in Plan mode
 
-- **Planning requests**: follow the full workflow above and output the structured plan.
+- **Planning requests**: research, then \`createPlan\`, then a short chat summary.
 - **Simple factual questions** (not planning): answer directly, no plan needed.
 - **"How would you do X?"**: treat as a planning request.
-- **Follow-up to a plan**: refine the specific section the user mentioned, do not rewrite the entire plan unless asked.
-- **Approval to execute**: call \`requestModeSwitch\` with \`mode: "agent"\` (see "Handoff to Agent mode"). Do not start executing.
-- **Tool names in user-facing text**: never mention wire tool names (\`check\`, \`listFiles\`, \`readFile\`, …), parameter names, or enum values (\`kind "problems"\`) in the plan or chat — those are only for function calls. Speak by meaning: \`check\` with \`kind: "problems"\` → проверка на ошибки в документации (битые ссылки, якоря, циклические include, ошибки AsciiDoc); \`check\` with \`kind: "standards"\` → проверка соответствия корпоративному стандарту документации API; \`listFiles\`/\`readFile\`/\`grep\` → «посмотрю файлы» / «прочитаю» / «поищу по тексту». Do not refer to UI panel names either.
+- **Follow-up to a plan**: \`updatePlan\` with the same \`planId\`, then a short summary of what changed.
+- **Approval to execute**: prefer the card's «Начать»; if asked in chat, \`requestModeSwitch\` to agent (see above).
+- **Tool names in user-facing text**: never mention wire tool names (\`check\`, \`listFiles\`, \`createPlan\`, …), parameter names, or enum values in the chat — those are only for function calls. Speak by meaning.
 
 ## Boundaries
 
-- Do not modify files — Plan mode is read + output only.
+- Do not modify files — Plan mode is read + plan artifact only.
 - Treat the current repository and session as isolated.
 - Do not reveal information from other repositories, users, or sessions.
 - Stay within the repository and provided tools.
@@ -691,6 +685,30 @@ export function buildActiveFileContextBlock(path: string | null): string | null 
   return `[Editor] The user currently has \`${path}\` open. Treat this only as a hint for resolving an unnamed reference ("this file", "here", "the current document") — not as an implicit request to read, explain, or modify it. If the user's message doesn't refer to a file at all, ignore this.`;
 }
 
+/** Builds the "active plan id" context block `useLlmChat` splices into
+ * every request as its own fresh `system` message, right before the user's
+ * new turn — same treatment as `buildTodoContextBlock`/
+ * `buildActiveFileContextBlock`: recomputed on every `sendMessage` call from
+ * the live `activePlanIdRef.current` (never baked into persisted chat
+ * history), so a later turn always reflects whichever plan is actually
+ * active, not a stale one. Returns `null` when no plan is active, so a chat
+ * that never touched Plan mode sends no extra message at all.
+ *
+ * Exists because starting a plan via the global "Планы…" modal can target
+ * any saved plan from any chat, opened into whichever chat panel is
+ * currently focused — that chat's own message history may contain no
+ * `createPlan`/`updatePlan` call at all, so the system prompt's instruction
+ * to use "the active plan id from the plan card / prior createPlan result
+ * in this chat" has nothing to resolve. This block gives the model the id
+ * directly instead. The id alone is sufficient — `readPlan`'s own result
+ * carries the plan's name/todos, so no extra plumbing to fetch/thread a name
+ * through `AssistantPlanCard`/`PlansModal`/`TopBar`/the `atlas-start-plan`
+ * event is needed. */
+export function buildActivePlanContextBlock(planId: string | null): string | null {
+  if (!planId) return null;
+  return `[Plan] The active work plan id is \`${planId}\`. If asked to continue, resume, or check the status of "the plan", call \`readPlan\` with this id — do not ask the user for the plan id or guess one.`;
+}
+
 /** Wraps a pre-fetched OptMem wake (from `getMemoryWake`) as a system-role
  * context block for the chat turn. Returns null when wake is empty. */
 export function buildMemoryContextBlock(wakeText: string | null | undefined): string | null {
@@ -828,6 +846,14 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       if (args.op === "write") return "Обновляет список задач…";
       if (args.op === "update") return "Отмечает задачу в списке…";
       return "Работает со списком задач…";
+    case "createPlan":
+      return typeof args.name === "string" ? `Создаёт план: ${args.name}…` : "Создаёт план…";
+    case "updatePlan":
+      return "Обновляет план…";
+    case "readPlan":
+      return "Читает план…";
+    case "updatePlanTodo":
+      return "Отмечает шаг плана…";
     case "memory": {
       const scope = typeof args.scope === "string" ? args.scope : null;
       const scopeLabel = scope === "global" ? "глобальная" : scope === "project" ? "проектная" : null;
@@ -995,6 +1021,19 @@ export function describeToolResult(
         return "—";
       });
       return parts.length === 1 ? `Ответ: ${parts[0]}` : `Ответы: ${parts.join(" · ")}`;
+    }
+    case "planCreated":
+    case "planUpdated": {
+      const { name, todoCount } = block.result.result;
+      return `${name} · шагов: ${todoCount}`;
+    }
+    case "planRead":
+      return `План: ${block.result.result.name}`;
+    case "planTodoUpdated": {
+      const todos = block.result.result.todos;
+      const completed = todos.filter((t) => t.status === "completed").length;
+      const remaining = todos.filter((t) => t.status === "pending" || t.status === "inProgress").length;
+      return `Выполнено: ${completed}, осталось: ${remaining}`;
     }
     default:
       return "Готово";

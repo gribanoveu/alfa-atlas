@@ -20,6 +20,10 @@ const ALLOWED_TOOL_LABELS: Record<string, string> = {
   ...AUTO_APPROVABLE_TOOL_LABELS,
   todo: "Список задач (todo)",
   memory: "Постоянная память агента (memory)",
+  createPlan: "Создание плана (createPlan)",
+  updatePlan: "Обновление плана (updatePlan)",
+  readPlan: "Чтение плана (readPlan)",
+  updatePlanTodo: "Статус шага плана (updatePlanTodo)",
 };
 
 const ALLOWED_TOOL_ORDER = [
@@ -42,6 +46,10 @@ const ALLOWED_TOOL_ORDER = [
   "requestModeSwitch",
   "getAsciidocTemplates",
   "askUser",
+  "createPlan",
+  "updatePlan",
+  "readPlan",
+  "updatePlanTodo",
 ];
 
 /** Per-project "always allow" list for the assistant's tool-calling loop

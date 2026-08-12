@@ -32,4 +32,7 @@ pub struct ChatSummary {
 pub struct LoadedChat {
     pub messages: Vec<serde_json::Value>,
     pub todos: Vec<Task>,
+    /// Active work-plan id for this chat (from Plan-mode createPlan /
+    /// Start), if any.
+    pub active_plan_id: Option<String>,
 }

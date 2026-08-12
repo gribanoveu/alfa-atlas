@@ -12,6 +12,7 @@ import {
 import {
   buildAccessModeChangeNotice,
   buildActiveFileContextBlock,
+  buildActivePlanContextBlock,
   buildCompactionSummaryBlock,
   buildHistoryCompactionPrompt,
   buildModeChangeNotice,
@@ -105,7 +106,8 @@ export function useLlmChat(
   docsRootRelativeToRepo: string | null,
   initialMessages: ChatMessage[],
   initialTodos: Task[],
-  onTurnSettled: (messages: ChatMessage[], todos: Task[]) => void,
+  initialActivePlanId: string | null,
+  onTurnSettled: (messages: ChatMessage[], todos: Task[], activePlanId: string | null) => void,
   activeFilePath: string | null,
   taskDoneSoundEnabled: boolean,
   needAnswerSoundEnabled: boolean,
@@ -201,6 +203,13 @@ export function useLlmChat(
   const setTodos = useCallback((next: Task[]) => {
     todoListRef.current = next;
     setTodosState(next);
+  }, []);
+
+  const activePlanIdRef = useRef<string | null>(initialActivePlanId);
+  const [activePlanId, setActivePlanIdState] = useState<string | null>(initialActivePlanId);
+  const setActivePlanId = useCallback((next: string | null) => {
+    activePlanIdRef.current = next;
+    setActivePlanIdState(next);
   }, []);
 
   // The in-flight batch of pending decisions, if any — `decide` is what
@@ -411,6 +420,9 @@ export function useLlmChat(
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenLlmToolResult(({ id, result, error: toolError }) => {
+      if (result?.tool === "planCreated" || result?.tool === "planUpdated") {
+        setActivePlanId(result.result.planId);
+      }
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) => settleToolCallBlock(blocks, { id, result, error: toolError })),
       );
@@ -422,7 +434,7 @@ export function useLlmChat(
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [setActivePlanId]);
 
   // Context-window usage so far. Every request resends the *entire* message
   // history, so a completed turn's `usage.totalTokens` (prompt + completion,
@@ -564,6 +576,7 @@ export function useLlmChat(
 
       const todoBlock = buildTodoContextBlock(todoListRef.current);
       const activeFileBlock = buildActiveFileContextBlock(activeFilePath);
+      const activePlanBlock = buildActivePlanContextBlock(activePlanIdRef.current);
 
       let memoryBlock: string | null = null;
       try {
@@ -618,6 +631,7 @@ export function useLlmChat(
         ...(memoryBlock ? [{ role: "system" as const, content: memoryBlock, toolCallId: null }] : []),
         ...(activeFileBlock ? [{ role: "system" as const, content: activeFileBlock, toolCallId: null }] : []),
         ...(todoBlock ? [{ role: "system" as const, content: todoBlock, toolCallId: null }] : []),
+        ...(activePlanBlock ? [{ role: "system" as const, content: activePlanBlock, toolCallId: null }] : []),
         { role: "user", content: userText, toolCallId: null },
       ];
 
@@ -735,7 +749,7 @@ export function useLlmChat(
         // queue in order; this updater sees exactly what the turn ended
         // with, covering both the success and error paths in one place.
         setMessages((prev) => {
-          onTurnSettled(prev, todoListRef.current);
+          onTurnSettled(prev, todoListRef.current, activePlanIdRef.current);
           return prev;
         });
       }
@@ -816,7 +830,7 @@ export function useLlmChat(
       t.status === "pending" || t.status === "inProgress" ? { ...t, status: "cancelled" as const } : t,
     );
     setTodos(next);
-    onTurnSettled(messages, next);
+    onTurnSettled(messages, next, activePlanIdRef.current);
   }, [messages, onTurnSettled, setTodos]);
 
   return {
@@ -827,6 +841,8 @@ export function useLlmChat(
     contextTokens,
     todos,
     clearTodos,
+    activePlanId,
+    setActivePlanId,
     systemPrompt: buildSystemPromptForConversationMode(
       conversationMode,
       accessMode,

@@ -113,6 +113,13 @@ const KNOWN_TOOLS = [
   "requestFullRepoAccess",
   "todo",
   "memory",
+  "requestModeSwitch",
+  "getAsciidocTemplates",
+  "askUser",
+  "createPlan",
+  "updatePlan",
+  "readPlan",
+  "updatePlanTodo",
 ];
 
 const TOOL_OPTIONS: LogSelectOption[] = [

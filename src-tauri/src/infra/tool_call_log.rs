@@ -283,6 +283,11 @@ pub fn redact_args(call: &ToolCall) -> serde_json::Value {
                 args.insert("text".to_string(), redacted());
             }
         }
+        ToolCall::CreatePlan(_) | ToolCall::UpdatePlan(_) => {
+            if args.contains_key("plan") {
+                args.insert("plan".to_string(), redacted());
+            }
+        }
         _ => {}
     }
     value
@@ -338,6 +343,11 @@ pub fn redact_result(result: &ToolResult, memory_op: Option<&str>) -> serde_json
         ToolResult::Memory { .. } if memory_op != Some("config") => {
             if let Some(obj) = inner.as_object_mut() {
                 obj.insert("text".to_string(), redacted());
+            }
+        }
+        ToolResult::PlanRead { .. } => {
+            if let Some(obj) = inner.as_object_mut() {
+                obj.insert("plan".to_string(), redacted());
             }
         }
         _ => {}

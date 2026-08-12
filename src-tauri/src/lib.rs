@@ -293,6 +293,9 @@ pub fn run() {
             commands::chat_history::chat_load_messages,
             commands::chat_history::chat_save,
             commands::chat_history::chat_set_archived,
+            commands::plans::plan_list,
+            commands::plans::plan_get,
+            commands::plans::plan_delete,
             commands::export::write_export_file,
         ])
         .run(tauri::generate_context!())

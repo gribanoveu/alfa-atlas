@@ -1910,6 +1910,69 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   padding-top: 2px;
 }
 
+/* =========================================================
+   Plan card (createPlan / updatePlan) — same shell as ask-user
+   ========================================================= */
+
+.assistant-plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  transition: opacity 0.15s ease;
+}
+
+.assistant-plan-card.is-running,
+.assistant-plan-card.is-error {
+  opacity: 0.85;
+}
+
+.assistant-plan-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.assistant-plan-card-eyebrow {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.assistant-plan-card-title {
+  font-size: calc(var(--font-ui) * 1.08);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-0);
+}
+
+.assistant-plan-card-overview {
+  margin: 0;
+  font-size: var(--font-ui);
+  line-height: 1.45;
+  color: var(--text-1);
+}
+
+.assistant-plan-card-error {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--red-tag);
+}
+
+.assistant-plan-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 2px;
+}
+
 
 /* =========================================================
    Spinner

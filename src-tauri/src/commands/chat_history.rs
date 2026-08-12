@@ -26,8 +26,17 @@ pub fn chat_save(
     title: String,
     messages: Vec<serde_json::Value>,
     todos: Vec<Task>,
+    active_plan_id: Option<String>,
 ) -> Result<ChatSummary, String> {
-    chat_store::save_chat(&repo_root, &chat_id, &title, &messages, &todos).map_err(|e| e.to_string())
+    chat_store::save_chat(
+        &repo_root,
+        &chat_id,
+        &title,
+        &messages,
+        &todos,
+        active_plan_id.as_deref(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
