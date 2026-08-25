@@ -50,7 +50,18 @@ pub fn resolve_with(
             .remote_model
             .clone()
             .or_else(|| preset.model.clone()),
-        remote_dimensions: settings.remote_dimensions.or(preset.dimensions),
+        // Unlike the other remote fields, dimensions is never settings-
+        // overridable — like `local::DIMENSIONS`, it has to stay a fixed
+        // constant of "which provider is running", not something a user
+        // can retype independently. A usearch index is dimension-fixed, so
+        // a dimension change orphans whatever's already embedded; letting
+        // it come from mutable settings meant editing this field (or a
+        // stale/blank value defaulting differently than intended) silently
+        // wiped and re-embedded the whole index — via a paid API, on the
+        // next app start — the moment the resolved value drifted from what
+        // was persisted. Pinning it to the compiled-in preset removes that
+        // failure mode entirely.
+        remote_dimensions: preset.dimensions,
         remote_trusted_cert_pem: settings
             .remote_trusted_cert_pem
             .clone()

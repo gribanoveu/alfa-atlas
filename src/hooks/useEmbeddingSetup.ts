@@ -210,7 +210,6 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
         kind: next.kind,
         remoteBaseUrl: next.remoteBaseUrl,
         remoteModel: next.remoteModel,
-        remoteDimensions: next.remoteDimensions,
         remoteTrustedCertPem: next.remoteTrustedCertPem,
         remoteSystemId: next.remoteSystemId,
         remoteDisableTlsVerification: next.remoteDisableTlsVerification,

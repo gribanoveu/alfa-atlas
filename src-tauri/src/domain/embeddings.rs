@@ -81,16 +81,6 @@ pub struct EmbeddingProviderConfig {
     pub remote_base_url: Option<String>,
     #[serde(default)]
     pub remote_model: Option<String>,
-    /// `usearch`'s index needs a fixed dimension count at construction
-    /// time, and unlike the local BGE-M3 provider (always 1024), a remote
-    /// service's dimension count depends entirely on which model it's
-    /// running — there's no way to discover it without either an extra API
-    /// round-trip or the user stating it up front. Settings asks for this
-    /// when Remote is selected; `None` falls back to the preset, then to
-    /// `DEFAULT_REMOTE_DIMENSIONS` (OpenAI's `text-embedding-3-small`
-    /// size, the most common default).
-    #[serde(default)]
-    pub remote_dimensions: Option<usize>,
     #[serde(default)]
     pub remote_trusted_cert_pem: Option<String>,
     #[serde(default)]
@@ -109,6 +99,11 @@ pub struct ResolvedEmbeddingConfig {
     pub kind: EmbeddingProviderKind,
     pub remote_base_url: Option<String>,
     pub remote_model: Option<String>,
+    /// Always the compiled-in `EmbeddingPreset::dimensions` (`None` falls
+    /// back to `DEFAULT_REMOTE_DIMENSIONS` — see `expected_dimensions`) —
+    /// never the settings-layer override, unlike every other `remote_*`
+    /// field here. Same "fixed for this build" treatment as the local
+    /// provider's `local::DIMENSIONS` constant.
     pub remote_dimensions: Option<usize>,
     pub remote_trusted_cert_pem: Option<String>,
     pub remote_system_id: Option<String>,
@@ -226,7 +221,6 @@ mod tests {
         let config = EmbeddingProviderConfig::default();
         assert_eq!(config.kind, None);
         assert_eq!(config.remote_base_url, None);
-        assert_eq!(config.remote_dimensions, None);
         assert_eq!(config.remote_trusted_cert_pem, None);
     }
 
@@ -236,7 +230,17 @@ mod tests {
             serde_json::from_str(r#"{"kind":"remote","remoteBaseUrl":"https://x"}"#).unwrap();
         assert_eq!(config.kind, Some(EmbeddingProviderKind::Remote));
         assert_eq!(config.remote_base_url.as_deref(), Some("https://x"));
-        assert_eq!(config.remote_dimensions, None);
+    }
+
+    /// A `settings.json` written before `remoteDimensions` stopped being a
+    /// settings-layer field must still deserialize — the stray key is
+    /// silently ignored (`serde` drops unknown fields by default) rather
+    /// than failing the whole load.
+    #[test]
+    fn deserializes_legacy_config_with_stray_remote_dimensions_key() {
+        let config: EmbeddingProviderConfig =
+            serde_json::from_str(r#"{"kind":"remote","remoteDimensions":1536}"#).unwrap();
+        assert_eq!(config.kind, Some(EmbeddingProviderKind::Remote));
     }
 
     #[test]

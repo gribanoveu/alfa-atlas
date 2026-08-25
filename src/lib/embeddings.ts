@@ -9,6 +9,8 @@ export type ResolvedEmbeddingConfig = {
   kind: EmbeddingProviderKind;
   remoteBaseUrl: string | null;
   remoteModel: string | null;
+  // Always the bundled preset's value — fixed for this build, like the
+  // local provider's dimension, never user-editable.
   remoteDimensions: number | null;
   remoteTrustedCertPem: string | null;
   remoteSystemId: string | null;
@@ -17,12 +19,13 @@ export type ResolvedEmbeddingConfig = {
 
 // Mirrors `domain::embeddings::EmbeddingProviderConfig` — the settings-layer
 // override persisted by `embedding_set_config`. `kind: null` means inherit
-// from the bundled preset.
+// from the bundled preset. No `remoteDimensions` here — unlike the other
+// remote fields, dimensions is never settings-overridable (see
+// `ResolvedEmbeddingConfig.remoteDimensions`).
 export type EmbeddingProviderConfig = {
   kind: EmbeddingProviderKind | null;
   remoteBaseUrl: string | null;
   remoteModel: string | null;
-  remoteDimensions: number | null;
   remoteTrustedCertPem: string | null;
   remoteSystemId: string | null;
   remoteDisableTlsVerification: boolean | null;

@@ -391,6 +391,11 @@ pub(crate) fn attach_index_store(
     let is_new_attach = !matches!(store_slot.as_ref(), Some((root, _, _)) if root == index_root);
     if is_new_attach {
         let attachment = index_store_ensure::open_for(storage_dir)?;
+        eprintln!(
+            "[embedding] attaching index store at {} (stale={})",
+            storage_dir.display(),
+            attachment.stale
+        );
         if attachment.stale {
             chunk_index.clear();
         } else {
@@ -436,9 +441,16 @@ pub(crate) fn attach_embedding_index(
 
         let fresh = if persisted_dimensions == Some(dimensions) {
             let persisted_hashes = store.load_all_embedding_hashes().map_err(|e| e.to_string())?;
+            eprintln!(
+                "[embedding] loaded {} persisted embeddings ({dimensions} dims)",
+                persisted_hashes.len()
+            );
             EmbeddingIndex::load(dimensions, &store.vectors_path(), persisted_hashes)
                 .map_err(|e| e.to_string())?
         } else if allow_repair {
+            eprintln!(
+                "[embedding] dimension mismatch (persisted={persisted_dimensions:?}, expected={dimensions}) — clearing and rebuilding index"
+            );
             // No persisted vectors for this dimension (first sync ever, or
             // the provider's dimension changed since last time) — whatever
             // is on disk for a *different* dimension can't be reused, so
@@ -1241,6 +1253,10 @@ pub async fn embedding_sync(
         let api_key = embedding_credentials_store::get_api_key();
         let provider = ensure_provider(&embedding_provider, &config, api_key)?;
         let dimensions = provider.dimensions();
+        eprintln!(
+            "[embedding] syncing via {:?} provider ({:?}, {dimensions} dims)",
+            config.kind, config.remote_model
+        );
         let builder = EmbeddingBuilder::new(provider);
 
         if !is_current_index_root(&index_root) {

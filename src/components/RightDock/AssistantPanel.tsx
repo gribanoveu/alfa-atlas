@@ -281,19 +281,19 @@ export function AssistantPanel({
           <>
             {!embeddingConfigured ? (
               <p className="assistant-chat-index-note">
-                Провайдер эмбеддингов не настроен — поиск по документации будет ограничен. Настройте
+                Провайдер эмбеддингов не настроен — поиск будет ограничен. Настройте
                 его в Настройки → Эмбеддинги.
               </p>
             ) : !indexReady ? (
               <p className="assistant-chat-index-note">
                 {busy && syncProgress ? (
-                  `Строится индекс документации: ${syncProgress.current}/${syncProgress.total}…`
+                  `Строится индекс: ${syncProgress.current}/${syncProgress.total}…`
                 ) : isRemoteEmbeddingProvider ? (
-                  "Индекс документации ещё строится — ответы будут менее точными, пока индексация не завершится."
+                  "Индекс ещё строится — ответы будут менее точными, пока индексация не завершится."
                 ) : (
                   <span className="assistant-chat-index-row">
                     <span>
-                      Индекс документации ещё не построен — поиск по документации будет менее
+                      Индекс ещё не построен — поиск по документации будет менее
                       точным. Нажмите, чтобы начать синхронизацию.
                     </span>
                     <button

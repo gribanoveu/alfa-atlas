@@ -60,7 +60,6 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
 
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
-  const [dimensions, setDimensions] = useState("");
   const [systemId, setSystemId] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState(false);
@@ -70,7 +69,6 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
     if (!config) return;
     setBaseUrl(config.remoteBaseUrl ?? "");
     setModel(config.remoteModel ?? "");
-    setDimensions(config.remoteDimensions != null ? String(config.remoteDimensions) : "");
     setSystemId(config.remoteSystemId ?? "");
   }, [config]);
 
@@ -213,23 +211,6 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
               disabled={busy}
               onChange={(event) => setModel(event.target.value)}
               onBlur={() => void updateConfig({ remoteModel: model.trim() || null })}
-            />
-          </label>
-          <label className="clone-modal-field">
-            <span className="clone-modal-label">Размерность вектора</span>
-            <input
-              className="clone-modal-input"
-              type="number"
-              placeholder="1536 (по умолчанию)"
-              value={dimensions}
-              disabled={busy}
-              onChange={(event) => setDimensions(event.target.value)}
-              onBlur={() => {
-                const parsed = Number(dimensions);
-                void updateConfig({
-                  remoteDimensions: dimensions.trim() && Number.isFinite(parsed) ? parsed : null,
-                });
-              }}
             />
           </label>
           <label className="clone-modal-field">
