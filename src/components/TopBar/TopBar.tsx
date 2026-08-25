@@ -102,6 +102,7 @@ export function TopBar({
   const [plansOpen, setPlansOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
+  const repoChipRef = useRef<HTMLDivElement>(null);
   const standardsSignalRef = useRef(openStandardsSettingsSignal);
   const llmSignalRef = useRef(openLlmSettingsSignal);
 
@@ -263,11 +264,11 @@ export function TopBar({
             <div className="topbar-context">
               <SyncStatusPill state={syncPillState} onClick={onSyncPillClick} />
               <span className="topbar-context-divider" aria-hidden />
-              <div className="repo-chip-wrapper">
+              <div className="repo-chip-wrapper" ref={repoChipRef}>
                 <button
                   type="button"
                   className="repo-chip"
-                  onClick={() => setRecentDropdownOpen(!recentDropdownOpen)}
+                  onClick={() => setRecentDropdownOpen((open) => !open)}
                   aria-expanded={recentDropdownOpen}
                   aria-haspopup="menu"
                   title="Недавние проекты"
@@ -278,6 +279,7 @@ export function TopBar({
                 </button>
                 {recentDropdownOpen ? (
                   <RecentProjectsDropdown
+                    anchorRef={repoChipRef}
                     onSelect={(root) => {
                       setRecentDropdownOpen(false);
                       onSelectProject?.(root);

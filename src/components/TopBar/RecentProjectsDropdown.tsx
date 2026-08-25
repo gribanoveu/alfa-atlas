@@ -8,16 +8,18 @@ import {
 import "./RecentProjectsDropdown.css";
 
 type RecentProjectsDropdownProps = {
+  anchorRef: React.RefObject<HTMLElement | null>;
   onSelect: (root: string) => void;
   onClose: () => void;
 };
 
 export function RecentProjectsDropdown({
+  anchorRef,
   onSelect,
   onClose,
 }: RecentProjectsDropdownProps) {
   const [recent, setRecent] = useState<RecentProject[]>([]);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -34,12 +36,11 @@ export function RecentProjectsDropdown({
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
-      if (
-        rootRef.current &&
-        !rootRef.current.contains(event.target as Node)
-      ) {
-        onClose();
+      const target = event.target as Node;
+      if (anchorRef.current?.contains(target) || menuRef.current?.contains(target)) {
+        return;
       }
+      onClose();
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -50,7 +51,7 @@ export function RecentProjectsDropdown({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [onClose]);
+  }, [anchorRef, onClose]);
 
   const handleRemove = async (root: string, event: React.MouseEvent) => {
     event.stopPropagation();
@@ -63,7 +64,7 @@ export function RecentProjectsDropdown({
   };
 
   return (
-    <div className="recent-projects-dropdown" ref={rootRef} role="menu">
+    <div className="recent-projects-dropdown" ref={menuRef} role="menu">
       <div className="recent-projects-header">Недавние проекты</div>
       {recent.length === 0 ? (
         <div className="recent-projects-empty">Список пуст</div>

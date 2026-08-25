@@ -139,7 +139,8 @@
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--bg-1);
-  overflow: hidden;
+  /* Keep visible so the recent-projects menu can extend below the chip row. */
+  overflow: visible;
 }
 
 .topbar-context-divider {
