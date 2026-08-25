@@ -70,6 +70,26 @@
   background: color-mix(in srgb, var(--accent, #58a6ff) 32%, transparent);
 }
 
+/* Вертикальный разделитель между «Добавить в чат» и «Больше». */
+.selection-ai-sep {
+  align-self: stretch;
+  width: 1px;
+  margin: 2px 2px;
+  background: var(--border);
+}
+
+/* Развёрнутый ряд «Больше»: все действия во второй строке панели. */
+.selection-ai-more-row {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
 .selection-ai-custom {
   display: flex;
   align-items: center;

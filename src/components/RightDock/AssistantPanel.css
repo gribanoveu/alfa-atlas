@@ -2498,6 +2498,148 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   position: relative;
 }
 
+.assistant-chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 4px;
+
+  /* Capped and internally scrollable — `.assistant-chat-input-row` is
+     `flex: none`, so an unbounded chip cloud here would keep growing at the
+     expense of the `flex: 1` transcript above it until the model's reply
+     scrolled out of view entirely. ~2 rows before it scrolls. */
+  max-height: 68px;
+  margin-bottom: 6px;
+  padding-right: 2px;
+
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.assistant-chat-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+
+  max-width: 100%;
+  padding: 3px 6px 3px 8px;
+
+  border: 1px solid var(--border);
+  border-radius: 999px;
+
+  background: var(--bg-2);
+  color: var(--text-1);
+
+  font-size: var(--font-ui-sm);
+  line-height: 1.35;
+}
+
+.assistant-chat-attachment-chip svg,
+.assistant-chat-attachment-row svg {
+  flex: none;
+  color: var(--text-2);
+}
+
+.assistant-chat-attachment-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.assistant-chat-attachment-remove {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-2);
+
+  cursor: pointer;
+}
+
+.assistant-chat-attachment-remove:hover {
+  background: var(--bg-1);
+  color: var(--text-0);
+}
+
+.assistant-chat-attachments-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+
+  padding: 3px 9px;
+
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+
+  background: none;
+  color: var(--text-2);
+
+  font-size: var(--font-ui-sm);
+  font-family: inherit;
+  line-height: 1.35;
+
+  cursor: pointer;
+}
+
+.assistant-chat-attachments-toggle:hover {
+  border-style: solid;
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+/* The expanded view: `.assistant-chat-input-row` is `flex: none`, so this
+   whole block — toggle plus list — must stay height-capped no matter how
+   many attachments there are, or it keeps eating into the transcript above
+   it (same reasoning as `.assistant-chat-attachments`'s cap). */
+.assistant-chat-attachments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  margin-bottom: 6px;
+}
+
+.assistant-chat-attachments-list-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  max-height: 128px;
+  padding-right: 2px;
+
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.assistant-chat-attachment-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  padding: 4px 6px;
+
+  border-radius: 6px;
+  color: var(--text-1);
+
+  font-size: var(--font-ui-sm);
+  line-height: 1.35;
+}
+
+.assistant-chat-attachment-row:hover {
+  background: var(--bg-2);
+}
+
+.assistant-chat-attachment-row .assistant-chat-attachment-label {
+  flex: 1;
+}
+
 .assistant-chat-input {
   width: 100%;
 

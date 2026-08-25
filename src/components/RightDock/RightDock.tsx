@@ -133,6 +133,17 @@ type RightDockProps = {
     busy: boolean;
     onUndo: (entry: GitActionLogEntry) => void;
   } | null;
+  /** «Добавить в чат» из редактора — запрос на вставку выделенного фрагмента
+   * в черновик ввода чата ассистента; потребляется в AssistantConversation. */
+  chatInsertRequest?: {
+    id: number;
+    text: string;
+    filePath: string | null;
+  } | null;
+  /** Вызывается сразу после того, как запрос выше вставлен в черновик —
+   * чистит его в App, чтобы перемонтирование AssistantConversation (смена
+   * чата, переключение инструментов дока) не вставило его повторно. */
+  onChatInsertHandled?: () => void;
 };
 
 export function RightDock({
@@ -146,6 +157,8 @@ export function RightDock({
   asciidoc,
   assistant,
   gitActionLog,
+  chatInsertRequest,
+  onChatInsertHandled,
 }: RightDockProps) {
   const open = Boolean(activeTool);
   const active = activeTool ? TOOL_DEFS[activeTool] : undefined;
@@ -237,6 +250,8 @@ export function RightDock({
                 onFileMoved={assistant.onFileMoved}
                 repoRoot={assistant.repoRoot}
                 activeFilePath={assistant.activeFilePath}
+                chatInsertRequest={chatInsertRequest ?? null}
+                onChatInsertHandled={onChatInsertHandled}
               />
             ) : (
               <div className="panel-empty">{active.empty}</div>

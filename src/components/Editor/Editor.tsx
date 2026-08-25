@@ -91,6 +91,9 @@ type EditorPaneProps = {
   providerId: string | null;
   /** True when the active provider has an API key and can serve `llmChatOnce`. */
   llmReady: boolean;
+  /** «Добавить в чат» из панели выделения — передаёт выделенный текст и путь
+   * файла (docs-root-relative) наверх, в App, для вставки в чат ассистента. */
+  onAddToChat?: (text: string, filePath: string | null) => void;
   /** Уведомляет о смене текущего экземпляра редактора (для команд Undo/Redo из меню). */
   onEditorInstanceChange?: (
     editor: MonacoEditor.IStandaloneCodeEditor | null,
@@ -130,6 +133,7 @@ export function EditorPane({
   editorFontSizePx,
   providerId,
   llmReady,
+  onAddToChat,
   onEditorInstanceChange,
   onMonacoInstanceChange,
 }: EditorPaneProps) {
@@ -272,6 +276,7 @@ export function EditorPane({
     providerId,
     llmReady,
     onContentChange: onChangeContent,
+    onAddToChat,
   });
 
   const selectionOverlay = (
@@ -280,6 +285,8 @@ export function EditorPane({
         state={selectionAi.state}
         onAction={selectionAi.runAction}
         onToggleCustom={selectionAi.setCustomPromptOpen}
+        onAddToChat={selectionAi.addToChat}
+        onToggleMore={selectionAi.setMoreExpanded}
       />
       <SelectionAiPreview
         state={selectionAi.state}

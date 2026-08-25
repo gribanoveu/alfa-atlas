@@ -407,8 +407,17 @@ function App() {
     tabId: string;
     text: string;
   } | null>(null);
+  // «Добавить в чат» из панели выделения — тот же паттерн «запрос с id», что и
+  // insertRequest выше: id нужен, чтобы повторная вставка того же текста не
+  // проглатывалась проверкой на равенство пропсов.
+  const [chatInsertRequest, setChatInsertRequest] = useState<{
+    id: number;
+    text: string;
+    filePath: string | null;
+  } | null>(null);
   const revealCounter = useRef(0);
   const insertCounter = useRef(0);
+  const chatInsertCounter = useRef(0);
   const skipNextPanelSync = useRef(false);
   const prevDirtyCount = useRef(0);
   const seededDocsRoot = useRef<string | null>(null);
@@ -1552,6 +1561,26 @@ function App() {
     setInsertRequest({ id: insertCounter.current, tabId, text });
   }, [editor.activeTabId]);
 
+  // Открывает док «Ассистент» (если закрыт) и кладёт выделенный фрагмент в
+  // черновик ввода чата — AssistantConversation подхватит запрос по id.
+  const handleAddSelectionToChat = useCallback(
+    (text: string, filePath: string | null) => {
+      chatInsertCounter.current += 1;
+      layout.setRightTool("assistant");
+      setChatInsertRequest({ id: chatInsertCounter.current, text, filePath });
+    },
+    [layout],
+  );
+
+  // AssistantConversation вызывает это сразу после того, как вставит запрос
+  // в черновик — очищает запрос здесь, в App, а не только локальным флагом
+  // «уже обработано» внутри AssistantConversation, потому что тот компонент
+  // перемонтируется (смена чата, переключение инструментов дока) и терял бы
+  // свою локальную отметку, повторно вставляя тот же запрос в новый черновик.
+  const handleChatInsertHandled = useCallback(() => {
+    setChatInsertRequest(null);
+  }, []);
+
   const toastMessage = editor.error ?? folderError;
   const visibleToastMessage =
     toastMessage && toastMessage !== dismissedToastMessage ? toastMessage : null;
@@ -1772,6 +1801,7 @@ function App() {
               editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
               providerId={selectionAiProviderId}
               llmReady={selectionAiLlmReady}
+              onAddToChat={handleAddSelectionToChat}
               onEditorInstanceChange={handleEditorInstanceChange}
               onMonacoInstanceChange={setMonacoInstance}
             />
@@ -1864,6 +1894,8 @@ function App() {
               repoRoot: project.repoRoot,
               activeFilePath: editor.activeTab?.path ?? null,
             }}
+            chatInsertRequest={chatInsertRequest}
+            onChatInsertHandled={handleChatInsertHandled}
             gitActionLog={
               hasProject
                 ? {

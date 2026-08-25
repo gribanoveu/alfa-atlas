@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, ChevronUp, Send, Sparkles, Square, X } from "lucide-react";
+import { AlertCircle, ArrowDown, ChevronUp, FileText, Send, Sparkles, Square, X } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import {
   ASSISTANT_SUGGESTIONS,
@@ -121,6 +121,78 @@ function trimTrailingZero(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }
 
+/** Форматирует вложение для отправки модели: строка с путём файла (если
+ * есть) плюс построчная цитата `> `. Вложения не попадают в черновик как
+ * текст (см. `ChatAttachment`) — это форматирование применяется только к
+ * итоговому сообщению в момент отправки. */
+function formatSelectionForChat(text: string, filePath: string | null): string {
+  const pathLine = filePath ? `Из \`${filePath}\`:\n` : "";
+  const quoted = text
+    .split("\n")
+    .map((line) => (line.trim() ? `> ${line}` : ">"))
+    .join("\n");
+  return `${pathLine}${quoted}`;
+}
+
+/** «Добавить в чат» из редактора — выделенный фрагмент, показанный в поле
+ * ввода как компактный чип (а не как сырой цитированный текст, который бы
+ * захламлял черновик), но по-прежнему уходящий модели целиком при отправке. */
+type ChatAttachment = {
+  id: number;
+  text: string;
+  filePath: string | null;
+};
+
+/** Подпись чипа: имя файла (или «Фрагмент» для вставок без пути) плюс
+ * количество строк/символов — ровно то, что нужно узнать вложение, не
+ * разворачивая его. */
+function attachmentLabel(attachment: ChatAttachment): string {
+  const lines = attachment.text.split("\n").length;
+  const sizeLabel = lines > 1 ? `${lines} строк` : `${attachment.text.length} симв.`;
+  const name = attachment.filePath?.split(/[/\\]/).pop();
+  return name ? `${name} · ${sizeLabel}` : `Фрагмент · ${sizeLabel}`;
+}
+
+/** Above this count, chips give way to a single «Все (N)» toggle instead of
+ * wrapping onto more rows — `.assistant-chat-input-row` is `flex: none`, so
+ * an unbounded chip cloud would keep growing at the expense of the
+ * transcript above it until the model's reply scrolled out of view. */
+const ATTACHMENTS_INLINE_LIMIT = 2;
+
+/** One attachment, rendered either as an inline pill (`variant="chip"`, the
+ * collapsed row) or as a full-width row (`variant="row"`, inside the
+ * expanded list) — same content either way, only the wrapping class
+ * differs. */
+function AttachmentChip({
+  attachment,
+  variant,
+  onRemove,
+}: {
+  attachment: ChatAttachment;
+  variant: "chip" | "row";
+  onRemove: () => void;
+}) {
+  const label = attachmentLabel(attachment);
+  return (
+    <span
+      className={variant === "chip" ? "assistant-chat-attachment-chip" : "assistant-chat-attachment-row"}
+      role="listitem"
+      title={attachment.text}
+    >
+      <FileText size={12} strokeWidth={1.75} aria-hidden />
+      <span className="assistant-chat-attachment-label">{label}</span>
+      <button
+        type="button"
+        className="assistant-chat-attachment-remove"
+        aria-label={`Убрать вложение: ${label}`}
+        onClick={onRemove}
+      >
+        <X size={10} strokeWidth={2} aria-hidden />
+      </button>
+    </span>
+  );
+}
+
 function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${trimTrailingZero(n / 1_000_000)}M`;
   if (n >= 1_000) return `${trimTrailingZero(n / 1_000)}K`;
@@ -204,6 +276,20 @@ type AssistantConversationProps = {
   taskDoneSoundEnabled: boolean;
   /** Settings-tab toggle — play a chime when an `askUser` card appears. */
   needAnswerSoundEnabled: boolean;
+  /** «Добавить в чат» из редактора — запрос на вставку выделенного фрагмента
+   * в черновик ввода. Обрабатывается по `id` (тот же паттерн «запрос с
+   * счётчиком», что и `insertRequest` в Editor.tsx), чтобы повторный клик по
+   * тому же выделению не проглатывался. */
+  chatInsertRequest: {
+    id: number;
+    text: string;
+    filePath: string | null;
+  } | null;
+  /** Вызывается сразу после вставки `chatInsertRequest` в черновик — сигнал
+   * родителю (App) очистить запрос. Без этого запрос пережил бы этот
+   * remount-able компонент (он монтируется заново при смене чата) и был бы
+   * вставлен повторно в свежий черновик следующего чата. */
+  onChatInsertHandled?: () => void;
 };
 
 /** The actual per-conversation surface: message transcript, model picker,
@@ -238,6 +324,8 @@ export function AssistantConversation({
   followUpSuggestionsEnabled,
   taskDoneSoundEnabled,
   needAnswerSoundEnabled,
+  chatInsertRequest,
+  onChatInsertHandled,
 }: AssistantConversationProps) {
   const contextLimit = activeProvider?.limit?.context ?? null;
 
@@ -404,6 +492,17 @@ export function AssistantConversation({
 
   const contextUsageRatio = contextLimit ? Math.min(1, contextTokens / contextLimit) : null;
   const [draft, setDraft] = useState("");
+  // Фрагменты из «Добавить в чат», показанные как чипы над полем ввода —
+  // не смешиваются с текстом черновика, но подставляются в отправляемое
+  // сообщение целиком (см. `handleSend`).
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  // Свёрнут ли список вложений за кнопку «Все (N)» — сбрасывается при
+  // отправке, чтобы следующая порция вложений снова начиналась свёрнутой.
+  const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
+  // Последний обработанный «Добавить в чат» — защита от повторного
+  // срабатывания на том же объекте запроса при перерисовках (тот же приём,
+  // что и `lastHandledInsertIdRef` в Editor.tsx).
+  const lastHandledChatInsertIdRef = useRef(0);
   // The suggestion node the user most recently clicked (top-level or a
   // follow-up) — drives which `followUps` row (if any) shows above the
   // transcript. Tracking the node itself (not matching on message text)
@@ -477,6 +576,26 @@ export function AssistantConversation({
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
 
+  // «Добавить в чат» из редактора — добавляем чип вложения (не трогаем
+  // текст черновика) и фокусим ввод. Пустые выделения (по факту не доходят
+  // сюда) игнорируем. `onChatInsertHandled` clears the request in App right
+  // after — this component remounts on chat switch (`key={currentChatId}`
+  // in AssistantPanel), so leaving the request live would replay it as a
+  // duplicate attachment on the next chat; `lastHandledChatInsertIdRef` only
+  // guards against a double-fire within this one mount.
+  useEffect(() => {
+    if (!chatInsertRequest || chatInsertRequest.id === lastHandledChatInsertIdRef.current) return;
+    lastHandledChatInsertIdRef.current = chatInsertRequest.id;
+    if (chatInsertRequest.text.trim()) {
+      setAttachments((prev) => [
+        ...prev,
+        { id: chatInsertRequest.id, text: chatInsertRequest.text, filePath: chatInsertRequest.filePath },
+      ]);
+      chatInputRef.current?.focus();
+    }
+    onChatInsertHandled?.();
+  }, [chatInsertRequest, onChatInsertHandled]);
+
   // Reset the fetched model list (and close the menu) whenever the active
   // provider itself changes, so a stale list from a different provider
   // never briefly shows.
@@ -534,13 +653,20 @@ export function AssistantConversation({
 
   const handleSend = () => {
     const text = draft.trim();
-    if (!text || sending) return;
+    if ((!text && attachments.length === 0) || sending) return;
+    // Attachment chips carry no text of their own in the draft — the model
+    // still needs their content, so it's woven in here, at the point the
+    // message actually leaves, ahead of whatever the user typed.
+    const quotes = attachments.map((a) => formatSelectionForChat(a.text, a.filePath));
+    const combined = [...quotes, text].filter(Boolean).join("\n\n");
     setDraft("");
+    setAttachments([]);
+    setAttachmentsExpanded(false);
     // Sending a message always means "follow the reply", even if the user
     // had scrolled up to reread something earlier in the transcript.
     pinnedToBottomRef.current = true;
     setShowJumpToBottom(false);
-    void sendMessage(text);
+    void sendMessage(combined);
   };
 
   return (
@@ -781,6 +907,57 @@ export function AssistantConversation({
       ) : null}
       <div className={`assistant-chat-input-row${showFollowUpBar ? " has-followups" : ""}`}>
         <div className="assistant-chat-input-wrap">
+          {attachments.length === 0 ? null : attachments.length <= ATTACHMENTS_INLINE_LIMIT ? (
+            <div className="assistant-chat-attachments" role="list">
+              {attachments.map((attachment) => (
+                <AttachmentChip
+                  key={attachment.id}
+                  attachment={attachment}
+                  variant="chip"
+                  onRemove={() => setAttachments((prev) => prev.filter((a) => a.id !== attachment.id))}
+                />
+              ))}
+            </div>
+          ) : !attachmentsExpanded ? (
+            <div className="assistant-chat-attachments" role="list">
+              {attachments.slice(0, ATTACHMENTS_INLINE_LIMIT).map((attachment) => (
+                <AttachmentChip
+                  key={attachment.id}
+                  attachment={attachment}
+                  variant="chip"
+                  onRemove={() => setAttachments((prev) => prev.filter((a) => a.id !== attachment.id))}
+                />
+              ))}
+              <button
+                type="button"
+                className="assistant-chat-attachments-toggle"
+                onClick={() => setAttachmentsExpanded(true)}
+              >
+                Все ({attachments.length})
+              </button>
+            </div>
+          ) : (
+            <div className="assistant-chat-attachments-list">
+              <button
+                type="button"
+                className="assistant-chat-attachments-toggle"
+                onClick={() => setAttachmentsExpanded(false)}
+              >
+                <ChevronUp size={12} aria-hidden />
+                Свернуть
+              </button>
+              <div className="assistant-chat-attachments-list-items" role="list">
+                {attachments.map((attachment) => (
+                  <AttachmentChip
+                    key={attachment.id}
+                    attachment={attachment}
+                    variant="row"
+                    onRemove={() => setAttachments((prev) => prev.filter((a) => a.id !== attachment.id))}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           <textarea
             ref={chatInputRef}
             className="assistant-chat-input"
@@ -811,7 +988,7 @@ export function AssistantConversation({
               <button
                 type="button"
                 className="assistant-chat-send"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() && attachments.length === 0}
                 aria-label="Отправить"
                 onClick={handleSend}
               >

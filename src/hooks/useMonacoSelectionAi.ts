@@ -46,6 +46,9 @@ export type SelectionAiUiState = {
   error: string | null;
   activeAction: SelectionAiAction | null;
   customPromptOpen: boolean;
+  /** Whether the collapsed toolbar has been expanded to show all actions
+   * («Больше» clicked) — collapsed shows only «Добавить в чат» + «Больше». */
+  moreExpanded: boolean;
   tooLong: boolean;
   llmReady: boolean;
 };
@@ -58,6 +61,9 @@ type UseMonacoSelectionAiOptions = {
   providerId: string | null;
   llmReady: boolean;
   onContentChange: (content: string) => void;
+  /** Called by the toolbar's «Добавить в чат» with the stored selection and
+   * its file's docs-root-relative path (`null` for virtual tabs). */
+  onAddToChat?: (text: string, filePath: string | null) => void;
 };
 
 /** Delay after pointer-up / keyboard selection settle before showing the bar. */
@@ -165,15 +171,18 @@ export function useMonacoSelectionAi({
   providerId,
   llmReady,
   onContentChange,
+  onAddToChat,
 }: UseMonacoSelectionAiOptions): {
   state: SelectionAiUiState;
   overlayRef: RefObject<HTMLDivElement | null>;
   runAction: (action: SelectionAiAction, customPrompt?: string) => void;
+  addToChat: () => void;
   accept: () => void;
   reject: () => void;
   retry: () => void;
   dismiss: () => void;
   setCustomPromptOpen: (open: boolean) => void;
+  setMoreExpanded: (open: boolean) => void;
 } {
   const [phase, setPhase] = useState<SelectionAiPhase>("hidden");
   const [position, setPosition] = useState<SelectionAiPosition | null>(null);
@@ -182,6 +191,7 @@ export function useMonacoSelectionAi({
   const [error, setError] = useState<string | null>(null);
   const [activeAction, setActiveAction] = useState<SelectionAiAction | null>(null);
   const [customPromptOpen, setCustomPromptOpen] = useState(false);
+  const [moreExpanded, setMoreExpanded] = useState(false);
   const [tooLong, setTooLong] = useState(false);
 
   const overlayRef = useRef<HTMLDivElement | null>(null);
@@ -201,6 +211,8 @@ export function useMonacoSelectionAi({
 
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
+  const onAddToChatRef = useRef(onAddToChat);
+  onAddToChatRef.current = onAddToChat;
   const llmReadyRef = useRef(llmReady);
   llmReadyRef.current = llmReady;
   const providerIdRef = useRef(providerId);
@@ -224,6 +236,7 @@ export function useMonacoSelectionAi({
     setError(null);
     setActiveAction(null);
     setCustomPromptOpen(false);
+    setMoreExpanded(false);
     setTooLong(false);
   }, []);
 
@@ -276,6 +289,7 @@ export function useMonacoSelectionAi({
       setError(null);
       setActiveAction(null);
       setCustomPromptOpen(false);
+      setMoreExpanded(false);
       setPhase("toolbar");
     },
     [dismiss, editor, monaco],
@@ -434,7 +448,7 @@ export function useMonacoSelectionAi({
       previewHeightRef.current,
     );
     if (pos) setPosition(pos);
-  }, [phase, selectedText, suggestedText, customPromptOpen, editor, monaco]);
+  }, [phase, selectedText, suggestedText, customPromptOpen, moreExpanded, editor, monaco]);
 
   useEffect(() => {
     dismiss();
@@ -541,11 +555,41 @@ export function useMonacoSelectionAi({
     dismiss();
   }, [dismiss]);
 
+  // «Добавить в чат» needs neither the LLM nor the length cap — it only
+  // moves text into the chat draft, no revision request is made. The
+  // toolbar keeps its own button enabled accordingly.
+  const addToChat = useCallback(() => {
+    const stored = storedRef.current;
+    if (!stored) return;
+    const tab = activeTabRef.current;
+    // Only project tabs carry a docs-root-relative path (see EditorTab's
+    // `origin` doc comment in useEditorTabs.ts) — external tabs carry an
+    // absolute OS path and virtual/plan tabs a synthetic `plan:<id>`, neither
+    // of which should be shown to the user as "the file this came from".
+    const filePath = tab && tab.origin === "project" ? tab.path : null;
+    onAddToChatRef.current?.(stored.text, filePath);
+    dismiss();
+  }, [dismiss]);
+
   const retry = useCallback(() => {
     const action = activeAction;
     if (!action) return;
     runAction(action, lastCustomPromptRef.current);
   }, [activeAction, runAction]);
+
+  // Toggling the collapsed row is a pure disclosure action, not a
+  // commitment like typing a custom prompt — it must not freeze selection
+  // tracking the way clicking inside the toolbar normally does (the global
+  // pointerdown listener above sets `holdSelectionRef` on any click inside
+  // the overlay, incl. this button). Without this reset, making a *new*
+  // selection elsewhere after clicking «Больше» is silently ignored —
+  // `onDidChangeCursorSelection` short-circuits while the ref is held — so
+  // the toolbar looks stuck on the old selection with no visible way out
+  // short of Escape.
+  const toggleMore = useCallback((open: boolean) => {
+    holdSelectionRef.current = false;
+    setMoreExpanded(open);
+  }, []);
 
   const state: SelectionAiUiState = {
     phase,
@@ -555,6 +599,7 @@ export function useMonacoSelectionAi({
     error,
     activeAction,
     customPromptOpen,
+    moreExpanded,
     tooLong,
     llmReady,
   };
@@ -563,10 +608,12 @@ export function useMonacoSelectionAi({
     state,
     overlayRef,
     runAction,
+    addToChat,
     accept,
     reject,
     retry,
     dismiss,
     setCustomPromptOpen,
+    setMoreExpanded: toggleMore,
   };
 }

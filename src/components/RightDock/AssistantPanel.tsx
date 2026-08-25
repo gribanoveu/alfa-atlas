@@ -59,6 +59,19 @@ type AssistantPanelProps = {
    * when nothing's open — forwarded to `AssistantConversation` so
    * `SemanticSearch` can boost results related to it. */
   activeFilePath: string | null;
+  /** «Добавить в чат» из редактора — запрос на вставку выделенного фрагмента
+   * в черновик ввода чата. Приход нового id закрывает открытый архив (иначе
+   * диалог не смонтирован и вставка была бы потеряна); саму вставку
+   * выполняет `AssistantConversation`. */
+  chatInsertRequest?: {
+    id: number;
+    text: string;
+    filePath: string | null;
+  } | null;
+  /** Вызывается сразу после того, как запрос выше вставлен в черновик —
+   * чистит его в App, чтобы перемонтирование `AssistantConversation` (смена
+   * чата, переключение инструментов дока) не вставило его повторно. */
+  onChatInsertHandled?: () => void;
 };
 
 /** This panel is the assistant's actual interaction surface. It owns
@@ -92,6 +105,8 @@ export function AssistantPanel({
   onFileMoved,
   repoRoot,
   activeFilePath,
+  chatInsertRequest,
+  onChatInsertHandled,
 }: AssistantPanelProps) {
   const {
     config: embeddingConfig,
@@ -194,6 +209,13 @@ export function AssistantPanel({
     setArchiveOpen(false);
     chatHistory.newChat();
   };
+
+  // A selection «Добавить в чат» while the archive view is open must close
+  // it first — the conversation (and its draft) isn't mounted behind the
+  // archive, so the insert would otherwise be silently lost.
+  useEffect(() => {
+    if (chatInsertRequest) setArchiveOpen(false);
+  }, [chatInsertRequest]);
 
   // Format is chosen up front (via `ChatHistoryMenu`'s popover) so the save
   // dialog's `filters`/`defaultPath` extension are unambiguous — Tauri's
@@ -344,6 +366,8 @@ export function AssistantPanel({
                 followUpSuggestionsEnabled={!(settings?.followUpSuggestionsDisabled ?? false)}
                 taskDoneSoundEnabled={settings?.taskDoneSoundEnabled ?? true}
                 needAnswerSoundEnabled={settings?.needAnswerSoundEnabled ?? true}
+                chatInsertRequest={chatInsertRequest ?? null}
+                onChatInsertHandled={onChatInsertHandled}
               />
             )}
           </>
