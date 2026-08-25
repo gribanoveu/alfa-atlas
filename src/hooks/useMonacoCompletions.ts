@@ -388,9 +388,22 @@ export function useMonacoCompletions(
     const mapPathSuggestions = (
       built: DocPathSuggestion[],
       range: Monaco.IRange,
-      opts?: { imageDocsRelative?: (insertText: string) => string },
+      opts?: {
+        imageDocsRelative?: (insertText: string) => string;
+        /** Close a file path so the AsciiDoc macro is valid (`path[]`). */
+        fileClose?: "brackets" | "xref-snippet";
+      },
     ): Monaco.languages.CompletionItem[] =>
       built.map((s) => {
+        let insertText = s.insertText;
+        let insertTextRules: Monaco.languages.CompletionItemInsertTextRule | undefined;
+        if (s.kind === "file" && opts?.fileClose === "brackets") {
+          insertText = `${s.insertText}[]`;
+        } else if (s.kind === "file" && opts?.fileClose === "xref-snippet") {
+          insertText = `${s.insertText}$0[]`;
+          insertTextRules =
+            monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+        }
         const base: Monaco.languages.CompletionItem = {
           label: s.label,
           detail: s.detail,
@@ -398,10 +411,11 @@ export function useMonacoCompletions(
             s.kind === "folder"
               ? monaco.languages.CompletionItemKind.Folder
               : monaco.languages.CompletionItemKind.File,
-          insertText: s.insertText,
+          insertText,
           filterText: s.filterText,
           sortText: s.sortText,
           range,
+          ...(insertTextRules ? { insertTextRules } : {}),
           ...(s.kind === "folder" ? { command: { ...RETRIGGER_SUGGEST_COMMAND } } : {}),
         };
         if (s.kind === "file" && opts?.imageDocsRelative) {
@@ -417,7 +431,8 @@ export function useMonacoCompletions(
       docs: Document[],
       partial: string,
       range: Monaco.IRange,
-      kinds?: readonly DocumentType[],
+      kinds: readonly DocumentType[] | undefined,
+      fileClose: "brackets" | "xref-snippet",
     ) => {
       const built = buildDocPathSuggestions({
         entries: documentsToPathEntries(docs),
@@ -429,7 +444,7 @@ export function useMonacoCompletions(
         excludeSelf: true,
         pathSpace: "repo",
       });
-      return mapPathSuggestions(built, range);
+      return mapPathSuggestions(built, range, { fileClose });
     };
 
     // 1. include:: — path list. `findOpenMacroTarget` keeps this alive across
@@ -448,6 +463,7 @@ export function useMonacoCompletions(
               open.partial,
               open.range,
               INCLUDE_DOC_KINDS,
+              "brackets",
             ),
             incomplete: true,
           };
@@ -472,6 +488,7 @@ export function useMonacoCompletions(
                 open.partial,
                 open.range,
                 XREF_DOC_KINDS,
+                "xref-snippet",
               ),
               incomplete: true,
             };
@@ -489,7 +506,7 @@ export function useMonacoCompletions(
             suggestions: anchors.map((a) => ({
               label: a.id,
               kind: monaco.languages.CompletionItemKind.Reference,
-              insertText: a.id,
+              insertText: `${a.id}[]`,
               range: anchorRange,
             })),
           };
@@ -521,6 +538,7 @@ export function useMonacoCompletions(
           });
           return {
             suggestions: mapPathSuggestions(built, open.range, {
+              fileClose: "brackets",
               imageDocsRelative: (insertText) =>
                 resolveRelativeToDocument(insertText, sourceDocsRelative),
             }),

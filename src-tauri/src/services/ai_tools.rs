@@ -28,6 +28,8 @@ use crate::domain::ai_tools::{
 use crate::domain::asciidoc_element_templates::{
     find_many as find_asciidoc_templates, ASCIIDOC_ELEMENT_TEMPLATES,
 };
+use crate::domain::asciidoc_macro_brackets::ensure_macro_attribute_brackets;
+use crate::domain::supported_files;
 use crate::domain::chunk_index::{qualified_name_for, ChunkMetadata};
 use crate::domain::conversation_mode::{mode_tools, ConversationMode};
 use crate::domain::git::GitDiffScope;
@@ -2226,6 +2228,17 @@ fn slice_lines(content: String, start_line: Option<u32>, end_line: Option<u32>) 
     FileSlice { content: sliced, start_line: start, end_line: end, total_lines }
 }
 
+/// Append `[]` to bare `include::`/`image::`/`xref:` targets in AsciiDoc
+/// files the assistant writes, so a missing attribute list does not make
+/// the macro invisible to the index and diagnostics.
+fn close_adoc_macro_brackets(docs_rel: &str, content: String) -> String {
+    if supported_files::is_asciidoc(docs_rel) {
+        ensure_macro_attribute_brackets(&content)
+    } else {
+        content
+    }
+}
+
 /// Resolves the path against the access-mode root, then requires it under
 /// `docs_root` — Full-repo widens what the assistant can *read*, not what
 /// it may write. Reuses `docs_fs::write_project_file` with the docs-relative
@@ -2247,7 +2260,8 @@ fn write_file(
         Err(ProjectError::NotFound(_)) => String::new(),
         Err(e) => return Err(e.into()),
     };
-    docs_fs::write_project_file(&docs_root, &docs_rel, &args.content)?;
+    let content = close_adoc_macro_brackets(&docs_rel, args.content);
+    docs_fs::write_project_file(&docs_root, &docs_rel, &content)?;
     // Best-effort: keeps the in-memory index in step with this write
     // immediately, rather than only once the async file-watcher gets to it
     // — which otherwise regularly still lags behind by the time the next
@@ -2257,7 +2271,7 @@ fn write_file(
     // index update lagged (e.g. `EmbeddingDeps::empty()` in tests, or no
     // project open).
     let _ = deps.workspace_index.update_document(scope.docs_root.join(&docs_rel));
-    let diff = text_diff::diff_stats(&old, &args.content);
+    let diff = text_diff::diff_stats(&old, &content);
     Ok((access_rel, diff))
 }
 
@@ -2280,6 +2294,7 @@ fn edit_file(
     let docs_root = scope.docs_root.to_string_lossy();
     let content = docs_fs::read_project_file(&docs_root, &docs_rel)?;
     let edited = apply_edits(&content, &args.edits, fast_apply)?;
+    let edited = close_adoc_macro_brackets(&docs_rel, edited);
     docs_fs::write_project_file(&docs_root, &docs_rel, &edited)?;
     // See `write_file`'s matching comment — same best-effort sync.
     let _ = deps.workspace_index.update_document(scope.docs_root.join(&docs_rel));
@@ -3903,6 +3918,20 @@ mod tests {
 
         write(&scope, "new.adoc", "= Replaced\n").unwrap();
         assert_eq!(fs::read_to_string(docs.join("new.adoc")).unwrap(), "= Replaced\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn write_file_closes_bare_asciidoc_macros() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        write(&scope, "inc.adoc", "include::request.adoc\n").unwrap();
+        assert_eq!(
+            fs::read_to_string(docs.join("inc.adoc")).unwrap(),
+            "include::request.adoc[]\n"
+        );
 
         fs::remove_dir_all(&repo).ok();
     }

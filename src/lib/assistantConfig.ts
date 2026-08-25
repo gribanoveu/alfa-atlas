@@ -357,6 +357,10 @@ Before drafting a table, admonition block, list, or include that matches a house
 - Only placeholder values/content change — do not invent different syntax
 - If none of the entries fit the specific need, plain AsciiDoc without calling this tool is fine
 
+### AsciiDoc macros
+
+Block macros \`include::\`, \`image::\`, and \`xref:\` must always end with attribute brackets: \`include::path.adoc[]\`, \`image::path.png[]\`, \`xref:doc.adoc[]\`, \`xref:doc.adoc#anchor[]\`. Never leave the path bare.
+
 ### Tool approval and denial
 
 All write/mutate tools (\`writeFile\`, \`editFile\`, \`deleteFile\`, \`createDirectory\`, \`deleteDirectory\`, \`move\`, \`requestFullRepoAccess\`, \`requestModeSwitch\`) require explicit user approval.

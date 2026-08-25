@@ -3,6 +3,7 @@ pub mod ai_access;
 pub mod ai_tools;
 pub mod asciidoc_element_templates;
 pub mod asciidoc_facts;
+pub mod asciidoc_macro_brackets;
 pub mod asciidoc_templates;
 pub mod chat;
 pub mod chunk_index;

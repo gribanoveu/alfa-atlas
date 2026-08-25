@@ -8,6 +8,7 @@ import { useMonacoDefinitions } from "../../hooks/useMonacoDefinitions";
 import { useMonacoDiagnostics } from "../../hooks/useMonacoDiagnostics";
 import { useMonacoErrorsWidget } from "../../hooks/useMonacoErrorsWidget";
 import { useMonacoIncludeGutter } from "../../hooks/useMonacoIncludeGutter";
+import { useMonacoMacroBrackets } from "../../hooks/useMonacoMacroBrackets";
 import { useMonacoOutline } from "../../hooks/useMonacoOutline";
 import { useMonacoSelectionAi } from "../../hooks/useMonacoSelectionAi";
 import { useMonacoSpellcheck } from "../../hooks/useMonacoSpellcheck";
@@ -234,6 +235,7 @@ export function EditorPane({
   }, [monaco, textEditor, activeTab, isImageTab]);
 
   useMonacoCompletions(monaco, completionsEnabled, docsRoot, gitGutter?.repoRoot ?? null);
+  useMonacoMacroBrackets(monaco, textEditor);
   useMonacoOutline(monaco);
   useMonacoDefinitions(monaco, docsRoot, gitGutter?.repoRoot ?? null);
   useMonacoDiagnostics(monaco, textEditor, diagnostics, projectTextTab?.path ?? null);
