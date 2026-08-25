@@ -11,6 +11,7 @@ import { SettingsDialog } from "../Settings/SettingsDialog";
 import type { SectionId } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
 import { ToolCallLogModal } from "../ToolLog/ToolCallLogModal";
+import { MemoryLogModal } from "../MemoryLog/MemoryLogModal";
 import { PlansModal } from "../Plans/PlansModal";
 import { AboutModal } from "./AboutModal";
 import { MenuBar } from "./MenuBar";
@@ -97,6 +98,7 @@ export function TopBar({
   const [cloneOpen, setCloneOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toolLogOpen, setToolLogOpen] = useState(false);
+  const [memoryLogOpen, setMemoryLogOpen] = useState(false);
   const [plansOpen, setPlansOpen] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
@@ -185,6 +187,9 @@ export function TopBar({
           break;
         case "tools.toolLog":
           setToolLogOpen(true);
+          break;
+        case "tools.memoryLog":
+          setMemoryLogOpen(true);
           break;
         case "tools.plans":
           setPlansOpen(true);
@@ -329,6 +334,9 @@ export function TopBar({
         />
       ) : null}
       {toolLogOpen ? <ToolCallLogModal projectRoot={projectRoot} onClose={() => setToolLogOpen(false)} /> : null}
+      {memoryLogOpen ? (
+        <MemoryLogModal projectRoot={projectRoot} onClose={() => setMemoryLogOpen(false)} />
+      ) : null}
       {plansOpen ? (
         <PlansModal
           onClose={() => setPlansOpen(false)}

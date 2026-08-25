@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS chats (
   archived   INTEGER NOT NULL DEFAULT 0,
   todos      TEXT NOT NULL DEFAULT '[]',
   active_plan_id TEXT,
+  memory_extracted_ordinal INTEGER NOT NULL DEFAULT -1,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -81,6 +82,7 @@ fn open() -> Result<Connection, ChatStoreError> {
     conn.execute_batch(SCHEMA_SQL)?;
     migrate_add_todos_column(&conn)?;
     migrate_add_active_plan_id_column(&conn)?;
+    migrate_add_memory_extracted_ordinal_column(&conn)?;
     Ok(conn)
 }
 
@@ -117,6 +119,22 @@ fn migrate_add_active_plan_id_column(conn: &Connection) -> Result<(), ChatStoreE
         .any(|name| name == "active_plan_id");
     if !has_col {
         conn.execute("ALTER TABLE chats ADD COLUMN active_plan_id TEXT", [])?;
+    }
+    Ok(())
+}
+
+fn migrate_add_memory_extracted_ordinal_column(conn: &Connection) -> Result<(), ChatStoreError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(chats)")?;
+    let has_col = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "memory_extracted_ordinal");
+    if !has_col {
+        conn.execute(
+            "ALTER TABLE chats ADD COLUMN memory_extracted_ordinal INTEGER NOT NULL DEFAULT -1",
+            [],
+        )?;
     }
     Ok(())
 }
@@ -247,6 +265,44 @@ pub fn save_chat(
     tx.commit()?;
 
     load_summary(&conn, chat_id)?.ok_or_else(|| ChatStoreError::NotFound(chat_id.to_string()))
+}
+
+/// Last message ordinal the memory pipeline has already processed for this
+/// chat (`-1` = never). Missing chat → `NotFound`.
+pub fn memory_extracted_ordinal(chat_id: &str) -> Result<i64, ChatStoreError> {
+    let conn = open()?;
+    conn.query_row(
+        "SELECT memory_extracted_ordinal FROM chats WHERE id = ?1",
+        params![chat_id],
+        |row| row.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| ChatStoreError::NotFound(chat_id.to_string()))
+}
+
+pub fn set_memory_extracted_ordinal(chat_id: &str, ordinal: i64) -> Result<(), ChatStoreError> {
+    let conn = open()?;
+    let changed = conn.execute(
+        "UPDATE chats SET memory_extracted_ordinal = ?1 WHERE id = ?2",
+        params![ordinal, chat_id],
+    )?;
+    if changed == 0 {
+        return Err(ChatStoreError::NotFound(chat_id.to_string()));
+    }
+    Ok(())
+}
+
+/// Repo root stored on the chat row — used by the memory pipeline to refuse
+/// writing OptMem for a different project than the one that owns the chat.
+pub fn chat_repo_root(chat_id: &str) -> Result<String, ChatStoreError> {
+    let conn = open()?;
+    conn.query_row(
+        "SELECT repo_root FROM chats WHERE id = ?1",
+        params![chat_id],
+        |row| row.get(0),
+    )
+    .optional()?
+    .ok_or_else(|| ChatStoreError::NotFound(chat_id.to_string()))
 }
 
 pub fn set_archived(chat_id: &str, archived: bool) -> Result<(), ChatStoreError> {
@@ -441,6 +497,53 @@ mod tests {
                     .unwrap();
             assert_eq!(updated.created_at, 1); // preserved across migration + upsert
             assert_eq!(load_chat("chat-old").unwrap().todos, vec![sample_todo("t1", "x")]);
+        });
+    }
+
+    #[test]
+    fn memory_extracted_ordinal_defaults_to_minus_one_and_survives_resave() {
+        with_temp_home(|| {
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
+            assert_eq!(memory_extracted_ordinal("chat-1").unwrap(), -1);
+            set_memory_extracted_ordinal("chat-1", 0).unwrap();
+            save_chat(
+                "/repo/one",
+                "chat-1",
+                "t",
+                &[sample_message("a"), sample_message("b")],
+                &[],
+                None,
+            )
+            .unwrap();
+            assert_eq!(memory_extracted_ordinal("chat-1").unwrap(), 0);
+            assert_eq!(chat_repo_root("chat-1").unwrap(), "/repo/one");
+        });
+    }
+
+    #[test]
+    fn opening_a_pre_existing_database_without_memory_extracted_ordinal_migrates() {
+        with_temp_home(|| {
+            let path = db_path().unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            {
+                let legacy = Connection::open(&path).unwrap();
+                legacy
+                    .execute_batch(
+                        "CREATE TABLE chats (
+                           id TEXT PRIMARY KEY, repo_root TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+                           archived INTEGER NOT NULL DEFAULT 0, todos TEXT NOT NULL DEFAULT '[]',
+                           created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                         );
+                         CREATE TABLE messages (
+                           chat_id TEXT NOT NULL, ordinal INTEGER NOT NULL, data TEXT NOT NULL,
+                           PRIMARY KEY (chat_id, ordinal)
+                         );
+                         INSERT INTO chats (id, repo_root, title, archived, todos, created_at, updated_at)
+                           VALUES ('chat-old', '/repo/one', 'old chat', 0, '[]', 1, 1);",
+                    )
+                    .unwrap();
+            }
+            assert_eq!(memory_extracted_ordinal("chat-old").unwrap(), -1);
         });
     }
 }

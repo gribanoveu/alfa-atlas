@@ -27,8 +27,8 @@
       "label": "EVC",
       "limit": 60000,
       "windowMinutes": 30,
-      "workFromHour": 8,
-      "workToHour": 21,
+      "workFromHour": null,
+      "workToHour": null,
       "timezoneOffsetHours": 3
     }
   ]

@@ -2,6 +2,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   BookOpen,
+  Brain,
   Clipboard,
   Copy,
   FolderOpen,
@@ -173,6 +174,13 @@ const MENUS: MenuDef[] = [
         label: "Журнал вызовов…",
         action: "tools.toolLog",
         icon: ScrollText,
+      },
+      {
+        type: "item",
+        id: "memoryLog",
+        label: "Память ассистента…",
+        action: "tools.memoryLog",
+        icon: Brain,
       },
       {
         type: "item",

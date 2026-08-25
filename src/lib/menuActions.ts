@@ -20,6 +20,7 @@ export type MenuActionId =
   | "git.push"
   | "tools.settings"
   | "tools.toolLog"
+  | "tools.memoryLog"
   | "tools.plans"
   | "help.about"
   | "help.docs"

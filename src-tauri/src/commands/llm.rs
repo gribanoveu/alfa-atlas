@@ -59,7 +59,7 @@ use crate::domain::repo_index::FileId;
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
 use crate::services::ai_tools::{self, EmbeddingDeps, ToolCallLogContext};
 use crate::services::{
-    agent_memory, chunk_builder::ChunkIndex, llm_config, llm_rate_limit, repo_index::RepositoryIndex,
+    chunk_builder::ChunkIndex, llm_config, llm_rate_limit, repo_index::RepositoryIndex,
     workspace_index::WorkspaceIndex,
 };
 use crate::domain::llm_rate_limit::RateLimitSnapshot;
@@ -782,67 +782,7 @@ fn run_tool_loop(
                 tool_call_id: Some(call.id.clone()),
                 tool_calls: vec![],
             });
-
-            // After a successful memory note/forget, drain pending TREE
-            // compressions with a tool-free side call — the model never sees
-            // `nap`. Failures leave blocks pending; inject wake tolerates that.
-            if matches!(&outcome, Ok(ToolResult::Memory { .. })) {
-                if let Some(mem_scope) = memory_op_scope_for_drain(call) {
-                    let provider = ctx.provider;
-                    let model = ctx.model;
-                    let debug = ctx.settings.debug_logging;
-                    let provider_id = ctx.provider_id;
-                    let app = ctx.app;
-                    let _ = agent_memory::drain_pending_naps(mem_scope, &scope.repo_root, |prompt| {
-                        let request = ChatRequest {
-                            messages: vec![LlmMessage {
-                                role: LlmRole::User,
-                                content: Some(prompt.to_string()),
-                                tool_call_id: None,
-                                tool_calls: vec![],
-                            }],
-                            tools: Vec::new(),
-                            model: model.to_string(),
-                        };
-                        llm_debug_log::log_request(
-                            debug,
-                            provider_id,
-                            llm_debug_log::ONCE_ROUND,
-                            &request,
-                        );
-                        let outcome = provider.chat(request).map_err(|e| e.to_string());
-                        llm_debug_log::log_chat_once_result(debug, provider_id, &outcome);
-                        if let Ok(ref response) = outcome {
-                            if let Some(usage) = response.usage {
-                                llm_rate_limit::record(provider_id, usage.completion_tokens);
-                                let _ = app.emit(RATE_LIMIT_CHANGED_EVENT, ());
-                            }
-                        }
-                        outcome.map(|resp| resp.content.unwrap_or_default())
-                    });
-                }
-            }
         }
-    }
-}
-
-/// `note`/`forget` scopes that should trigger harness auto-nap after a
-/// successful `memory` tool result. Other ops (and malformed args) skip drain.
-fn memory_op_scope_for_drain(call: &LlmToolCall) -> Option<agent_memory::MemoryScope> {
-    if call.name != "memory" {
-        return None;
-    }
-    #[derive(serde::Deserialize)]
-    struct Fields {
-        op: Option<String>,
-        scope: Option<String>,
-    }
-    let parsed: Fields = serde_json::from_str(&call.arguments).ok()?;
-    match parsed.op.as_deref() {
-        Some("note" | "forget") => {
-            agent_memory::MemoryScope::from_wire(parsed.scope.as_deref()?).ok()
-        }
-        _ => None,
     }
 }
 

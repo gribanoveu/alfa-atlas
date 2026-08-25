@@ -42,6 +42,7 @@ export function LlmTab() {
     loadModels,
     testConnection,
     setRateLimitEnabled,
+    setMemoryExtractionEnabled,
   } = useLlmSetup();
 
   const activeId = settings?.activeProviderId ?? providers[0]?.id ?? null;
@@ -510,6 +511,30 @@ export function LlmTab() {
         <p className="settings-hint">
           Для AlfaGen — скользящее окно EVC. Выключите, чтобы скрыть чип и не
           записывать расход токенов.
+        </p>
+      </div>
+
+      <hr className="credentials-divider" />
+
+      <div className="settings-section-title">Память ассистента</div>
+      <p className="settings-lead">
+        После каждого ответа отдельный вызов модели извлекает долговечные факты
+        и записывает их в память. Основной агент об этом не знает — задержка
+        ответа не зависит от записи.
+      </p>
+      <div className="settings-row">
+        <label className="settings-check">
+          <input
+            type="checkbox"
+            checked={settings?.memoryExtractionEnabled ?? true}
+            disabled={busy || !settings}
+            onChange={(event) => void setMemoryExtractionEnabled(event.target.checked)}
+          />
+          <span>Извлекать факты в память после ответа</span>
+        </label>
+        <p className="settings-hint">
+          Выключите, если не хотите, чтобы диалоги пополняли долгосрочную память.
+          Уже сохранённые факты по-прежнему подмешиваются в контекст.
         </p>
       </div>
 

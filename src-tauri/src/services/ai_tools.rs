@@ -1261,40 +1261,6 @@ pub fn llm_tool_definitions(
             }),
         });
     }
-    if visible(ToolName::Memory) {
-        defs.push(LlmToolDefinition {
-            name: "memory".to_string(),
-            description: "Permanent OptMem-style agent memory that outlives sessions and compaction. Two scopes: \"project\" (`{repo}/.atlas/memory`, shareable via git) for repo/docs facts and decisions; \"global\" (`~/.atlas/memory`) for user preferences across projects. A combined wake of both scopes is auto-injected at the start of each turn — treat it as already-read; do not request wake. Tree compression after note/forget is handled by the harness automatically — do not request nap/zoom/config. Ops: \"note\" appends one lasting fact as a dense telegram-style line (prefer ≤ ~120 UTF-8 bytes / ~60 Cyrillic chars; hard cap ~560 bytes) — never a paragraph or stack dump; split multiple facts into multiple notes; do not note redundant memories; pauses for user approval unless the user previously chose \"always allow\" for memory, and the user may deny a note (do not retry automatically after a denial); \"recall\" searches every raw memory with a regex; \"forget\" drops TREE summaries for a block (e.g. when the user asks to forget something, or a summary is wrong) so the harness can rebuild — the raw log is never deleted; requires approval like note.".to_string(),
-            parameters: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "op": {
-                        "type": "string",
-                        "enum": ["note", "recall", "forget"],
-                        "description": "Memory operation."
-                    },
-                    "scope": {
-                        "type": "string",
-                        "enum": ["project", "global"],
-                        "description": "Which store to use."
-                    },
-                    "text": {
-                        "type": ["string", "null"],
-                        "description": "For note: the one-line memory."
-                    },
-                    "pattern": {
-                        "type": ["string", "null"],
-                        "description": "For recall: regex over every raw memory line."
-                    },
-                    "block": {
-                        "type": ["string", "null"],
-                        "description": "For forget: inclusive block id as wake prints it, e.g. \"0-15\"."
-                    }
-                },
-                "required": ["op", "scope"]
-            }),
-        });
-    }
     if visible(ToolName::RequestModeSwitch) {
         defs.push(LlmToolDefinition {
             name: "requestModeSwitch".to_string(),
@@ -6279,7 +6245,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_twenty_one_in_agent_mode_by_default() {
+    fn llm_tool_definitions_includes_all_twenty_in_agent_mode_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -6303,7 +6269,6 @@ mod tests {
                 "move",
                 "requestFullRepoAccess",
                 "todo",
-                "memory",
                 "requestModeSwitch",
                 "getAsciidocTemplates",
                 "askUser",
@@ -6453,14 +6418,7 @@ mod tests {
         assert_eq!(standards_args.kind, CheckKind::Standards);
         assert_eq!(standards_args.path, None);
 
-        let memory = defs.iter().find(|d| d.name == "memory").unwrap();
-        assert_eq!(
-            memory.parameters["properties"]["op"]["enum"],
-            serde_json::json!(["note", "recall", "forget"])
-        );
-        assert!(memory.parameters["properties"].get("knob").is_none());
-        assert!(memory.parameters["properties"].get("part").is_none());
-        assert!(memory.parameters["properties"].get("snapshotT").is_none());
+        assert!(defs.iter().find(|d| d.name == "memory").is_none());
 
         fs::remove_dir_all(&repo).ok();
     }

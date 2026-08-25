@@ -237,7 +237,6 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::Move,
         ToolName::RequestFullRepoAccess,
         ToolName::Todo,
-        ToolName::Memory,
         ToolName::RequestModeSwitch,
         ToolName::GetAsciidocTemplates,
         ToolName::AskUser,
@@ -349,9 +348,9 @@ mod tests {
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_twenty_three() {
+    fn default_allowed_tools_includes_all_twenty_two() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 23);
+        assert_eq!(allowed.len(), 22);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
@@ -364,7 +363,7 @@ mod tests {
         assert!(allowed.contains(&ToolName::Move));
         assert!(allowed.contains(&ToolName::RequestFullRepoAccess));
         assert!(allowed.contains(&ToolName::Todo));
-        assert!(allowed.contains(&ToolName::Memory));
+        assert!(!allowed.contains(&ToolName::Memory));
         assert!(allowed.contains(&ToolName::RequestModeSwitch));
         assert!(allowed.contains(&ToolName::GetAsciidocTemplates));
         assert!(allowed.contains(&ToolName::AskUser));

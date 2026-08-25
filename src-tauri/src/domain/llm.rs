@@ -132,10 +132,24 @@ pub struct LlmSettings {
     /// turned back on.
     #[serde(default = "default_true")]
     pub rate_limit_enabled: bool,
+    /// On by default. When on, a tool-free extractor LLM call runs after
+    /// each persisted chat turn and (subject to `memory_policy`) appends
+    /// lasting facts to OptMem. Off skips the job entirely — wake of
+    /// already-stored memory still injects on the next turn.
+    #[serde(default = "default_true")]
+    pub memory_extraction_enabled: bool,
+    /// Minimum extractor `confidence` a candidate fact needs before policy
+    /// will store it. Clamped to 0.0–1.0 at the policy boundary.
+    #[serde(default = "default_memory_confidence")]
+    pub memory_confidence_threshold: f32,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_memory_confidence() -> f32 {
+    crate::domain::memory_policy::DEFAULT_CONFIDENCE_THRESHOLD
 }
 
 impl Default for LlmSettings {
@@ -149,6 +163,8 @@ impl Default for LlmSettings {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            memory_extraction_enabled: true,
+            memory_confidence_threshold: crate::domain::memory_policy::DEFAULT_CONFIDENCE_THRESHOLD,
         }
     }
 }
@@ -544,6 +560,11 @@ mod tests {
         assert_eq!(settings.active_provider_id, None);
         assert!(settings.providers.is_empty());
         assert!(settings.rate_limit_enabled);
+        assert!(settings.memory_extraction_enabled);
+        assert_eq!(
+            settings.memory_confidence_threshold,
+            crate::domain::memory_policy::DEFAULT_CONFIDENCE_THRESHOLD
+        );
     }
 
     #[test]

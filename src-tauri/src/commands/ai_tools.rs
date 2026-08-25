@@ -157,20 +157,16 @@ pub fn ai_set_tool_allowed(tool: ToolName, allowed: bool) -> Result<(), String> 
 }
 
 /// Combined OptMem wake for project + global stores — injected into the
-/// chat system context at the start of a turn so the model does not have
-/// to remember to call `memory`/`wake` first. Returns an empty string when
-/// the `memory` tool is disallowed for the open project, or both stores are
-/// empty/missing.
+/// chat system context at the start of a turn. Returns an empty string when
+/// both stores are empty/missing. Memory is harness-managed (post-turn
+/// extraction), not an agent tool, so this no longer gates on the `memory`
+/// allowlist entry.
 #[tauri::command]
 pub fn ai_get_memory_wake() -> Result<String, String> {
     let project = project_open::get_project().map_err(|e| e.to_string())?;
     let Some(project) = project else {
         return Err("no project open".to_string());
     };
-    let allowed = crate::services::ai_tools::allowed_tools().map_err(|e| e.to_string())?;
-    if !allowed.contains(&crate::domain::ai_access::ToolName::Memory) {
-        return Ok(String::new());
-    }
     let root = std::path::PathBuf::from(&project.root);
     crate::services::agent_memory::wake_context(&root).map_err(|e| e.to_string())
 }

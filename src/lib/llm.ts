@@ -58,6 +58,11 @@ export type LlmSettings = {
    * and completion tokens are not recorded. The baked-in rule lives in
    * `system_providers.json` `rateLimits`. */
   rateLimitEnabled: boolean;
+  /** On by default. When on, a background extractor runs after each
+   * persisted chat turn and writes lasting facts to OptMem. */
+  memoryExtractionEnabled: boolean;
+  /** Minimum extractor confidence (0–1) before a candidate fact is stored. */
+  memoryConfidenceThreshold: number;
 };
 
 // Mirrors `domain::llm::ResolvedLlmProvider` — the merged, ready-to-use

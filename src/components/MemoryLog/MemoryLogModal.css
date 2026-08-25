@@ -1,0 +1,36 @@
+.memory-log-subtitle {
+  margin-top: 2px;
+  font-size: calc(var(--font-ui) * 0.88);
+  color: var(--text-2);
+  max-width: min(720px, 70vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-log-hint {
+  font-size: calc(var(--font-ui) * 0.92);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.memory-log-text {
+  white-space: normal !important;
+  max-width: 520px;
+}
+
+.memory-log-scope {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: calc(var(--font-ui) * 0.9);
+}
+
+.memory-log-scope-project {
+  background: var(--accent-dim);
+  color: var(--text-0);
+}
+
+.memory-log-scope-global {
+  background: rgba(120, 140, 180, 0.18);
+  color: var(--text-0);
+}

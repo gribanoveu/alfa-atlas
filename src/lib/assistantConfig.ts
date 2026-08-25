@@ -340,7 +340,7 @@ Before drafting a table, admonition block, list, or include that matches a house
 
 ### Tool approval and denial
 
-All write/mutate tools (\`writeFile\`, \`editFile\`, \`deleteFile\`, \`createDirectory\`, \`deleteDirectory\`, \`move\`, \`requestFullRepoAccess\`, \`memory\` note/forget, \`requestModeSwitch\`) require explicit user approval.
+All write/mutate tools (\`writeFile\`, \`editFile\`, \`deleteFile\`, \`createDirectory\`, \`deleteDirectory\`, \`move\`, \`requestFullRepoAccess\`, \`requestModeSwitch\`) require explicit user approval.
 
 **If the user denies approval:**
 - Do NOT retry the same operation automatically
@@ -356,29 +356,9 @@ When you finish the active task, call \`todo\` with \`op: "update"\`, the task's
 
 If more steps are needed mid-task, call \`todo\` with \`op: "write"\` again — new titles are appended, never replace the existing list. If a step becomes unnecessary or impossible, use \`op: "update"\` with \`status: "cancelled"\` and a \`note\` explaining why.
 
-### Permanent memory (memory)
-You have OptMem-style permanent memory via the \`memory\` tool. It outlives sessions, compaction, and model changes.
+### Permanent memory
 
-- **scope \`project\`**: \`{repo}/.atlas/memory\` — facts about this repository, docs structure, team decisions, naming. Shareable via git.
-- **scope \`global\`**: \`~/.atlas/memory\` — user preferences and lasting facts across projects.
-
-A combined wake of both scopes is injected into your context at the start of each turn — treat that as already-read. Wake pagination and tree compression are harness-managed; do not call wake/nap/zoom/config.
-
-**Memory operations:**
-
-**\`note\`** — append one lasting fact as a dense telegram-style line:
-- Prefer ≤ ~120 UTF-8 bytes (~60 Cyrillic chars), hard cap ~560 bytes
-- Write only the durable kernel (name + role, or one decision, or one preference)
-- If several facts matter, make several short notes — never one bulky note
-- Do not register redundant memories
-- Pauses for user approval unless "always allow" was previously chosen
-- The user may deny a note; do not retry automatically after a denial
-
-**\`recall\`** — search every raw memory with regex
-
-**\`forget\`** — drop TREE summaries for a block (e.g. when the user asks to forget something, or a summary is wrong). The harness rebuilds compressions; the raw log is never deleted. Requires approval like \`note\`.
-
-Never edit or delete files under \`.atlas/memory\` with write/mutate tools — only the \`memory\` tool manages that store. The harness also hard-rejects those paths.
+Lasting facts about this repository and the user's preferences are stored automatically after each turn (OptMem). A combined wake of project and global memory is injected into your context at the start of each turn — treat that as already-read. Do not try to write or delete files under \`.atlas/memory\` with write/mutate tools.
 
 ## Boundaries
 
@@ -1259,11 +1239,9 @@ export const TOOL_APPROVAL_TIMEOUT_MS = 30_000;
 /** Static Russian labels for the tools a pending-approval card's "не
  * спрашивать больше"/"Разрешать всегда" controls can apply to
  * (`domain::ai_access::call_requires_confirmation` in Rust — `Todo` is never
- * among them, see `AI_HARNESS.md`'s "Tool-calling loop"). `memory` pauses on
- * `note`/`forget` only; trust is still granted per tool name, same as every
- * other entry here, so trusting it once covers all future gated memory ops.
- * Falls back to the raw wire name for anything unrecognized, so a future
- * tool never silently disappears from this list before this map is updated.
+ * among them, see `AI_HARNESS.md`'s "Tool-calling loop"). Falls back to the
+ * raw wire name for anything unrecognized, so a future tool never silently
+ * disappears from this list before this map is updated.
  * Shared by `PermissionsTab` (revoking) and `AssistantToolApprovalGroup`
  * (granting) so both show the exact same copy. */
 export const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
@@ -1274,7 +1252,6 @@ export const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
   deleteDirectory: "Удаление папок (deleteDirectory)",
   move: "Перемещение / переименование (move)",
   requestFullRepoAccess: "Запрос доступа к репозиторию (requestFullRepoAccess)",
-  memory: "Изменение памяти (memory note/forget)",
   requestModeSwitch: "Смена режима ассистента (requestModeSwitch)",
 };
 

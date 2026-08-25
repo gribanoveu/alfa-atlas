@@ -79,6 +79,16 @@ pub fn resolve_provider(
 /// Skips an id that fails to resolve (e.g. a custom entry that's missing
 /// its `base_url` so far) rather than surfacing a hard error for what's
 /// often just a form the user hasn't finished filling in yet.
+/// Provider id used for one-shot LLM callers (memory extraction, compaction, …).
+/// Matches the frontend fallback: explicit `active_provider_id`, else the first
+/// entry in [`list_resolved_providers`] (same order as the Settings picker).
+pub fn effective_active_provider_id(settings: &LlmSettings) -> Option<String> {
+    if let Some(id) = settings.active_provider_id.clone() {
+        return Some(id);
+    }
+    list_resolved_providers(settings).into_iter().next().map(|p| p.id)
+}
+
 pub fn list_resolved_providers(settings: &LlmSettings) -> Vec<ResolvedLlmProvider> {
     let mut out = Vec::new();
     for preset in llm_provider_manifest::system_providers() {
@@ -174,6 +184,35 @@ mod tests {
     }
 
     #[test]
+    fn effective_active_provider_id_falls_back_to_first_resolved_provider() {
+        let settings = LlmSettings {
+            active_provider_id: None,
+            providers: vec![LlmProviderConfig {
+                id: "alfagen".to_string(),
+                label: None,
+                base_url: None,
+                model: Some("DeepSeek-V4-Flash".to_string()),
+                trusted_cert_pem: None,
+                limit: None,
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_active_provider_id(&settings).as_deref(),
+            Some("alfagen")
+        );
+
+        let pinned = LlmSettings {
+            active_provider_id: Some("alfagen".to_string()),
+            ..settings
+        };
+        assert_eq!(
+            effective_active_provider_id(&pinned).as_deref(),
+            Some("alfagen")
+        );
+    }
+
+    #[test]
     fn resolve_system_provider_with_no_override_uses_manifest_values() {
         let settings = LlmSettings::default();
         let resolved = resolve_provider("alfagen", &settings).unwrap();
@@ -209,6 +248,7 @@ mod tests {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            ..Default::default()
         };
         let resolved = resolve_provider("alfagen", &settings).unwrap();
         // Unset override fields still fall back to the manifest.
@@ -244,6 +284,7 @@ mod tests {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            ..Default::default()
         };
         assert!(resolve_provider("my-custom", &settings).is_err());
     }
@@ -266,6 +307,7 @@ mod tests {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            ..Default::default()
         };
         let resolved = resolve_provider("my-custom", &settings).unwrap();
         assert!(!resolved.is_system);
@@ -291,6 +333,7 @@ mod tests {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            ..Default::default()
         };
         let list = list_resolved_providers(&settings);
         let alfagen_rows: Vec<_> = list.iter().filter(|p| p.id == "alfagen").collect();
@@ -316,6 +359,7 @@ mod tests {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            ..Default::default()
         };
         let list = list_resolved_providers(&settings);
         let ids: Vec<&str> = list.iter().map(|p| p.id.as_str()).collect();
@@ -340,6 +384,7 @@ mod tests {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            ..Default::default()
         };
         let list = list_resolved_providers(&settings);
         assert!(!list.iter().any(|p| p.id == "unfinished"));
@@ -432,6 +477,7 @@ mod tests {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            ..Default::default()
         };
         remove_provider_config(&mut settings, "a");
         assert!(settings.providers.is_empty());
@@ -449,6 +495,7 @@ mod tests {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            ..Default::default()
         };
         remove_provider_config(&mut settings, "a");
         assert_eq!(settings.active_provider_id.as_deref(), Some("b"));

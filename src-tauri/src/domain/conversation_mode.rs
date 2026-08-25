@@ -39,7 +39,6 @@ pub fn base_tools() -> HashSet<ToolName> {
         ToolName::GitDiff,
         ToolName::GitBlame,
         ToolName::Check,
-        ToolName::Memory,
         ToolName::RequestModeSwitch,
         // Read-only lookup over a fixed catalog — useful in every mode:
         // Agent to actually draft with it, Plan to reference the exact
@@ -103,7 +102,7 @@ mod tests {
 
     #[test]
     fn agent_mode_has_every_tool() {
-        assert_eq!(mode_tools(ConversationMode::Agent).len(), 21);
+        assert_eq!(mode_tools(ConversationMode::Agent).len(), 20);
     }
 
     #[test]
@@ -145,6 +144,13 @@ mod tests {
     fn ask_user_is_reachable_from_every_mode() {
         for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Question] {
             assert!(mode_tools(mode).contains(&ToolName::AskUser));
+        }
+    }
+
+    #[test]
+    fn memory_is_not_an_agent_tool() {
+        for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Question] {
+            assert!(!mode_tools(mode).contains(&ToolName::Memory));
         }
     }
 }

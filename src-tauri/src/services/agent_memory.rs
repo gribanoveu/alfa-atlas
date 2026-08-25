@@ -14,7 +14,7 @@ use crate::infra::optmem_store::{validate_entry, OptMemStore, OptMemStoreError};
 use crate::infra::settings_store;
 
 /// Which of the two stores a memory op targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MemoryScope {
     Project,
@@ -411,9 +411,8 @@ pub fn wake_context(repo_root: &Path) -> Result<String, AgentMemoryError> {
     Ok(format!(
         "## Agent memory (OptMem)\n\n\
          {}\n\n\
-         Use the `memory` tool to note new lasting facts (scope \"project\" for this repo, \
-         \"global\" for preferences across projects), recall with a regex, or forget a bad \
-         summary block when asked. Wake and tree compression are harness-managed.",
+         Memory is managed automatically after each turn. Treat this wake as already-read \
+         lasting context. Do not write or edit files under `.atlas/memory`.",
         sections.join("\n\n")
     ))
 }
@@ -683,6 +682,23 @@ fn validate_knob(name: &str, value: usize) -> Result<(), AgentMemoryError> {
 
 /// Cap on harness-side compressions per drain (after one note/forget).
 const MAX_NAPS_PER_DRAIN: usize = 16;
+
+/// Every raw log line in `scope`, oldest first. Empty when the store is
+/// missing. Used by the post-turn memory policy for dedup / supersede —
+/// not a model-facing op.
+pub fn list_raw_entries(
+    scope: MemoryScope,
+    repo_root: &Path,
+) -> Result<Vec<MemoryEntry>, AgentMemoryError> {
+    let Some(store) = try_open_store(scope, repo_root)? else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for entry in store.log_scan()? {
+        out.push(entry?);
+    }
+    Ok(out)
+}
 
 /// Drain pending TREE compressions using a caller-supplied summarizer
 /// (typically a tool-free `LlmProvider::chat` call). Best-effort: on
@@ -962,8 +978,9 @@ mod tests {
             let repo = temp_repo();
             note(MemoryScope::Project, &repo, "only-project").unwrap();
             let ctx = wake_context(&repo).unwrap();
-            assert!(ctx.contains("harness-managed") || ctx.contains("note"));
+            assert!(ctx.contains("managed automatically"));
             assert!(!ctx.contains("call nap"));
+            assert!(!ctx.contains("`memory` tool"));
             fs::remove_dir_all(&repo).ok();
         });
     }

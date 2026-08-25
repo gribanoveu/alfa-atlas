@@ -124,6 +124,7 @@ pub fn run() {
             app.manage(Arc::new(DownloadState::default()));
             app.manage(Arc::new(LlmProviderSlot::new(None)));
             app.manage(Arc::new(ChatCancelFlag::new(false)));
+            app.manage(Arc::new(commands::memory_pipeline::MemoryExtractGuard::new()));
 
             Ok(())
         })
@@ -295,6 +296,8 @@ pub fn run() {
             commands::chat_history::chat_load_messages,
             commands::chat_history::chat_save,
             commands::chat_history::chat_set_archived,
+            commands::memory_pipeline::memory_extract_turn,
+            commands::memory_log::memory_log_query,
             commands::plans::plan_list,
             commands::plans::plan_get,
             commands::plans::plan_delete,

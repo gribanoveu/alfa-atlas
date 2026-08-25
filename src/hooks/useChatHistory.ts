@@ -9,6 +9,7 @@ import {
   setChatArchived,
   type ChatSummary,
 } from "../lib/chatHistory";
+import { memoryExtractTurn } from "../lib/memoryPipeline";
 
 /** Owns chat-list/switch/archive state for one repository — lives inside
  * `AssistantPanel` (not lifted to `App.tsx`): `RightDock` only mounts
@@ -162,6 +163,9 @@ export function useChatHistory(repoRoot: string | null) {
       void saveChat(repoRoot, currentChatId, title, messages, todos, activePlanId)
         .then((summary) => {
           setActiveChats((prev) => [summary, ...prev.filter((c) => c.id !== summary.id)]);
+          void memoryExtractTurn(repoRoot, currentChatId).catch((e: unknown) => {
+            console.error("Не удалось запустить извлечение памяти", e);
+          });
         })
         .catch((e: unknown) => {
           console.error("Не удалось сохранить историю чата", e);

@@ -7,6 +7,8 @@ pub mod git;
 pub mod git_action_log;
 pub mod layout;
 pub mod llm;
+pub mod memory_log;
+pub mod memory_pipeline;
 pub mod onboarding;
 pub mod openapi;
 pub mod plans;
