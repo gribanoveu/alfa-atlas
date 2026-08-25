@@ -34,13 +34,17 @@ const GIT_PROGRESS_THROTTLE: Duration = Duration::from_millis(100);
 /// Builds a progress callback that forwards `GitProgressEvent`s to the
 /// frontend over `GIT_PROGRESS_EVENT`, throttled so only ~10/sec reach the
 /// UI regardless of how often libgit2 invokes the underlying callback.
+/// `Started`/`Finished` are one-off lifecycle markers rather than a
+/// high-frequency tick, so they always bypass the throttle.
 fn progress_emitter(app: AppHandle) -> impl FnMut(GitProgressEvent) {
     let mut last = Instant::now()
         .checked_sub(GIT_PROGRESS_THROTTLE)
         .unwrap_or_else(Instant::now);
     move |event: GitProgressEvent| {
         let now = Instant::now();
-        if now.duration_since(last) >= GIT_PROGRESS_THROTTLE {
+        let is_lifecycle_marker =
+            matches!(event, GitProgressEvent::Started { .. } | GitProgressEvent::Finished { .. });
+        if is_lifecycle_marker || now.duration_since(last) >= GIT_PROGRESS_THROTTLE {
             last = now;
             let _ = app.emit(GIT_PROGRESS_EVENT, &event);
         }
@@ -76,7 +80,10 @@ pub fn git_log(repo_root: String, limit: Option<usize>) -> Result<Vec<GitCommitS
 pub async fn git_pull(repo_root: String, mode: PullMode, app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut emit = progress_emitter(app);
-        git_ops::pull(&repo_root, mode, Some(&mut emit)).map_err(|e| e.to_string())
+        emit(GitProgressEvent::Started { op: "pull".to_string() });
+        let result = git_ops::pull(&repo_root, mode, Some(&mut emit)).map_err(|e| e.to_string());
+        emit(GitProgressEvent::Finished { op: "pull".to_string() });
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -131,7 +138,10 @@ pub async fn git_sync_status(repo_root: String) -> Result<GitSyncStatus, String>
 pub async fn git_push(repo_root: String, app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut emit = progress_emitter(app);
-        git_ops::push(&repo_root, Some(&mut emit)).map_err(|e| e.to_string())
+        emit(GitProgressEvent::Started { op: "push".to_string() });
+        let result = git_ops::push(&repo_root, Some(&mut emit)).map_err(|e| e.to_string());
+        emit(GitProgressEvent::Finished { op: "push".to_string() });
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -212,7 +222,10 @@ pub fn git_list_branches(repo_root: String) -> Result<Vec<GitBranchInfo>, String
 pub async fn git_fetch_branches(repo_root: String, app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut emit = progress_emitter(app);
-        git_ops::fetch_branches(&repo_root, Some(&mut emit)).map_err(|e| e.to_string())
+        emit(GitProgressEvent::Started { op: "fetch".to_string() });
+        let result = git_ops::fetch_branches(&repo_root, Some(&mut emit)).map_err(|e| e.to_string());
+        emit(GitProgressEvent::Finished { op: "fetch".to_string() });
+        result
     })
     .await
     .map_err(|e| e.to_string())?
@@ -308,7 +321,9 @@ pub async fn git_clone(
 ) -> Result<ProbeResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut emit = progress_emitter(app);
+        emit(GitProgressEvent::Started { op: "clone".to_string() });
         git_clone::clone_repository(&url, &destination, Some(&mut emit))?;
+        emit(GitProgressEvent::Finished { op: "clone".to_string() });
 
         // After cloning, probe the repo to find docs root candidates.
         // The frontend will show ConfirmOpenProjectModal for the user to pick.

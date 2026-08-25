@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
+#[cfg(test)]
+use super::ai_access::default_allowed_tools;
+use super::ai_access::{AiAccessMode, ToolName};
 use super::conversation_mode::ConversationMode;
 use super::embeddings::EmbeddingError;
 use super::paths;
@@ -1113,6 +1115,12 @@ impl ToolScope {
 
     /// Convenience for the common case — no persisted allowlist
     /// customization yet, use `default_allowed_tools` for `mode`.
+    ///
+    /// Test-only: production code resolves scopes via
+    /// `services::ai_tools::scope_for_config`, which inlines this same
+    /// default-vs-persisted-allowlist logic while also handling a
+    /// persisted list.
+    #[cfg(test)]
     pub fn for_project(repo_root: &Path, docs_root: &Path, mode: AiAccessMode) -> Self {
         Self::new(repo_root, docs_root, mode, default_allowed_tools(mode))
     }
