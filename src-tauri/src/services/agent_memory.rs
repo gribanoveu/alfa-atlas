@@ -1,14 +1,15 @@
-//! Agent permanent memory — OptMem adapted for Atlas dual roots.
+//! Harness-facing OptMem adapter for Atlas dual roots.
 //!
-//! - `project` → `{repoRoot}/.atlas/memory/`
-//! - `global`  → `~/.atlas/memory/`
+//! Production callers use only:
+//! - `wake_context` — pre-turn inject
+//! - `note` + `drain_pending_naps` — post-turn writes (via `memory_pipeline`)
+//! - `list_raw_entries` + `delete_log_entry` — memory viewer UI
+//! - path helpers — FS tool guard
 
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use crate::domain::optmem::{
-    cover, paginate, parse_block_id, pending, pending_count, plural, BlockRange, MemoryEntry,
-    OptMemError, OptMemKnobs, LOG_REC, RAW_MAX, TREE_REC,
+    cover, paginate, pending, pending_count, plural, BlockRange, MemoryEntry, OptMemError, RAW_MAX,
 };
 use crate::infra::optmem_store::{validate_entry, OptMemStore, OptMemStoreError};
 use crate::infra::settings_store;
@@ -137,20 +138,7 @@ fn level_len_fn<'a>(
     move |size| map.get(&size).copied().unwrap_or(0)
 }
 
-fn next_nap(store: &OptMemStore, t: usize) -> Result<Option<String>, AgentMemoryError> {
-    let map = level_lens(store, t)?;
-    let level = level_len_fn(&map);
-    let todo = pending(t, &level, Some(1));
-    if todo.is_empty() {
-        return Ok(None);
-    }
-    let BlockRange { lo, hi } = todo[0];
-    let left = pending_count(t, &level).saturating_sub(1);
-    Ok(Some(nap_prompt(store, lo, hi, left)?))
-}
-
-/// Prompt for harness-side compression (no tool-call instructions — the
-/// summarizer returns one line that `drain_pending_naps` writes via `nap`).
+/// Prompt for harness-side TREE compression (`drain_pending_naps`).
 fn nap_prompt(
     store: &OptMemStore,
     lo: usize,
@@ -197,54 +185,11 @@ fn nap_prompt(
     ))
 }
 
-pub fn wake(
-    scope: MemoryScope,
-    repo_root: &Path,
-    part: Option<usize>,
-    snapshot_t: Option<usize>,
-) -> Result<String, AgentMemoryError> {
-    let Some(store) = try_open_store(scope, repo_root)? else {
-        return Ok(format!(
-            "[{}] No memories yet. Record the first with op \"note\".\nYou are awake.",
-            scope.as_str()
-        ));
-    };
-    wake_from_store(scope, &store, part, snapshot_t, WakeMode::Tool)
-}
-
-#[derive(Clone, Copy)]
-enum WakeMode {
-    /// Full OptMem wake: may demand nap before returning cover lines.
-    Tool,
-    /// Chat auto-inject: never emit nap prompts; skip missing summaries.
-    Inject,
-}
-
-fn wake_from_store(
-    scope: MemoryScope,
-    store: &OptMemStore,
-    part: Option<usize>,
-    snapshot_t: Option<usize>,
-    mode: WakeMode,
-) -> Result<String, AgentMemoryError> {
-    let now = store.log_len()?;
-    let k = part.unwrap_or(1);
-    let t = snapshot_t.unwrap_or(now);
-    if t > now {
-        return Err(AgentMemoryError::Message(format!(
-            "T={t}, but the log holds {}. Run wake without T.",
-            plural(now, "memory")
-        )));
-    }
+fn wake_from_store(scope: MemoryScope, store: &OptMemStore) -> Result<String, AgentMemoryError> {
+    let t = store.log_len()?;
     if t == 0 {
-        return Ok(format!(
-            "[{}] No memories yet. Record the first with op \"note\".\nYou are awake.",
-            scope.as_str()
-        ));
+        return Ok(String::new());
     }
-
-    let map = level_lens(store, t)?;
-    let level = level_len_fn(&map);
 
     let mut lines = Vec::new();
     let mut pending_compressions = 0usize;
@@ -253,40 +198,13 @@ fn wake_from_store(
             let e = store.log_get(lo)?;
             lines.push(format!("#{} {} {}", e.id, e.date, e.text));
         } else {
-            let mut s = store.tree_get(lo, hi)?;
-            if s.is_none() {
-                match mode {
-                    WakeMode::Inject => {
-                        pending_compressions += 1;
-                        lines.push(format!(
-                            "#{}-{} (not compressed yet)",
-                            lo,
-                            hi - 1
-                        ));
-                        continue;
-                    }
-                    WakeMode::Tool => {
-                        if let Some(nap) = next_nap(store, t)? {
-                            return Ok(format!(
-                                "[{}] Cannot wake: the memory context needs #{}-{}, which is not compressed yet.\n\
-                                 Do the {} below, then run wake again.\n\n{nap}",
-                                scope.as_str(),
-                                lo,
-                                hi - 1,
-                                plural(pending_count(t, &level), "compression"),
-                            ));
-                        }
-                        s = store.tree_get(lo, hi)?;
-                        if s.is_none() {
-                            return Err(AgentMemoryError::Store(OptMemStoreError::BlankSummary {
-                                lo,
-                                hi: hi - 1,
-                            }));
-                        }
-                    }
+            match store.tree_get(lo, hi)? {
+                Some(s) => lines.push(format!("#{}-{} {}", lo, hi - 1, s)),
+                None => {
+                    pending_compressions += 1;
+                    lines.push(format!("#{}-{} (not compressed yet)", lo, hi - 1));
                 }
             }
-            lines.push(format!("#{}-{} {}", lo, hi - 1, s.unwrap()));
         }
     }
 
@@ -296,63 +214,23 @@ fn wake_from_store(
         store.knobs().part_lines,
     );
 
-    // Inject mode concatenates every part so the model never needs wake
-    // pagination. Tool mode (internal / tests) still paginates.
-    match mode {
-        WakeMode::Inject => {
-            let mut out = Vec::new();
-            out.push(format!(
-                "[{}] Your memory ({}):",
-                scope.as_str(),
-                plural(t, "memory")
-            ));
-            for part_lines in &parts {
-                out.extend(part_lines.iter().cloned());
-            }
-            out.push("You are awake.".to_string());
-            if pending_compressions > 0 {
-                out.push(format!(
-                    "({} not compressed yet — harness will rebuild summaries.)",
-                    plural(pending_compressions, "block")
-                ));
-            }
-            Ok(out.join("\n"))
-        }
-        WakeMode::Tool => {
-            if !(1..=parts.len()).contains(&k) {
-                return Err(AgentMemoryError::Message(format!(
-                    "No part {k}: the memory has {}. Run wake.",
-                    plural(parts.len(), "part")
-                )));
-            }
-
-            let mut out = Vec::new();
-            if parts.len() > 1 {
-                out.push(format!(
-                    "[{}] Your memory, part {k} of {}, oldest first ({}).",
-                    scope.as_str(),
-                    parts.len(),
-                    plural(t, "memory")
-                ));
-            } else {
-                out.push(format!("[{}] Your memory ({}):", scope.as_str(), plural(t, "memory")));
-            }
-            out.extend(parts[k - 1].iter().cloned());
-            if k < parts.len() {
-                out.push(format!(
-                    "Not awake yet. Call memory op \"wake\" with part={} and snapshotT={t}.",
-                    k + 1
-                ));
-            } else {
-                out.push("You are awake.".to_string());
-                if let Some(nap) = next_nap(store, t)? {
-                    out.push(String::new());
-                    out.push(nap);
-                }
-            }
-            Ok(out.join("\n"))
-        }
+    let mut out = Vec::new();
+    out.push(format!(
+        "[{}] Your memory ({}):",
+        scope.as_str(),
+        plural(t, "memory")
+    ));
+    for part_lines in &parts {
+        out.extend(part_lines.iter().cloned());
     }
+    out.push("You are awake.".to_string());
+    if pending_compressions > 0 {
+        out.push(format!(
+            "({} not compressed yet — harness will rebuild summaries.)",
+            plural(pending_compressions, "block")
+        ));
+    }
+    Ok(out.join("\n"))
 }
 
 /// Wake one scope for chat injection. `Ok(None)` when the store is missing
@@ -367,13 +245,7 @@ fn wake_inject(
     if store.log_len()? == 0 {
         return Ok(None);
     }
-    Ok(Some(wake_from_store(
-        scope,
-        &store,
-        None,
-        None,
-        WakeMode::Inject,
-    )?))
+    Ok(Some(wake_from_store(scope, &store)?))
 }
 
 fn format_scope_section(label: &str, result: Result<Option<String>, AgentMemoryError>) -> Option<String> {
@@ -421,271 +293,14 @@ pub fn note(scope: MemoryScope, repo_root: &Path, text: &str) -> Result<String, 
     let store = open_store(scope, repo_root)?;
     let text = validate_entry(&store, text)?;
     let i = store.log_append(&[(today(), text)])?;
-    // Pending TREE compressions are drained by the harness (`drain_pending_naps`)
-    // after this tool returns — do not ask the model to call `nap`.
     Ok(format!("[{}] Saved as #{i}.", scope.as_str()))
 }
 
-pub fn nap(
-    scope: MemoryScope,
-    repo_root: &Path,
-    block: Option<&str>,
-    text: Option<&str>,
-) -> Result<String, AgentMemoryError> {
-    let Some(store) = try_open_store(scope, repo_root)? else {
-        return Ok(format!("[{}] Nothing left to compress.", scope.as_str()));
-    };
-    let t = store.log_len()?;
-    let map = level_lens(&store, t)?;
-    let level = level_len_fn(&map);
-    let mut said = false;
-    let mut out = String::new();
-
-    if let (Some(block), Some(text)) = (block, text) {
-        said = true;
-        let BlockRange { lo, hi } = parse_block_id(block)?;
-        let todo = pending(t, &level, Some(1));
-        if todo.is_empty() {
-            return Ok(format!("[{}] Nothing left to compress.", scope.as_str()));
-        }
-        if (lo, hi) != (todo[0].lo, todo[0].hi) {
-            if store.tree_get(lo, hi)?.is_some() {
-                out.push_str(&format!(
-                    "[{}] {}-{} is already settled.",
-                    scope.as_str(),
-                    lo,
-                    hi - 1
-                ));
-            } else {
-                return Err(AgentMemoryError::Message(format!(
-                    "Wrong block: {block}. Blocks are built in order; the next is {}-{}. Call nap without args or with that block.",
-                    todo[0].lo,
-                    todo[0].hi - 1
-                )));
-            }
-        } else {
-            let summary = validate_entry(&store, text)?;
-            if !store.tree_put(lo, hi, &summary)? {
-                out.push_str(&format!(
-                    "[{}] {}-{} was settled or forgotten meanwhile.",
-                    scope.as_str(),
-                    lo,
-                    hi - 1
-                ));
-            } else {
-                out.push_str(&format!(
-                    "[{}] {}-{} saved.",
-                    scope.as_str(),
-                    lo,
-                    hi - 1
-                ));
-            }
-        }
-    }
-
-    match next_nap(&store, t)? {
-        None => {
-            if out.is_empty() {
-                Ok(format!("[{}] Nothing left to compress.", scope.as_str()))
-            } else {
-                out.push_str("\nNothing left to compress.");
-                Ok(out)
-            }
-        }
-        Some(nap) => {
-            if said && !out.is_empty() {
-                out.push_str("\n\n");
-            }
-            out.push_str(&nap);
-            Ok(out)
-        }
-    }
-}
-
-const RECALL_PATTERN_MAX: usize = 200;
-
-pub fn recall(scope: MemoryScope, repo_root: &Path, pattern: &str) -> Result<String, AgentMemoryError> {
-    if pattern.is_empty() {
-        return Err(AgentMemoryError::Message(
-            "op \"recall\" requires a non-empty `pattern`".into(),
-        ));
-    }
-    if pattern.len() > RECALL_PATTERN_MAX {
-        return Err(AgentMemoryError::Message(format!(
-            "recall pattern is too long (max {RECALL_PATTERN_MAX} bytes)"
-        )));
-    }
-    let Some(store) = try_open_store(scope, repo_root)? else {
-        return Ok(format!("[{}] No match.", scope.as_str()));
-    };
-    let pat = regex::RegexBuilder::new(&format!("(?i){pattern}"))
-        .size_limit(1 << 20)
-        .dfa_size_limit(1 << 20)
-        .build()
-        .map_err(|e| OptMemError::BadRegex(e.to_string()))?;
-    let part_chars = store.knobs().part_chars;
-    let mut hits = 0usize;
-    let mut out: VecDeque<String> = VecDeque::new();
-    let mut size = 0usize;
-    for entry in store.log_scan()? {
-        let e: MemoryEntry = entry?;
-        let line = format!("#{} {} {}", e.id, e.date, e.text);
-        if !pat.is_match(&line) {
-            continue;
-        }
-        hits += 1;
-        size += line.len() + 1;
-        out.push_back(line);
-        while size > part_chars {
-            if let Some(front) = out.pop_front() {
-                size -= front.len() + 1;
-            } else {
-                break;
-            }
-        }
-    }
-    if hits == 0 {
-        return Ok(format!("[{}] No match.", scope.as_str()));
-    }
-    let mut text = format!("[{}]\n", scope.as_str());
-    text.push_str(&out.iter().cloned().collect::<Vec<_>>().join("\n"));
-    text.push('\n');
-    if out.len() < hits {
-        text.push_str(&format!(
-            "Newest {} of {}. Narrow the regex.",
-            out.len(),
-            plural(hits, "match")
-        ));
-    } else {
-        text.push_str(&format!("{}.", plural(hits, "match")));
-    }
-    Ok(text)
-}
-
-pub fn zoom(scope: MemoryScope, repo_root: &Path, block: &str) -> Result<String, AgentMemoryError> {
-    let Some(store) = try_open_store(scope, repo_root)? else {
-        return Err(AgentMemoryError::Message(format!(
-            "#{block} is beyond the memory: it holds {}. Run wake.",
-            plural(0, "memory")
-        )));
-    };
-    let BlockRange { lo, hi } = parse_block_id(block)?;
-    let t = store.log_len()?;
-    if lo >= t {
-        return Err(AgentMemoryError::Message(format!(
-            "#{block} is beyond the memory: it holds {}. Run wake.",
-            plural(t, "memory")
-        )));
-    }
-    let mid = (lo + hi) / 2;
-    let mut lines = vec![format!("[{}]", scope.as_str())];
-    for (a, b) in [(lo, mid), (mid, hi)] {
-        if a >= t {
-            continue;
-        }
-        if b - a == 1 {
-            let e = store.log_get(a)?;
-            lines.push(format!("#{} {} {}", e.id, e.date, e.text));
-        } else {
-            let s = store
-                .tree_get(a, b)?
-                .unwrap_or_else(|| "not compressed yet".to_string());
-            lines.push(format!("#{}-{} {}", a, b - 1, s));
-        }
-    }
-    Ok(lines.join("\n"))
-}
-
-pub fn forget(scope: MemoryScope, repo_root: &Path, block: &str) -> Result<String, AgentMemoryError> {
-    let Some(store) = try_open_store(scope, repo_root)? else {
-        return Err(AgentMemoryError::Message(format!(
-            "No summary at {block}."
-        )));
-    };
-    let range = parse_block_id(block)?;
-    let gone = store.tree_drop(range.lo, range.hi)?;
-    if gone.is_empty() {
-        return Err(AgentMemoryError::Message(format!(
-            "No summary at {block}."
-        )));
-    }
-    Ok(format!(
-        "[{}] Forgot {}, from {}-{} up. Harness will rebuild summaries.",
-        scope.as_str(),
-        plural(gone.len(), "summary"),
-        gone[0].lo,
-        gone[0].hi - 1
-    ))
-}
-
-pub fn config(
-    scope: MemoryScope,
-    repo_root: &Path,
-    knob: Option<&str>,
-) -> Result<String, AgentMemoryError> {
-    let mut store = open_store(scope, repo_root)?;
-    let mut over = store.overrides()?;
-    if let Some(a) = knob {
-        let Some((k_raw, v)) = a.split_once('=') else {
-            return Err(AgentMemoryError::Message(format!(
-                "usage: config NAME=VALUE (NAME one of {})",
-                crate::domain::optmem::KNOB_NAMES.join(", ")
-            )));
-        };
-        let k = k_raw.trim().to_uppercase();
-        let v = v.trim();
-        if !crate::domain::optmem::KNOB_NAMES.contains(&k.as_str()) {
-            return Err(OptMemError::UnknownKnob(k).into());
-        }
-        if v.is_empty() {
-            over.remove(&k);
-        } else {
-            let parsed: usize = v.parse().map_err(|_| OptMemError::InvalidKnobValue {
-                name: k.clone(),
-                value: v.to_string(),
-            })?;
-            validate_knob(&k, parsed)?;
-            over.insert(k, parsed);
-        }
-        store.set_overrides(&over)?;
-    }
-    let defaults = OptMemKnobs::default();
-    let mut lines = vec![format!("[{}] sizes:", scope.as_str())];
-    for (name, default, what) in [
-        ("WAKE_LINES", defaults.wake_lines, "the memory context: how many lines wake prints"),
-        ("ENTRY_CHARS", defaults.entry_chars, "the longest one memory may be, in bytes"),
-        ("PART_CHARS", defaults.part_chars, "output paging: largest part, in bytes"),
-        ("PART_LINES", defaults.part_lines, "output paging: largest part, in lines"),
-    ] {
-        let val = over.get(name).copied().unwrap_or(default);
-        let mark = if over.contains_key(name) {
-            format!(" (default {default})")
-        } else {
-            String::new()
-        };
-        lines.push(format!("{name:<12} {val:<7} {what}{mark}"));
-    }
-    Ok(lines.join("\n"))
-}
-
-fn validate_knob(name: &str, value: usize) -> Result<(), AgentMemoryError> {
-    OptMemKnobs::validate_positive(name, value)?;
-    if name == "ENTRY_CHARS" {
-        let top = (TREE_REC - 8).min(LOG_REC - 40);
-        if value > top {
-            return Err(OptMemError::EntryCharsTooLarge { max: top }.into());
-        }
-    }
-    crate::domain::optmem::check_knob_max(name, value)?;
-    Ok(())
-}
-
-/// Cap on harness-side compressions per drain (after one note/forget).
+/// Cap on harness-side compressions per drain (after one note).
 const MAX_NAPS_PER_DRAIN: usize = 16;
 
 /// Every raw log line in `scope`, oldest first. Empty when the store is
-/// missing. Used by the post-turn memory policy for dedup / supersede —
-/// not a model-facing op.
+/// missing. Used by the memory viewer and post-turn policy dedup.
 pub fn list_raw_entries(
     scope: MemoryScope,
     repo_root: &Path,
@@ -698,6 +313,17 @@ pub fn list_raw_entries(
         out.push(entry?);
     }
     Ok(out)
+}
+
+/// Remove one raw log entry by `#id` (0-based index). Remaining entries are
+/// renumbered; TREE summaries are cleared and rebuilt on the next nap drain.
+pub fn delete_log_entry(
+    scope: MemoryScope,
+    repo_root: &Path,
+    id: usize,
+) -> Result<(), AgentMemoryError> {
+    let store = open_store(scope, repo_root)?;
+    store.log_remove_at(id).map_err(AgentMemoryError::from)
 }
 
 /// Drain pending TREE compressions using a caller-supplied summarizer
@@ -755,47 +381,6 @@ fn first_summary_line(raw: &str) -> &str {
         .unwrap_or("")
 }
 
-/// Dispatch a model-facing memory op. Wake/nap/zoom/config are harness-managed
-/// and rejected here with a clear error — use the internal functions instead.
-pub fn run_op(
-    scope: MemoryScope,
-    repo_root: &Path,
-    op: &str,
-    text: Option<&str>,
-    pattern: Option<&str>,
-    block: Option<&str>,
-    _knob: Option<&str>,
-    _part: Option<usize>,
-    _snapshot_t: Option<usize>,
-) -> Result<String, AgentMemoryError> {
-    match op {
-        "wake" | "nap" | "zoom" | "config" => Err(AgentMemoryError::Message(format!(
-            "op \"{op}\" is harness-managed; use note, recall, or forget"
-        ))),
-        "note" => {
-            let text = text.ok_or_else(|| {
-                AgentMemoryError::Message("op \"note\" requires `text`".into())
-            })?;
-            note(scope, repo_root, text)
-        }
-        "recall" => {
-            let pattern = pattern.ok_or_else(|| {
-                AgentMemoryError::Message("op \"recall\" requires `pattern`".into())
-            })?;
-            recall(scope, repo_root, pattern)
-        }
-        "forget" => {
-            let block = block.ok_or_else(|| {
-                AgentMemoryError::Message("op \"forget\" requires `block`".into())
-            })?;
-            forget(scope, repo_root, block)
-        }
-        other => Err(AgentMemoryError::Message(format!(
-            "unknown memory op: \"{other}\" (expected note|recall|forget)"
-        ))),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -820,70 +405,68 @@ mod tests {
             note(MemoryScope::Project, &repo, "project-only fact").unwrap();
             note(MemoryScope::Global, &repo, "global-only fact").unwrap();
 
-            let p = recall(MemoryScope::Project, &repo, "project-only").unwrap();
-            assert!(p.contains("project-only"));
-            assert!(!p.contains("global-only"));
+            let p: Vec<_> = list_raw_entries(MemoryScope::Project, &repo)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.text)
+                .collect();
+            assert!(p.iter().any(|t| t.contains("project-only")));
+            assert!(!p.iter().any(|t| t.contains("global-only")));
 
-            let g = recall(MemoryScope::Global, &repo, "global-only").unwrap();
-            assert!(g.contains("global-only"));
-            assert!(!g.contains("project-only"));
+            let g: Vec<_> = list_raw_entries(MemoryScope::Global, &repo)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.text)
+                .collect();
+            assert!(g.iter().any(|t| t.contains("global-only")));
+            assert!(!g.iter().any(|t| t.contains("project-only")));
 
             fs::remove_dir_all(&repo).ok();
         });
     }
 
     #[test]
-    fn note_then_nap_then_wake() {
+    fn delete_log_entry_removes_one_line() {
         with_temp_home(|| {
             let repo = temp_repo();
-            let out = note(MemoryScope::Project, &repo, "alpha").unwrap();
-            assert!(out.contains("Saved as #0"));
+            note(MemoryScope::Global, &repo, "keep").unwrap();
+            note(MemoryScope::Global, &repo, "drop me").unwrap();
+            delete_log_entry(MemoryScope::Global, &repo, 1).unwrap();
+            let texts: Vec<_> = list_raw_entries(MemoryScope::Global, &repo)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.text)
+                .collect();
+            assert_eq!(texts, vec!["keep".to_string()]);
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
+    fn note_then_drain_then_wake_context() {
+        with_temp_home(|| {
+            let repo = temp_repo();
+            note(MemoryScope::Project, &repo, "alpha").unwrap();
             note(MemoryScope::Project, &repo, "beta").unwrap();
-            // size-2 block should be pending
-            let nap_out = nap(
-                MemoryScope::Project,
-                &repo,
-                Some("0-1"),
-                Some("alpha and beta"),
-            )
+            let written = drain_pending_naps(MemoryScope::Project, &repo, |_prompt| {
+                Ok("alpha and beta".to_string())
+            })
             .unwrap();
-            assert!(nap_out.contains("0-1 saved") || nap_out.contains("Nothing left"));
-            let wake_out = wake(MemoryScope::Project, &repo, None, None).unwrap();
-            assert!(wake_out.contains("awake") || wake_out.contains("alpha"));
+            assert!(written >= 1);
+            let wake_out = wake_context(&repo).unwrap();
+            assert!(wake_out.contains("alpha and beta") || wake_out.contains("alpha"));
             fs::remove_dir_all(&repo).ok();
         });
     }
 
     #[test]
-    fn config_rejects_wake_lines_above_the_cap() {
-        use crate::domain::optmem::WAKE_LINES_MAX;
-
-        with_temp_home(|| {
-            let repo = temp_repo();
-            let too_large = format!("WAKE_LINES={}", WAKE_LINES_MAX + 1);
-            let err = config(MemoryScope::Project, &repo, Some(&too_large)).unwrap_err();
-            assert!(matches!(
-                err,
-                AgentMemoryError::Domain(OptMemError::KnobTooLarge { .. })
-            ));
-
-            let at_cap = format!("WAKE_LINES={WAKE_LINES_MAX}");
-            assert!(config(MemoryScope::Project, &repo, Some(&at_cap)).is_ok());
-
-            fs::remove_dir_all(&repo).ok();
-        });
-    }
-
-    #[test]
-    fn wake_does_not_create_store_on_missing_dir() {
+    fn wake_context_does_not_create_store_on_missing_dir() {
         with_temp_home(|| {
             let repo = temp_repo();
             let mem = project_memory_dir(&repo);
             assert!(!mem.exists());
-            let out = wake(MemoryScope::Project, &repo, None, None).unwrap();
-            assert!(out.contains("No memories yet"));
-            assert!(!mem.exists(), "wake must not create {mem:?}");
             assert!(wake_context(&repo).unwrap().is_empty());
+            assert!(!mem.exists(), "wake must not create {mem:?}");
             fs::remove_dir_all(&repo).ok();
         });
     }
@@ -904,52 +487,12 @@ mod tests {
     }
 
     #[test]
-    fn recall_rejects_oversized_pattern() {
-        with_temp_home(|| {
-            let repo = temp_repo();
-            let long = "a".repeat(RECALL_PATTERN_MAX + 1);
-            let err = recall(MemoryScope::Project, &repo, &long).unwrap_err();
-            assert!(matches!(err, AgentMemoryError::Message(_)));
-            fs::remove_dir_all(&repo).ok();
-        });
-    }
-
-    #[test]
-    fn run_op_rejects_harness_managed_ops() {
-        with_temp_home(|| {
-            let repo = temp_repo();
-            for op in ["wake", "nap", "zoom", "config"] {
-                let err = run_op(
-                    MemoryScope::Project,
-                    &repo,
-                    op,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-                .unwrap_err();
-                let msg = err.to_string();
-                assert!(
-                    msg.contains("harness-managed"),
-                    "op {op}: {msg}"
-                );
-            }
-            fs::remove_dir_all(&repo).ok();
-        });
-    }
-
-    #[test]
-    fn note_result_does_not_ask_model_to_nap() {
+    fn note_result_is_short_confirmation() {
         with_temp_home(|| {
             let repo = temp_repo();
             note(MemoryScope::Project, &repo, "alpha").unwrap();
             let out = note(MemoryScope::Project, &repo, "beta").unwrap();
             assert!(out.contains("Saved as #1"));
-            assert!(!out.contains("Compress"));
-            assert!(!out.contains("op \"nap\""));
             fs::remove_dir_all(&repo).ok();
         });
     }

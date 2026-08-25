@@ -298,6 +298,7 @@ pub fn run() {
             commands::chat_history::chat_set_archived,
             commands::memory_pipeline::memory_extract_turn,
             commands::memory_log::memory_log_query,
+            commands::memory_log::memory_log_delete,
             commands::plans::plan_list,
             commands::plans::plan_get,
             commands::plans::plan_delete,

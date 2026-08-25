@@ -26,6 +26,8 @@ pub enum OptMemStoreError {
     CorruptSummary { lo: usize, hi: usize },
     #[error("the summary of #{lo}-{hi} is blank")]
     BlankSummary { lo: usize, hi: usize },
+    #[error("log index {0} is out of range")]
+    LogIndexOutOfRange(usize),
 }
 
 pub struct OptMemStore {
@@ -240,6 +242,36 @@ impl OptMemStore {
         Ok(())
     }
 
+    /// Remove one raw log entry by index and rebuild LOG.txt. OptMem ids are
+    /// positional — remaining entries are renumbered `#0..`. TREE summaries
+    /// are cleared because block ranges no longer match the log.
+    pub fn log_remove_at(&self, index: usize) -> Result<(), OptMemStoreError> {
+        let _lock = self.lock()?;
+        repair(&self.log_path(), LOG_REC)?;
+        let mut entries: Vec<MemoryEntry> = self
+            .log_scan()?
+            .collect::<Result<Vec<_>, _>>()?;
+        if index >= entries.len() {
+            return Err(OptMemStoreError::LogIndexOutOfRange(index));
+        }
+        entries.remove(index);
+        let path = self.log_path();
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+        for (k, entry) in entries.iter().enumerate() {
+            let line = format!("#{} {} {}", k, entry.date, entry.text);
+            let rec = pad_record(&line, LOG_REC)?;
+            f.write_all(&rec)?;
+        }
+        f.flush()?;
+        f.sync_all()?;
+        clear_tree_files(&self.dir)?;
+        Ok(())
+    }
+
     fn log_path(&self) -> PathBuf {
         self.dir.join("LOG.txt")
     }
@@ -297,6 +329,20 @@ impl Iterator for LogScan {
             }
         }
     }
+}
+
+fn clear_tree_files(dir: &Path) -> Result<(), OptMemStoreError> {
+    let tree = dir.join("TREE");
+    if !tree.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&tree)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 fn count_records(path: &Path, rec: usize) -> Result<usize, OptMemStoreError> {
@@ -487,6 +533,26 @@ mod tests {
             Err(OptMemStoreError::Domain(OptMemError::KnobTooLarge { .. }))
         ));
 
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn log_remove_at_renumbers_and_clears_tree() {
+        let dir = temp_dir();
+        let store = OptMemStore::init(&dir).unwrap();
+        store
+            .log_append(&[
+                ("2026-08-11".into(), "keep".into()),
+                ("2026-08-11".into(), "drop".into()),
+                ("2026-08-11".into(), "also keep".into()),
+            ])
+            .unwrap();
+        assert!(store.tree_put(0, 2, "summary").unwrap());
+        store.log_remove_at(1).unwrap();
+        assert_eq!(store.log_len().unwrap(), 2);
+        assert_eq!(store.log_get(0).unwrap().text, "keep");
+        assert_eq!(store.log_get(1).unwrap().text, "also keep");
+        assert!(store.tree_get(0, 2).unwrap().is_none());
         fs::remove_dir_all(&dir).ok();
     }
 }

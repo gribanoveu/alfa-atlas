@@ -23,6 +23,16 @@ export type MemoryLogFilter = {
   offset?: number;
 };
 
+export type MemoryLogDeleteRequest = {
+  scope: string;
+  id: number;
+  repoRoot?: string;
+};
+
 export function queryMemoryLog(filter: MemoryLogFilter): Promise<MemoryLogPage> {
   return invoke<MemoryLogPage>("memory_log_query", { filter });
+}
+
+export function deleteMemoryLogEntry(request: MemoryLogDeleteRequest): Promise<void> {
+  return invoke("memory_log_delete", { request });
 }

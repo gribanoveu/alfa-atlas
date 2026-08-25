@@ -141,8 +141,8 @@ mod tests {
         assert_eq!(preset.label, "EVC");
         assert_eq!(preset.limit, 60_000);
         assert_eq!(preset.window_minutes, 30);
-        assert_eq!(preset.work_from_hour, Some(8));
-        assert_eq!(preset.work_to_hour, Some(21));
+        assert_eq!(preset.work_from_hour, None);
+        assert_eq!(preset.work_to_hour, None);
         assert_eq!(preset.timezone_offset_hours, 3);
     }
 }

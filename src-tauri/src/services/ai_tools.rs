@@ -19,7 +19,7 @@ use crate::domain::ai_tools::{
     AsciidocTemplateEntry, CheckArgs, CheckKind, CreateDirectoryArgs, CreatePlanArgs,
     DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileDiffStats, FileEdit,
     GetAsciidocTemplatesArgs, GitBlameArgs, GitDiffArgs, GrepArgs, ListFilesArgs,
-    MatchSource, MemoryArgs, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
+    MatchSource, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
     RequestModeSwitchArgs, AskUserArgs, SemanticSearchArgs, SemanticSearchMeta,
     SemanticSearchPayload, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs,
     ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, UpdatePlanArgs,
@@ -201,7 +201,10 @@ pub fn execute_tool(
             .map_err(ToolError::from),
         ToolCall::TodoWrite(args) => todo_write(todos, args).map(ToolResult::TodoWritten),
         ToolCall::TodoUpdate(args) => todo_update(todos, args).map(ToolResult::TodoUpdated),
-        ToolCall::Memory(args) => memory(scope, args).map(|text| ToolResult::Memory { text }),
+        ToolCall::Memory(_) => Err(ToolError::InvalidArguments {
+            tool: "memory".to_string(),
+            reason: "the memory tool was removed; long-term memory is managed automatically by the harness".to_string(),
+        }),
         // No state to mutate — `ConversationMode` isn't persisted anywhere
         // server-side (see `domain::conversation_mode`'s doc comment); this
         // is a pure acknowledgement the frontend reacts to once the call
@@ -342,27 +345,6 @@ fn todo_update(todos: &[Task], args: TodoUpdateArgs) -> Result<Vec<Task>, ToolEr
         task.note = Some(note);
     }
     Ok(enforce_todo_invariant(updated))
-}
-
-fn memory(scope: &ToolScope, args: MemoryArgs) -> Result<String, ToolError> {
-    let mem_scope = agent_memory::MemoryScope::from_wire(&args.scope).map_err(|e| {
-        ToolError::InvalidArguments {
-            tool: "memory".to_string(),
-            reason: e,
-        }
-    })?;
-    agent_memory::run_op(
-        mem_scope,
-        &scope.repo_root,
-        &args.op,
-        args.text.as_deref(),
-        args.pattern.as_deref(),
-        args.block.as_deref(),
-        args.knob.as_deref(),
-        args.part.map(|p| p as usize),
-        args.snapshot_t.map(|t| t as usize),
-    )
-    .map_err(|e| ToolError::Memory(e.to_string()))
 }
 
 fn create_plan(args: CreatePlanArgs) -> Result<ToolResult, ToolError> {
@@ -677,9 +659,6 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map(ToolCall::RequestFullRepoAccess)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "todo" => parse_todo_call(&call.arguments)
-            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
-        "memory" => lenient_json_object::<MemoryArgs>(&call.arguments)
-            .map(ToolCall::Memory)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "requestModeSwitch" => lenient_json_object::<RequestModeSwitchArgs>(&call.arguments)
             .map(ToolCall::RequestModeSwitch)

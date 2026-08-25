@@ -1,8 +1,8 @@
-//! Read-only query over OptMem raw log entries for the memory viewer UI.
+//! Query and delete OptMem raw log entries for the memory viewer UI.
 
 use std::path::Path;
 
-use crate::domain::memory_log::{MemoryLogFilter, MemoryLogPage, MemoryLogRow};
+use crate::domain::memory_log::{MemoryLogDeleteRequest, MemoryLogFilter, MemoryLogPage, MemoryLogRow};
 use crate::services::agent_memory::{self, AgentMemoryError, MemoryScope};
 
 const DEFAULT_LIMIT: u32 = 50;
@@ -102,6 +102,22 @@ pub fn query(filter: &MemoryLogFilter) -> Result<MemoryLogPage, MemoryLogError> 
     })
 }
 
+pub fn delete_entry(request: &MemoryLogDeleteRequest) -> Result<(), MemoryLogError> {
+    let scope = parse_scope(&request.scope)?;
+    let repo_root = request.repo_root.as_deref().unwrap_or("");
+    if scope == MemoryScope::Project && repo_root.is_empty() {
+        return Err(MemoryLogError::Memory(AgentMemoryError::Message(
+            "project memory delete requires repoRoot".into(),
+        )));
+    }
+    agent_memory::delete_log_entry(scope, Path::new(repo_root), request.id as usize)?;
+    Ok(())
+}
+
+fn parse_scope(raw: &str) -> Result<MemoryScope, MemoryLogError> {
+    MemoryScope::from_wire(raw).map_err(AgentMemoryError::Message).map_err(MemoryLogError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +195,27 @@ mod tests {
             assert_eq!(page.total, 1);
             assert!(page.rows[0].text.contains("Rust"));
 
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
+    fn delete_entry_removes_global_row() {
+        with_temp_home(|| {
+            let repo = temp_repo();
+            agent_memory::note(MemoryScope::Global, &repo, "to delete").unwrap();
+            delete_entry(&MemoryLogDeleteRequest {
+                scope: "global".to_string(),
+                id: 0,
+                repo_root: None,
+            })
+            .unwrap();
+            let page = query(&MemoryLogFilter {
+                scope: Some("global".to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+            assert_eq!(page.total, 0);
             fs::remove_dir_all(&repo).ok();
         });
     }

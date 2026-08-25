@@ -34,3 +34,14 @@
   background: rgba(120, 140, 180, 0.18);
   color: var(--text-0);
 }
+
+.memory-log-detail-actions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.memory-log-delete-btn {
+  color: var(--danger, #c0392b);
+  border-color: rgba(192, 57, 43, 0.35);
+}

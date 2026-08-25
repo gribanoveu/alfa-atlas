@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { queryMemoryLog, type MemoryLogRow } from "../../lib/memoryLog";
+import { deleteMemoryLogEntry, queryMemoryLog, type MemoryLogRow } from "../../lib/memoryLog";
 import "../Welcome/CloneRepoModal.css";
 import "../ToolLog/ToolCallLogModal.css";
 import "./MemoryLogModal.css";
@@ -116,6 +116,7 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
   const [search, setSearch] = useState("");
   const [scope, setScope] = useState("");
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
   const filter = useMemo(
     () => ({
@@ -147,6 +148,32 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const handleDelete = useCallback(
+    async (row: MemoryLogRow) => {
+      const rowKey = `${row.scope}-${row.id}`;
+      if (deletingKey === rowKey) return;
+      const label = previewText(row.text, 80);
+      const ok = window.confirm(`Удалить запись #${row.id} (${scopeLabel(row.scope)})?\n\n${label}`);
+      if (!ok) return;
+      setDeletingKey(rowKey);
+      try {
+        await deleteMemoryLogEntry({
+          scope: row.scope,
+          id: row.id,
+          repoRoot: row.scope === "project" ? (projectRoot ?? undefined) : undefined,
+        });
+        if (expandedKey === rowKey) setExpandedKey(null);
+        await load();
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setDeletingKey(null);
+      }
+    },
+    [deletingKey, expandedKey, load, projectRoot],
+  );
 
   useEffect(() => {
     setOffset(0);
@@ -246,6 +273,19 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
                               {row.storePath}
                             </div>
                             <pre className="tool-log-detail-json">{row.text}</pre>
+                            <div className="memory-log-detail-actions">
+                              <button
+                                type="button"
+                                className="tool-log-btn memory-log-delete-btn"
+                                disabled={deletingKey === rowKey}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void handleDelete(row);
+                                }}
+                              >
+                                {deletingKey === rowKey ? "Удаление…" : "Удалить запись"}
+                              </button>
+                            </div>
                           </div>
                         </td>
                       </tr>

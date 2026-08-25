@@ -1,5 +1,4 @@
-//! Types for the read-only memory viewer — raw OptMem log rows from
-//! project and global stores.
+//! Types for the memory viewer — raw OptMem log rows and delete requests.
 
 use serde::{Deserialize, Serialize};
 
@@ -38,4 +37,13 @@ pub struct MemoryLogFilter {
     pub limit: Option<u32>,
     #[serde(default)]
     pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryLogDeleteRequest {
+    pub scope: String,
+    pub id: u32,
+    #[serde(default)]
+    pub repo_root: Option<String>,
 }
