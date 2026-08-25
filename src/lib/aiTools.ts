@@ -150,7 +150,6 @@ export type ToolCall =
           prompt: string;
           options: Array<{ id: string; label: string }>;
           allowMultiple: boolean;
-          allowCustom: boolean;
         }>;
       };
     }

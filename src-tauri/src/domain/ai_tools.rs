@@ -216,8 +216,6 @@ pub struct AskUserQuestion {
     pub options: Vec<AskUserOption>,
     #[serde(default)]
     pub allow_multiple: bool,
-    #[serde(default)]
-    pub allow_custom: bool,
 }
 
 /// Args for `askUser` — mid-turn clarifying questions (Cursor AskQuestion

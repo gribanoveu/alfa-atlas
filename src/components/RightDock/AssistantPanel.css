@@ -1870,6 +1870,18 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   min-width: 0;
 }
 
+.assistant-ask-user-card-custom-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.assistant-ask-user-card-custom-label {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  color: var(--text-2);
+}
+
 .assistant-ask-user-card-custom {
   width: 100%;
   box-sizing: border-box;
@@ -1892,6 +1904,10 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
 
 .assistant-ask-user-card-custom:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.assistant-ask-user-card-custom:not(:placeholder-shown) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
 .assistant-ask-user-card-custom:focus {

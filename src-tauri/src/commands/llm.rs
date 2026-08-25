@@ -756,12 +756,7 @@ fn run_tool_loop(
                 // tree hands it the whole shape (and where each entry sits)
                 // at a glance, same as a human skimming `tree(1)` output.
                 Ok(ToolResult::FileList(entries)) => {
-                    let root_label = scope
-                        .root
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(".");
-                    ai_tools::render_file_tree(entries, root_label)
+                    ai_tools::render_file_tree(entries)
                 }
                 // OptMem already formats wake/note/nap as agent-facing prose —
                 // wrapping it in JSON would only add noise and burn tokens.

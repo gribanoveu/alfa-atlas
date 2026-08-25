@@ -1359,7 +1359,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "askUser".to_string(),
             description:
-                "Ask the user one or more structured clarifying questions mid-turn and wait for their answers before continuing. Use when you genuinely cannot proceed without a choice (blocking fork, conflicting requirements, equally valid alternatives). Do NOT use for rhetorical questions, anything already visible in the repo, or when a reasonable default can be chosen and briefly mentioned. Prefer calling this alone in its own tool round — do not bundle with write/edit/delete. Do not also write the same question as plain chat text in the same turn. Keep 1–4 questions; options should be concrete and mutually exclusive unless allowMultiple is true. Available in every conversation mode (agent, plan, question)."
+                "Ask the user one or more structured clarifying questions mid-turn and wait for their answers before continuing. Use when you genuinely cannot proceed without a choice (blocking fork, conflicting requirements, equally valid alternatives). Do NOT use for rhetorical questions, anything already visible in the repo, or when a reasonable default can be chosen and briefly mentioned. Prefer calling this alone in its own tool round — do not bundle with write/edit/delete. Do not also write the same question as plain chat text in the same turn. Keep 1–4 questions; options should be concrete and mutually exclusive unless allowMultiple is true. The UI always offers a free-text field — the user may pick options, type their own answer, or both. Treat `customText` in the tool result as the user's real intent when present. Available in every conversation mode (agent, plan, question)."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1399,10 +1399,6 @@ pub fn llm_tool_definitions(
                                 "allowMultiple": {
                                     "type": "boolean",
                                     "description": "If true, the user may select more than one option (checkboxes). Default false (radio)."
-                                },
-                                "allowCustom": {
-                                    "type": "boolean",
-                                    "description": "If true, the user may also type a free-text answer. Default false."
                                 }
                             },
                             "required": ["id", "prompt", "options"]
@@ -1645,9 +1641,10 @@ struct TreeBuildNode {
 /// Renders a flat `listFiles` result as an indented ASCII tree (à la `tree(1)`)
 /// instead of a JSON array — so the model can see the whole directory
 /// structure and where each file sits at a glance, rather than reconstructing
-/// it from N separate `path` strings. `root_label` is the name shown on the
-/// first line (typically the scope root's own directory name).
-pub fn render_file_tree(entries: &[ToolFileEntry], root_label: &str) -> String {
+/// it from N separate `path` strings. The first line is always `./` (the
+/// access-mode root), never the on-disk folder name, so a docs-root folder
+/// such as `asciidoc` is not mistaken for a child to prepend onto paths.
+pub fn render_file_tree(entries: &[ToolFileEntry]) -> String {
     let mut root = TreeBuildNode::default();
     for entry in entries {
         let mut node = &mut root;
@@ -1662,7 +1659,7 @@ pub fn render_file_tree(entries: &[ToolFileEntry], root_label: &str) -> String {
         leaf.is_file = !entry.is_dir;
     }
 
-    let mut out = format!("{root_label}/\n");
+    let mut out = String::from("./\n");
     render_tree_children(&root, "", &mut out);
     out
 }
@@ -3360,11 +3357,11 @@ mod tests {
             ToolFileEntry { path: "src/test/java/com/example/UserServiceTest.java".to_string(), is_dir: false },
         ];
 
-        let tree = render_file_tree(&entries, "repository");
+        let tree = render_file_tree(&entries);
 
         assert_eq!(
             tree,
-            "repository/\n\
+            "./\n\
              ├── build.gradle\n\
              └── src/\n    \
              ├── main/\n    │   \
@@ -3386,7 +3383,7 @@ mod tests {
     #[test]
     fn render_file_tree_marks_explicit_empty_directory() {
         let entries = vec![ToolFileEntry { path: "empty".to_string(), is_dir: true }];
-        assert_eq!(render_file_tree(&entries, "repository"), "repository/\n└── empty/\n");
+        assert_eq!(render_file_tree(&entries), "./\n└── empty/\n");
     }
 
     /// Calls `execute_tool` for `ReadFile` and unwraps the expected
@@ -6142,7 +6139,7 @@ mod tests {
         let call = LlmToolCall {
             id: "call_1".to_string(),
             name: "askUser".to_string(),
-            arguments: r#"{"title":"Format","questions":[{"id":"fmt","prompt":"Which format?","options":[{"id":"adoc","label":"AsciiDoc"},{"id":"md","label":"Markdown"}],"allowMultiple":false,"allowCustom":true}]}"#.to_string(),
+            arguments: r#"{"title":"Format","questions":[{"id":"fmt","prompt":"Which format?","options":[{"id":"adoc","label":"AsciiDoc"},{"id":"md","label":"Markdown"}],"allowMultiple":false}]}"#.to_string(),
         };
         let parsed = parse_tool_call(&call).unwrap();
         match parsed {
@@ -6151,7 +6148,7 @@ mod tests {
                 assert_eq!(args.questions.len(), 1);
                 assert_eq!(args.questions[0].id, "fmt");
                 assert_eq!(args.questions[0].options.len(), 2);
-                assert!(args.questions[0].allow_custom);
+                assert!(!args.questions[0].allow_multiple);
             }
             other => panic!("expected AskUser, got {other:?}"),
         }
@@ -6266,7 +6263,6 @@ mod tests {
                         },
                     ],
                     allow_multiple: false,
-                    allow_custom: false,
                 }],
             }),
             &deps,

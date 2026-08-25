@@ -8,7 +8,6 @@ type AskQuestion = {
   prompt: string;
   options: AskOption[];
   allowMultiple: boolean;
-  allowCustom: boolean;
 };
 type AskArgs = {
   title: string | null;
@@ -48,7 +47,6 @@ function parseAskArgs(argumentsJson: string): AskArgs | null {
         prompt: q.prompt,
         options,
         allowMultiple: Boolean(q.allowMultiple),
-        allowCustom: Boolean(q.allowCustom),
       });
     }
     if (questions.length === 0) return null;
@@ -101,7 +99,7 @@ export function AssistantAskUserCard({ blocks, onAnswer, onSkip }: AssistantAskU
     for (const q of args.questions) {
       const picks = selected[blockId]?.[q.id] ?? [];
       const custom = (customText[blockId]?.[q.id] ?? "").trim();
-      if (picks.length === 0 && !(q.allowCustom && custom)) return false;
+      if (picks.length === 0 && !custom) return false;
     }
     return true;
   };
@@ -144,7 +142,7 @@ export function AssistantAskUserCard({ blocks, onAnswer, onSkip }: AssistantAskU
           questionId: q.id,
           selectedOptionIds: ids,
           selectedLabels: labels,
-          customText: q.allowCustom && custom ? custom : null,
+          customText: custom ? custom : null,
         };
       });
       onAnswer(block.id, { answers });
@@ -223,11 +221,13 @@ export function AssistantAskUserCard({ blocks, onAnswer, onSkip }: AssistantAskU
                         );
                       })}
                     </div>
-                    {q.allowCustom ? (
+                    <label className="assistant-ask-user-card-custom-wrap">
+                      <span className="assistant-ask-user-card-custom-label">Или свой ответ</span>
                       <textarea
                         className="assistant-ask-user-card-custom"
                         rows={2}
-                        placeholder="Или свой ответ…"
+                        placeholder="Если ни один вариант не подходит…"
+                        aria-label={`Свой ответ: ${q.prompt}`}
                         value={customText[block.id]?.[q.id] ?? ""}
                         disabled={decided}
                         onChange={(e) =>
@@ -236,8 +236,14 @@ export function AssistantAskUserCard({ blocks, onAnswer, onSkip }: AssistantAskU
                             [block.id]: { ...(prev[block.id] ?? {}), [q.id]: e.target.value },
                           }))
                         }
+                        onKeyDown={(e) => {
+                          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                            e.preventDefault();
+                            handleSubmit();
+                          }
+                        }}
                       />
-                    ) : null}
+                    </label>
                   </li>
                 );
               })}

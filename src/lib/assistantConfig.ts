@@ -9,6 +9,28 @@ import type { SpecsRepoInfo } from "./openapi";
  * `useLlmChat.ts`/`LlmTab.tsx`) so future additions/changes touch one file
  * rather than hunting through components for a magic string or number. */
 
+/** Docs-only vs Full-repo path examples shared by every conversation mode.
+ * Plan/Question used to show only the Full-repo form (`asciidoc/foo.adoc`),
+ * which made the model prepend the docs-root folder name while already
+ * rooted inside it. */
+function pathExampleBlock(docsRootRelativeToRepo: string | null): string {
+  const prefix = docsRootRelativeToRepo ?? "<docs-root>";
+  const intro = docsRootRelativeToRepo
+    ? `The documentation root in this project is \`${docsRootRelativeToRepo}\`. For the file \`architecture/system.adoc\` within it:`
+    : `The documentation root in this project coincides with the repository root (or is not yet known — use listFiles to confirm). Using the placeholder \`<docs-root>\` below is illustrative only, not a literal path — for the file \`architecture/system.adoc\` within it:`;
+  const openApi = docsRootRelativeToRepo
+    ? `For OpenAPI projects, the spec directory is the documentation root (\`${docsRootRelativeToRepo}\`). In Full-repo mode tool paths include that prefix; in Docs-only they do not.`
+    : `For OpenAPI projects, the spec directory is the documentation root. In Full-repo mode tool paths include the docs prefix; in Docs-only they do not.`;
+  return `${intro}
+
+- Docs-only (any tool): \`architecture/system.adoc\`
+- Full-repo (any tool): \`${prefix}/architecture/system.adoc\`
+
+In Docs-only do not prepend \`${prefix}\` — that is the access-mode root itself, not a child folder. A \`listFiles\` tree starts with \`./\`; that line is not a path segment.
+
+${openApi}`;
+}
+
 /** Compact router hint — skills catalog is never inlined into the prompt. */
 const SKILLS_ROUTER_HINT = `## Skills
 
@@ -69,13 +91,7 @@ export function buildAssistantSystemPrompt(
       }`
     : "Documentation";
 
-  const pathExamplePrefix = docsRootRelativeToRepo ?? "<docs-root>";
-  const pathExampleIntro = docsRootRelativeToRepo
-    ? `The documentation root in this project is \`${docsRootRelativeToRepo}\`. For the file \`architecture/system.adoc\` within it:`
-    : `The documentation root in this project coincides with the repository root (or is not yet known — use listFiles to confirm). Using the placeholder \`<docs-root>\` below is illustrative only, not a literal path — for the file \`architecture/system.adoc\` within it:`;
-  const openApiPathLine = docsRootRelativeToRepo
-    ? `For OpenAPI projects, the spec directory is the documentation root (\`${docsRootRelativeToRepo}\`). In Full-repo mode tool paths include that prefix; in Docs-only they do not.`
-    : `For OpenAPI projects, the spec directory is the documentation root. In Full-repo mode tool paths include the docs prefix; in Docs-only they do not.`;
+  const pathExamples = pathExampleBlock(docsRootRelativeToRepo);
 
   const toolUsageSection =
     toolDefinitions.length === 0
@@ -221,12 +237,7 @@ the documentation root in Docs-only, the repository root in Full-repo.
 - Pass paths between tools unchanged — a \`listFiles\`/\`readFile\`/\`grep\`/\`semanticSearch\`/\`check\` path is already valid for \`writeFile\`/\`editFile\`/\`move\`/\`check\` in the same mode.
 - Write/mutate/\`check\` still only succeed for paths under the documentation tree. A path outside it (e.g. source code in Full-repo) fails immediately with an error — do not retry the same path, and do not ask the user to approve an impossible write.
 
-${pathExampleIntro}
-
-- Docs-only (any tool): \`architecture/system.adoc\`
-- Full-repo (any tool): \`${pathExamplePrefix}/architecture/system.adoc\`
-
-${openApiPathLine}
+${pathExamples}
 
 ## Tool usage
 
@@ -408,9 +419,7 @@ export function buildPlanModeSystemPrompt(
       }`
     : "Documentation";
 
-  const pathExampleIntro = docsRootRelativeToRepo
-    ? `The documentation root in this project is \`${docsRootRelativeToRepo}\`. For the file \`architecture/system.adoc\` within it, use \`${docsRootRelativeToRepo}/architecture/system.adoc\` as the read path.`
-    : `The documentation root in this project coincides with the repository root (or is not yet known — use listFiles to confirm). Using the placeholder \`src/docs/asciidoc\` below is illustrative only, not a literal path — if the documentation root were \`src/docs/asciidoc\`, then for the file \`architecture/system.adoc\` within it, the read path would be \`src/docs/asciidoc/architecture/system.adoc\`.`;
+  const pathExamples = pathExampleBlock(docsRootRelativeToRepo);
 
   const toolUsageSection =
     toolDefinitions.length === 0
@@ -542,10 +551,7 @@ For ASCII directory/file trees and any pre-formatted diagram using \`├──\`
 
 All tool paths use the **access-mode root**: the documentation root in Docs-only, the repository root in Full-repo. Pass paths between tools unchanged.
 
-${pathExampleIntro}
-
-In Docs-only mode the access-mode root is the documentation root.
-In Full-repo mode the access-mode root is the repository root.
+${pathExamples}
 
 ## Response styles in Plan mode
 
@@ -601,9 +607,7 @@ export function buildQuestionModeSystemPrompt(
       }`
     : "Documentation";
 
-  const pathExampleIntro = docsRootRelativeToRepo
-    ? `The documentation root in this project is \`${docsRootRelativeToRepo}\`. For the file \`architecture/system.adoc\` within it, use \`${docsRootRelativeToRepo}/architecture/system.adoc\` as the read path.`
-    : `The documentation root in this project coincides with the repository root (or is not yet known — use listFiles to confirm). Using the placeholder \`src/docs/asciidoc\` below is illustrative only, not a literal path — if the documentation root were \`src/docs/asciidoc\`, then for the file \`architecture/system.adoc\` within it, the read path would be \`src/docs/asciidoc/architecture/system.adoc\`.`;
+  const pathExamples = pathExampleBlock(docsRootRelativeToRepo);
 
   const toolUsageSection =
     toolDefinitions.length === 0
@@ -646,7 +650,7 @@ Do not use \`askUser\` to request a mode change — that is \`requestModeSwitch\
 
 All tool paths use the **access-mode root**: the documentation root in Docs-only, the repository root in Full-repo. Pass paths between tools unchanged.
 
-${pathExampleIntro}
+${pathExamples}
 
 ## Tool usage
 
