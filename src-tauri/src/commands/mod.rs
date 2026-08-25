@@ -16,6 +16,7 @@ pub mod prefs;
 pub mod project;
 pub mod repo_index;
 pub mod search;
+pub mod skills;
 pub mod spellcheck;
 pub mod standards;
 pub mod tool_call_log;

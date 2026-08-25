@@ -24,6 +24,7 @@ import { LoggingTab } from "./LoggingTab";
 import { NotificationsTab } from "./NotificationsTab";
 import { PermissionsTab } from "./PermissionsTab";
 import { SpellcheckTab } from "./SpellcheckTab";
+import { SkillsTab } from "./SkillsTab";
 import { StandardsRulesTab } from "./StandardsRulesTab";
 
 export type SectionId =
@@ -36,6 +37,7 @@ export type SectionId =
   | "spellcheck"
   | "embeddings"
   | "llm"
+  | "skills"
   | "logging"
   | "notifications"
   | "permissions";
@@ -50,6 +52,7 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "spellcheck", label: "Орфография" },
   { id: "embeddings", label: "Эмбеддинги" },
   { id: "llm", label: "Провайдеры" },
+  { id: "skills", label: "Скилы" },
   { id: "logging", label: "Логирование" },
   { id: "notifications", label: "Уведомления" },
   { id: "permissions", label: "Разрешения" },
@@ -620,6 +623,8 @@ export function SettingsDialog({
             {section === "embeddings" ? <EmbeddingsTab repoRoot={projectRoot} /> : null}
 
             {section === "llm" ? <LlmTab /> : null}
+
+            {section === "skills" ? <SkillsTab /> : null}
 
             {section === "logging" ? <LoggingTab /> : null}
 

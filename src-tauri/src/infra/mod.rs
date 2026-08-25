@@ -1,3 +1,4 @@
+pub mod bundled_skills;
 pub mod chat_store;
 pub mod chunk_strategies;
 pub mod common_spec_assets;
@@ -26,6 +27,7 @@ pub mod project_store;
 pub mod repository_identity;
 pub mod settings_store;
 pub mod tool_call_log;
+pub mod user_skills_store;
 pub mod vector_store;
 pub mod workspace_scanner;
 pub mod workspace_store;

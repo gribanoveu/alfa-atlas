@@ -337,6 +337,51 @@ pub struct GetAsciidocTemplatesArgs {
     pub ids: Vec<String>,
 }
 
+/// Router for Agent Skills — `op` is `search` | `load` | `read`. Catalog is
+/// never dumped into the system prompt; the model must search first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillArgs {
+    pub op: String,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSearchHit {
+    pub name: String,
+    pub description: String,
+    pub source: crate::domain::agent_skills::SkillSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSearchResult {
+    pub matches: Vec<SkillSearchHit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillLoadedResult {
+    pub name: String,
+    pub source: crate::domain::agent_skills::SkillSource,
+    pub body: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillFileResult {
+    pub name: String,
+    pub path: String,
+    pub content: String,
+}
+
 /// Which verification `check` should run. Extensible — add variants as new
 /// check kinds ship; wire name is camelCase (`"problems"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -553,6 +598,7 @@ pub enum ToolCall {
     RequestModeSwitch(RequestModeSwitchArgs),
     GetAsciidocTemplates(GetAsciidocTemplatesArgs),
     AskUser(AskUserArgs),
+    Skill(SkillArgs),
     CreatePlan(CreatePlanArgs),
     UpdatePlan(UpdatePlanArgs),
     ReadPlan(ReadPlanArgs),
@@ -582,6 +628,7 @@ impl ToolCall {
             ToolCall::RequestModeSwitch(_) => ToolName::RequestModeSwitch,
             ToolCall::GetAsciidocTemplates(_) => ToolName::GetAsciidocTemplates,
             ToolCall::AskUser(_) => ToolName::AskUser,
+            ToolCall::Skill(_) => ToolName::Skill,
             ToolCall::CreatePlan(_) => ToolName::CreatePlan,
             ToolCall::UpdatePlan(_) => ToolName::UpdatePlan,
             ToolCall::ReadPlan(_) => ToolName::ReadPlan,
@@ -740,6 +787,13 @@ pub enum ToolResult {
         templates: Vec<AsciidocTemplateEntry>,
         not_found: Vec<String>,
     },
+    /// Settled `skill` `op: "search"` — compact name+description hits, never
+    /// the full catalog.
+    SkillSearch(SkillSearchResult),
+    /// Settled `skill` `op: "load"` — SKILL.md body plus companion file names.
+    SkillLoaded(SkillLoadedResult),
+    /// Settled `skill` `op: "read"` — one companion file.
+    SkillFile(SkillFileResult),
     /// Settled `askUser` — the user's structured answers collected by the
     /// frontend card and threaded back through `ToolCallDecision::answer`
     /// on resume (never produced by `execute_tool` itself).
@@ -900,6 +954,24 @@ pub enum ToolError {
     /// Plan store / validation failure.
     #[error("plan error: {0}")]
     Plan(String),
+    /// Agent Skills parse/router failure.
+    #[error("skill error: {0}")]
+    Skill(String),
+}
+
+impl From<crate::domain::agent_skills::SkillError> for ToolError {
+    fn from(err: crate::domain::agent_skills::SkillError) -> Self {
+        match err {
+            crate::domain::agent_skills::SkillError::NotFound(p) => ToolError::NotFound(p),
+            crate::domain::agent_skills::SkillError::PathEscape(p) => ToolError::PathEscape(p),
+            crate::domain::agent_skills::SkillError::EmptyQuery
+            | crate::domain::agent_skills::SkillError::UnknownOp(_) => ToolError::InvalidArguments {
+                tool: "skill".to_string(),
+                reason: err.to_string(),
+            },
+            other => ToolError::Skill(other.to_string()),
+        }
+    }
 }
 
 impl From<crate::domain::plan::PlanError> for ToolError {

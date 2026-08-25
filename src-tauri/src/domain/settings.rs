@@ -233,6 +233,11 @@ pub struct AppSettings {
     /// `infra::llm_credentials_store`.
     #[serde(default)]
     pub llm: crate::domain::llm::LlmSettings,
+    /// Global Agent Skills enable/disable overrides (`disabled` keys
+    /// `"bundled:name"` / `"user:name"`). Missing/empty = every discovered
+    /// skill is on.
+    #[serde(default)]
+    pub skills: crate::domain::agent_skills::SkillsSettings,
 }
 
 #[derive(Debug, Error)]

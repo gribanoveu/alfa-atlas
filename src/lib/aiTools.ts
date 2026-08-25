@@ -265,6 +265,17 @@ export type ToolResult =
       tool: "asciidocTemplates";
       result: { templates: AsciidocTemplateEntry[]; notFound: string[] };
     }
+  | {
+      tool: "skillSearch";
+      result: {
+        matches: Array<{ name: string; description: string; source: "bundled" | "user" }>;
+      };
+    }
+  | {
+      tool: "skillLoaded";
+      result: { name: string; source: "bundled" | "user"; body: string; files: string[] };
+    }
+  | { tool: "skillFile"; result: { name: string; path: string; content: string } }
   | { tool: "todoWritten"; result: Task[] }
   | { tool: "todoUpdated"; result: Task[] }
   | { tool: "memory"; result: { text: string } }

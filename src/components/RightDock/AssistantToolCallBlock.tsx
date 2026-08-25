@@ -515,6 +515,49 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
           ) : null}
         </div>
       );
+    case "skillSearch":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">Скилы</div>
+          {result.result.matches.length === 0 ? (
+            <p className="assistant-tool-call-detail-empty">Ничего не найдено</p>
+          ) : (
+            <ul className="assistant-tool-call-detail-list">
+              {result.result.matches.map((hit) => (
+                <li key={`${hit.source}:${hit.name}`}>
+                  <span>
+                    {hit.name}
+                    {hit.source === "user" ? " · пользовательский" : ""} — {hit.description}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      );
+    case "skillLoaded":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">{result.result.name}</div>
+          <pre className="assistant-tool-call-detail-pre" style={{ whiteSpace: "pre-wrap" }}>
+            {result.result.body}
+          </pre>
+          {result.result.files.length > 0 ? (
+            <p className="assistant-tool-call-detail-empty">
+              Файлы: {result.result.files.join(", ")}
+            </p>
+          ) : null}
+        </div>
+      );
+    case "skillFile":
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">{result.result.path}</div>
+          <pre className="assistant-tool-call-detail-pre" style={{ whiteSpace: "pre-wrap" }}>
+            {result.result.content}
+          </pre>
+        </div>
+      );
     case "todoWritten":
     case "todoUpdated":
       return <TodoChecklistDetail tasks={result.result} />;

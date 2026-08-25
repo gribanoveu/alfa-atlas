@@ -21,9 +21,9 @@ use crate::domain::ai_tools::{
     GetAsciidocTemplatesArgs, GitBlameArgs, GitDiffArgs, GrepArgs, ListFilesArgs,
     MatchSource, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
     RequestModeSwitchArgs, AskUserArgs, SemanticSearchArgs, SemanticSearchMeta,
-    SemanticSearchPayload, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus, TodoWriteArgs,
-    ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope, UpdatePlanArgs,
-    UpdatePlanTodoArgs, WriteFileArgs,
+    SemanticSearchPayload, SkillArgs, Task, TodoStatus, TodoUpdateArgs, TodoUpdateStatus,
+    TodoWriteArgs, ToolCall, ToolError, ToolFileEntry, ToolMatch, ToolResult, ToolScope,
+    UpdatePlanArgs, UpdatePlanTodoArgs, WriteFileArgs,
 };
 use crate::domain::asciidoc_element_templates::{
     find_many as find_asciidoc_templates, ASCIIDOC_ELEMENT_TEMPLATES,
@@ -215,6 +215,7 @@ pub fn execute_tool(
             Ok(ToolResult::ModeSwitchRequested { mode: args.mode, reason: args.reason })
         }
         ToolCall::GetAsciidocTemplates(args) => Ok(get_asciidoc_templates(args)),
+        ToolCall::Skill(args) => execute_skill(args),
         // Never produced here — answers come from `ToolCallDecision::answer`
         // on `llm_chat_stream_resume`. Calling via bare `ai_execute_tool`
         // without a user answer is a programming error, not a model recovery
@@ -247,6 +248,39 @@ fn get_asciidoc_templates(args: GetAsciidocTemplatesArgs) -> ToolResult {
         })
         .collect();
     ToolResult::AsciidocTemplates { templates, not_found }
+}
+
+fn execute_skill(args: SkillArgs) -> Result<ToolResult, ToolError> {
+    match args.op.as_str() {
+        "search" => {
+            let query = args.query.as_deref().unwrap_or("");
+            crate::services::agent_skills::search(query).map_err(ToolError::from)
+        }
+        "load" => {
+            let name = args.name.as_deref().unwrap_or("");
+            if name.is_empty() {
+                return Err(ToolError::InvalidArguments {
+                    tool: "skill".to_string(),
+                    reason: "load requires `name`".to_string(),
+                });
+            }
+            crate::services::agent_skills::load(name).map_err(ToolError::from)
+        }
+        "read" => {
+            let name = args.name.as_deref().unwrap_or("");
+            let path = args.path.as_deref().unwrap_or("");
+            if name.is_empty() || path.is_empty() {
+                return Err(ToolError::InvalidArguments {
+                    tool: "skill".to_string(),
+                    reason: "read requires `name` and `path`".to_string(),
+                });
+            }
+            crate::services::agent_skills::read(name, path).map_err(ToolError::from)
+        }
+        other => Err(ToolError::from(
+            crate::domain::agent_skills::SkillError::UnknownOp(other.to_string()),
+        )),
+    }
 }
 
 /// Correlation info available at a real (non-test) call site, threaded
@@ -533,6 +567,9 @@ const PLAN_TOOLS_MIGRATION: [ToolName; 4] = [
     ToolName::UpdatePlanTodo,
 ];
 
+/// Same backfill reason as `PLAN_TOOLS_MIGRATION` for the Agent Skills router.
+const SKILL_TOOL_MIGRATION: [ToolName; 1] = [ToolName::Skill];
+
 /// Backfills `config.ai_allowed_tools` with any `PLAN_TOOLS_MIGRATION` tool
 /// missing from an already-customized list, so a project saved before this
 /// feature shipped doesn't permanently lose access to it — `ToolName`
@@ -548,9 +585,9 @@ fn migrate_plan_tools_into_allowlist(config: &mut ProjectConfig) -> bool {
         return false;
     };
     let mut changed = false;
-    for tool in PLAN_TOOLS_MIGRATION {
-        if !list.contains(&tool) {
-            list.push(tool);
+    for tool in PLAN_TOOLS_MIGRATION.iter().chain(SKILL_TOOL_MIGRATION.iter()) {
+        if !list.contains(tool) {
+            list.push(*tool);
             changed = true;
         }
     }
@@ -665,6 +702,9 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "getAsciidocTemplates" => lenient_json_object::<GetAsciidocTemplatesArgs>(&call.arguments)
             .map(ToolCall::GetAsciidocTemplates)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "skill" => lenient_json_object::<SkillArgs>(&call.arguments)
+            .map(ToolCall::Skill)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "askUser" => lenient_json_object::<AskUserArgs>(&call.arguments)
             .and_then(|args| validate_ask_user_args(args).map_err(|reason| reason))
@@ -1281,6 +1321,37 @@ pub fn llm_tool_definitions(
                     }
                 },
                 "required": ["ids"]
+            }),
+        });
+    }
+    if visible(ToolName::Skill) {
+        defs.push(LlmToolDefinition {
+            name: "skill".to_string(),
+            description:
+                "Search and load specialized instruction packs (skills) on demand. Do not guess skill names and do not expect a catalog in this description. First call with op \"search\" and a short query about the current task (required — empty query is rejected). Then op \"load\" with a matching name to get full instructions. If those instructions point to a companion file, op \"read\" with name and path. Use this before filling a REST method folder after its scaffold, or when working with OpenAPI specs layout (schemas/operations/$ref) or any user-installed pack. Ordinary AsciiDoc authoring does not need a skill."
+                    .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "op": {
+                        "type": "string",
+                        "enum": ["search", "load", "read"],
+                        "description": "search: find skills by query. load: full SKILL.md body. read: one companion file."
+                    },
+                    "query": {
+                        "type": ["string", "null"],
+                        "description": "Required for op search. Short description of the task (not empty)."
+                    },
+                    "name": {
+                        "type": ["string", "null"],
+                        "description": "Skill name from a search hit. Required for load and read."
+                    },
+                    "path": {
+                        "type": ["string", "null"],
+                        "description": "Companion file path relative to the skill root. Required for read."
+                    }
+                },
+                "required": ["op"]
             }),
         });
     }
@@ -4884,6 +4955,7 @@ mod tests {
         assert!(list.contains(&ToolName::UpdatePlan));
         assert_eq!(list.iter().filter(|t| **t == ToolName::ReadPlan).count(), 1);
         assert!(list.contains(&ToolName::UpdatePlanTodo));
+        assert!(list.contains(&ToolName::Skill));
         assert!(!list.contains(&ToolName::WriteFile));
     }
 
@@ -6086,6 +6158,80 @@ mod tests {
     }
 
     #[test]
+    fn parse_tool_call_parses_skill_search_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "skill".to_string(),
+            arguments: r#"{"op":"search","query":"REST method folder"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::Skill(SkillArgs {
+                op: "search".to_string(),
+                query: Some("REST method folder".to_string()),
+                name: None,
+                path: None,
+            })
+        );
+    }
+
+    #[test]
+    fn execute_tool_skill_search_does_not_return_disabled() {
+        crate::infra::settings_store::test_support::with_temp_home(|| {
+            crate::services::agent_skills::set_skill_enabled(
+                crate::domain::agent_skills::SkillSource::Bundled,
+                "rest-endpoint-docs",
+                false,
+            )
+            .unwrap();
+            let (repo, docs) = fixture_repo();
+            let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+            let result = execute_tool(
+                &scope,
+                ToolCall::Skill(SkillArgs {
+                    op: "search".to_string(),
+                    query: Some("REST method folder documentation".to_string()),
+                    name: None,
+                    path: None,
+                }),
+                &EmbeddingDeps::empty(),
+                &[],
+            )
+            .unwrap();
+            match result {
+                ToolResult::SkillSearch(hits) => {
+                    assert!(!hits.matches.iter().any(|m| m.name == "rest-endpoint-docs"));
+                }
+                other => panic!("expected SkillSearch, got {other:?}"),
+            }
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
+    fn execute_tool_skill_load_unknown_name_errors() {
+        crate::infra::settings_store::test_support::with_temp_home(|| {
+            let (repo, docs) = fixture_repo();
+            let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+            let err = execute_tool(
+                &scope,
+                ToolCall::Skill(SkillArgs {
+                    op: "load".to_string(),
+                    query: None,
+                    name: Some("no-such-skill".to_string()),
+                    path: None,
+                }),
+                &EmbeddingDeps::empty(),
+                &[],
+            )
+            .unwrap_err();
+            assert!(matches!(err, ToolError::NotFound(_)));
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
     fn parse_tool_call_rejects_ask_user_with_too_few_options() {
         let call = LlmToolCall {
             id: "call_1".to_string(),
@@ -6224,7 +6370,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_twenty_in_agent_mode_by_default() {
+    fn llm_tool_definitions_includes_all_twenty_one_in_agent_mode_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -6250,6 +6396,7 @@ mod tests {
                 "todo",
                 "requestModeSwitch",
                 "getAsciidocTemplates",
+                "skill",
                 "askUser",
                 "readPlan",
                 "updatePlanTodo",
@@ -6287,6 +6434,7 @@ mod tests {
         assert!(plan_names.contains("requestFullRepoAccess"));
         assert!(plan_names.contains("requestModeSwitch"));
         assert!(plan_names.contains("getAsciidocTemplates"));
+        assert!(plan_names.contains("skill"));
         assert!(plan_names.contains("askUser"));
         assert!(plan_names.contains("createPlan"));
         assert!(plan_names.contains("updatePlan"));
@@ -6300,6 +6448,7 @@ mod tests {
         assert!(!question_names.contains("requestFullRepoAccess"));
         assert!(question_names.contains("requestModeSwitch"));
         assert!(question_names.contains("getAsciidocTemplates"));
+        assert!(question_names.contains("skill"));
         assert!(question_names.contains("askUser"));
 
         fs::remove_dir_all(&repo).ok();

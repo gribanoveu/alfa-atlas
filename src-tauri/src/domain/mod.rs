@@ -1,3 +1,4 @@
+pub mod agent_skills;
 pub mod ai_access;
 pub mod ai_tools;
 pub mod asciidoc_element_templates;

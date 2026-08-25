@@ -46,6 +46,7 @@ pub fn base_tools() -> HashSet<ToolName> {
         // format X" without needing write access.
         ToolName::GetAsciidocTemplates,
         ToolName::AskUser,
+        ToolName::Skill,
     ]
     .into_iter()
     .collect()
@@ -102,7 +103,7 @@ mod tests {
 
     #[test]
     fn agent_mode_has_every_tool() {
-        assert_eq!(mode_tools(ConversationMode::Agent).len(), 20);
+        assert_eq!(mode_tools(ConversationMode::Agent).len(), 21);
     }
 
     #[test]
@@ -123,6 +124,7 @@ mod tests {
         assert!(tools.contains(&ToolName::RequestFullRepoAccess));
         assert!(tools.contains(&ToolName::RequestModeSwitch));
         assert!(tools.contains(&ToolName::AskUser));
+        assert!(tools.contains(&ToolName::Skill));
         assert!(tools.contains(&ToolName::CreatePlan));
         assert!(tools.contains(&ToolName::UpdatePlan));
         assert!(tools.contains(&ToolName::ReadPlan));
@@ -144,6 +146,13 @@ mod tests {
     fn ask_user_is_reachable_from_every_mode() {
         for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Question] {
             assert!(mode_tools(mode).contains(&ToolName::AskUser));
+        }
+    }
+
+    #[test]
+    fn skill_is_reachable_from_every_mode() {
+        for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Question] {
+            assert!(mode_tools(mode).contains(&ToolName::Skill));
         }
     }
 

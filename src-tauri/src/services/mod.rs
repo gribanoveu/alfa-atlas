@@ -1,4 +1,5 @@
 pub mod agent_memory;
+pub mod agent_skills;
 pub mod ai_tools;
 pub mod chunk_builder;
 pub mod chunk_text;

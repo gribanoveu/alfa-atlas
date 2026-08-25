@@ -9,6 +9,11 @@ import type { SpecsRepoInfo } from "./openapi";
  * `useLlmChat.ts`/`LlmTab.tsx`) so future additions/changes touch one file
  * rather than hunting through components for a magic string or number. */
 
+/** Compact router hint — skills catalog is never inlined into the prompt. */
+const SKILLS_ROUTER_HINT = `## Skills
+
+Specialized workflows (filling a REST method folder after its scaffold, OpenAPI specs layout, and any user-installed packs) live behind the \`skill\` tool. Before that kind of work, call \`skill\` with \`op: "search"\` and a short query, then \`op: "load"\` a match and follow it. Do not skip this for those tasks. Ordinary AsciiDoc authoring does not need a skill. Empty search queries are rejected.`;
+
 // System prompt for the assistant embedded in Alfa Atlas. Built by a
 // function rather than a plain const so the date/timezone context line is
 // evaluated per-request instead of being frozen at module load (the app
@@ -226,6 +231,8 @@ ${openApiPathLine}
 ## Tool usage
 
 ${toolUsageSection}
+
+${SKILLS_ROUTER_HINT}
 
 When a project-specific claim requires verification: (1) check whether evidence is already in context, (2) if not, use the appropriate tool, (3) inspect the source, (4) only then present the claim as fact. Do not use tools to confirm avoidable assumptions. Do not perform exploratory searches unrelated to the request. If search results are only weak/indirect evidence, do not treat them as definitive. Read the source when precision matters. If a tool result contradicts an assumption, discard the assumption.
 
@@ -477,6 +484,8 @@ If a step cannot be made concrete without user input, list it under "Откры�
 
 ${toolUsageSection}
 
+${SKILLS_ROUTER_HINT}
+
 **Use read-only tools to:**
 - Discover the current structure of the area you'll propose changes to
 - Read existing content that will be modified or referenced
@@ -642,6 +651,8 @@ ${pathExampleIntro}
 ## Tool usage
 
 ${toolUsageSection}
+
+${SKILLS_ROUTER_HINT}
 
 ## Boundaries
 
@@ -933,6 +944,17 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       return `Запрашивает смену режима${typeof args.mode === "string" ? `: ${conversationModeLabel(args.mode)}` : ""}…`;
     case "getAsciidocTemplates":
       return "Читает шаблоны AsciiDoc…";
+    case "skill":
+      if (args.op === "search") {
+        return typeof args.query === "string" ? `Ищет скил: «${args.query}»…` : "Ищет скил…";
+      }
+      if (args.op === "load") {
+        return typeof args.name === "string" ? `Загружает скил: ${args.name}…` : "Загружает скил…";
+      }
+      if (args.op === "read") {
+        return typeof args.path === "string" ? `Читает файл скила: ${basename(String(args.path))}…` : "Читает файл скила…";
+      }
+      return "Работает со скилом…";
     case "askUser": {
       const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : null;
       const count = Array.isArray(args.questions) ? args.questions.length : 0;
@@ -1092,6 +1114,14 @@ export function describeToolResult(
       const suffix = notFound.length > 0 ? `, не найдено: ${notFound.length}` : "";
       return `Шаблонов: ${templates.length}${suffix}`;
     }
+    case "skillSearch": {
+      const { matches } = block.result.result;
+      return matches.length === 0 ? "Скилов: 0" : `Скилов: ${matches.length}`;
+    }
+    case "skillLoaded":
+      return `Скил: ${block.result.result.name}`;
+    case "skillFile":
+      return `Файл скила: ${basename(block.result.result.path)}`;
     case "todoWritten": {
       const tasks = block.result.result;
       return `Задач в списке: ${tasks.length}`;
