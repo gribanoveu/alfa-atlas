@@ -493,7 +493,7 @@ fn run_tool_loop(
         }
         if round >= MAX_TOOL_ITERATIONS as u32 || budget_used >= MAX_TOOL_BUDGET {
             return Err(format!(
-                "Ассистент не дал окончательный ответ за {MAX_TOOL_ITERATIONS} раундов обращения к инструментам (бюджет {budget_used}/{MAX_TOOL_BUDGET})"
+                "Ассистент не дал окончательный ответ за {MAX_TOOL_ITERATIONS} раундов обращения к инструментам. Попросите асистента продолжить, если вы уверены, что он ещё не закончил работу."
             ));
         }
         round += 1;
