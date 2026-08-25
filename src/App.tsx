@@ -62,6 +62,7 @@ import { useSpellcheckConfig } from "./hooks/useSpellcheckConfig";
 import { useGitPanel } from "./hooks/useGitPanel";
 import { usePanelLayout } from "./hooks/usePanelLayout";
 import { useProject } from "./hooks/useProject";
+import { useWindowTitle } from "./hooks/useWindowTitle";
 import { useAsciiDocParser } from "./hooks/useAsciiDocParser";
 import { useEditorViewMode } from "./hooks/useEditorViewMode";
 import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
@@ -182,6 +183,7 @@ function App() {
   const layout = useWorkspaceLayout();
   const viewMode = useEditorViewMode();
   const project = useProject();
+  useWindowTitle(project.projectName);
   const generalPrefs = useGeneralPrefs();
   const spellcheck = useSpellcheckConfig();
   const panels = usePanelLayout(project.repoRoot, {
