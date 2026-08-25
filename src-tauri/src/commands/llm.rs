@@ -58,7 +58,11 @@ use crate::domain::paths;
 use crate::domain::repo_index::FileId;
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
 use crate::services::ai_tools::{self, EmbeddingDeps, ToolCallLogContext};
-use crate::services::{agent_memory, chunk_builder::ChunkIndex, llm_config, repo_index::RepositoryIndex, workspace_index::WorkspaceIndex};
+use crate::services::{
+    agent_memory, chunk_builder::ChunkIndex, llm_config, llm_rate_limit, repo_index::RepositoryIndex,
+    workspace_index::WorkspaceIndex,
+};
+use crate::domain::llm_rate_limit::RateLimitSnapshot;
 
 /// Fires once per non-empty text chunk while `llm_chat_stream`'s promise is
 /// still in flight. Global/unscoped, matching `SYNC_PROGRESS_EVENT`'s
@@ -88,6 +92,11 @@ pub const TOOL_CALL_EVENT: &str = "llm:tool-call";
 /// matching entry in its transcript. Exactly one of `result`/`error` is
 /// ever `Some`.
 pub const TOOL_RESULT_EVENT: &str = "llm:tool-result";
+
+/// Fires after completion tokens are recorded into the rate-limit store,
+/// and after LLM settings are saved (the tracking toggle lives there) —
+/// the status-bar chip refreshes without waiting for its poll interval.
+pub const RATE_LIMIT_CHANGED_EVENT: &str = "llm:rate-limit-changed";
 
 /// A misbehaving/looping model shouldn't be able to hold the UI in a
 /// "thinking" state indefinitely — this caps how many model↔tool round
@@ -223,8 +232,12 @@ pub fn llm_get_settings() -> Result<LlmSettings, String> {
 }
 
 #[tauri::command]
-pub fn llm_set_settings(settings: LlmSettings) -> Result<(), String> {
-    llm_config::save_llm_settings(settings).map_err(|e| e.to_string())
+pub fn llm_set_settings(app: AppHandle, settings: LlmSettings) -> Result<(), String> {
+    llm_config::save_llm_settings(settings).map_err(|e| e.to_string())?;
+    // Settings owns `rate_limit_enabled`; the chip's hook already listens
+    // to this event, so a toggle takes effect without waiting for a poll.
+    let _ = app.emit(RATE_LIMIT_CHANGED_EVENT, ());
+    Ok(())
 }
 
 /// Every provider available for the Settings picker — every compiled-in
@@ -326,6 +339,7 @@ pub async fn llm_test_connection(
 /// the tool-calling machinery.
 #[tauri::command]
 pub async fn llm_chat_once(
+    app: AppHandle,
     provider_id: String,
     messages: Vec<LlmMessage>,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
@@ -355,10 +369,25 @@ pub async fn llm_chat_once(
         );
         let outcome = provider.chat(request).map_err(|e| e.to_string());
         llm_debug_log::log_chat_once_result(settings.debug_logging, &provider_id, &outcome);
+        if let Ok(ref response) = outcome {
+            if let Some(usage) = response.usage {
+                llm_rate_limit::record(&provider_id, usage.completion_tokens);
+                let _ = app.emit(RATE_LIMIT_CHANGED_EVENT, ());
+            }
+        }
         outcome
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Current rate-limit snapshot for the status-bar chip. Pure read — never
+/// blocks a chat turn. Policy comes from the baked-in `rateLimits` preset
+/// for `provider_id` (see `infra::llm_provider_manifest`) when tracking is
+/// on; otherwise a hidden noop.
+#[tauri::command]
+pub fn llm_rate_limit_snapshot(provider_id: String) -> RateLimitSnapshot {
+    llm_rate_limit::snapshot(&provider_id)
 }
 
 /// One round's cost against `MAX_TOOL_BUDGET` — the sum of
@@ -505,6 +534,10 @@ fn run_tool_loop(
                 let raw_result = ctx.provider.chat_stream(request, &on_delta, &on_reasoning, &cancelled);
                 llm_debug_log::log_response(ctx.settings.debug_logging, ctx.provider_id, round, &raw_result);
                 let result = raw_result.map_err(|e| e.to_string())?;
+                if let Some(usage) = result.usage {
+                    llm_rate_limit::record(ctx.provider_id, usage.completion_tokens);
+                    let _ = ctx.app.emit(RATE_LIMIT_CHANGED_EVENT, ());
+                }
 
                 // Checkpoint 2 — see this function's doc comment. Checked
                 // before either branch below so a stop that landed exactly
@@ -759,6 +792,7 @@ fn run_tool_loop(
                     let model = ctx.model;
                     let debug = ctx.settings.debug_logging;
                     let provider_id = ctx.provider_id;
+                    let app = ctx.app;
                     let _ = agent_memory::drain_pending_naps(mem_scope, &scope.repo_root, |prompt| {
                         let request = ChatRequest {
                             messages: vec![LlmMessage {
@@ -778,6 +812,12 @@ fn run_tool_loop(
                         );
                         let outcome = provider.chat(request).map_err(|e| e.to_string());
                         llm_debug_log::log_chat_once_result(debug, provider_id, &outcome);
+                        if let Ok(ref response) = outcome {
+                            if let Some(usage) = response.usage {
+                                llm_rate_limit::record(provider_id, usage.completion_tokens);
+                                let _ = app.emit(RATE_LIMIT_CHANGED_EVENT, ());
+                            }
+                        }
                         outcome.map(|resp| resp.content.unwrap_or_default())
                     });
                 }

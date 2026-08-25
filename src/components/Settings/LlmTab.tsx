@@ -41,6 +41,7 @@ export function LlmTab() {
     saveApiKey,
     loadModels,
     testConnection,
+    setRateLimitEnabled,
   } = useLlmSetup();
 
   const activeId = settings?.activeProviderId ?? providers[0]?.id ?? null;
@@ -486,6 +487,30 @@ export function LlmTab() {
             Добавить провайдера
           </button>
         </div>
+      </div>
+
+      <hr className="credentials-divider" />
+
+      <div className="settings-section-title">Лимиты API</div>
+      <p className="settings-lead">
+        Чип в статус-баре считает completion-токены по правилу, зашитому в
+        приложение для выбранного провайдера — так же, как список системных
+        провайдеров. Пороги и окно здесь не редактируются.
+      </p>
+      <div className="settings-row">
+        <label className="settings-check">
+          <input
+            type="checkbox"
+            checked={settings?.rateLimitEnabled ?? true}
+            disabled={busy || !settings}
+            onChange={(event) => void setRateLimitEnabled(event.target.checked)}
+          />
+          <span>Учитывать лимиты API</span>
+        </label>
+        <p className="settings-hint">
+          Для AlfaGen — скользящее окно EVC. Выключите, чтобы скрыть чип и не
+          записывать расход токенов.
+        </p>
       </div>
 
       {error ? <div className="settings-error">{error}</div> : null}

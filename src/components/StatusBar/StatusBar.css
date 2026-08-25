@@ -74,19 +74,23 @@
 .statusbar .seg.clickable {
   border: none;
   background: none;
-  padding: 0;
-  margin: 0;
+  padding: 2px 6px;
+  margin: 0 -6px;
+  border-radius: 4px;
   font: inherit;
   color: inherit;
   cursor: pointer;
 }
 
-.statusbar .seg.clickable:hover:not(:disabled) {
+.statusbar .seg.clickable:hover:not(:disabled),
+.statusbar .seg.clickable[aria-disabled="true"]:hover {
   color: var(--text-0, var(--text-1));
-  text-decoration: underline;
+  background: var(--bg-2);
+  text-decoration: none;
 }
 
-.statusbar .seg.clickable:disabled {
+.statusbar .seg.clickable:disabled,
+.statusbar .seg.clickable[aria-disabled="true"] {
   cursor: default;
 }
 
@@ -101,4 +105,175 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/* ── EVC / rate-limit chip ─────────────────────────────────── */
+
+.statusbar .seg.rate-limit {
+  position: relative;
+  gap: 0;
+}
+
+.statusbar .seg.rate-limit-chip {
+  gap: 6px;
+  padding: 2px 6px;
+  margin: 0 -6px;
+  border-radius: 4px;
+  color: var(--text-1);
+}
+
+.statusbar .seg.rate-limit-chip.open {
+  color: var(--text-0);
+  background: var(--bg-2);
+  text-decoration: none;
+}
+
+.statusbar .rate-limit-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  flex-shrink: 0;
+}
+
+.statusbar .rate-limit-chip.warning .rate-limit-dot {
+  background: var(--yellow);
+}
+
+.statusbar .rate-limit-chip.critical .rate-limit-dot {
+  background: var(--orange);
+}
+
+.statusbar .rate-limit-chip.limited .rate-limit-dot {
+  background: var(--red-tag);
+}
+
+.statusbar .rate-limit-chip.off-hours .rate-limit-dot {
+  background: var(--purple);
+}
+
+.statusbar .rate-limit-dot.pulse {
+  animation: rate-limit-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes rate-limit-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.statusbar .rate-limit-name {
+  color: var(--text-2);
+}
+
+.statusbar .rate-limit-chip.normal .rate-limit-value {
+  color: var(--text-1);
+}
+
+.statusbar .rate-limit-chip.warning {
+  color: var(--yellow);
+}
+
+.statusbar .rate-limit-chip.critical {
+  color: var(--orange);
+}
+
+.statusbar .rate-limit-chip.limited {
+  color: var(--red-tag);
+}
+
+.statusbar .rate-limit-chip.off-hours .rate-limit-value {
+  color: var(--purple);
+}
+
+.statusbar .rate-limit-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  width: 280px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 40;
+  color: var(--text-1);
+  font-size: var(--font-ui-sm);
+}
+
+.statusbar .rate-limit-title {
+  margin-bottom: 8px;
+  font-size: var(--font-ui-xs);
+  font-weight: 600;
+  color: var(--text-0);
+  letter-spacing: 0.01em;
+}
+
+.statusbar .rate-limit-usage-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.statusbar .rate-limit-usage-num {
+  font-size: calc(var(--font-ui) * 1.15);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.statusbar .rate-limit-usage-den {
+  color: var(--text-2);
+  font-weight: 400;
+  font-size: var(--font-ui-sm);
+}
+
+.statusbar .rate-limit-usage-unit {
+  color: var(--text-2);
+  font-size: var(--font-ui-xs);
+}
+
+.statusbar .rate-limit-bar-track {
+  height: 6px;
+  background: var(--bg-2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.statusbar .rate-limit-bar-fill {
+  height: 100%;
+  background: var(--green);
+  transition: width 0.2s ease, background-color 0.2s ease;
+}
+
+.statusbar .rate-limit-bar-fill.warning {
+  background: var(--yellow);
+}
+
+.statusbar .rate-limit-bar-fill.critical {
+  background: var(--orange);
+}
+
+.statusbar .rate-limit-bar-fill.limited {
+  background: var(--red-tag);
+}
+
+.statusbar .rate-limit-bar-fill.off-hours {
+  background: var(--purple);
+}
+
+.statusbar .rate-limit-hint {
+  margin-top: 8px;
+  color: var(--text-2);
+  font-size: var(--font-ui-xs);
+  line-height: 1.4;
+}
+
+.statusbar .rate-limit-hint.limited {
+  color: var(--red-tag);
 }

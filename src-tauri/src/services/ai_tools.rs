@@ -3882,7 +3882,11 @@ mod tests {
             self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             match &self.response {
                 Ok(content) => {
-                    Ok(crate::domain::llm::ChatResponse { content: Some(content.clone()), tool_calls: vec![] })
+                    Ok(crate::domain::llm::ChatResponse {
+                        content: Some(content.clone()),
+                        tool_calls: vec![],
+                        usage: None,
+                    })
                 }
                 Err(message) => Err(crate::domain::llm::LlmError::Provider(message.clone())),
             }

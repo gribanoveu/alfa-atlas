@@ -487,6 +487,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 Some(result.text)
             },
             tool_calls: result.tool_calls,
+            usage: result.usage,
         })
     }
 

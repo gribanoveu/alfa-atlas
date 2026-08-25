@@ -2,6 +2,8 @@ import { AlertCircle, AlertTriangle, Check, Loader2 } from "lucide-react";
 import type { IndexStats } from "../../lib/workspaceIndex";
 import type { IndexStatus, IndexProgress } from "../../hooks/useWorkspaceIndex";
 import type { EmbeddingIndexStatus, SyncProgress } from "../../lib/embeddings";
+import type { RateLimitSnapshot } from "../../lib/llm";
+import { RateLimitChip } from "./RateLimitChip";
 import "./StatusBar.css";
 
 type StatusBarProps = {
@@ -31,6 +33,10 @@ type StatusBarProps = {
    * label right after a successful click-to-sync — see `App.tsx`'s
    * `embedJustSynced` state for the timing. */
   embedJustSynced?: boolean;
+  /** EVC (or other) rate-limit snapshot. `null` hides the chip. */
+  rateLimitSnapshot?: RateLimitSnapshot | null;
+  rateLimitPopoverOpen?: boolean;
+  onRateLimitPopoverChange?: (open: boolean) => void;
 };
 
 type EmbedIndexState = "syncing" | "stale" | "synced" | "unsynced";
@@ -142,6 +148,9 @@ export function StatusBar({
   onEmbedSyncClick,
   embedSyncDisabled,
   embedJustSynced,
+  rateLimitSnapshot = null,
+  rateLimitPopoverOpen = false,
+  onRateLimitPopoverChange,
 }: StatusBarProps) {
   const showIndex = indexStatus !== "idle";
   const Icon =
@@ -195,8 +204,11 @@ export function StatusBar({
                 ? "Индекс эмбеддингов (документация и репозиторий)"
                 : "Индекс эмбеддингов (документация и репозиторий) — нажмите, чтобы синхронизировать"
             }
-            disabled={embedSyncDisabled}
-            onClick={onEmbedSyncClick}
+            aria-disabled={embedSyncDisabled || undefined}
+            onClick={() => {
+              if (embedSyncDisabled) return;
+              onEmbedSyncClick();
+            }}
           >
             {embedJustSynced ? (
               <Check size={11} />
@@ -213,6 +225,13 @@ export function StatusBar({
             {embedIndexLabel(embedState, embedIndexStatus, embedSyncProgress)}
           </div>
         )
+      ) : null}
+      {rateLimitSnapshot && onRateLimitPopoverChange ? (
+        <RateLimitChip
+          snapshot={rateLimitSnapshot}
+          open={rateLimitPopoverOpen}
+          onOpenChange={onRateLimitPopoverChange}
+        />
       ) : null}
       {hasActiveFile ? (
         <>

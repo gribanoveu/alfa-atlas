@@ -12,6 +12,7 @@ pub mod git;
 pub mod git_action_log;
 pub mod layout;
 pub mod llm;
+pub mod llm_rate_limit;
 pub mod onboarding;
 pub mod openapi;
 pub mod optmem;

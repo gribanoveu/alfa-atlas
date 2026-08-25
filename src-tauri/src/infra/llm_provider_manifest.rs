@@ -1,7 +1,8 @@
 //! Compiled-in registry of "system" LLM providers, embedded at compile
 //! time from the top-level `llm` section of
 //! `assets/llm/system_providers.json` (the same file that holds the
-//! global embedding preset under `embedding`).
+//! global embedding preset under `embedding` and baked-in API rate-limit
+//! rules under `rateLimits`).
 //!
 //! Embedding (rather than shipping as a Tauri bundle resource) sidesteps
 //! the resource-path differences between `cargo tauri dev` and a bundled
@@ -26,6 +27,7 @@ use std::sync::LazyLock;
 
 use crate::domain::embeddings::EmbeddingPreset;
 use crate::domain::llm::LlmProviderPreset;
+use crate::domain::llm_rate_limit::RateLimitPreset;
 use serde::Deserialize;
 
 const MANIFEST_JSON: &str = include_str!("../../assets/llm/system_providers.json");
@@ -38,22 +40,34 @@ struct SystemProvidersManifest {
     #[serde(default)]
     #[allow(dead_code)]
     embedding: EmbeddingPreset,
+    /// Baked-in API rate-limit rules, keyed by provider id. Empty means
+    /// no status-bar chip for anyone — a fork clears this the same way it
+    /// clears `llm`.
+    #[serde(default)]
+    rate_limits: Vec<RateLimitPreset>,
 }
 
-static PARSED: LazyLock<Vec<LlmProviderPreset>> = LazyLock::new(|| {
-    let manifest: SystemProvidersManifest = serde_json::from_str(MANIFEST_JSON)
-        .expect("bundled system_providers.json must be a valid SystemProvidersManifest");
-    manifest.llm
+static PARSED: LazyLock<SystemProvidersManifest> = LazyLock::new(|| {
+    serde_json::from_str(MANIFEST_JSON)
+        .expect("bundled system_providers.json must be a valid SystemProvidersManifest")
 });
 
 /// Every system provider this build ships with — `&[]` if the `llm`
 /// section was emptied out by a fork. Parsed once, for the process lifetime.
 pub fn system_providers() -> &'static [LlmProviderPreset] {
-    &PARSED
+    &PARSED.llm
 }
 
 pub fn find_system_provider(id: &str) -> Option<&'static LlmProviderPreset> {
-    PARSED.iter().find(|preset| preset.id == id)
+    PARSED.llm.iter().find(|preset| preset.id == id)
+}
+
+pub fn rate_limit_presets() -> &'static [RateLimitPreset] {
+    &PARSED.rate_limits
+}
+
+pub fn find_rate_limit(provider_id: &str) -> Option<&'static RateLimitPreset> {
+    rate_limit_presets().iter().find(|preset| preset.provider_id == provider_id)
 }
 
 #[cfg(test)]
@@ -113,5 +127,22 @@ mod tests {
         let manifest: SystemProvidersManifest =
             serde_json::from_str(r#"{"llm":[],"embedding":{}}"#).unwrap();
         assert!(manifest.llm.is_empty());
+        assert!(manifest.rate_limits.is_empty());
+    }
+
+    #[test]
+    fn bundled_manifest_contains_evc_rate_limit_for_alfagen() {
+        assert!(
+            rate_limit_presets().iter().any(|p| p.provider_id == "alfagen"),
+            "rate_limit_presets() must surface the same baked-in rules as find_rate_limit"
+        );
+        let preset = find_rate_limit("alfagen").expect("alfagen rate limit present");
+        assert_eq!(preset.policy_id, "evc-sliding-window");
+        assert_eq!(preset.label, "EVC");
+        assert_eq!(preset.limit, 60_000);
+        assert_eq!(preset.window_minutes, 30);
+        assert_eq!(preset.work_from_hour, Some(8));
+        assert_eq!(preset.work_to_hour, Some(21));
+        assert_eq!(preset.timezone_offset_hours, 3);
     }
 }

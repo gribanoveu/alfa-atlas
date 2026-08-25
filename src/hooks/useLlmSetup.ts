@@ -190,6 +190,24 @@ export function useLlmSetup() {
     [settings],
   );
 
+  const setRateLimitEnabled = useCallback(
+    async (enabled: boolean) => {
+      if (!settings) return;
+      const next = { ...settings, rateLimitEnabled: enabled };
+      setSettingsState(next);
+      setBusy(true);
+      try {
+        await setLlmSettings(next);
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [settings],
+  );
+
   const removeProvider = useCallback(
     async (providerId: string) => {
       setBusy(true);
@@ -243,6 +261,7 @@ export function useLlmSetup() {
     setToolCallLogging,
     setTaskDoneSoundEnabled,
     setNeedAnswerSoundEnabled,
+    setRateLimitEnabled,
     removeProvider,
     saveApiKey,
     loadModels,

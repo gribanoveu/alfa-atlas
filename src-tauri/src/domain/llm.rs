@@ -126,6 +126,12 @@ pub struct LlmSettings {
     /// reads this flag.
     #[serde(default = "default_true")]
     pub need_answer_sound_enabled: bool,
+    /// On by default. When off, the status-bar rate-limit chip is hidden
+    /// and completion tokens are not recorded — the baked-in rule from
+    /// `system_providers.json` `rateLimits` stays unused until this is
+    /// turned back on.
+    #[serde(default = "default_true")]
+    pub rate_limit_enabled: bool,
 }
 
 fn default_true() -> bool {
@@ -142,6 +148,7 @@ impl Default for LlmSettings {
             tool_call_logging: true,
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
+            rate_limit_enabled: true,
         }
     }
 }
@@ -305,6 +312,12 @@ pub struct ChatResponse {
     pub content: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<LlmToolCall>,
+    /// Real token usage when the provider reported it on the final chunk
+    /// (one-shot `chat` is implemented via streaming, so this is the same
+    /// trailing `usage` field `chat_stream` already surfaces). `None` when
+    /// the server omitted it — callers must not invent a count.
+    #[serde(default)]
+    pub usage: Option<ChatUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -530,6 +543,13 @@ mod tests {
         let settings = LlmSettings::default();
         assert_eq!(settings.active_provider_id, None);
         assert!(settings.providers.is_empty());
+        assert!(settings.rate_limit_enabled);
+    }
+
+    #[test]
+    fn settings_missing_rate_limit_flag_defaults_on() {
+        let settings: LlmSettings = serde_json::from_str("{}").unwrap();
+        assert!(settings.rate_limit_enabled);
     }
 
     #[test]

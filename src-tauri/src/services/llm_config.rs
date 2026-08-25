@@ -208,6 +208,7 @@ mod tests {
             tool_call_logging: true,
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
+            rate_limit_enabled: true,
         };
         let resolved = resolve_provider("alfagen", &settings).unwrap();
         // Unset override fields still fall back to the manifest.
@@ -242,6 +243,7 @@ mod tests {
             tool_call_logging: true,
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
+            rate_limit_enabled: true,
         };
         assert!(resolve_provider("my-custom", &settings).is_err());
     }
@@ -263,6 +265,7 @@ mod tests {
             tool_call_logging: true,
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
+            rate_limit_enabled: true,
         };
         let resolved = resolve_provider("my-custom", &settings).unwrap();
         assert!(!resolved.is_system);
@@ -287,6 +290,7 @@ mod tests {
             tool_call_logging: true,
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
+            rate_limit_enabled: true,
         };
         let list = list_resolved_providers(&settings);
         let alfagen_rows: Vec<_> = list.iter().filter(|p| p.id == "alfagen").collect();
@@ -311,6 +315,7 @@ mod tests {
             tool_call_logging: true,
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
+            rate_limit_enabled: true,
         };
         let list = list_resolved_providers(&settings);
         let ids: Vec<&str> = list.iter().map(|p| p.id.as_str()).collect();
@@ -334,6 +339,7 @@ mod tests {
             tool_call_logging: true,
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
+            rate_limit_enabled: true,
         };
         let list = list_resolved_providers(&settings);
         assert!(!list.iter().any(|p| p.id == "unfinished"));
@@ -425,6 +431,7 @@ mod tests {
             tool_call_logging: true,
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
+            rate_limit_enabled: true,
         };
         remove_provider_config(&mut settings, "a");
         assert!(settings.providers.is_empty());
@@ -441,6 +448,7 @@ mod tests {
             tool_call_logging: true,
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
+            rate_limit_enabled: true,
         };
         remove_provider_config(&mut settings, "a");
         assert_eq!(settings.active_provider_id.as_deref(), Some("b"));

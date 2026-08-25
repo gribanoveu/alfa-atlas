@@ -70,6 +70,7 @@ import { useEmbeddingIndexWarmup } from "./hooks/useEmbeddingIndexWarmup";
 import { useEmbeddingPriorityFiles } from "./hooks/useEmbeddingPriorityFiles";
 import { useEmbeddingSetup } from "./hooks/useEmbeddingSetup";
 import { useLlmSetup } from "./hooks/useLlmSetup";
+import { useLlmRateLimit } from "./hooks/useLlmRateLimit";
 import { findAnchors } from "./lib/workspaceIndex";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
@@ -544,6 +545,10 @@ function App() {
   const llmSetup = useLlmSetup();
   const selectionAiProviderId =
     llmSetup.settings?.activeProviderId ?? llmSetup.providers[0]?.id ?? null;
+  // Backend snapshot already respects `rateLimitEnabled` and the baked-in
+  // preset; gating here on App's copy of settings would miss a toggle
+  // made in the Settings dialog (a separate `useLlmSetup` instance).
+  const rateLimit = useLlmRateLimit(selectionAiProviderId);
   const selectionAiLlmReady =
     selectionAiProviderId !== null &&
     Boolean(llmSetup.hasApiKeyMap[selectionAiProviderId]);
@@ -1917,6 +1922,9 @@ function App() {
         onEmbedSyncClick={hasProject ? handleEmbedSyncClick : undefined}
         embedSyncDisabled={embeddingSetup.busy || !embeddingSetup.providerConfigured}
         embedJustSynced={embedJustSynced}
+        rateLimitSnapshot={rateLimit.snapshot}
+        rateLimitPopoverOpen={rateLimit.popoverOpen}
+        onRateLimitPopoverChange={rateLimit.setPopoverOpen}
       />
 
       {project.pendingOpen ? (

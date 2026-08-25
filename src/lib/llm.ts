@@ -54,6 +54,10 @@ export type LlmSettings = {
    * unfocused, also sends an OS notification. Ordinary tool-approval cards
    * stay silent. Toggled from the LLM settings tab. */
   needAnswerSoundEnabled: boolean;
+  /** On by default. When off, the status-bar rate-limit chip is hidden
+   * and completion tokens are not recorded. The baked-in rule lives in
+   * `system_providers.json` `rateLimits`. */
+  rateLimitEnabled: boolean;
 };
 
 // Mirrors `domain::llm::ResolvedLlmProvider` — the merged, ready-to-use
@@ -234,6 +238,53 @@ export function testLlmConnection(providerId: string): Promise<string> {
 export type ChatOnceResponse = {
   content: string | null;
 };
+
+/** Mirrors `domain::llm_rate_limit::RateLimitSeverity`. */
+export type RateLimitSeverity =
+  | "normal"
+  | "warning"
+  | "critical"
+  | "limited"
+  | "offHours";
+
+/** Mirrors `domain::llm_rate_limit::RateLimitRelease`. */
+export type RateLimitRelease = {
+  at: number;
+  tokens: number;
+};
+
+/** Mirrors `domain::llm_rate_limit::RateLimitSample`. */
+export type RateLimitSample = {
+  id: string;
+  at: number;
+  tokens: number;
+  expiresAt: number;
+};
+
+/** Mirrors `domain::llm_rate_limit::RateLimitSnapshot` — stable UI contract;
+ * the frontend must not hard-code window length / limit / working hours. */
+export type RateLimitSnapshot = {
+  policyId: string;
+  label: string;
+  used: number;
+  remaining: number;
+  limit: number;
+  windowMs: number | null;
+  isEnforced: boolean;
+  isLimited: boolean;
+  severity: RateLimitSeverity;
+  retryUntil: number | null;
+  nextReleaseAt: number | null;
+  nextEnforceAt: number | null;
+  releases: RateLimitRelease[];
+  samples: RateLimitSample[];
+};
+
+/** Current rate-limit snapshot for the status-bar chip. `policyId === "none"`
+ * means the chip should stay hidden (non-EVC provider). */
+export function getLlmRateLimitSnapshot(providerId: string): Promise<RateLimitSnapshot> {
+  return invoke<RateLimitSnapshot>("llm_rate_limit_snapshot", { providerId });
+}
 
 /** One non-streaming, tool-free completion — used by the history-compaction
  * summarization pass (see `src/lib/contextCompaction.ts`), never by the main
