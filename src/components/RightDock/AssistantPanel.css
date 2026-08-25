@@ -2244,6 +2244,29 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   background: var(--bg-1);
 }
 
+.assistant-tool-call-detail-list > li.assistant-tool-call-standards-folder {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.assistant-tool-call-standards-fails {
+  margin: 0;
+  padding: 0 0 0 14px;
+  list-style: disc;
+}
+
+.assistant-tool-call-detail-list .assistant-tool-call-standards-fails li {
+  display: list-item;
+  align-items: unset;
+  padding: 1px 0;
+  color: var(--text-2);
+}
+
+.assistant-tool-call-detail-list .assistant-tool-call-standards-fails li:hover {
+  background: transparent;
+}
+
 .assistant-tool-call-detail-icon {
   flex: none;
 

@@ -275,6 +275,7 @@
   margin-top: 2px;
   font-size: var(--font-ui-sm);
   color: var(--text-2);
+  white-space: pre-wrap;
 }
 
 .standards-toggle-all {

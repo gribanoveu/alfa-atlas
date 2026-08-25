@@ -38,7 +38,7 @@ include::{methodName}.puml[]
 
 (The scaffold may still say `sequence_diagramm` in comments; the generated include target is `{methodName}.puml`.)
 
-5. **Алгоритм работы** — numbered list. **First item is always «Валидация входных параметров».** Later headings repeat those list items.
+5. **Алгоритм работы** — numbered list of steps, not a prose paragraph. **First item is always «Валидация входных параметров».** Each list item is then expanded below as its own heading (`=== …`) with the same title and a detailed description (tables, includes, links). Do not stop at the list.
 6. **Валидация входных параметров** — table Параметр / Условие / Результат. Cover parameters that are actually validated; if the set is small, list the rest as «не валидируется/не проверяется». All columns required. Use row-span (`.2+|`) when one parameter has several conditions.
 7. Per-step sections for business/external calls:
    - Heading must include a `link:` to the used service's docs in git, e.g. `=== Шаг 1. Вызов link:ссылка[названиеМетода]`

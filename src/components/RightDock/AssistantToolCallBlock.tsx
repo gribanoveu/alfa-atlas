@@ -10,10 +10,17 @@ import type { ToolCallBlock } from "../../lib/chatBlocks";
  * itself still received the untruncated content; this doesn't change what
  * was sent). */
 const MAX_DETAIL_CHARS = 4000;
+const FINDING_PREVIEW_CHARS = 120;
 
 function truncateForDisplay(text: string): { text: string; truncated: boolean } {
   if (text.length <= MAX_DETAIL_CHARS) return { text, truncated: false };
   return { text: text.slice(0, MAX_DETAIL_CHARS), truncated: true };
+}
+
+function findingPreview(message: string): string {
+  const firstLine = (message.split("\n")[0] ?? message).trim();
+  if (firstLine.length <= FINDING_PREVIEW_CHARS) return firstLine;
+  return `${firstLine.slice(0, FINDING_PREVIEW_CHARS - 1)}…`;
 }
 
 /** `diff` for a settled `writeFile`/`editFile`/`deleteFile` call, or `null`
@@ -432,13 +439,19 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
                 const pct = f.maxScore > 0 ? Math.round((f.score / f.maxScore) * 100) : 0;
                 const failing = f.findings.filter((finding) => !finding.passed);
                 return (
-                  <li key={f.folder}>
+                  <li key={f.folder} className="assistant-tool-call-standards-folder">
                     <span>
                       [{f.passed ? "✓" : "✗"} {pct}%] {f.folder}
-                      {failing.length > 0
-                        ? ` — ${failing.map((finding) => `${finding.ruleId}: ${finding.message}`).join("; ")}`
-                        : ""}
                     </span>
+                    {failing.length > 0 ? (
+                      <ul className="assistant-tool-call-standards-fails">
+                        {failing.map((finding) => (
+                          <li key={finding.ruleId}>
+                            {finding.ruleId} — {findingPreview(finding.message)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </li>
                 );
               })}
