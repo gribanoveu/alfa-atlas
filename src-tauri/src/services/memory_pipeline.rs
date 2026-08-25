@@ -7,11 +7,12 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::domain::memory_extract::{
-    extractor_prompt, parse_extractor_output, ExtractorOutput, MemoryExtractError, MemoryFactScope,
-    TurnTranscript,
+    extractor_prompt, parse_extractor_output, reconcile_prompt, ExtractorOutput, MemoryExtractError,
+    MemoryFactScope, ReconcileNeighbor, TurnTranscript,
 };
 use crate::domain::memory_policy::{
-    apply_policy, ApprovedFact, MemoryEntrySnapshot, MemoryPolicyConfig,
+    apply_policy, neighbors_for_facts, ApprovedFact, MemoryEntrySnapshot, MemoryPolicyConfig,
+    SimilarEntry,
 };
 use crate::services::agent_memory::{self, AgentMemoryError, MemoryScope};
 
@@ -105,8 +106,10 @@ where
     Ok(StoreReport { noted, naps })
 }
 
-/// Full extract → policy → store for one turn. `llm` is used for both the
-/// extractor call and subsequent OptMem nap summaries.
+/// Full extract → nearest-neighbor reconcile → policy → store.
+/// `llm` is used for the extractor, optional reconcile, and OptMem naps.
+/// A reconcile LLM failure is an error — drafts are not stored, so the
+/// watermark in `commands::memory_pipeline` does not advance.
 pub fn run_turn<F>(
     transcript: &TurnTranscript,
     repo_root: &Path,
@@ -116,10 +119,35 @@ pub fn run_turn<F>(
 where
     F: FnMut(&str) -> Result<String, String>,
 {
-    let output = extract_from_turn(transcript, |prompt| llm(prompt))?;
+    let mut output = extract_from_turn(transcript, |prompt| llm(prompt))?;
     let existing = load_existing_snapshots(repo_root)?;
+    let neighbors = neighbors_for_facts(&output.facts, &existing);
+    if !neighbors.is_empty() {
+        output = reconcile_with_neighbors(&output, &neighbors, |prompt| llm(prompt))?;
+    }
     let approved = facts_to_store(output, &existing, config);
     store_facts(&approved, repo_root, llm)
+}
+
+fn reconcile_with_neighbors<F>(
+    drafts: &ExtractorOutput,
+    neighbors: &[SimilarEntry],
+    llm: F,
+) -> Result<ExtractorOutput, MemoryPipelineError>
+where
+    F: FnOnce(&str) -> Result<String, String>,
+{
+    let shown: Vec<ReconcileNeighbor> = neighbors
+        .iter()
+        .map(|n| ReconcileNeighbor {
+            id: n.id,
+            text: n.text.clone(),
+            scope: n.scope,
+        })
+        .collect();
+    let prompt = reconcile_prompt(&drafts.facts, &shown);
+    let raw = llm(&prompt).map_err(MemoryPipelineError::Llm)?;
+    Ok(parse_extractor_output(&raw)?)
 }
 
 #[cfg(test)]
@@ -203,6 +231,80 @@ mod tests {
             assert!(agent_memory::list_raw_entries(MemoryScope::Global, &repo)
                 .unwrap()
                 .is_empty());
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
+    fn run_turn_skips_reconcile_when_no_similar_hits() {
+        with_temp_home(|| {
+            let repo = temp_repo();
+            let turn = TurnTranscript {
+                user_message: "I prefer Rust for backend work".into(),
+                assistant_text: "We'll stick with Rust.".into(),
+            };
+            let extract_calls = std::cell::Cell::new(0usize);
+            let reconcile_calls = std::cell::Cell::new(0usize);
+            let report = run_turn(
+                &turn,
+                &repo,
+                &MemoryPolicyConfig::default(),
+                |prompt| {
+                    if prompt.contains("Nearest existing memories") {
+                        reconcile_calls.set(reconcile_calls.get() + 1);
+                        return Ok(r#"{"facts":[]}"#.into());
+                    }
+                    if prompt.contains("extract long-term memories") {
+                        extract_calls.set(extract_calls.get() + 1);
+                        return Ok(r#"{"facts":[{"fact":"User prefers Rust for backend work","type":"preference","confidence":0.94,"scope":"project"}]}"#.into());
+                    }
+                    Ok("user prefers rust".into())
+                },
+            )
+            .unwrap();
+            assert_eq!(extract_calls.get(), 1);
+            assert_eq!(reconcile_calls.get(), 0);
+            assert_eq!(report.noted, 1);
+            fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    #[test]
+    fn run_turn_reconciles_near_match_and_empty_reply_stores_nothing() {
+        with_temp_home(|| {
+            let repo = temp_repo();
+            agent_memory::note(
+                MemoryScope::Project,
+                &repo,
+                "saveAusnDetails is a Kafka consumer for MARKED_TRANSACTIONS topic; no REST response exists, only async processing",
+            )
+            .unwrap();
+            let turn = TurnTranscript {
+                user_message: "how does saveAusnDetails work?".into(),
+                assistant_text: "It is a Kafka consumer with no REST response.".into(),
+            };
+            let reconcile_calls = std::cell::Cell::new(0usize);
+            let report = run_turn(
+                &turn,
+                &repo,
+                &MemoryPolicyConfig::default(),
+                |prompt| {
+                    if prompt.contains("Nearest existing memories") {
+                        reconcile_calls.set(reconcile_calls.get() + 1);
+                        assert!(prompt.contains("#0") || prompt.contains("MARKED_TRANSACTIONS"));
+                        return Ok(r#"{"facts":[]}"#.into());
+                    }
+                    if prompt.contains("extract long-term memories") {
+                        return Ok(r#"{"facts":[{"fact":"saveAusnDetails methods are Kafka consumers with no response; request/response doc stubs contain explanatory placeholders","type":"project_context","confidence":0.96,"scope":"project"}]}"#.into());
+                    }
+                    Ok("summary".into())
+                },
+            )
+            .unwrap();
+            assert_eq!(reconcile_calls.get(), 1);
+            assert_eq!(report.noted, 0);
+            let entries = agent_memory::list_raw_entries(MemoryScope::Project, &repo).unwrap();
+            assert_eq!(entries.len(), 1);
             fs::remove_dir_all(&repo).ok();
         });
     }

@@ -70,15 +70,19 @@ pub fn extractor_prompt(turn: &TurnTranscript) -> String {
          {{\"facts\":[{{\"fact\":\"...\",\"type\":\"preference|project_context|team_decision|tooling\",\"confidence\":0.0,\"scope\":\"project|global\",\"supersedes_hint\":null}}]}}\n\
          \n\
          Rules:\n\
-         - Extract only durable facts that will still matter in a later session.\n\
-         - Skip ephemeral work (this turn's edits, debugging in progress, one-off questions).\n\
+         - Usually return an empty facts array. That is the correct default.\n\
+         - At most 2 facts. Never more.\n\
+         - Extract only durable facts that will still matter in a later session: an explicit user preference, a team decision the user confirmed, or a lasting repository convention.\n\
+         - Do NOT store Atlas/assistant capabilities (built-in skills such as rest-endpoint-docs or openapi-specs-layout, getAsciidocTemplates, integrity checks, harness tools).\n\
+         - Do NOT store this turn's findings: broken/malformed tables, empty sections, typos, missing files, audit scores (56/97, 12 of 13 pass), checklists of issues.\n\
+         - Do NOT store implementation details the assistant discovered by reading code and that can be re-read (@ValidMonths, a specific Gateway method).\n\
+         - Architecture belongs in memory only if the USER confirmed it, not merely because the assistant found it in source.\n\
          - Skip secrets (passwords, API keys, tokens, credentials).\n\
-         - Prefer at most 4 facts. Empty facts array is correct when nothing lasting was said.\n\
          - Each fact is one dense English telegram-style line, 10–500 characters, no newlines.\n\
          - type must be one of: preference, project_context, team_decision, tooling.\n\
          - scope \"project\" = this repository (stack, docs structure, team decisions).\n\
          - scope \"global\" = user preferences that apply across projects.\n\
-         - confidence is 0.0–1.0; use ≥ 0.85 only when the fact is explicit, not inferred.\n\
+         - confidence is 0.0–1.0; use ≥ 0.90 only when the fact is explicit, not inferred.\n\
          - If this turn updates an earlier memory, set supersedes_hint to a distinctive substring of the old fact; otherwise null.\n\
          \n\
          USER:\n{}\n\
@@ -86,6 +90,78 @@ pub fn extractor_prompt(turn: &TurnTranscript) -> String {
          ASSISTANT:\n{}",
         turn.user_message, turn.assistant_text
     )
+}
+
+/// One already-stored OptMem line shown to the extractor on the reconcile
+/// pass. Domain-pure display DTO — ranking lives in `memory_policy`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconcileNeighbor {
+    pub id: usize,
+    pub text: String,
+    pub scope: MemoryFactScope,
+}
+
+/// Second extractor call: drafts plus the nearest already-stored lines.
+/// Does not include the original turn (the first call already saw it).
+pub fn reconcile_prompt(drafts: &[ExtractedFact], neighbors: &[ReconcileNeighbor]) -> String {
+    let mut drafts_block = String::new();
+    for (i, d) in drafts.iter().enumerate() {
+        let hint = d
+            .supersedes_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
+            .unwrap_or("null");
+        drafts_block.push_str(&format!(
+            "  {i}. type={} scope={} confidence={:.2} supersedes_hint={hint}\n     {}\n",
+            fact_type_wire(d.fact_type),
+            scope_wire(d.scope),
+            d.confidence,
+            d.fact
+        ));
+    }
+    let mut existing_block = String::new();
+    for n in neighbors {
+        existing_block.push_str(&format!(
+            "  #{} [{}] {}\n",
+            n.id,
+            scope_wire(n.scope),
+            n.text
+        ));
+    }
+    format!(
+        "You already proposed new long-term memories from one assistant-chat turn. \
+         Nearest existing memories (already stored) are listed below.\n\
+         \n\
+         Return ONLY a JSON object of this exact shape (no markdown, no commentary):\n\
+         {{\"facts\":[{{\"fact\":\"...\",\"type\":\"preference|project_context|team_decision|tooling\",\"confidence\":0.0,\"scope\":\"project|global\",\"supersedes_hint\":null}}]}}\n\
+         \n\
+         Rules:\n\
+         - If an existing line already covers a draft, drop that draft.\n\
+         - If a draft updates an existing line, keep it and set supersedes_hint to a distinctive substring of that existing text.\n\
+         - Keep only genuinely new durable facts. Empty facts array is correct when nothing new remains.\n\
+         - At most 2 facts. Do not invent facts that were not in the drafts.\n\
+         \n\
+         DRAFTS:\n{drafts_block}\n\
+         EXISTING:\n{existing_block}"
+    )
+}
+
+fn fact_type_wire(t: MemoryFactType) -> &'static str {
+    match t {
+        MemoryFactType::Preference => "preference",
+        MemoryFactType::ProjectContext => "project_context",
+        MemoryFactType::TeamDecision => "team_decision",
+        MemoryFactType::Tooling => "tooling",
+        MemoryFactType::Other => "other",
+    }
+}
+
+fn scope_wire(s: MemoryFactScope) -> &'static str {
+    match s {
+        MemoryFactScope::Project => "project",
+        MemoryFactScope::Global => "global",
+    }
 }
 
 /// Pull a JSON object out of a model reply that may wrap it in fences or
@@ -266,5 +342,43 @@ mod tests {
         let pending = pending_turn(&messages, -1).unwrap();
         assert!(pending.transcript.is_none());
         assert_eq!(pending.last_ordinal, 0);
+    }
+
+    #[test]
+    fn extractor_prompt_asks_for_empty_default_and_at_most_two() {
+        let turn = TurnTranscript {
+            user_message: "hello".into(),
+            assistant_text: "hi".into(),
+        };
+        let prompt = extractor_prompt(&turn);
+        assert!(prompt.contains("extract long-term memories"));
+        assert!(prompt.contains("Usually return an empty facts array"));
+        assert!(prompt.contains("At most 2 facts"));
+        assert!(prompt.contains("rest-endpoint-docs"));
+        assert!(prompt.contains("USER:\nhello"));
+        assert!(prompt.contains("ASSISTANT:\nhi"));
+    }
+
+    #[test]
+    fn reconcile_prompt_lists_drafts_and_nearest_ids_not_the_turn() {
+        let drafts = [ExtractedFact {
+            fact: "saveAusnDetails is a Kafka consumer".into(),
+            fact_type: MemoryFactType::ProjectContext,
+            confidence: 0.94,
+            scope: MemoryFactScope::Project,
+            supersedes_hint: None,
+        }];
+        let neighbors = [ReconcileNeighbor {
+            id: 10,
+            text: "saveAusnDetails is a Kafka consumer for MARKED_TRANSACTIONS topic".into(),
+            scope: MemoryFactScope::Project,
+        }];
+        let prompt = reconcile_prompt(&drafts, &neighbors);
+        assert!(prompt.contains("Nearest existing memories"));
+        assert!(prompt.contains("#10"));
+        assert!(prompt.contains("MARKED_TRANSACTIONS"));
+        assert!(prompt.contains("saveAusnDetails is a Kafka consumer"));
+        assert!(!prompt.contains("USER:"));
+        assert!(!prompt.contains("ASSISTANT:"));
     }
 }
