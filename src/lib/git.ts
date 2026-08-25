@@ -120,6 +120,24 @@ export function syncPillLabel(state: SyncPillState): string {
   }
 }
 
+/** Compact label for the TopBar sync pill — full text stays in `title`. */
+export function syncPillShortLabel(state: SyncPillState): string {
+  switch (state) {
+    case "conflict":
+      return "Конфликт";
+    case "merging":
+      return "Слияние";
+    case "dirty":
+      return "Изменения";
+    case "behind":
+      return "Обновить";
+    case "unpushed":
+      return "Отправить";
+    case "synced":
+      return "Синхронизировано";
+  }
+}
+
 export type GitSyncStatus = {
   ahead: number;
   behind: number;

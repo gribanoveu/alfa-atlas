@@ -4,7 +4,8 @@
   display: flex;
   align-items: center;
   padding: 0 10px;
-  gap: 18px;
+  gap: 12px;
+  min-height: 36px;
   -webkit-app-region: drag;
 }
 
@@ -16,6 +17,7 @@
   -webkit-app-region: no-drag;
   position: relative;
   z-index: 20;
+  flex: none;
 }
 
 .menu-root {
@@ -92,13 +94,15 @@
 
 .topbar-spacer {
   flex: 1;
+  min-width: 0;
 }
 
 .topbar-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   -webkit-app-region: no-drag;
+  flex: none;
 }
 
 .topbar-nav-buttons {
@@ -128,23 +132,46 @@
   cursor: default;
 }
 
+.topbar-context {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-1);
+  overflow: hidden;
+}
+
+.topbar-context-divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  flex: none;
+}
+
 .sync-pill {
   display: flex;
   align-items: center;
   gap: 5px;
   font-size: var(--font-ui-sm);
-  padding: 4px 10px;
-  margin-left: 6px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg-1);
+  padding: 5px 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-1);
   white-space: nowrap;
   -webkit-app-region: no-drag;
+  flex: none;
+  max-width: 160px;
 }
 
 .sync-pill:hover {
   background: var(--bg-2);
+}
+
+.sync-pill-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sync-pill-synced {
@@ -153,6 +180,10 @@
 
 .sync-pill-unpushed {
   color: var(--orange);
+}
+
+.sync-pill-dirty {
+  color: var(--yellow);
 }
 
 .sync-pill-behind,
@@ -164,56 +195,72 @@
   color: #e5534b;
 }
 
+.repo-chip-wrapper {
+  position: relative;
+  min-width: 0;
+}
+
 .repo-chip {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  padding: 4px 10px;
-  border-radius: 5px;
+  height: 100%;
+  background: transparent;
+  border: none;
+  padding: 5px 10px;
+  border-radius: 0;
   font-size: var(--font-ui-sm);
   color: var(--text-1);
   cursor: pointer;
   -webkit-app-region: no-drag;
+  max-width: 200px;
 }
 
 .repo-chip:hover {
   background: var(--bg-2);
 }
 
-.repo-chip svg {
-  width: 12px;
-  height: 12px;
-}
-
-.repo-chip b {
+.repo-chip-name {
   color: var(--text-0);
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
-.repo-chip-wrapper {
-  position: relative;
+.repo-chip-chevron {
+  flex: none;
+  color: var(--text-2);
 }
 
 .branch-chip {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: var(--green);
   font-size: var(--font-ui-sm);
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg-1);
+  padding: 5px 10px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   cursor: pointer;
+  max-width: 180px;
 }
 
-.branch-chip:hover:not(:disabled) {
+.branch-chip:hover:not(:disabled),
+.branch-chip.is-open {
   background: var(--bg-2);
 }
 
 .branch-chip:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.branch-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }

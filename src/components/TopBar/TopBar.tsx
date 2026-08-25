@@ -1,6 +1,6 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronLeft, ChevronRight, FolderOpen } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, FolderOpen, GitBranch } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
@@ -255,41 +255,47 @@ export function TopBar({
             </button>
           </div>
           {hasProject ? (
-            <SyncStatusPill state={syncPillState} onClick={onSyncPillClick} />
+            <div className="topbar-context">
+              <SyncStatusPill state={syncPillState} onClick={onSyncPillClick} />
+              <span className="topbar-context-divider" aria-hidden />
+              <div className="repo-chip-wrapper">
+                <button
+                  type="button"
+                  className="repo-chip"
+                  onClick={() => setRecentDropdownOpen(!recentDropdownOpen)}
+                  aria-expanded={recentDropdownOpen}
+                  aria-haspopup="menu"
+                  title="Недавние проекты"
+                >
+                  <FolderOpen size={13} aria-hidden />
+                  <span className="repo-chip-name">{repoName}</span>
+                  <ChevronDown size={12} className="repo-chip-chevron" aria-hidden />
+                </button>
+                {recentDropdownOpen ? (
+                  <RecentProjectsDropdown
+                    onSelect={(root) => {
+                      setRecentDropdownOpen(false);
+                      onSelectProject?.(root);
+                    }}
+                    onClose={() => setRecentDropdownOpen(false)}
+                  />
+                ) : null}
+              </div>
+              <span className="topbar-context-divider" aria-hidden />
+              <button
+                type="button"
+                className={`branch-chip${branchesPanelOpen ? " is-open" : ""}`}
+                disabled={!hasProject || gitBusy || branchBusy}
+                onClick={onBranchChipClick}
+                aria-expanded={branchesPanelOpen}
+                aria-controls="branches-panel"
+                title="Ветки"
+              >
+                <GitBranch size={13} aria-hidden />
+                <span className="branch-chip-name">{branchName}</span>
+              </button>
+            </div>
           ) : null}
-          <div className="repo-chip-wrapper">
-            <button
-              type="button"
-              className="repo-chip"
-              onClick={() =>
-                setRecentDropdownOpen(!recentDropdownOpen)
-              }
-              aria-expanded={recentDropdownOpen}
-              aria-haspopup="menu"
-            >
-              <FolderOpen size={14} />
-              <b>{repoName}</b>
-            </button>
-            {recentDropdownOpen ? (
-              <RecentProjectsDropdown
-                onSelect={(root) => {
-                  setRecentDropdownOpen(false);
-                  onSelectProject?.(root);
-                }}
-                onClose={() => setRecentDropdownOpen(false)}
-              />
-            ) : null}
-          </div>
-          <button
-            type="button"
-            className="branch-chip"
-            disabled={!hasProject || gitBusy || branchBusy}
-            onClick={onBranchChipClick}
-            aria-expanded={branchesPanelOpen}
-            aria-controls="branches-panel"
-          >
-            ⎇ {branchName}
-          </button>
         </div>
       </header>
 
