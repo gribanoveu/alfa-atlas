@@ -38,51 +38,42 @@ pub fn search_under_root(
         _ => None,
     };
 
-    let subdir = resolve_subdir(root, args.path.as_deref())?;
-    let scan_root = subdir.unwrap_or_else(|| root.to_path_buf());
-
-    let files = workspace_scanner::scan_all_with_depth(&scan_root, None)?;
+    let target = resolve_search_target(root, args.path.as_deref())?;
     let mut matches = Vec::new();
     let mut truncated = false;
 
-    'files: for scanned in files {
-        if scanned.size > MAX_GREP_FILE_BYTES {
-            continue;
+    match target {
+        SearchTarget::File(path) => {
+            let rel = paths::relative_to(root, &path)?.replace('\\', "/");
+            truncated = grep_one_file(
+                &path,
+                &rel,
+                &re,
+                glob.as_ref(),
+                max_results,
+                &mut matches,
+            );
         }
-        let rel = match paths::relative_to(root, &scanned.path) {
-            Ok(r) => r.replace('\\', "/"),
-            Err(_) => continue,
-        };
-        if let Some(ref matcher) = glob {
-            if !matcher.is_match(basename(&rel)) {
-                continue;
+        SearchTarget::Dir(scan_root) => {
+            let files = workspace_scanner::scan_all_with_depth(&scan_root, None)?;
+            'files: for scanned in files {
+                let rel = match paths::relative_to(root, &scanned.path) {
+                    Ok(r) => r.replace('\\', "/"),
+                    Err(_) => continue,
+                };
+                let hit = grep_one_file(
+                    &scanned.path,
+                    &rel,
+                    &re,
+                    glob.as_ref(),
+                    max_results,
+                    &mut matches,
+                );
+                if hit {
+                    truncated = true;
+                    break 'files;
+                }
             }
-        }
-
-        let Ok(bytes) = fs::read(&scanned.path) else {
-            continue;
-        };
-        let sniff_len = GREP_BINARY_SNIFF_BYTES.min(bytes.len());
-        if bytes[..sniff_len].contains(&0) {
-            continue;
-        }
-        let Ok(content) = String::from_utf8(bytes) else {
-            continue;
-        };
-
-        for (idx, line) in content.lines().enumerate() {
-            if !re.is_match(line) {
-                continue;
-            }
-            if matches.len() >= max_results {
-                truncated = true;
-                break 'files;
-            }
-            matches.push(GrepMatch {
-                path: rel.clone(),
-                line: (idx + 1) as u32,
-                text: truncate_grep_line(line),
-            });
         }
     }
 
@@ -114,22 +105,76 @@ fn compile_glob(pattern: &str) -> Result<globset::GlobMatcher, DocsSearchError> 
         .map_err(|e| DocsSearchError::InvalidPattern(e.to_string()))
 }
 
-fn resolve_subdir(
+/// `path` is a file (search only that file) or a directory (walk it).
+/// `None` / `.` / empty → the whole `root`.
+enum SearchTarget {
+    Dir(PathBuf),
+    File(PathBuf),
+}
+
+fn resolve_search_target(
     root: &Path,
     path: Option<&str>,
-) -> Result<Option<PathBuf>, DocsSearchError> {
-    let Some(path) = path else {
-        return Ok(None);
+) -> Result<SearchTarget, DocsSearchError> {
+    let Some(path) = path.filter(|p| !p.is_empty() && *p != ".") else {
+        return Ok(SearchTarget::Dir(root.to_path_buf()));
     };
-    if path.is_empty() || path == "." {
-        return Ok(None);
-    }
     let joined = paths::join_relative(root, path)?;
     let canonical = paths::ensure_under(root, &joined)?;
-    if !canonical.is_dir() {
-        return Err(DocsSearchError::NotFound(path.to_string()));
+    if canonical.is_file() {
+        return Ok(SearchTarget::File(canonical));
     }
-    Ok(Some(canonical))
+    if canonical.is_dir() {
+        return Ok(SearchTarget::Dir(canonical));
+    }
+    Err(DocsSearchError::NotFound(path.to_string()))
+}
+
+/// Pushes line hits from one file. Returns `true` when `max_results` is hit
+/// (caller should stop walking).
+fn grep_one_file(
+    abs: &Path,
+    rel: &str,
+    re: &regex::Regex,
+    glob: Option<&globset::GlobMatcher>,
+    max_results: usize,
+    matches: &mut Vec<GrepMatch>,
+) -> bool {
+    if let Some(matcher) = glob {
+        if !matcher.is_match(basename(rel)) {
+            return false;
+        }
+    }
+    let Ok(meta) = fs::metadata(abs) else {
+        return false;
+    };
+    if meta.len() > MAX_GREP_FILE_BYTES {
+        return false;
+    }
+    let Ok(bytes) = fs::read(abs) else {
+        return false;
+    };
+    let sniff_len = GREP_BINARY_SNIFF_BYTES.min(bytes.len());
+    if bytes[..sniff_len].contains(&0) {
+        return false;
+    }
+    let Ok(content) = String::from_utf8(bytes) else {
+        return false;
+    };
+    for (idx, line) in content.lines().enumerate() {
+        if !re.is_match(line) {
+            continue;
+        }
+        if matches.len() >= max_results {
+            return true;
+        }
+        matches.push(GrepMatch {
+            path: rel.to_string(),
+            line: (idx + 1) as u32,
+            text: truncate_grep_line(line),
+        });
+    }
+    false
 }
 
 fn truncate_grep_line(line: &str) -> String {
@@ -255,6 +300,48 @@ mod tests {
 
         assert_eq!(payload.matches.len(), 1);
         assert_eq!(payload.matches[0].path, "a.adoc");
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn docs_search_path_may_be_a_file() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("a.adoc"), "Needle in a\n").unwrap();
+        fs::write(docs.join("b.adoc"), "Needle in b\n").unwrap();
+
+        let payload = search_docs(
+            docs.to_str().unwrap(),
+            &GrepArgs {
+                pattern: "Needle".to_string(),
+                path: Some("a.adoc".to_string()),
+                glob: None,
+                case_insensitive: None,
+                max_results: None,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(payload.matches.len(), 1);
+        assert_eq!(payload.matches[0].path, "a.adoc");
+        assert!(payload.matches[0].text.contains("Needle in a"));
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn docs_search_missing_path_is_not_found() {
+        let (repo, docs) = fixture_repo();
+        let err = search_docs(
+            docs.to_str().unwrap(),
+            &GrepArgs {
+                pattern: "Needle".to_string(),
+                path: Some("nope.adoc".to_string()),
+                glob: None,
+                case_insensitive: None,
+                max_results: None,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, DocsSearchError::NotFound(_)));
         fs::remove_dir_all(&repo).ok();
     }
 }

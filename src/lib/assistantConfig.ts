@@ -16,17 +16,18 @@ import type { SpecsRepoInfo } from "./openapi";
 function pathExampleBlock(docsRootRelativeToRepo: string | null): string {
   const prefix = docsRootRelativeToRepo ?? "<docs-root>";
   const intro = docsRootRelativeToRepo
-    ? `The documentation root in this project is \`${docsRootRelativeToRepo}\`. For the file \`architecture/system.adoc\` within it:`
-    : `The documentation root in this project coincides with the repository root (or is not yet known — use listFiles to confirm). Using the placeholder \`<docs-root>\` below is illustrative only, not a literal path — for the file \`architecture/system.adoc\` within it:`;
+    ? `The documentation root in this project is \`${docsRootRelativeToRepo}\`. For the file \`updateTransactionSpecifics/foo.adoc\` within it:`
+    : `The documentation root in this project coincides with the repository root (or is not yet known — use listFiles to confirm). Using the placeholder \`<docs-root>\` below is illustrative only, not a literal path — for the file \`updateTransactionSpecifics/foo.adoc\` within it:`;
   const openApi = docsRootRelativeToRepo
-    ? `For OpenAPI projects, the spec directory is the documentation root (\`${docsRootRelativeToRepo}\`). In Full-repo mode tool paths include that prefix; in Docs-only they do not.`
-    : `For OpenAPI projects, the spec directory is the documentation root. In Full-repo mode tool paths include the docs prefix; in Docs-only they do not.`;
+    ? `For OpenAPI projects, the spec directory is the documentation root (\`${docsRootRelativeToRepo}\`). In Full-repo mode documentation paths include that prefix; in Docs-only they do not.`
+    : `For OpenAPI projects, the spec directory is the documentation root. In Full-repo mode documentation paths include the docs prefix; in Docs-only they do not.`;
   return `${intro}
 
-- Docs-only (any tool): \`architecture/system.adoc\`
-- Full-repo (any tool): \`${prefix}/architecture/system.adoc\`
+- Docs-only: \`updateTransactionSpecifics/foo.adoc\`
+- Full-repo (the same documentation file): \`${prefix}/updateTransactionSpecifics/foo.adoc\`
+- Full-repo source (already complete; not related to the documentation root): \`src/main/java/.../AusnController.java\`
 
-In Docs-only do not prepend \`${prefix}\` — that is the access-mode root itself, not a child folder. A \`listFiles\` tree starts with \`./\`; that line is not a path segment.
+A \`listFiles\` tree starts with \`./\`; that line is not a path segment. Do not prepend \`${prefix}\` in Docs-only. Do not strip \`${prefix}\` in Full-repo. Do not treat \`src/main/...\` as something to prefix or un-prefix with the docs root.
 
 ${openApi}`;
 }

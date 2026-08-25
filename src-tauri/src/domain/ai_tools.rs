@@ -69,8 +69,8 @@ pub struct GrepArgs {
     /// Rust `regex` pattern (no backreferences). Invalid patterns surface
     /// as `ToolError::InvalidPattern` / `DocsSearchError::InvalidPattern`.
     pub pattern: String,
-    /// Optional subdirectory relative to the scope root (same as
-    /// `ListFilesArgs::path`).
+    /// Optional file or subdirectory relative to the scope root (same as
+    /// `ListFilesArgs::path`). A `semanticSearch` file hit is valid here.
     pub path: Option<String>,
     /// Filename-only glob filter (same semantics as `ListFilesArgs::pattern`).
     pub glob: Option<String>,

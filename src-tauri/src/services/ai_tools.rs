@@ -973,7 +973,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "grep".to_string(),
             description:
-                "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Secondary tool — do not use as the first search step; call semanticSearch first for discovery. Use grep only when semanticSearch is insufficient: you need every call site of a symbol, every occurrence of a literal string, or a regex pattern across files, and you already know what to match. Not for conceptual or exploratory search. Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Honors .gitignore; skips binary and oversized files. Returned paths are already relative to the same root readFile uses — pass them to readFile unchanged, no prefix needed."
+                "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Secondary tool — do not use as the first search step; call semanticSearch first for discovery. Use grep only when semanticSearch is insufficient: you need every call site of a symbol, every occurrence of a literal string, or a regex pattern across files, and you already know what to match. Not for conceptual or exploratory search. Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Honors .gitignore; skips binary and oversized files. `path` may be a file (a semanticSearch hit is valid) or a subdirectory; omit it to search the whole root. Returned paths are already relative to the same root readFile uses — pass them to readFile unchanged."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -984,7 +984,7 @@ pub fn llm_tool_definitions(
                     },
                     "path": {
                         "type": ["string", "null"],
-                        "description": "Optional subdirectory relative to the current access-mode root. Omit or null to search the whole root."
+                        "description": "Optional file or subdirectory relative to the current access-mode root. A path from semanticSearch is valid. Omit or null to search the whole root."
                     },
                     "glob": {
                         "type": ["string", "null"],
@@ -1618,7 +1618,12 @@ fn compile_glob(pattern: &str) -> Result<globset::GlobMatcher, ToolError> {
 /// `services::docs_search::search_under_root` (shared with the user-facing
 /// `docs_search` IPC). Paths in results are scope-root-relative so they
 /// round-trip into `readFile`.
-fn grep(scope: &ToolScope, args: GrepArgs) -> Result<ToolResult, ToolError> {
+fn grep(scope: &ToolScope, mut args: GrepArgs) -> Result<ToolResult, ToolError> {
+    if let Some(path) = args.path.as_deref().filter(|p| !p.is_empty() && *p != ".") {
+        let canonical = resolve_existing_path(scope, path)?;
+        let rel = relative_under_maybe_missing(&scope.root, &canonical)?;
+        args.path = Some(if rel == "." { String::new() } else { rel });
+    }
     let payload = docs_search::search_under_root(&scope.root, &args)?;
     Ok(ToolResult::GrepResults {
         matches: payload.matches,
@@ -1698,11 +1703,7 @@ fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<FileSlice, ToolErr
     // the tool boundary is containment under `scope.root` alone. In
     // `FullRepo` mode the harness must be able to read source files, which
     // aren't in `is_supported_file`'s doc-format list.
-    let joined = paths::join_relative(&scope.root, &args.path)?;
-    let canonical = paths::ensure_under(&scope.root, &joined)?;
-    if !canonical.exists() {
-        return Err(ToolError::NotFound(args.path));
-    }
+    let canonical = resolve_existing_path(scope, &args.path)?;
     if !canonical.is_file() {
         return Err(ToolError::NotAFile(args.path));
     }
@@ -1743,7 +1744,42 @@ fn relative_under_maybe_missing(root: &Path, absolute: &Path) -> Result<String, 
 /// it under `docs_root`. Returns `(access_relative, docs_relative)`.
 /// `docs_relative` is computed by subtracting the known docs root after
 /// containment — not by stripping a prefix from the raw model argument.
+///
+/// When the as-is path misses (or sits outside docs), a Docs-only extra
+/// prefix / Full-repo docs-relative spelling is accepted **only if that
+/// alias already exists on disk** — never guessed into a new location.
 pub fn resolve_mutable_docs_path(
+    scope: &ToolScope,
+    path: &str,
+) -> Result<(String, String), ToolError> {
+    match resolve_mutable_docs_path_as_given(scope, path) {
+        Ok(resolved) => {
+            if mutable_target_exists(scope, &resolved.1) {
+                return Ok(resolved);
+            }
+            if let Ok(aliased) = resolve_existing_path(scope, path) {
+                return access_and_docs_rel(scope, &aliased, path);
+            }
+            Ok(resolved)
+        }
+        Err(e @ ToolError::PathEscape(_)) => Err(e),
+        Err(e) => match resolve_existing_path(scope, path) {
+            Ok(aliased) => access_and_docs_rel(scope, &aliased, path),
+            Err(_) => Err(e),
+        },
+    }
+}
+
+fn mutable_target_exists(scope: &ToolScope, docs_rel: &str) -> bool {
+    if docs_rel.is_empty() || docs_rel == "." {
+        return scope.docs_root.exists();
+    }
+    paths::join_relative(&scope.docs_root, docs_rel)
+        .map(|p| p.exists())
+        .unwrap_or(false)
+}
+
+fn resolve_mutable_docs_path_as_given(
     scope: &ToolScope,
     path: &str,
 ) -> Result<(String, String), ToolError> {
@@ -1753,6 +1789,21 @@ pub fn resolve_mutable_docs_path(
         Ok(p) => p,
         Err(ProjectError::PathEscape(_)) => {
             return Err(ToolError::OutsideDocumentation(path.to_string()));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    access_and_docs_rel(scope, &under_docs, path)
+}
+
+fn access_and_docs_rel(
+    scope: &ToolScope,
+    abs: &Path,
+    original: &str,
+) -> Result<(String, String), ToolError> {
+    let under_docs = match paths::ensure_under(&scope.docs_root, abs) {
+        Ok(p) => p,
+        Err(ProjectError::PathEscape(_)) => {
+            return Err(ToolError::OutsideDocumentation(original.to_string()));
         }
         Err(e) => return Err(e.into()),
     };
@@ -1769,6 +1820,104 @@ pub fn resolve_mutable_docs_path(
         docs_rel
     };
     Ok((access_rel, docs_rel))
+}
+
+/// On-disk path for a model argument: as-is under `scope.root` first, then
+/// the other access-mode spelling if that file/dir exists (Full-repo
+/// docs-relative path, or Docs-only path that still has the docs-root
+/// folder name / repo-relative prefix on it). `..` still PathEscapes
+/// immediately and is never rewritten.
+fn resolve_existing_path(scope: &ToolScope, path: &str) -> Result<PathBuf, ToolError> {
+    match existing_under(scope, &scope.root, path) {
+        Ok(Some(p)) => return Ok(p),
+        Ok(None) => {}
+        Err(e @ ToolError::PathEscape(_)) => return Err(e),
+        Err(_) => {}
+    }
+    for alias in path_aliases(scope, path) {
+        if let Ok(Some(p)) = existing_under(scope, &alias.join_root, &alias.relative) {
+            return Ok(p);
+        }
+    }
+    Err(ToolError::NotFound(path.to_string()))
+}
+
+struct PathAlias {
+    join_root: PathBuf,
+    relative: String,
+}
+
+fn path_aliases(scope: &ToolScope, path: &str) -> Vec<PathAlias> {
+    let mut out = Vec::new();
+    match scope.mode {
+        AiAccessMode::FullRepo => {
+            out.push(PathAlias {
+                join_root: scope.docs_root.clone(),
+                relative: path.to_string(),
+            });
+        }
+        AiAccessMode::DocsOnly => {
+            for relative in stripped_docs_prefixes(scope, path) {
+                out.push(PathAlias {
+                    join_root: scope.root.clone(),
+                    relative,
+                });
+            }
+        }
+    }
+    out
+}
+
+fn docs_root_prefixes(scope: &ToolScope) -> Vec<String> {
+    let mut prefixes = Vec::new();
+    if let Ok(rel) = paths::relative_to(&scope.repo_root, &scope.docs_root) {
+        let rel = rel.replace('\\', "/");
+        if rel != "." && !rel.is_empty() {
+            prefixes.push(rel);
+        }
+    }
+    if let Some(name) = scope.docs_root.file_name().and_then(|n| n.to_str()) {
+        if !prefixes.iter().any(|p| p == name) {
+            prefixes.push(name.to_string());
+        }
+    }
+    prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
+    prefixes
+}
+
+fn stripped_docs_prefixes(scope: &ToolScope, path: &str) -> Vec<String> {
+    let path = path.trim_start_matches("./");
+    let mut out = Vec::new();
+    for prefix in docs_root_prefixes(scope) {
+        if path == prefix {
+            out.push(".".to_string());
+            continue;
+        }
+        let with_slash = format!("{prefix}/");
+        if let Some(rest) = path.strip_prefix(&with_slash) {
+            if !rest.is_empty() {
+                out.push(rest.to_string());
+            }
+        }
+    }
+    out
+}
+
+fn existing_under(
+    scope: &ToolScope,
+    join_root: &Path,
+    relative: &str,
+) -> Result<Option<PathBuf>, ToolError> {
+    let joined = paths::join_relative(join_root, relative)?;
+    let canonical = paths::ensure_under(join_root, &joined)?;
+    if !canonical.exists() {
+        return Ok(None);
+    }
+    match paths::ensure_under(&scope.root, &canonical) {
+        Ok(_) => Ok(Some(canonical)),
+        Err(ProjectError::PathEscape(_)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Convert a repo-relative path (index/`FileId`/`DocumentId` space) into the
@@ -2621,8 +2770,7 @@ fn resolve_subdir(
     if path.is_empty() || path == "." {
         return Ok(None);
     }
-    let joined = paths::join_relative(&scope.root, path)?;
-    let canonical = paths::ensure_under(&scope.root, &joined)?;
+    let canonical = resolve_existing_path(scope, path)?;
     if !canonical.is_dir() {
         return Err(ToolError::NotFound(path.to_string()));
     }
@@ -3660,6 +3808,92 @@ mod tests {
     }
 
     #[test]
+    fn read_file_full_repo_accepts_docs_relative_path_when_that_file_exists() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("updateTransactionSpecifics")).unwrap();
+        fs::write(
+            docs.join("updateTransactionSpecifics/foo.adoc"),
+            "= Foo\n",
+        )
+        .unwrap();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let content = read(&full_repo, "updateTransactionSpecifics/foo.adoc").unwrap();
+        assert_eq!(content, "= Foo\n");
+
+        let listed = list(&full_repo, Some("updateTransactionSpecifics")).unwrap();
+        assert!(listed.iter().any(|e| e.path.ends_with("foo.adoc")));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn read_file_docs_only_strips_docs_root_prefix_when_that_file_exists() {
+        let (repo, docs) = fixture_repo();
+        let docs_only = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        assert_eq!(read(&docs_only, "docs/intro.adoc").unwrap(), "= Intro\n");
+        assert_eq!(read(&docs_only, "intro.adoc").unwrap(), "= Intro\n");
+
+        let err = read(&docs_only, "docs/missing.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn read_file_docs_only_strips_nested_docs_prefix() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let repo = std::env::temp_dir().join(format!("alfa-atlas-ai-tools-nested-docs-{nanos}-{n}"));
+        let docs = repo.join("src/docs/asciidoc");
+        fs::create_dir_all(docs.join("method")).unwrap();
+        fs::write(docs.join("method/foo.adoc"), "= Foo\n").unwrap();
+        let repo = repo.canonicalize().unwrap();
+        let docs = docs.canonicalize().unwrap();
+        let docs_only = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        assert_eq!(
+            read(&docs_only, "src/docs/asciidoc/method/foo.adoc").unwrap(),
+            "= Foo\n"
+        );
+        assert_eq!(read(&docs_only, "asciidoc/method/foo.adoc").unwrap(), "= Foo\n");
+        assert_eq!(read(&docs_only, "method/foo.adoc").unwrap(), "= Foo\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn edit_file_full_repo_accepts_docs_relative_path_of_existing_file() {
+        let (repo, docs) = fixture_repo();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        edit(&full_repo, "intro.adoc", vec![("= Intro\n", "= Changed\n")]).unwrap();
+        assert_eq!(fs::read_to_string(docs.join("intro.adoc")).unwrap(), "= Changed\n");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn path_alias_does_not_invent_missing_files() {
+        let (repo, docs) = fixture_repo();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+        let docs_only = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = read(&full_repo, "updateTransactionSpecifics/missing.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+        let err = list(&full_repo, Some("updateTransactionSpecifics")).unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+        let err = read(&docs_only, "docs/missing.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn write_file_creates_and_overwrites_under_docs_root() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
@@ -3682,16 +3916,23 @@ mod tests {
         let (repo, docs) = fixture_repo();
         let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        // Full-repo paths are repo-relative (same as readFile).
+        // Bare docs-relative path of a file that does not exist yet is still
+        // outside docs — the alias only rewrites when the target is already
+        // on disk under docs_root.
+        let err = write(&full_repo, "guide.adoc", "= Nope\n").unwrap_err();
+        assert!(matches!(err, ToolError::OutsideDocumentation(_)), "got {err:?}");
+        assert!(!docs.join("guide.adoc").exists());
+
         let written = write(&full_repo, "docs/guide.adoc", "= Guide\n").unwrap();
         assert_eq!(written, "docs/guide.adoc");
-
         assert_eq!(fs::read_to_string(docs.join("guide.adoc")).unwrap(), "= Guide\n");
         assert!(!repo.join("guide.adoc").exists());
 
-        // Bare docs-relative path resolves under the repo root → outside docs.
-        let err = write(&full_repo, "guide.adoc", "= Nope\n").unwrap_err();
-        assert!(matches!(err, ToolError::OutsideDocumentation(_)), "got {err:?}");
+        // Same file, docs-relative spelling: now exists, so the alias applies.
+        let written = write(&full_repo, "guide.adoc", "= Aliased\n").unwrap();
+        assert_eq!(written, "docs/guide.adoc");
+        assert_eq!(fs::read_to_string(docs.join("guide.adoc")).unwrap(), "= Aliased\n");
+
         let err = write(&full_repo, "src/main.rs", "fn main() {}\n").unwrap_err();
         assert!(matches!(err, ToolError::OutsideDocumentation(_)), "got {err:?}");
 
@@ -5461,6 +5702,93 @@ mod tests {
             ToolResult::GrepResults { matches, truncated } => {
                 assert!(truncated);
                 assert_eq!(matches.len(), 3);
+            }
+            other => panic!("expected GrepResults, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn grep_path_may_be_a_file() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("a.adoc"), "Needle in a\n").unwrap();
+        fs::write(docs.join("b.adoc"), "Needle in b\n").unwrap();
+        fs::write(repo.join("src/Controller.java"), "class Needle {}\n").unwrap();
+
+        let docs_only = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let result = execute_tool(
+            &docs_only,
+            ToolCall::Grep(GrepArgs {
+                pattern: "Needle".to_string(),
+                path: Some("a.adoc".to_string()),
+                glob: None,
+                case_insensitive: None,
+                max_results: None,
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::GrepResults { matches, truncated } => {
+                assert!(!truncated);
+                assert_eq!(matches.len(), 1);
+                assert_eq!(matches[0].path, "a.adoc");
+            }
+            other => panic!("expected GrepResults, got {other:?}"),
+        }
+
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+        let result = execute_tool(
+            &full_repo,
+            ToolCall::Grep(GrepArgs {
+                pattern: "Needle".to_string(),
+                path: Some("src/Controller.java".to_string()),
+                glob: None,
+                case_insensitive: None,
+                max_results: None,
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::GrepResults { matches, truncated } => {
+                assert!(!truncated);
+                assert_eq!(matches.len(), 1);
+                assert_eq!(matches[0].path, "src/Controller.java");
+            }
+            other => panic!("expected GrepResults, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn grep_full_repo_accepts_docs_relative_file_path() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("guide.adoc"), "checkCustomerAccess here\n").unwrap();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let result = execute_tool(
+            &full_repo,
+            ToolCall::Grep(GrepArgs {
+                pattern: "checkCustomerAccess".to_string(),
+                path: Some("guide.adoc".to_string()),
+                glob: None,
+                case_insensitive: None,
+                max_results: None,
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::GrepResults { matches, truncated } => {
+                assert!(!truncated);
+                assert_eq!(matches.len(), 1);
+                assert_eq!(matches[0].path, "docs/guide.adoc");
             }
             other => panic!("expected GrepResults, got {other:?}"),
         }
