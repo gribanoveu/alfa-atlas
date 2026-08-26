@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type * as Monaco from "monaco-editor";
 import { toMessage } from "./lib/errors";
 import { BottomDock } from "./components/BottomDock/BottomDock";
@@ -31,6 +31,9 @@ import { useGitActionLog } from "./hooks/useGitActionLog";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useDocNavigation } from "./hooks/useDocNavigation";
 import { useFileTreeActions } from "./hooks/useFileTreeActions";
+import { useAppShortcuts } from "./hooks/useAppShortcuts";
+import { useAssistantBridge } from "./hooks/useAssistantBridge";
+import { useSessionRestore } from "./hooks/useSessionRestore";
 import { useEditorTabActions } from "./hooks/useEditorTabActions";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useSpecsRepo } from "./hooks/useSpecsRepo";
@@ -69,7 +72,6 @@ import {
   readProjectFile,
   renameProjectDir,
   renameProjectFile,
-  type UpdatedReference,
 } from "./lib/project";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
@@ -89,11 +91,6 @@ function joinParent(parentPath: string, name: string): string {
   return `${parentPath.replace(/[/\\]+$/, "")}/${name}`;
 }
 
-function dirnameOf(path: string): string {
-  const segments = path.split(/[/\\]/).filter(Boolean);
-  segments.pop();
-  return segments.length > 0 ? segments.join("/") : ".";
-}
 
 /** Append " copy" to a name. For files it goes before the extension
  * (`report.adoc` → `report copy.adoc`) so the copy keeps a supported
@@ -227,89 +224,30 @@ function App() {
     applyRenameReport,
   } = fileTree;
 
+  const { suppressNextPanelSync } = useSessionRestore({
+    project,
+    session,
+    editor,
+    tree,
+    layout,
+  });
+  const assistant = useAssistantBridge({
+    project,
+    editor,
+    tree,
+    session,
+    git,
+    layout,
+    openApiBundle,
+    applyRenameReport,
+  });
+  const { insertRequest, chatInsertRequest } = assistant;
+
   const [docsSearchOpen, setDocsSearchOpen] = useState(false);
-  const [insertRequest, setInsertRequest] = useState<{
-    id: number;
-    tabId: string;
-    text: string;
-  } | null>(null);
-  // «Добавить в чат» из панели выделения — тот же паттерн «запрос с id», что и
-  // insertRequest выше: id нужен, чтобы повторная вставка того же текста не
-  // проглатывалась проверкой на равенство пропсов.
-  const [chatInsertRequest, setChatInsertRequest] = useState<{
-    id: number;
-    text: string;
-    filePath: string | null;
-  } | null>(null);
-  const insertCounter = useRef(0);
-  const chatInsertCounter = useRef(0);
-  const skipNextPanelSync = useRef(false);
-  const prevDirtyCount = useRef(0);
-  const seededDocsRoot = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!session.ready || !session.loadedState || !project.docsRoot) return;
-    void editor.restoreTabs(
-      session.loadedState.openTabs,
-      session.loadedState.activeTab,
-    );
-  }, [
-    session.ready,
-    session.loadedState,
-    project.docsRoot,
-    editor.restoreTabs,
-  ]);
 
-  useEffect(() => {
-    if (!session.ready || !session.loadedState || !project.docsRoot) return;
-    skipNextPanelSync.current = true;
-    layout.hydrate(session.loadedState);
-  }, [
-    session.ready,
-    session.loadedState,
-    project.docsRoot,
-    layout.hydrate,
-  ]);
 
-  useEffect(() => {
-    if (!session.ready || !project.docsRoot) return;
-    if (skipNextPanelSync.current) {
-      skipNextPanelSync.current = false;
-      return;
-    }
-    session.syncPanelUi({
-      sidebarOpen: layout.sidebarOpen,
-      rightTool: layout.activeTool,
-      bottomTool: layout.bottomTool,
-    });
-  }, [
-    session.ready,
-    session.syncPanelUi,
-    project.docsRoot,
-    layout.sidebarOpen,
-    layout.activeTool,
-    layout.bottomTool,
-  ]);
 
-  useEffect(() => {
-    if (!session.ready || !session.loadedState || !project.docsRoot) return;
-    if (tree.nodes.length === 0) return;
-    if (seededDocsRoot.current === project.docsRoot) return;
-    seededDocsRoot.current = project.docsRoot;
-    const loaded = session.loadedState.expandedDirs;
-    const isDefault =
-      loaded.length === 0 || (loaded.length === 1 && loaded[0] === ".");
-    if (!isDefault) return;
-    if (session.expandedDirs.size > 1) return;
-    session.seedShallowExpanded(collectDirPaths(tree.nodes));
-  }, [
-    session.ready,
-    session.loadedState,
-    session.expandedDirs.size,
-    session.seedShallowExpanded,
-    project.docsRoot,
-    tree.nodes,
-  ]);
 
   const mainClassName = [
     "main",
@@ -320,6 +258,12 @@ function App() {
     .join(" ");
 
   const hasProject = Boolean(project.docsRoot && project.repoRoot);
+  useAppShortcuts({
+    hasProject,
+    editor,
+    git,
+    openDocsSearch: () => setDocsSearchOpen(true),
+  });
 
 
   const {
@@ -509,9 +453,9 @@ function App() {
     await project.closeProject();
     setOpenApiTabOpen(false);
     setActiveKind("file");
-    skipNextPanelSync.current = true;
+    suppressNextPanelSync();
     layout.reset();
-  }, [editor.reset, layout.reset, project.closeProject]);
+  }, [editor.reset, layout.reset, project.closeProject, suppressNextPanelSync]);
 
   const toggleRightPanel = useCallback(() => {
     if (layout.activeTool) {
@@ -559,73 +503,6 @@ function App() {
 
 
 
-  // Reconciles an open editor tab against a change the AI assistant just
-  // made directly on disk (`writeFile`/`editFile`/`deleteFile`/
-  // `createDirectory`/`deleteDirectory`, see `AssistantConversation`'s
-  // `onFileWritten`). Without this, a tab left open on the affected path
-  // keeps showing its now-stale in-memory content — and if it's dirty (or
-  // becomes dirty) by the time autosave/save-on-switch fires,
-  // `useEditorTabs.saveTab` would write that stale content straight back to
-  // disk, silently reverting the assistant's change (or resurrecting a file
-  // it just deleted). Mirrors `editor.discardTabsUnder` in the manual
-  // tree-delete confirm above for the delete case, and `reloadTabFromDisk`
-  // in `applyRenameReport`/`handleGitSaveContent` for the write case.
-  const handleAssistantFileWritten = useCallback(
-    ({ tool, path }: { tool: string; path: string }) => {
-      void tree.refresh();
-      if (openApiBundle.bundle) void openApiBundle.reload();
-      // Tool results use access-mode-relative paths; editor tabs are docs-relative.
-      const docsPath =
-        project.repoRoot && project.docsRoot
-          ? toDocsRelativePath(path, project.repoRoot, project.docsRoot)
-          : path;
-      switch (tool) {
-        case "writeFile":
-        case "editFile":
-          void editor.reloadTabFromDisk(docsPath);
-          break;
-        case "deleteFile":
-        case "deleteDirectory":
-          editor.discardTabsUnder(docsPath);
-          break;
-        default:
-          break;
-      }
-    },
-    [tree, editor, openApiBundle, project.repoRoot, project.docsRoot],
-  );
-
-  // Same idea as `handleAssistantFileWritten`, but a `move` tool call has
-  // both an old and a new path, so a plain reload isn't enough — an open
-  // tab under `from` needs to keep pointing at the same file at its new
-  // path, exactly like the manual drag-and-drop `onMove` handler below
-  // achieves via `editor.remapTabsUnder`/`session.remapExpandedUnder`. The
-  // move's reference-rewrite report reuses `applyRenameReport` so cascaded
-  // changes to *other* open tabs (files that included/referenced the moved
-  // one) get reloaded and reported the same way a manual rename does.
-  const handleAssistantFileMoved = useCallback(
-    ({ from, to, updatedFiles }: { from: string; to: string; updatedFiles: UpdatedReference[] }) => {
-      const toDocs = (p: string) =>
-        project.repoRoot && project.docsRoot
-          ? toDocsRelativePath(p, project.repoRoot, project.docsRoot)
-          : p;
-      const docsFrom = toDocs(from);
-      const docsTo = toDocs(to);
-      editor.remapTabsUnder(docsFrom, docsTo);
-      session.remapExpandedUnder(docsFrom, docsTo);
-      session.ensureExpanded(dirnameOf(docsTo));
-      void tree.refresh();
-      if (openApiBundle.bundle) void openApiBundle.reload();
-      git.scheduleRefresh();
-      void applyRenameReport({
-        updatedFiles: updatedFiles.map((f) => ({
-          docsRelativePath: toDocs(f.docsRelativePath),
-          count: f.count,
-        })),
-      });
-    },
-    [editor, session, tree, git, applyRenameReport, openApiBundle, project.repoRoot, project.docsRoot],
-  );
 
 
 
@@ -634,54 +511,8 @@ function App() {
 
 
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-        event.preventDefault();
-        if (hasProject) {
-          void editor.saveActive().then((ok) => {
-            if (ok) git.scheduleRefresh();
-          });
-        }
-        return;
-      }
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.shiftKey &&
-        event.key.toLowerCase() === "f"
-      ) {
-        event.preventDefault();
-        if (hasProject) setDocsSearchOpen(true);
-        return;
-      }
-      if ((event.metaKey || event.ctrlKey) && event.altKey) {
-        if (event.key === "ArrowLeft") {
-          event.preventDefault();
-          void editor.goBack();
-          return;
-        }
-        if (event.key === "ArrowRight") {
-          event.preventDefault();
-          void editor.goForward();
-          return;
-        }
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [editor.saveActive, editor.goBack, editor.goForward, git.scheduleRefresh, hasProject]);
 
-  // After autosave clears dirty flags, refresh Git status for gutter and panel.
-  useEffect(() => {
-    const dirtyCount = editor.tabs.filter((t) => t.dirty).length;
-    if (
-      prevDirtyCount.current > 0 &&
-      dirtyCount < prevDirtyCount.current
-    ) {
-      git.scheduleRefresh();
-    }
-    prevDirtyCount.current = dirtyCount;
-  }, [editor.tabs, git.scheduleRefresh]);
+
 
   const activePath = editor.activeTab?.path ?? null;
   const statusPath = activePath ?? "—";
@@ -716,32 +547,8 @@ function App() {
     editor.activeTab && isAsciiDocPath(editor.activeTab.path),
   );
 
-  const handleInsertSnippet = useCallback((text: string) => {
-    const tabId = editor.activeTabId;
-    if (!tabId) return;
-    insertCounter.current += 1;
-    setInsertRequest({ id: insertCounter.current, tabId, text });
-  }, [editor.activeTabId]);
 
-  // Открывает док «Ассистент» (если закрыт) и кладёт выделенный фрагмент в
-  // черновик ввода чата — AssistantConversation подхватит запрос по id.
-  const handleAddSelectionToChat = useCallback(
-    (text: string, filePath: string | null) => {
-      chatInsertCounter.current += 1;
-      layout.setRightTool("assistant");
-      setChatInsertRequest({ id: chatInsertCounter.current, text, filePath });
-    },
-    [layout],
-  );
 
-  // AssistantConversation вызывает это сразу после того, как вставит запрос
-  // в черновик — очищает запрос здесь, в App, а не только локальным флагом
-  // «уже обработано» внутри AssistantConversation, потому что тот компонент
-  // перемонтируется (смена чата, переключение инструментов дока) и терял бы
-  // свою локальную отметку, повторно вставляя тот же запрос в новый черновик.
-  const handleChatInsertHandled = useCallback(() => {
-    setChatInsertRequest(null);
-  }, []);
 
   return (
     <div className="app" style={panelStyle}>
@@ -933,7 +740,7 @@ function App() {
               editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
               providerId={selectionAiProviderId}
               llmReady={selectionAiLlmReady}
-              onAddToChat={handleAddSelectionToChat}
+              onAddToChat={assistant.addSelectionToChat}
               onEditorInstanceChange={tabs.onEditorInstanceChange}
               onMonacoInstanceChange={setMonacoInstance}
             />
@@ -998,7 +805,7 @@ function App() {
               hasProject
                 ? {
                     canInsert: canInsertAsciiDoc,
-                    onInsert: handleInsertSnippet,
+                    onInsert: assistant.insertSnippet,
                   }
                 : null
             }
@@ -1021,13 +828,13 @@ function App() {
               onOpenSettings: () => setLlmSettingsSignal((n) => n + 1),
               specsRepoInfo: specsRepo.info,
               docsRoot: project.docsRoot ?? "",
-              onFileWritten: handleAssistantFileWritten,
-              onFileMoved: handleAssistantFileMoved,
+              onFileWritten: assistant.onFileWritten,
+              onFileMoved: assistant.onFileMoved,
               repoRoot: project.repoRoot,
               activeFilePath: editor.activeTab?.path ?? null,
             }}
             chatInsertRequest={chatInsertRequest}
-            onChatInsertHandled={handleChatInsertHandled}
+            onChatInsertHandled={assistant.onChatInsertHandled}
             gitActionLog={
               hasProject
                 ? {

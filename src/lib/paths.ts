@@ -172,3 +172,12 @@ export function relativizeToDocument(
   const parts = [...Array(upCount).fill(".."), ...targetParts.slice(common)];
   return parts.join("/");
 }
+
+/** The directory a docs-relative path sits in, `"."` for a path at the root.
+ * Splits on both separators because paths cross the Windows/POSIX boundary
+ * here — the backend hands back whatever the OS produced. */
+export function dirnameOf(path: string): string {
+  const segments = path.split(/[/\\]/).filter(Boolean);
+  segments.pop();
+  return segments.length > 0 ? segments.join("/") : ".";
+}
