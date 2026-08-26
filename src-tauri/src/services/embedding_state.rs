@@ -22,6 +22,7 @@ use crate::infra::index_store::IndexStore;
 use crate::infra::{embedding_providers, project_store, repository_identity, settings_store};
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::embedding_index::EmbeddingIndex;
+use crate::services::embedding_config;
 use crate::services::index_store_ensure;
 use crate::services::index_watcher::IndexWatcher;
 use crate::services::project_open;
@@ -385,6 +386,62 @@ pub struct EmbeddingSession {
     pub priority_files: Arc<PriorityFilesSlot>,
     pub background_backlog: Arc<BackgroundBacklogSlot>,
     pub full_sync_active: Arc<FullSyncActiveSlot>,
+}
+
+/// The currently open project's index store, attached and ready to read.
+pub struct AttachedIndex {
+    pub index_root: PathBuf,
+    pub store: Arc<IndexStore>,
+    /// The persisted content predates the current chunking/index version
+    /// (see `index_store_ensure`) — nothing in it is safe to read, and only
+    /// a real `embedding_sync` repairs it. Reported rather than swallowed:
+    /// `embedding_sync::status` distinguishes "stale" from "never synced",
+    /// and starts the incremental watcher either way.
+    pub stale: bool,
+}
+
+/// Resolves the open project and attaches its index store — the prefix every
+/// index consumer runs before it can read anything. `Ok(None)` means no
+/// project is open, which is a normal state, not an error.
+///
+/// Deliberately does *not* acquire `EmbeddingSyncGuard`: the two callers
+/// disagree about what to do when a sync is in flight, and only they can
+/// decide. `embedding_sync::status` waits it out (`lock_sync_guard`);
+/// `ai_tools`' semantic search gives up for this one call (`try_lock`, and
+/// only on `WouldBlock` — never on `Poisoned`).
+pub fn attach_current(
+    chunk_index: &ChunkIndex,
+    index_store: &IndexStoreSlot,
+) -> Result<Option<AttachedIndex>, String> {
+    let Some(project) = project_open::get_project().map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let (index_root, storage_dir) = resolve_index_paths(&project)?;
+    let (store, stale) = attach_index_store(chunk_index, index_store, &storage_dir, &index_root)?;
+    Ok(Some(AttachedIndex { index_root, store, stale }))
+}
+
+/// How many vectors are actually resident for `index_root` at the configured
+/// provider's dimension count. Read-only: attaches with
+/// `allow_repair: false`, so a dimension mismatch reports as an empty index
+/// rather than dropping what's persisted for some other provider.
+///
+/// Only meaningful for a non-stale `AttachedIndex` — a stale store's
+/// persisted vectors describe an incompatible chunking, so callers check
+/// `AttachedIndex::stale` first rather than trusting a count derived from it.
+pub fn embedded_count(
+    embedding_index: &EmbeddingIndexSlot,
+    store: &IndexStore,
+    index_root: &Path,
+) -> Result<usize, String> {
+    let config = embedding_config::resolve_embedding_config().map_err(|e| e.to_string())?;
+    let dimensions = embedding_providers::expected_dimensions(&config);
+    attach_embedding_index(embedding_index, store, index_root, dimensions, false)?;
+    let slot = embedding_index
+        .lock()
+        .map_err(|_| "embedding index lock poisoned".to_string())?;
+    let (_, _, index) = slot.as_ref().expect("attach_embedding_index just set this");
+    Ok(index.len())
 }
 
 #[cfg(test)]

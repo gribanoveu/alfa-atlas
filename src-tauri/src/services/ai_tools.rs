@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, TryLockError};
 
 use crate::services::embedding_state::{
-    attach_embedding_index, attach_index_store, ensure_provider, resolve_index_paths,
-    EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
+    attach_current, attach_embedding_index, attach_index_store, embedded_count, ensure_provider,
+    resolve_index_paths, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard,
+    IndexStoreSlot,
 };
 use crate::domain::ai_access::{default_allowed_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{
@@ -2968,57 +2969,38 @@ fn related_files(deps: &EmbeddingDeps, file_id: &FileId) -> HashSet<FileId> {
     out
 }
 
-/// Mirrors `commands::embeddings::embedding_index_status`'s readiness check
-/// exactly (`resolve_index_paths` -> `attach_index_store` -> stale check ->
-/// `attach_embedding_index(allow_repair: false)` -> `embedded_count > 0`),
-/// plus a `try_lock` peek at `EmbeddingSyncGuard` for "a sync is actively
-/// running right now". The guard is never held through this check or the
-/// search that follows — its `try_lock` guard value is dropped immediately
-/// (never bound to a variable), matching `embedding_index_status`'s own
-/// precedent of never acquiring this guard at all for a read. Any failure
-/// along the rest of this sequence (no project open, a transient
+/// Whether semantic search can answer right now. Runs the same readiness
+/// primitives `embedding_sync::status` does — `attach_current` (project ->
+/// index paths -> store attach), a staleness check, then `embedded_count` —
+/// so the two can no longer drift apart, plus a `try_lock` peek at
+/// `EmbeddingSyncGuard` for "a sync is actively running right now".
+///
+/// Every failure along that sequence (no project open, a transient
 /// store-open error) degrades to "not ready" rather than propagating —
 /// consistent with the whole feature being a graceful cascade, not a
 /// pipeline that should hard-fail just because the fast path had a hiccup.
+/// That degradation is this function's own policy, not the primitives': the
+/// guard is likewise never held through this check or the search that
+/// follows, unlike `status`, which waits an in-flight sync out.
 fn is_semantic_ready(deps: &EmbeddingDeps) -> bool {
     // `WouldBlock` (a sync is actively running right now) is the only
     // `try_lock` outcome that should degrade this call — `Poisoned` must
     // not, or a single panic elsewhere while holding this guard (see
-    // `services::embedding_state::lock_sync_guard`'s doc comment) would disable
-    // semantic search for the rest of the app's lifetime instead of just
-    // this one call.
+    // `services::embedding_state::lock_sync_guard`'s doc comment) would
+    // disable semantic search for the rest of the app's lifetime instead of
+    // just this one call.
     if matches!(deps.sync_guard.try_lock(), Err(TryLockError::WouldBlock)) {
         return false;
     }
 
-    let Ok(Some(project)) = project_open::get_project() else {
+    let Ok(Some(attached)) = attach_current(&deps.chunk_index, &deps.index_store) else {
         return false;
     };
-    let Ok((index_root, storage_dir)) = resolve_index_paths(&project) else {
-        return false;
-    };
-    let Ok((store, stale)) =
-        attach_index_store(&deps.chunk_index, &deps.index_store, &storage_dir, &index_root)
-    else {
-        return false;
-    };
-    if stale {
+    if attached.stale {
         return false;
     }
-
-    let Ok(config) = embedding_config::resolve_embedding_config() else {
-        return false;
-    };
-    let dimensions = embedding_providers::expected_dimensions(&config);
-    if attach_embedding_index(&deps.embedding_index, &store, &index_root, dimensions, false).is_err()
-    {
-        return false;
-    }
-
-    let Ok(slot) = deps.embedding_index.lock() else {
-        return false;
-    };
-    slot.as_ref().is_some_and(|(_, _, index)| index.len() > 0)
+    embedded_count(&deps.embedding_index, &attached.store, &attached.index_root)
+        .is_ok_and(|n| n > 0)
 }
 
 /// Embeds `query`, searches the resident `EmbeddingIndex`, and resolves
