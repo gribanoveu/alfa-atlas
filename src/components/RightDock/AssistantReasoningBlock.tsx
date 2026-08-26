@@ -1,6 +1,7 @@
 import { Brain, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import type { ReasoningBlock } from "../../lib/chatBlocks";
+import { AssistantElapsedTimer } from "./AssistantElapsedTimer";
 
 type AssistantReasoningBlockProps = {
   block: ReasoningBlock;
@@ -22,6 +23,10 @@ type AssistantReasoningBlockProps = {
  * springing shut under them. */
 export function AssistantReasoningBlock({ block, thinking }: AssistantReasoningBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  // Captured once: a block restored from persisted history starts with
+  // `thinking: false` and never had a live "thinking" phase in this
+  // session, so it must never show a fabricated "Thought for 0s" timer.
+  const [wasThinking] = useState(thinking);
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
@@ -35,6 +40,9 @@ export function AssistantReasoningBlock({ block, thinking }: AssistantReasoningB
         <Chevron className="assistant-reasoning-chevron" size={12} aria-hidden />
         <Brain className="assistant-reasoning-icon" size={13} aria-hidden />
         <span className="assistant-reasoning-label">{thinking ? "Модель думает…" : "Ход рассуждений"}</span>
+        {wasThinking ? (
+          <AssistantElapsedTimer running={thinking} className="assistant-reasoning-elapsed" />
+        ) : null}
       </button>
 
       {expanded ? <div className="assistant-reasoning-detail">{block.content}</div> : null}

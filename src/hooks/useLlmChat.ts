@@ -573,7 +573,7 @@ export function useLlmChat(
    * the in-flight assistant message — shared by `runTurn` and the
    * cold-hydrate effect below, same as `runPendingLoop`. */
   const settleOutcome = useCallback(
-    (outcome: ChatStreamOutcome, assistantId: string) => {
+    (outcome: ChatStreamOutcome, assistantId: string, turnStartedAt: number) => {
       // `runPendingLoop` never returns while `status === "pendingApproval"`
       // (that's its own while-loop's exit condition) — this guard is just
       // to satisfy the type checker across the function-call boundary, not
@@ -601,6 +601,7 @@ export function useLlmChat(
                 streaming: false,
                 usage: usage ?? undefined,
                 cancelled: stoppedByUser,
+                durationMs: Date.now() - turnStartedAt,
               }
             : m,
         ),
@@ -614,7 +615,7 @@ export function useLlmChat(
 
   /** Marks the in-flight assistant message as failed — shared by `runTurn`
    * and the cold-hydrate effect below, same as `runPendingLoop`. */
-  const settleError = useCallback((e: unknown, assistantId: string) => {
+  const settleError = useCallback((e: unknown, assistantId: string, turnStartedAt: number) => {
     const message = e instanceof Error ? e.message : String(e);
     // Best-effort: drives the "Сжать историю и повторить" retry action
     // (`retryWithCompaction`) rather than just showing raw error text — see
@@ -631,6 +632,7 @@ export function useLlmChat(
               failed: true,
               errorMessage: message,
               contextLengthExceeded,
+              durationMs: Date.now() - turnStartedAt,
             }
           : m,
       ),
@@ -662,6 +664,7 @@ export function useLlmChat(
     ) => {
       if (!providerId) return;
       setSending(true);
+      const turnStartedAt = Date.now();
 
       const real = realMessages(priorTurns);
       const scoped = sliceMessagesForPlanExecution(real, opts.planExecutionStart === true);
@@ -843,9 +846,9 @@ export function useLlmChat(
         const outcome = await runPendingLoop(
           await streamLlmChat(providerId, wireMessages, todoListRef.current, activeFilePath, conversationMode),
         );
-        settleOutcome(outcome, assistantId);
+        settleOutcome(outcome, assistantId, turnStartedAt);
       } catch (e) {
-        settleError(e, assistantId);
+        settleError(e, assistantId, turnStartedAt);
       } finally {
         setSending(false);
         // Reads the true final state for this turn via a functional-update
@@ -896,12 +899,16 @@ export function useLlmChat(
     coldResumedRef.current = true;
     const assistantId = last.id;
     setSending(true);
+    // Only covers time since this app restart, not the turn's true original
+    // start (lost across the restart) — see `durationMs`'s doc comment on
+    // `ChatMessage`.
+    const turnStartedAt = Date.now();
     void (async () => {
       try {
         const outcome = await runPendingLoop({ status: "pendingApproval", value: initialPendingResume });
-        settleOutcome(outcome, assistantId);
+        settleOutcome(outcome, assistantId, turnStartedAt);
       } catch (e) {
-        settleError(e, assistantId);
+        settleError(e, assistantId, turnStartedAt);
       } finally {
         setSending(false);
         setMessages((prev) => {

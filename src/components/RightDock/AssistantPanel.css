@@ -1135,6 +1135,24 @@
   }
 }
 
+.assistant-elapsed-timer {
+  font-size: var(--font-ui-xs);
+  color: var(--text-2);
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.assistant-reasoning-elapsed {
+  margin-left: 6px;
+}
+
+.assistant-chat-duration {
+  margin-top: 4px;
+  font-size: var(--font-ui-xs);
+  color: var(--text-2);
+  opacity: 0.6;
+}
+
 
 /* =========================================================
    Container for assistant message blocks

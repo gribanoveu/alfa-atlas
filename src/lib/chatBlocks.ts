@@ -124,6 +124,14 @@ export type ChatMessage =
        * повторить" retry action in `AssistantConversation` (see
        * `useLlmChat`'s `retryWithCompaction`). */
       contextLengthExceeded?: boolean;
+      /** Wall-clock duration of the whole turn — from `runTurn`'s start to
+       * the moment `settleOutcome`/`settleError` marked this message
+       * `streaming: false` — only ever set on a completed (success or
+       * failed) assistant message, same as `usage` above. Not set to the
+       * turn's true original duration when it was cold-resumed after an
+       * app restart — there the timestamp only covers time since resume,
+       * see `useLlmChat`'s cold-resume effect. */
+      durationMs?: number;
     };
 
 // ---- Pure block-transition rules -------------------------------------

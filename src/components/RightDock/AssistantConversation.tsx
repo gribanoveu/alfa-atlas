@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, ChevronUp, FileText, Send, Sparkles, Square, X } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
+import { formatElapsedDuration } from "../../hooks/useElapsedSeconds";
 import {
   ASSISTANT_SUGGESTIONS,
   AUTO_MODEL_LABEL,
@@ -790,6 +791,11 @@ export function AssistantConversation({
                               Сжать историю и повторить
                             </button>
                           ) : null}
+                        </div>
+                      ) : null}
+                      {typeof m.durationMs === "number" ? (
+                        <div className="assistant-chat-duration">
+                          Готово за {formatElapsedDuration(Math.round(m.durationMs / 1000))}
                         </div>
                       ) : null}
                     </div>
