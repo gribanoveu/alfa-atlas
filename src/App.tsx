@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type * as Monaco from "monaco-editor";
-import type { editor as MonacoEditor } from "monaco-editor";
 import { toMessage } from "./lib/errors";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
@@ -30,11 +29,12 @@ import { useBranches } from "./hooks/useBranches";
 import { useGitStash } from "./hooks/useGitStash";
 import { useGitActionLog } from "./hooks/useGitActionLog";
 import { useDocsTree } from "./hooks/useDocsTree";
+import { useDocNavigation } from "./hooks/useDocNavigation";
+import { useEditorTabActions } from "./hooks/useEditorTabActions";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useSpecsRepo } from "./hooks/useSpecsRepo";
 import { useOpenApiBundle } from "./hooks/useOpenApiBundle";
 import { OpenApiExplorer } from "./components/OpenApiExplorer/OpenApiExplorer";
-import type { DisplayTab } from "./components/Editor/EditorTabs";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
 import { useSpellcheckConfig } from "./hooks/useSpellcheckConfig";
 import { useGitPanel } from "./hooks/useGitPanel";
@@ -51,7 +51,7 @@ import { useEmbeddingPriorityFiles } from "./hooks/useEmbeddingPriorityFiles";
 import { useEmbeddingSetup } from "./hooks/useEmbeddingSetup";
 import { useLlmSetup } from "./hooks/useLlmSetup";
 import { useLlmRateLimit } from "./hooks/useLlmRateLimit";
-import { findAnchors } from "./lib/workspaceIndex";
+import { useAppToasts } from "./hooks/useAppToasts";
 import { useWorkspaceLayout } from "./hooks/useWorkspaceLayout";
 import {
   collectDirPaths,
@@ -81,7 +81,6 @@ import {
   lineEndingLabelFor,
 } from "./lib/supportedFiles";
 import {
-  resolveRelativeToDocument,
   toDocsRelativePath,
   toRepoRelativePath,
 } from "./lib/paths";
@@ -122,32 +121,6 @@ function parentOfPath(path: string): string {
   return parts.slice(0, -1).join("/");
 }
 
-/**
- * Resolve an xref `href` (`path#anchor`, `path`, or `#anchor`) against the
- * docs-relative `sourcePath` of the document that contains the link. Returns
- * a `{ path, anchor }` pair where `path` is docs-relative (suitable for
- * `editor.openFile`) and `anchor` may be `null`.
- *
- * When `href` has no path component (just `#anchor`), the target is the
- * current document — `path` is `sourcePath` unchanged.
- */
-function resolveXrefHref(
-  href: string,
-  sourcePath: string,
-): { path: string; anchor: string | null } {
-  // Strip any `./`/`../`-style relative segments against the source file's
-  // directory. We don't use `URL` because these hrefs are not real URLs
-  // (no scheme) and Tauri webview may absolutize them oddly.
-  const hashIdx = href.indexOf("#");
-  const pathPart = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
-  const anchor = hashIdx >= 0 ? href.slice(hashIdx + 1) : null;
-
-  if (!pathPart) {
-    return { path: sourcePath, anchor: anchor ?? null };
-  }
-
-  return { path: resolveRelativeToDocument(pathPart, sourcePath), anchor: anchor ?? null };
-}
 
 function App() {
   // Mount the AsciiDoc parse-request listener unconditionally. The hook
@@ -182,21 +155,22 @@ function App() {
   });
 
   const specsRepo = useSpecsRepo(project.repoRoot);
-  const [openApiTabOpen, setOpenApiTabOpen] = useState(false);
-  const [activeKind, setActiveKind] = useState<"file" | "openapi">("file");
+  const tabs = useEditorTabActions({ editor, specsRepo });
+  const {
+    openApiTabOpen,
+    setOpenApiTabOpen,
+    activeKind,
+    setActiveKind,
+    displayTabs,
+    openApiExplorerTab,
+  } = tabs;
+
   const openApiBundle = useOpenApiBundle(
     project.repoRoot,
     specsRepo.info?.entryFile ?? null,
     openApiTabOpen,
   );
 
-  // Any real file tab becoming active (open/select/restore-on-load) hands
-  // focus back to the file view — the API Explorer only stays active when
-  // the user explicitly picked it (see handleSelectTab), which doesn't
-  // touch editor.activeTabId.
-  useEffect(() => {
-    setActiveKind("file");
-  }, [editor.activeTabId]);
 
   useEffect(() => {
     const onOpenPlan = (event: Event) => {
@@ -208,90 +182,12 @@ function App() {
     return () => window.removeEventListener("atlas-open-plan", onOpenPlan);
   }, [editor.openPlan]);
 
-  const displayTabs: DisplayTab[] = useMemo(() => {
-    const fileTabs: DisplayTab[] = editor.tabs.map((t) => ({
-      id: t.id,
-      title: t.title,
-      dirty: t.dirty,
-    }));
-    if (!openApiTabOpen) return fileTabs;
-    return [
-      ...fileTabs,
-      { id: "openapi", title: specsRepo.info?.title ?? "API Explorer", dirty: false },
-    ];
-  }, [editor.tabs, openApiTabOpen, specsRepo.info]);
 
-  const handleSelectTab = useCallback(
-    (id: string) => {
-      if (id === "openapi") {
-        setActiveKind("openapi");
-        return;
-      }
-      editor.selectTab(id);
-    },
-    [editor.selectTab],
-  );
 
-  const handleCloseTab = useCallback(
-    (id: string) => {
-      if (id === "openapi") {
-        setOpenApiTabOpen(false);
-        setActiveKind("file");
-        return;
-      }
-      void editor.closeTab(id);
-    },
-    [editor.closeTab],
-  );
 
-  const openApiExplorerTab = useCallback(() => {
-    setOpenApiTabOpen(true);
-    setActiveKind("openapi");
-  }, []);
 
-  const handleCloseAllTabs = useCallback(() => {
-    setOpenApiTabOpen(false);
-    setActiveKind("file");
-    void editor.closeAllTabs();
-  }, [editor.closeAllTabs]);
 
-  const handleCloseOtherTabs = useCallback(
-    (id: string) => {
-      if (id === "openapi") {
-        setActiveKind("openapi");
-        void editor.closeAllTabs();
-        return;
-      }
-      setOpenApiTabOpen(false);
-      void editor.closeOtherTabs(id);
-    },
-    [editor.closeAllTabs, editor.closeOtherTabs],
-  );
 
-  // Текущий экземпляр Monaco-редактора — для команд Undo/Redo из меню
-  // «Правка». Ref, а не state: сама смена инстанса не должна вызывать
-  // перерендер App, нужен только актуальный указатель на момент клика.
-  const activeEditorRef = useRef<MonacoEditor.IStandaloneCodeEditor | null>(
-    null,
-  );
-  const handleEditorInstanceChange = useCallback(
-    (instance: MonacoEditor.IStandaloneCodeEditor | null) => {
-      activeEditorRef.current = instance;
-    },
-    [],
-  );
-  const handleUndo = useCallback(() => {
-    const instance = activeEditorRef.current;
-    if (!instance) return;
-    instance.trigger("menu", "undo", null);
-    instance.focus();
-  }, []);
-  const handleRedo = useCallback(() => {
-    const instance = activeEditorRef.current;
-    if (!instance) return;
-    instance.trigger("menu", "redo", null);
-    instance.focus();
-  }, []);
 
   // State (not a ref) — the Ctrl+Click editor-opener registration effect
   // below needs to re-run once this becomes available.
@@ -309,10 +205,8 @@ function App() {
   const actionLog = useGitActionLog(project.repoRoot, {
     active: Boolean(project.repoRoot),
   });
-  const [folderError, setFolderError] = useState<string | null>(null);
-  const [dismissedToastMessage, setDismissedToastMessage] = useState<string | null>(null);
-  const [successToast, setSuccessToast] = useState<{ id: number; message: string } | null>(null);
-  const successToastCounter = useRef(0);
+  const { toast: activeToast, showSuccess, folderError, setFolderError } =
+    useAppToasts(editor.error);
 
   // Переименование/перемещение файла или папки могло переписать include::/
   // image::/xref: в других документах — подхватываем это в открытых вкладках
@@ -325,28 +219,20 @@ function App() {
         report.updatedFiles.map((f) => editor.reloadTabFromDisk(f.docsRelativePath)),
       );
       const totalRefs = report.updatedFiles.reduce((sum, f) => sum + f.count, 0);
-      successToastCounter.current += 1;
-      setSuccessToast({
-        id: successToastCounter.current,
-        // Родительный падеж числительного не согласуем со словом — как в
-        // «Найдено результатов: N» — чтобы не городить русскую плюрализацию
-        // ради тоста.
-        message: `Ссылки обновлены — файлов: ${report.updatedFiles.length}, ссылок: ${totalRefs}`,
-      });
+      // Родительный падеж числительного не согласуем со словом — как в
+      // «Найдено результатов: N» — чтобы не городить русскую плюрализацию
+      // ради тоста.
+      showSuccess(
+        `Ссылки обновлены — файлов: ${report.updatedFiles.length}, ссылок: ${totalRefs}`,
+      );
     },
-    [editor.reloadTabFromDisk],
+    [editor.reloadTabFromDisk, showSuccess],
   );
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [copiedItem, setCopiedItem] = useState<FileTreeDeleteTarget | null>(null);
   const [renameTarget, setRenameTarget] = useState<FileTreeDeleteTarget | null>(null);
-  const [revealRequest, setRevealRequest] = useState<{
-    id: number;
-    line: number;
-    column: number;
-    severity: "error" | "warning";
-  } | null>(null);
   const [docsSearchOpen, setDocsSearchOpen] = useState(false);
   const [insertRequest, setInsertRequest] = useState<{
     id: number;
@@ -361,7 +247,6 @@ function App() {
     text: string;
     filePath: string | null;
   } | null>(null);
-  const revealCounter = useRef(0);
   const insertCounter = useRef(0);
   const chatInsertCounter = useRef(0);
   const skipNextPanelSync = useRef(false);
@@ -442,10 +327,6 @@ function App() {
 
   const hasProject = Boolean(project.docsRoot && project.repoRoot);
 
-  const showSuccess = useCallback((message: string) => {
-    successToastCounter.current += 1;
-    setSuccessToast({ id: successToastCounter.current, message });
-  }, []);
 
   const {
     branchSwitchBlocked,
@@ -558,6 +439,13 @@ function App() {
   const workspaceIndex = useWorkspaceIndex(project.repoRoot, {
     active: hasProject,
   });
+  const {
+    revealRequest,
+    openDiagnostic,
+    openDocsSearchHit,
+    openDocumentReference,
+    openXref,
+  } = useDocNavigation({ editor, project, layout, workspaceIndex, monacoInstance });
   const standards = useStandardsCheck(project.docsRoot, {
     active: hasProject,
   });
@@ -775,160 +663,10 @@ function App() {
 
 
 
-  const openDiagnostic = useCallback(
-    async (documentId: string, line: number, column: number) => {
-      // Если Problems panel был свёрнут — раскрываем его (как в IDE: клик по
-      // проблеме не должен прятать сам список).
-      if (!layout.bottomTool) {
-        layout.setBottomToolId("problems");
-      }
 
-      const severity: "error" | "warning" = (() => {
-        const found = workspaceIndex.diagnostics.find(
-          (d) =>
-            d.document === documentId &&
-            d.line === line &&
-            d.column === column,
-        );
-        return found?.severity === "warning" ? "warning" : "error";
-      })();
 
-      const reveal = () => {
-        revealCounter.current += 1;
-        setRevealRequest({
-          id: revealCounter.current,
-          line,
-          column,
-          severity,
-        });
-      };
 
-      if (project.docsRoot && project.repoRoot) {
-        // `documentId` — это repo-relative ключ индекса (например
-        // `src/docs/asciidoc/foo.adoc`), а `editor.openFile` ожидает путь
-        // относительно docsRoot (`foo.adoc`). Считаем относительный суффикс.
-        const rel = toDocsRelativePath(
-          documentId,
-          project.repoRoot,
-          project.docsRoot,
-        );
-        try {
-          await editor.openFile(rel);
-          reveal();
-          return;
-        } catch {
-          // Путь не открылся — ниже общий fallback.
-        }
-      }
-      try {
-        await editor.openFile(documentId);
-        reveal();
-      } catch {
-        // Файл не существует (битый include) — тихо игнорируем, не показывая
-        // сырую os-ошибку. Пользователь уже видит диагностику в Problems.
-      }
-    },
-    [
-      editor,
-      layout,
-      project.docsRoot,
-      project.repoRoot,
-      workspaceIndex.diagnostics,
-    ],
-  );
 
-  const openDocsSearchHit = useCallback(
-    async (path: string, line: number) => {
-      try {
-        await editor.openFile(path);
-        revealCounter.current += 1;
-        setRevealRequest({
-          id: revealCounter.current,
-          line,
-          column: 1,
-          severity: "warning",
-        });
-      } catch {
-        // Missing / unsupported file — leave the search overlay open.
-      }
-    },
-    [editor],
-  );
-
-  /**
-   * Открывает `relPath` (относительно docsRoot) и, если передан `anchor`,
-   * прокручивает редактор к его строке через `findAnchors`. Общая для клика
-   * по xref-ссылке в превью (`openXref` ниже) и для Ctrl+Click «перейти к
-   * файлу» из самого Monaco (см. `registerEditorOpener` ниже).
-   */
-  const openDocumentReference = useCallback(
-    async (relPath: string, anchor: string | null) => {
-      try {
-        await editor.openFile(relPath);
-      } catch {
-        // Файл не существует (битая ссылка) — тихо игнорируем; диагностику
-        // пользователь уже видит в Problems, если она была построена.
-        return;
-      }
-
-      if (!anchor) return;
-      const repoRoot = project.repoRoot;
-      const docsRoot = project.docsRoot;
-      if (!repoRoot || !docsRoot) return;
-
-      const documentId = toRepoRelativePath(relPath, repoRoot, docsRoot);
-      try {
-        const anchors = await findAnchors(documentId);
-        const hit = anchors.find((a) => a.id === anchor);
-        if (!hit) return;
-        revealCounter.current += 1;
-        setRevealRequest({
-          id: revealCounter.current,
-          line: hit.line,
-          column: hit.column,
-          severity: "warning",
-        });
-      } catch {
-        // Индекс недоступен или документ не проиндексирован — оставляем
-        // пользователя на открытой файле без прокрутки.
-      }
-    },
-    [editor, project.repoRoot, project.docsRoot],
-  );
-
-  /**
-   * Клик по xref-ссылке в превью AsciiDoc. Распарсивает href (`path#anchor`,
-   * `path`, `#anchor`) и делегирует открытие+прокрутку `openDocumentReference`.
-   */
-  const openXref = useCallback(
-    async (href: string) => {
-      const sourcePath = editor.activeTab?.path;
-      if (!sourcePath) return;
-      // Внешние URL — не наша зона ответственности, пропускаем.
-      if (/^https?:\/\//i.test(href) || href.startsWith("mailto:")) return;
-
-      const { path: relPath, anchor } = resolveXrefHref(href, sourcePath);
-      await openDocumentReference(relPath, anchor);
-    },
-    [editor, openDocumentReference],
-  );
-
-  // Ctrl+Click (Cmd+Click на macOS) на цель include::/image::/xref: —
-  // useMonacoDefinitions.ts резолвит макрос в Uri (docs-relative путь,
-  // якорь — в fragment), а дальше Monaco зовёт этот «opener», потому что
-  // сам standalone-редактор не умеет открывать чужие ресурсы.
-  useEffect(() => {
-    if (!monacoInstance) return;
-    const disposer = monacoInstance.editor.registerEditorOpener({
-      openCodeEditor(_source, resource) {
-        const path = resource.path.replace(/^\//, "");
-        if (!path) return false;
-        void openDocumentReference(path, resource.fragment || null);
-        return true;
-      },
-    });
-    return () => disposer.dispose();
-  }, [monacoInstance, openDocumentReference]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1039,36 +777,6 @@ function App() {
     setChatInsertRequest(null);
   }, []);
 
-  const toastMessage = editor.error ?? folderError;
-  const visibleToastMessage =
-    toastMessage && toastMessage !== dismissedToastMessage ? toastMessage : null;
-
-  useEffect(() => {
-    if (!toastMessage) return;
-    const timer = setTimeout(() => {
-      setDismissedToastMessage(toastMessage);
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, [toastMessage]);
-
-  useEffect(() => {
-    if (!successToast) return;
-    const timer = setTimeout(() => {
-      setSuccessToast((current) => (current?.id === successToast.id ? null : current));
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, [successToast]);
-
-  const activeToast = successToast
-    ? { message: successToast.message, variant: "success" as const, onClose: () => setSuccessToast(null) }
-    : visibleToastMessage
-      ? {
-          message: visibleToastMessage,
-          variant: "error" as const,
-          onClose: () => setDismissedToastMessage(toastMessage),
-        }
-      : null;
-
   return (
     <div className="app" style={panelStyle}>
       <TopBar
@@ -1089,8 +797,8 @@ function App() {
           if (ok) git.scheduleRefresh();
           return ok;
         }}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
+        onUndo={tabs.undo}
+        onRedo={tabs.redo}
         hasActiveTab={editor.activeTab !== null}
         onPrefsChange={generalPrefs.setPrefs}
         onSpellcheckConfigChange={spellcheck.setConfig}
@@ -1230,10 +938,10 @@ function App() {
                   />
                 ) : undefined
               }
-              onSelectTab={handleSelectTab}
-              onCloseTab={handleCloseTab}
-              onCloseAllTabs={handleCloseAllTabs}
-              onCloseOtherTabs={handleCloseOtherTabs}
+              onSelectTab={tabs.selectTab}
+              onCloseTab={tabs.closeTab}
+              onCloseAllTabs={tabs.closeAllTabs}
+              onCloseOtherTabs={tabs.closeOtherTabs}
               onChangeContent={editor.updateActiveContent}
               onCursorChange={editor.setCursor}
               diagnostics={editorDiagnostics}
@@ -1260,7 +968,7 @@ function App() {
               providerId={selectionAiProviderId}
               llmReady={selectionAiLlmReady}
               onAddToChat={handleAddSelectionToChat}
-              onEditorInstanceChange={handleEditorInstanceChange}
+              onEditorInstanceChange={tabs.onEditorInstanceChange}
               onMonacoInstanceChange={setMonacoInstance}
             />
           ) : (
