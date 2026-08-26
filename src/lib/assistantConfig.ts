@@ -1,7 +1,8 @@
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, MatchSource, Task } from "./aiTools";
 import { normalizeSemanticSearchResult } from "./aiTools";
-import type { ToolCallBlock } from "./chatBlocks";
+import type { ChatMessage, ToolCallBlock } from "./chatBlocks";
 import type { SpecsRepoInfo } from "./openapi";
+import type { PlanRecord, PlanTodo, PlanTodoStatus } from "./plans";
 
 /** Central place for the assistant chat panel's tunable constants — system
  * prompt, model-picker labels, input sizing, context-bar thresholds.
@@ -120,7 +121,7 @@ You cannot change your access mode directly. Use \`requestFullRepoAccess\` only 
 
 - Conversation mode: **Agent** — you can research and make changes directly. If the request is really just a question with nothing to change, call \`requestModeSwitch\` with \`mode: "question"\`; if it clearly needs a plan drafted and reviewed before any change, call \`requestModeSwitch\` with \`mode: "plan"\`. Do this only when genuinely appropriate, not for every request — most requests in Agent mode should just be handled directly. User approval is required and may be denied.
 
-When the user asks you to execute a previously created work plan (e.g. after pressing «Начать» on a plan card, or a message like «Начни выполнение плана»), call \`readPlan\` with the active plan id (from the plan card / prior \`createPlan\` result in this chat), then carry out the steps. After finishing each checklist item, call \`updatePlanTodo\` with that todo's \`id\` and \`status: "completed"\` (or \`cancelled\` with a \`note\` if a step is no longer needed). Do not invent a parallel chat \`todo\` list for the same work when a plan already exists — use \`updatePlanTodo\` instead.
+When executing a previously created work plan (e.g. after pressing «Начать» on a plan card, or a message like «Начни выполнение плана»), a live snapshot of the persisted plan is already in this turn's \`[Plan]\` context block — id, overview, markdown body, checklist with todo ids/statuses, and the current step. Follow that snapshot; it is the source of truth (including any \`updatePlan\` edits since planning). Do **not** call \`readPlan\` just to load it. After finishing each checklist item, call \`updatePlanTodo\` with that todo's \`id\` and \`status: "completed"\` (or \`cancelled\` with a \`note\` if a step is no longer needed). Call \`readPlan\` only if you need to refresh after something outside this turn may have changed the plan. Do not invent a parallel chat \`todo\` list for the same work when a plan already exists — use \`updatePlanTodo\` instead.
 
 ## Formatting (MANDATORY)
 
@@ -481,12 +482,20 @@ Use this structure inside the \`plan\` argument:
 ## Цель
 <1-2 sentences>
 
-## Контекст
-<2-4 sentences from research>
+## Что выяснено
+<Compressed research digest: structure found, conventions, constraints, key snippets. Enough that a fresh model can execute without the planning transcript.>
+
+## Релевантные файлы
+- \`path\` — why it matters (only paths you actually verified)
 
 ## Шаги
 1. **<imperative title>** — <exact file, concrete action>
+   Критерий готовности: <observable done-state>
 2. ...
+
+## Отвергнутые варианты
+- <approach>: <why not — so the executor does not reinvent it>
+(Omit this section if there were none.)
 
 ## Открытые вопросы
 - <if any>
@@ -501,6 +510,9 @@ Use this structure inside the \`plan\` argument:
 - Specific file path (real, verified with \`readFile\` or \`listFiles\`)
 - Concrete action (not "проверить", "обдумать", "рассмотреть")
 - Self-contained (does not depend on hidden context)
+- Acceptance criterion stated on the step
+
+**Self-containment test:** a fresh model, given only this plan and the repository (no planning chat), must be able to execute any step — including step 3. If it would need a discarded file dump or a rejected hypothesis from the conversation, the plan is underspecified: put that into «Что выяснено» or the step itself. Execution discards the planning transcript; the plan is the handoff artifact.
 
 If a step cannot be made concrete without user input, list it under "Открытые вопросы" instead of faking it. Mirror concrete steps in \`todos\` with matching slug ids.
 
@@ -532,7 +544,7 @@ Before proposing a step that assumes something about the repository (a file exis
 
 ## Handoff to Agent mode
 
-The plan card has a «Начать» button that switches to Agent mode and starts execution — you do not need to call \`requestModeSwitch\` when merely presenting a plan.
+The plan card has a «Начать» button that switches to Agent mode and starts execution — you do not need to call \`requestModeSwitch\` when merely presenting a plan. Execution reassembles context from the persisted plan artifact; the planning transcript is not sent to the executor. Keep the plan self-contained.
 
 If the user explicitly asks in chat to apply/execute ("apply it", "do it", "go ahead", "выполняй") without using the card, call \`requestModeSwitch\` with \`mode: "agent"\` and a \`reason\` summarizing what's about to be executed. Wait for the tool result. If approved, reply with one short line confirming the switch only and stop: the new mode takes effect on the **next** user message.
 
@@ -812,28 +824,93 @@ export function buildActiveFileContextBlock(path: string | null): string | null 
   return `[Editor] The user currently has \`${path}\` open. Treat this only as a hint for resolving an unnamed reference ("this file", "here", "the current document") — not as an implicit request to read, explain, or modify it. If the user's message doesn't refer to a file at all, ignore this.`;
 }
 
-/** Builds the "active plan id" context block `useLlmChat` splices into
- * every request as its own fresh `system` message, right before the user's
- * new turn — same treatment as `buildTodoContextBlock`/
- * `buildActiveFileContextBlock`: recomputed on every `sendMessage` call from
- * the live `activePlanIdRef.current` (never baked into persisted chat
- * history), so a later turn always reflects whichever plan is actually
- * active, not a stale one. Returns `null` when no plan is active, so a chat
- * that never touched Plan mode sends no extra message at all.
+/** Canned user text sent when the plan card's «Начать» (or the equivalent
+ * `atlas-start-plan` event) starts execution. Kept in one place so the UI
+ * send and any "this is the start-execution turn" checks cannot drift. */
+export const PLAN_EXECUTION_START_TEXT = "Начни выполнение плана";
+
+function planTodoGlyph(status: PlanTodoStatus): string {
+  switch (status) {
+    case "completed":
+      return "✓";
+    case "inProgress":
+      return "●";
+    case "cancelled":
+      return "✗";
+    case "pending":
+      return "○";
+  }
+}
+
+function formatPlanTodoLine(todo: PlanTodo): string {
+  const glyph = planTodoGlyph(todo.status);
+  const current = todo.status === "inProgress" ? "   ← текущая" : "";
+  const note = todo.status === "cancelled" && todo.note ? ` (${todo.note})` : "";
+  return `${glyph} ${todo.content} (id: \`${todo.id}\`)${current}${note}`;
+}
+
+/** Builds the active-plan context block `useLlmChat` splices into every
+ * request as its own fresh `system` message, right before the user's new
+ * turn — same treatment as `buildTodoContextBlock` /
+ * `buildActiveFileContextBlock`: recomputed on every `sendMessage` from the
+ * live `activePlanId` (never baked into persisted chat history).
  *
- * Exists because starting a plan via the global "Планы…" modal can target
- * any saved plan from any chat, opened into whichever chat panel is
- * currently focused — that chat's own message history may contain no
- * `createPlan`/`updatePlan` call at all, so the system prompt's instruction
- * to use "the active plan id from the plan card / prior createPlan result
- * in this chat" has nothing to resolve. This block gives the model the id
- * directly instead. The id alone is sufficient — `readPlan`'s own result
- * carries the plan's name/todos, so no extra plumbing to fetch/thread a name
- * through `AssistantPlanCard`/`PlansModal`/`TopBar`/the `atlas-start-plan`
- * event is needed. */
-export function buildActivePlanContextBlock(planId: string | null): string | null {
+ * When `record` is provided (Agent mode fetched via `planGet`), the block
+ * is the full live snapshot: markdown body, overview, checklist with ids
+ * and statuses, and the current step. Input tokens are cheap under EVC;
+ * this avoids a `readPlan` completion round and stays in sync after
+ * `updatePlan`. When only `planId` is known (Plan/Question mode, or
+ * `planGet` failed), falls back to the id so the model can still
+ * `readPlan` rather than guessing.
+ *
+ * Returns `null` when no plan is active, so a chat that never touched Plan
+ * mode sends no extra message at all. */
+export function buildActivePlanContextBlock(planId: string | null, record: PlanRecord | null = null): string | null {
   if (!planId) return null;
-  return `[Plan] The active work plan id is \`${planId}\`. If asked to continue, resume, or check the status of "the plan", call \`readPlan\` with this id — do not ask the user for the plan id or guess one.`;
+  if (!record) {
+    return `[Plan] The active work plan id is \`${planId}\`. If asked to continue, resume, or check the status of "the plan", call \`readPlan\` with this id — do not ask the user for the plan id or guess one.`;
+  }
+
+  const current = record.todos.find((t) => t.status === "inProgress");
+  const currentLine = current
+    ? `${current.content} (id: \`${current.id}\`)`
+    : "(none — every remaining item is pending, completed, or cancelled)";
+  const checklist = record.todos.map(formatPlanTodoLine).join("\n");
+
+  return `[Plan] Active work plan \`${record.id}\` — «${record.name}». This snapshot is the live persisted plan (including any edits since planning). Follow it; do not reconstruct the plan from earlier chat. After finishing a checklist item, call \`updatePlanTodo\` with that todo's \`id\`. Call \`readPlan\` only if you need to refresh after an external change you did not just make.
+
+Overview: ${record.overview}
+
+Current step: ${currentLine}
+
+Checklist:
+${checklist}
+
+Plan body:
+${record.plan}`;
+}
+
+/** Drops the planning (or any pre-start) transcript from the *wire* tail
+ * when executing a plan. The UI chat is untouched — only what is replayed
+ * to the model changes.
+ *
+ * - `currentTurnIsStart`: this send *is* the «Начать» turn, so `messages`
+ *   is everything *before* that user message — drop it all.
+ * - Otherwise, slice from the last user message marked
+ *   `isPlanExecutionStart` (inclusive), so later execution turns keep the
+ *   start message and everything after it, and a second «Начать» in the
+ *   same chat starts a fresh execution tail.
+ * - No start marker and not a start turn: return `messages` unchanged
+ *   (ordinary Agent chat, or Plan/Question). */
+export function sliceMessagesForPlanExecution(messages: ChatMessage[], currentTurnIsStart: boolean): ChatMessage[] {
+  if (currentTurnIsStart) return [];
+  let start = -1;
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role === "user" && m.isPlanExecutionStart) start = i;
+  }
+  if (start === -1) return messages;
+  return messages.slice(start);
 }
 
 /** Wraps a pre-fetched OptMem wake (from `getMemoryWake`) as a system-role

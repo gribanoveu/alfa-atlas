@@ -1415,7 +1415,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "createPlan".to_string(),
             description:
-                "Create a persisted work plan as the final deliverable of Plan mode. Call this AFTER research with read-only tools — do not dump the full plan as chat prose; the UI shows a plan card from this tool result. `name` is a short 3–4 word title; `overview` is 1–2 sentences; `plan` is the full markdown body (first line MUST be a `# Title` heading); `todos` is an array of at least 2 concrete checklist items with stable slug `id`s (e.g. \"setup-auth\") and imperative `content`. Returns `planId` — remember it for later `updatePlan` calls in this session. After success, reply with a brief 1–3 sentence summary only; the card has «Открыть» / «Начать» buttons."
+                "Create a persisted work plan as the final deliverable of Plan mode. Call this AFTER research with read-only tools — do not dump the full plan as chat prose; the UI shows a plan card from this tool result. `name` is a short 3–4 word title; `overview` is 1–2 sentences; `plan` is the full markdown body (first line MUST be a `# Title` heading) and MUST be self-contained: a later Agent turn executes from this artifact alone, without the planning conversation; `todos` is an array of at least 2 concrete checklist items with stable slug `id`s (e.g. \"setup-auth\") and imperative `content`. Returns `planId` — remember it for later `updatePlan` calls in this session. After success, reply with a brief 1–3 sentence summary only; the card has «Открыть» / «Начать» buttons."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1430,7 +1430,7 @@ pub fn llm_tool_definitions(
                     },
                     "plan": {
                         "type": "string",
-                        "description": "Full markdown plan body; first line must be `# Title`."
+                        "description": "Full markdown plan body; first line must be `# Title`. Must be self-contained for execution without the planning chat (goal, research digest, files, steps with acceptance criteria, rejected alternatives)."
                     },
                     "todos": {
                         "type": "array",
@@ -1503,7 +1503,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "readPlan".to_string(),
             description:
-                "Load a persisted plan by `planId` — full markdown body and current todo statuses. Use in Agent mode before executing an approved plan, or in Plan mode to refresh context before `updatePlan`."
+                "Load a persisted plan by `planId` — full markdown body and current todo statuses. In Agent mode the live snapshot is already injected each turn; call this only to refresh after an external change. In Plan mode, use it to refresh context before `updatePlan`."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",

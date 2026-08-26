@@ -19,6 +19,7 @@ import {
   buildSystemPromptForConversationMode,
   buildTodoContextBlock,
   buildMemoryContextBlock,
+  sliceMessagesForPlanExecution,
   CONTEXT_COMPACTION_KEEP_LAST_MESSAGES,
   CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES,
   TOOL_APPROVAL_TIMEOUT_MS,
@@ -64,6 +65,7 @@ import {
   type ToolCallDecision,
 } from "../lib/llm";
 import { playNeedAnswerSound, playTaskDoneSound } from "../lib/assistantSounds";
+import { planGet, type PlanRecord } from "../lib/plans";
 import { estimateTokenCount } from "../lib/tokens";
 
 export type { ChatMessage, MessageBlock, ReasoningBlock, TextBlock, ToolCallBlock, ToolCallStatus } from "../lib/chatBlocks";
@@ -645,16 +647,29 @@ export function useLlmChat(
    * `retryWithCompaction` (`true`, and a smaller keep-tail) so the two
    * paths can't drift apart. `priorTurns` is passed in rather than read
    * from `messages` directly so a retry can supply a version with the
-   * failed turn already removed. */
+   * failed turn already removed.
+   *
+   * `opts.planExecutionStart` marks the canned «Начать» send: planning
+   * transcript is dropped from the *wire* (UI chat stays) and a planning-era
+   * compaction cache is discarded so GOAL/DECISIONS cannot leak rejected
+   * hypotheses into execution. */
   const runTurn = useCallback(
-    async (userText: string, assistantId: string, priorTurns: ChatMessage[], opts: { aggressiveCompaction: boolean }) => {
+    async (
+      userText: string,
+      assistantId: string,
+      priorTurns: ChatMessage[],
+      opts: { aggressiveCompaction: boolean; planExecutionStart?: boolean },
+    ) => {
       if (!providerId) return;
       setSending(true);
 
-      // A cache surviving from a foreign/removed conversation (see
-      // `compactionCacheRef`'s doc comment) must never be used — drop it
+      const real = realMessages(priorTurns);
+      const scoped = sliceMessagesForPlanExecution(real, opts.planExecutionStart === true);
+
+      // A cache surviving from a foreign/removed conversation, or from the
+      // planning transcript we just dropped, must never be used — drop it
       // before either deciding whether to compact or building `wireMessages`.
-      if (!isCacheValid(compactionCacheRef.current, priorTurns)) {
+      if (!isCacheValid(compactionCacheRef.current, scoped)) {
         compactionCacheRef.current = null;
       }
 
@@ -662,19 +677,29 @@ export function useLlmChat(
         ? CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES
         : CONTEXT_COMPACTION_KEEP_LAST_MESSAGES;
 
-      if (opts.aggressiveCompaction || shouldCompact(contextTokens, contextLimit, priorTurns)) {
+      const scopedTokens =
+        estimateTokenCount(
+          buildSystemPromptForConversationMode(
+            conversationMode,
+            accessMode,
+            specsRepoInfo,
+            toolDefinitions,
+            docsRootRelativeToRepo,
+          ),
+        ) + scoped.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
+
+      if (opts.aggressiveCompaction || shouldCompact(scopedTokens, contextLimit, scoped)) {
         try {
-          const plan = planCompaction(priorTurns, compactionCacheRef.current, keepLast, activeFilePath);
-          if (plan) {
-            const excerpt = plan.toSummarize.map(describeMessageForCompaction).join("\n\n");
+          const compaction = planCompaction(scoped, compactionCacheRef.current, keepLast, activeFilePath);
+          if (compaction) {
+            const excerpt = compaction.toSummarize.map(describeMessageForCompaction).join("\n\n");
             const prompt = buildHistoryCompactionPrompt(compactionCacheRef.current?.summaryText ?? null, excerpt);
             const response = await llmChatOnce(providerId, [{ role: "user", content: prompt, toolCallId: null }]);
             const summaryText = response.content?.trim();
             if (summaryText) {
-              const real = realMessages(priorTurns);
-              const fromOrdinal = real.findIndex((m) => m.id === plan.toSummarize[0]!.id) + 1;
-              const toOrdinal = real.findIndex((m) => m.id === plan.toSummarize[plan.toSummarize.length - 1]!.id) + 1;
-              compactionCacheRef.current = { summaryText, boundaryMessageId: plan.newBoundaryId };
+              const fromOrdinal = real.findIndex((m) => m.id === compaction.toSummarize[0]!.id) + 1;
+              const toOrdinal = real.findIndex((m) => m.id === compaction.toSummarize[compaction.toSummarize.length - 1]!.id) + 1;
+              compactionCacheRef.current = { summaryText, boundaryMessageId: compaction.newBoundaryId };
               const noticeMsg: ChatMessage = {
                 id: crypto.randomUUID(),
                 role: "assistant",
@@ -696,18 +721,17 @@ export function useLlmChat(
         }
       }
 
-      const real = realMessages(priorTurns);
-      let wireTail = real;
+      let wireTail = scoped;
       if (compactionCacheRef.current) {
-        const boundaryIndex = real.findIndex((m) => m.id === compactionCacheRef.current!.boundaryMessageId);
+        const boundaryIndex = scoped.findIndex((m) => m.id === compactionCacheRef.current!.boundaryMessageId);
         if (boundaryIndex === -1) {
           // Stale cache slipped past the earlier `isCacheValid` check
           // somehow (e.g. the boundary message was removed mid-turn) —
-          // fall back to full history rather than inject a summary that no
-          // longer corresponds to anything being sent.
+          // fall back to the (already scoped) history rather than inject a
+          // summary that no longer corresponds to anything being sent.
           compactionCacheRef.current = null;
         } else {
-          wireTail = real.slice(boundaryIndex + 1);
+          wireTail = scoped.slice(boundaryIndex + 1);
         }
       }
 
@@ -735,7 +759,18 @@ export function useLlmChat(
           ? `${docsRootRelativeToRepo}/${activeFilePath}`
           : activeFilePath;
       const activeFileBlock = buildActiveFileContextBlock(activeFileForPrompt);
-      const activePlanBlock = buildActivePlanContextBlock(activePlanIdRef.current);
+
+      const planId = activePlanIdRef.current;
+      let planRecord: PlanRecord | null = null;
+      if (planId && conversationMode === "agent") {
+        try {
+          planRecord = await planGet(planId);
+        } catch (e) {
+          console.error("Не удалось прочитать активный план", e);
+          planRecord = null;
+        }
+      }
+      const activePlanBlock = buildActivePlanContextBlock(planId, planRecord);
 
       let memoryBlock: string | null = null;
       try {
@@ -828,7 +863,6 @@ export function useLlmChat(
     [
       providerId,
       contextLimit,
-      contextTokens,
       accessMode,
       conversationMode,
       specsRepoInfo,
@@ -879,19 +913,27 @@ export function useLlmChat(
   }, [initialPendingResume, initialMessages, providerId, runPendingLoop, settleOutcome, settleError, onTurnSettled]);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, opts?: { planExecutionStart?: boolean }) => {
       const trimmed = text.trim();
       if (!providerId || sending || !trimmed) return;
 
       const priorTurns = messages;
-      const userMsg: ChatMessage = { id: crypto.randomUUID(), role: "user", content: trimmed };
+      const userMsg: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: trimmed,
+        ...(opts?.planExecutionStart ? { isPlanExecutionStart: true } : {}),
+      };
       const assistantId = crypto.randomUUID();
       setMessages((prev) => [
         ...prev,
         userMsg,
         { id: assistantId, role: "assistant", blocks: [], streaming: true },
       ]);
-      await runTurn(trimmed, assistantId, priorTurns, { aggressiveCompaction: false });
+      await runTurn(trimmed, assistantId, priorTurns, {
+        aggressiveCompaction: false,
+        planExecutionStart: opts?.planExecutionStart === true,
+      });
     },
     [providerId, sending, messages, runTurn],
   );
@@ -922,7 +964,10 @@ export function useLlmChat(
         ...prev.filter((m) => m.id !== assistantMessageId),
         { id: newAssistantId, role: "assistant", blocks: [], streaming: true },
       ]);
-      void runTurn(userMsgToRetry.content, newAssistantId, priorTurns, { aggressiveCompaction: true });
+      void runTurn(userMsgToRetry.content, newAssistantId, priorTurns, {
+        aggressiveCompaction: true,
+        planExecutionStart: userMsgToRetry.isPlanExecutionStart === true,
+      });
     },
     [providerId, sending, messages, runTurn],
   );

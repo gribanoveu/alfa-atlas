@@ -76,7 +76,17 @@ export type MessageBlock = TextBlock | ToolCallBlock | ReasoningBlock;
  * so a user message can never carry `blocks` and an assistant message can
  * never carry `content` by construction. */
 export type ChatMessage =
-  | { id: string; role: "user"; content: string }
+  | {
+      id: string;
+      role: "user";
+      content: string;
+      /** Set on the canned «Начать» user turn (`PLAN_EXECUTION_START_TEXT`)
+       * so later Agent requests can drop the planning transcript from the
+       * *wire* (not the UI) and start from this message. Persists with the
+       * chat JSON blob — same as `isCompactionNotice` on assistant
+       * messages, no backend column needed. */
+      isPlanExecutionStart?: boolean;
+    }
   | {
       id: string;
       role: "assistant";

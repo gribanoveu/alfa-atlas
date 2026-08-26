@@ -7,6 +7,7 @@ import {
   AUTO_MODEL_VALUE,
   CHAT_INPUT_ROWS,
   CONTEXT_NEAR_LIMIT_RATIO,
+  PLAN_EXECUTION_START_TEXT,
 } from "../../lib/assistantConfig";
 import type { AssistantSuggestion } from "../../lib/assistantConfig";
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, Task } from "../../lib/aiTools";
@@ -381,7 +382,7 @@ export function AssistantConversation({
       // Already in Agent mode — the mode-change effect below never fires
       // (onConversationModeChange("agent") is a same-value no-op), so send
       // directly instead of leaving pendingStartPlanRef stuck true.
-      if (!sending) void sendMessage("Начни выполнение плана");
+      if (!sending) void sendMessage(PLAN_EXECUTION_START_TEXT, { planExecutionStart: true });
       return;
     }
     pendingStartPlanRef.current = true;
@@ -391,7 +392,7 @@ export function AssistantConversation({
   useEffect(() => {
     if (conversationMode !== "agent" || !pendingStartPlanRef.current || sending) return;
     pendingStartPlanRef.current = false;
-    void sendMessage("Начни выполнение плана");
+    void sendMessage(PLAN_EXECUTION_START_TEXT, { planExecutionStart: true });
   }, [conversationMode, sending, sendMessage]);
 
   useEffect(() => {
