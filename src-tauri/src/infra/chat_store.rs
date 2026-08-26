@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS chats (
   todos      TEXT NOT NULL DEFAULT '[]',
   active_plan_id TEXT,
   memory_extracted_ordinal INTEGER NOT NULL DEFAULT -1,
+  pending_resume TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -83,6 +84,7 @@ fn open() -> Result<Connection, ChatStoreError> {
     migrate_add_todos_column(&conn)?;
     migrate_add_active_plan_id_column(&conn)?;
     migrate_add_memory_extracted_ordinal_column(&conn)?;
+    migrate_add_pending_resume_column(&conn)?;
     Ok(conn)
 }
 
@@ -135,6 +137,25 @@ fn migrate_add_memory_extracted_ordinal_column(conn: &Connection) -> Result<(), 
             "ALTER TABLE chats ADD COLUMN memory_extracted_ordinal INTEGER NOT NULL DEFAULT -1",
             [],
         )?;
+    }
+    Ok(())
+}
+
+/// Opaque JSON blob of the frontend's `PendingApproval` — set when a turn
+/// pauses awaiting a tool-approval/`askUser` decision (before the turn as a
+/// whole has settled), cleared (`NULL`) once it resolves. Lets a chat
+/// reopened after a full app restart (not just a panel close within one
+/// running session) restore enough state (`history`/`round`/`budgetUsed`)
+/// to resume via `llm_chat_stream_resume` — see `commands::chat_history`.
+fn migrate_add_pending_resume_column(conn: &Connection) -> Result<(), ChatStoreError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(chats)")?;
+    let has_col = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "pending_resume");
+    if !has_col {
+        conn.execute("ALTER TABLE chats ADD COLUMN pending_resume TEXT", [])?;
     }
     Ok(())
 }
@@ -216,10 +237,23 @@ pub fn load_chat(chat_id: &str) -> Result<LoadedChat, ChatStoreError> {
         .optional()?
         .flatten();
 
+    let pending_resume_json: Option<String> = conn
+        .query_row(
+            "SELECT pending_resume FROM chats WHERE id = ?1",
+            params![chat_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let pending_resume = pending_resume_json
+        .map(|s| serde_json::from_str(&s))
+        .transpose()?;
+
     Ok(LoadedChat {
         messages,
         todos,
         active_plan_id,
+        pending_resume,
     })
 }
 
@@ -237,21 +271,24 @@ pub fn save_chat(
     messages: &[serde_json::Value],
     todos: &[Task],
     active_plan_id: Option<&str>,
+    pending_resume: Option<&serde_json::Value>,
 ) -> Result<ChatSummary, ChatStoreError> {
     let mut conn = open()?;
     let now = now_millis();
     let todos_json = serde_json::to_string(todos)?;
+    let pending_resume_json = pending_resume.map(serde_json::to_string).transpose()?;
     let tx = conn.transaction()?;
 
     tx.execute(
-        "INSERT INTO chats (id, repo_root, title, todos, active_plan_id, archived, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)
+        "INSERT INTO chats (id, repo_root, title, todos, active_plan_id, pending_resume, archived, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7)
          ON CONFLICT(id) DO UPDATE SET
            title = excluded.title,
            todos = excluded.todos,
            active_plan_id = excluded.active_plan_id,
+           pending_resume = excluded.pending_resume,
            updated_at = excluded.updated_at",
-        params![chat_id, repo_root, title, todos_json, active_plan_id, now],
+        params![chat_id, repo_root, title, todos_json, active_plan_id, pending_resume_json, now],
     )?;
 
     tx.execute("DELETE FROM messages WHERE chat_id = ?1", params![chat_id])?;
@@ -335,7 +372,7 @@ mod tests {
     fn save_then_list_round_trips_a_new_chat() {
         with_temp_home(|| {
             let repo = "/repo/one";
-            let summary = save_chat(repo, "chat-1", "Первый вопрос", &[sample_message("hi")], &[], None).unwrap();
+            let summary = save_chat(repo, "chat-1", "Первый вопрос", &[sample_message("hi")], &[], None, None).unwrap();
             assert_eq!(summary.id, "chat-1");
             assert_eq!(summary.repo_root, repo);
             assert_eq!(summary.title, "Первый вопрос");
@@ -351,7 +388,7 @@ mod tests {
     fn save_then_load_messages_preserves_order() {
         with_temp_home(|| {
             let messages = vec![sample_message("first"), sample_message("second"), sample_message("third")];
-            save_chat("/repo/one", "chat-1", "t", &messages, &[], None).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &messages, &[], None, None).unwrap();
 
             let loaded = load_chat("chat-1").unwrap();
             assert_eq!(loaded.messages, messages);
@@ -361,10 +398,10 @@ mod tests {
     #[test]
     fn resaving_a_chat_replaces_its_messages_and_preserves_created_at() {
         with_temp_home(|| {
-            let first = save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
+            let first = save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None, None).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
             let second =
-                save_chat("/repo/one", "chat-1", "t2", &[sample_message("a"), sample_message("b")], &[], None).unwrap();
+                save_chat("/repo/one", "chat-1", "t2", &[sample_message("a"), sample_message("b")], &[], None, None).unwrap();
 
             assert_eq!(second.created_at, first.created_at);
             assert!(second.updated_at >= first.updated_at);
@@ -380,7 +417,7 @@ mod tests {
     fn archiving_moves_a_chat_between_active_and_archived_lists() {
         with_temp_home(|| {
             let repo = "/repo/one";
-            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
+            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[], None, None).unwrap();
 
             set_archived("chat-1", true).unwrap();
             assert!(list_chats(repo, false).unwrap().is_empty());
@@ -403,8 +440,8 @@ mod tests {
     #[test]
     fn chats_are_scoped_to_their_repo_root() {
         with_temp_home(|| {
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
-            save_chat("/repo/two", "chat-2", "t", &[sample_message("a")], &[], None).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None, None).unwrap();
+            save_chat("/repo/two", "chat-2", "t", &[sample_message("a")], &[], None, None).unwrap();
 
             let repo_one = list_chats("/repo/one", false).unwrap();
             assert_eq!(repo_one.len(), 1);
@@ -420,11 +457,11 @@ mod tests {
     fn list_chats_orders_by_most_recently_updated_first() {
         with_temp_home(|| {
             let repo = "/repo/one";
-            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
+            save_chat(repo, "chat-1", "t", &[sample_message("a")], &[], None, None).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
-            save_chat(repo, "chat-2", "t", &[sample_message("a")], &[], None).unwrap();
+            save_chat(repo, "chat-2", "t", &[sample_message("a")], &[], None, None).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
-            save_chat(repo, "chat-1", "t", &[sample_message("a"), sample_message("b")], &[], None).unwrap();
+            save_chat(repo, "chat-1", "t", &[sample_message("a"), sample_message("b")], &[], None, None).unwrap();
 
             let active = list_chats(repo, false).unwrap();
             assert_eq!(active.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), vec!["chat-1", "chat-2"]);
@@ -436,7 +473,7 @@ mod tests {
         with_temp_home(|| {
             // save_chat on a brand-new id: the DELETE before insert matches
             // zero rows, which must not error.
-            let summary = save_chat("/repo/one", "chat-new", "t", &[], &[], None).unwrap();
+            let summary = save_chat("/repo/one", "chat-new", "t", &[], &[], None, None).unwrap();
             assert_eq!(summary.id, "chat-new");
             assert!(load_chat("chat-new").unwrap().messages.is_empty());
         });
@@ -446,7 +483,7 @@ mod tests {
     fn save_then_load_todos_round_trips() {
         with_temp_home(|| {
             let todos = vec![sample_todo("t1", "Write the docs")];
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &todos, None).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &todos, None, None).unwrap();
             assert_eq!(load_chat("chat-1").unwrap().todos, todos);
         });
     }
@@ -454,8 +491,8 @@ mod tests {
     #[test]
     fn resaving_a_chat_replaces_its_todos() {
         with_temp_home(|| {
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t1", "first")], None).unwrap();
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t2", "second")], None).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t1", "first")], None, None).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[sample_todo("t2", "second")], None, None).unwrap();
             assert_eq!(load_chat("chat-1").unwrap().todos, vec![sample_todo("t2", "second")]);
         });
     }
@@ -493,8 +530,16 @@ mod tests {
             assert!(loaded.todos.is_empty());
 
             let updated =
-                save_chat("/repo/one", "chat-old", "old chat", &[sample_message("a")], &[sample_todo("t1", "x")], None)
-                    .unwrap();
+                save_chat(
+                    "/repo/one",
+                    "chat-old",
+                    "old chat",
+                    &[sample_message("a")],
+                    &[sample_todo("t1", "x")],
+                    None,
+                    None,
+                )
+                .unwrap();
             assert_eq!(updated.created_at, 1); // preserved across migration + upsert
             assert_eq!(load_chat("chat-old").unwrap().todos, vec![sample_todo("t1", "x")]);
         });
@@ -503,7 +548,7 @@ mod tests {
     #[test]
     fn memory_extracted_ordinal_defaults_to_minus_one_and_survives_resave() {
         with_temp_home(|| {
-            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None).unwrap();
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None, None).unwrap();
             assert_eq!(memory_extracted_ordinal("chat-1").unwrap(), -1);
             set_memory_extracted_ordinal("chat-1", 0).unwrap();
             save_chat(
@@ -512,6 +557,7 @@ mod tests {
                 "t",
                 &[sample_message("a"), sample_message("b")],
                 &[],
+                None,
                 None,
             )
             .unwrap();
@@ -544,6 +590,58 @@ mod tests {
                     .unwrap();
             }
             assert_eq!(memory_extracted_ordinal("chat-old").unwrap(), -1);
+        });
+    }
+
+    #[test]
+    fn save_then_load_pending_resume_round_trips() {
+        with_temp_home(|| {
+            let pending = serde_json::json!({"round": 2, "budgetUsed": 5, "calls": []});
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None, Some(&pending)).unwrap();
+            assert_eq!(load_chat("chat-1").unwrap().pending_resume, Some(pending));
+        });
+    }
+
+    #[test]
+    fn resaving_without_pending_resume_clears_it() {
+        with_temp_home(|| {
+            let pending = serde_json::json!({"round": 1});
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None, Some(&pending)).unwrap();
+            assert!(load_chat("chat-1").unwrap().pending_resume.is_some());
+
+            save_chat("/repo/one", "chat-1", "t", &[sample_message("a")], &[], None, None).unwrap();
+            assert_eq!(load_chat("chat-1").unwrap().pending_resume, None);
+        });
+    }
+
+    #[test]
+    fn opening_a_pre_existing_database_without_pending_resume_column_migrates_cleanly() {
+        with_temp_home(|| {
+            let path = db_path().unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            {
+                let legacy = Connection::open(&path).unwrap();
+                legacy
+                    .execute_batch(
+                        "CREATE TABLE chats (
+                           id TEXT PRIMARY KEY, repo_root TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
+                           archived INTEGER NOT NULL DEFAULT 0, todos TEXT NOT NULL DEFAULT '[]',
+                           created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+                         );
+                         CREATE TABLE messages (
+                           chat_id TEXT NOT NULL, ordinal INTEGER NOT NULL, data TEXT NOT NULL,
+                           PRIMARY KEY (chat_id, ordinal)
+                         );
+                         INSERT INTO chats (id, repo_root, title, archived, todos, created_at, updated_at)
+                           VALUES ('chat-old', '/repo/one', 'old chat', 0, '[]', 1, 1);",
+                    )
+                    .unwrap();
+            }
+            assert_eq!(load_chat("chat-old").unwrap().pending_resume, None);
+
+            let pending = serde_json::json!({"round": 3});
+            save_chat("/repo/one", "chat-old", "old chat", &[sample_message("a")], &[], None, Some(&pending)).unwrap();
+            assert_eq!(load_chat("chat-old").unwrap().pending_resume, Some(pending));
         });
     }
 }

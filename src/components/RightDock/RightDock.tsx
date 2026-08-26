@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   FileText,
   GitCommitHorizontal,
@@ -146,6 +147,23 @@ type RightDockProps = {
   onChatInsertHandled?: () => void;
 };
 
+function ToolWindowHeader({ label, onHide }: { label: string; onHide: () => void }) {
+  return (
+    <header className="tool-window-head">
+      <span className="tool-window-title">{label}</span>
+      <button
+        type="button"
+        className="tool-window-hide"
+        onClick={onHide}
+        title="Hide"
+        aria-label={`Скрыть ${label}`}
+      >
+        <HideIcon />
+      </button>
+    </header>
+  );
+}
+
 export function RightDock({
   activeTool,
   onToggleTool,
@@ -163,6 +181,24 @@ export function RightDock({
   const open = Boolean(activeTool);
   const active = activeTool ? TOOL_DEFS[activeTool] : undefined;
 
+  // Latches true the first time the assistant tool is opened (while a repo
+  // is actually open) and never resets — closing the panel or switching to
+  // another dock tool only hides the assistant window via CSS from then on,
+  // instead of unmounting it. Unmounting would destroy `AssistantPanel`'s
+  // in-flight state: an unsent draft, streaming text, or (worst case) a
+  // `Promise` waiting on the user to answer a clarifying question, which
+  // would then be stranded forever with no UI left to resolve it. If
+  // `assistant` later goes back to `null` (the repo was closed), the window
+  // unmounts anyway below since there's no repo left for that state to mean
+  // anything — reopening a repo mounts a fresh instance for it.
+  const [assistantMounted, setAssistantMounted] = useState(activeTool === "assistant" && Boolean(assistant));
+  if (activeTool === "assistant" && assistant && !assistantMounted) {
+    setAssistantMounted(true);
+  }
+
+  const showAssistant = open && activeTool === "assistant";
+  const showOther = open && active && activeTool && activeTool !== "assistant";
+
   return (
     <aside className={`right-dock ${open ? "is-open" : "is-collapsed"}`}>
       {open && onResize ? (
@@ -175,20 +211,9 @@ export function RightDock({
         />
       ) : null}
 
-      {open && active && activeTool ? (
+      {showOther ? (
         <div className="tool-window">
-          <header className="tool-window-head">
-            <span className="tool-window-title">{active.label}</span>
-            <button
-              type="button"
-              className="tool-window-hide"
-              onClick={onHide}
-              title="Hide"
-              aria-label={`Скрыть ${active.label}`}
-            >
-              <HideIcon />
-            </button>
-          </header>
+          <ToolWindowHeader label={active.label} onHide={onHide} />
           <div className="tool-window-body">
             {activeTool === "git" && git ? (
               <GitPanel
@@ -241,21 +266,35 @@ export function RightDock({
               />
             ) : activeTool === "suggestions" ? (
               <NotificationsPanel gitActionLog={gitActionLog ?? undefined} />
-            ) : activeTool === "assistant" && assistant ? (
-              <AssistantPanel
-                onOpenSettings={assistant.onOpenSettings}
-                specsRepoInfo={assistant.specsRepoInfo}
-                docsRoot={assistant.docsRoot}
-                onFileWritten={assistant.onFileWritten}
-                onFileMoved={assistant.onFileMoved}
-                repoRoot={assistant.repoRoot}
-                activeFilePath={assistant.activeFilePath}
-                chatInsertRequest={chatInsertRequest ?? null}
-                onChatInsertHandled={onChatInsertHandled}
-              />
             ) : (
               <div className="panel-empty">{active.empty}</div>
             )}
+          </div>
+        </div>
+      ) : null}
+
+      {assistantMounted && assistant ? (
+        <div className={showAssistant ? "tool-window" : "tool-window is-hidden"}>
+          <ToolWindowHeader label={TOOL_DEFS.assistant.label} onHide={onHide} />
+          <div className="tool-window-body">
+            <AssistantPanel
+              onOpenSettings={assistant.onOpenSettings}
+              specsRepoInfo={assistant.specsRepoInfo}
+              docsRoot={assistant.docsRoot}
+              onFileWritten={assistant.onFileWritten}
+              onFileMoved={assistant.onFileMoved}
+              repoRoot={assistant.repoRoot}
+              activeFilePath={assistant.activeFilePath}
+              chatInsertRequest={chatInsertRequest ?? null}
+              onChatInsertHandled={onChatInsertHandled}
+            />
+          </div>
+        </div>
+      ) : showAssistant ? (
+        <div className="tool-window">
+          <ToolWindowHeader label={TOOL_DEFS.assistant.label} onHide={onHide} />
+          <div className="tool-window-body">
+            <div className="panel-empty">{TOOL_DEFS.assistant.empty}</div>
           </div>
         </div>
       ) : null}

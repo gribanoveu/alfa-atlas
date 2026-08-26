@@ -11,7 +11,7 @@ import {
 import type { AssistantSuggestion } from "../../lib/assistantConfig";
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, Task } from "../../lib/aiTools";
 import { groupBlocksForRender, type ChatMessage } from "../../lib/chatBlocks";
-import type { LlmModelInfo, LlmProviderConfig, ResolvedLlmProvider } from "../../lib/llm";
+import type { LlmModelInfo, LlmProviderConfig, PendingApproval, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
@@ -220,7 +220,17 @@ type AssistantConversationProps = {
    * `todoListRef` — same remount-driven reset as `initialMessages`. */
   initialTodos: Task[];
   initialActivePlanId: string | null;
+  /** Set when this chat was last saved mid-turn, paused awaiting a
+   * tool-approval/`askUser` decision never resolved before the app closed —
+   * lets `useLlmChat` resume the turn (via `streamLlmChatResume`) after a
+   * full app restart, not just a same-session panel close. */
+  initialPendingResume: PendingApproval | null;
   onTurnSettled: (messages: ChatMessage[], todos: Task[], activePlanId: string | null) => void;
+  /** Fires the moment a round pauses awaiting a tool-approval/`askUser`
+   * decision, not just once the whole turn eventually settles like
+   * `onTurnSettled` — lets the parent persist enough to resume the pause
+   * itself even if the app closes before the turn ever finishes. */
+  onTurnPaused: (messages: ChatMessage[], todos: Task[], activePlanId: string | null, pendingResume: PendingApproval) => void;
   /** Bubbles `useLlmChat`'s `sending` up to the parent, which uses it to
    * disable chat-switching/new-chat while a turn (including a
    * `pendingApproval` pause) is in flight — see `AssistantPanel.tsx`'s own
@@ -303,7 +313,9 @@ export function AssistantConversation({
   initialMessages,
   initialTodos,
   initialActivePlanId,
+  initialPendingResume,
   onTurnSettled,
+  onTurnPaused,
   onSendingChange,
   providerId,
   accessMode,
@@ -353,7 +365,9 @@ export function AssistantConversation({
     initialMessages,
     initialTodos,
     initialActivePlanId,
+    initialPendingResume,
     onTurnSettled,
+    onTurnPaused,
     activeFilePath,
     taskDoneSoundEnabled,
     needAnswerSoundEnabled,

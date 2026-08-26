@@ -345,7 +345,9 @@ export function AssistantPanel({
                 initialMessages={chatHistory.currentMessages}
                 initialTodos={chatHistory.currentTodos}
                 initialActivePlanId={chatHistory.currentActivePlanId}
+                initialPendingResume={chatHistory.currentPendingResume}
                 onTurnSettled={chatHistory.saveTurn}
+                onTurnPaused={chatHistory.savePendingApproval}
                 onSendingChange={setConversationSending}
                 providerId={activeProviderId}
                 accessMode={accessMode ?? "docsOnly"}

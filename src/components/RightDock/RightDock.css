@@ -25,6 +25,13 @@
   border-right: 1px solid var(--border);
 }
 
+/* Keeps the assistant tool window mounted (not unmounted) while the panel
+   is closed or another dock tool is active, so an in-flight turn or an
+   unsent draft survives — see RightDock.tsx's `assistantMounted` latch. */
+.tool-window.is-hidden {
+  display: none;
+}
+
 .tool-window-head {
   height: 28px;
   flex: none;

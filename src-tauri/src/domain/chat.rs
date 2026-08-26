@@ -35,4 +35,11 @@ pub struct LoadedChat {
     /// Active work-plan id for this chat (from Plan-mode createPlan /
     /// Start), if any.
     pub active_plan_id: Option<String>,
+    /// Opaque `PendingApproval` blob (same trust boundary as `messages` —
+    /// never parsed here) when this chat was last saved mid-turn, paused
+    /// awaiting a tool-approval/`askUser` decision that was never resolved
+    /// before the app closed. `None` for a chat with no unresolved pause.
+    /// Lets the frontend resume via `llm_chat_stream_resume` after a full
+    /// app restart, not just a same-session panel close.
+    pub pending_resume: Option<serde_json::Value>,
 }

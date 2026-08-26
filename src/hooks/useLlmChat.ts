@@ -56,8 +56,10 @@ import {
   llmChatOnce,
   streamLlmChat,
   streamLlmChatResume,
+  type ChatStreamOutcome,
   type LlmMessage,
   type AskUserAnswerPayload,
+  type PendingApproval,
   type PendingToolCall,
   type ToolCallDecision,
 } from "../lib/llm";
@@ -95,7 +97,18 @@ export type { ChatMessage, MessageBlock, ReasoningBlock, TextBlock, ToolCallBloc
  * both the success and error paths, with the turn's final `messages`/
  * `todos` snapshot — the caller's `useChatHistory` uses it to persist the
  * conversation (including the todo checklist, which otherwise only ever
- * lived in this hook's own `todoListRef`). */
+ * lived in this hook's own `todoListRef`).
+ *
+ * `initialPendingResume`/`onTurnPaused` cover the case where this chat was
+ * last saved *mid-turn*, paused on a tool-approval/`askUser` card that was
+ * never resolved before the app fully closed (not just the panel being
+ * hidden within one running session — see `RightDock`'s keep-mounted fix
+ * for that case, which never unmounts this hook at all). `onTurnPaused`
+ * fires every time a round actually pauses (mirroring `onTurnSettled`, but
+ * per-pause rather than per-turn) so `useChatHistory` can persist enough to
+ * resume later; `initialPendingResume`, when set, replays that exact pause
+ * once on mount so the already-restored pending-approval card (it's part of
+ * `initialMessages`, nothing new to render) becomes answerable again. */
 export function useLlmChat(
   providerId: string | null,
   contextLimit: number | null,
@@ -107,7 +120,9 @@ export function useLlmChat(
   initialMessages: ChatMessage[],
   initialTodos: Task[],
   initialActivePlanId: string | null,
+  initialPendingResume: PendingApproval | null,
   onTurnSettled: (messages: ChatMessage[], todos: Task[], activePlanId: string | null) => void,
+  onTurnPaused: (messages: ChatMessage[], todos: Task[], activePlanId: string | null, pendingResume: PendingApproval) => void,
   activeFilePath: string | null,
   taskDoneSoundEnabled: boolean,
   needAnswerSoundEnabled: boolean,
@@ -422,6 +437,12 @@ export function useLlmChat(
     void listenLlmToolResult(({ id, result, error: toolError }) => {
       if (result?.tool === "planCreated" || result?.tool === "planUpdated") {
         setActivePlanId(result.result.planId);
+      } else if (result?.tool === "todoWritten" || result?.tool === "todoUpdated") {
+        // The tool's own result already carries the authoritative post-call
+        // checklist — reflect it in `TodoProgressWidget` the moment the
+        // call settles, rather than waiting for the whole round (which may
+        // still have several more tool calls left) to finish streaming.
+        setTodos(result.result);
       }
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) => settleToolCallBlock(blocks, { id, result, error: toolError })),
@@ -434,7 +455,7 @@ export function useLlmChat(
       cancelled = true;
       unlisten?.();
     };
-  }, [setActivePlanId]);
+  }, [setActivePlanId, setTodos]);
 
   // Context-window usage so far. Every request resends the *entire* message
   // history, so a completed turn's `usage.totalTokens` (prompt + completion,
@@ -482,6 +503,137 @@ export function useLlmChat(
       .reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
     return lastUsageTotal + tail;
   }, [messages, accessMode, conversationMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
+
+  /** Drives the pending-approval resume loop starting from `initialOutcome`
+   * — shared by a live turn (`runTurn`, starting from a fresh
+   * `streamLlmChat()` result) and a cold-hydrate on mount (starting from a
+   * `PendingApproval` restored from `chat.db`, see the effect below). Each
+   * time a round actually pauses (i.e. `collectDecisions` is really shown,
+   * not silently auto-approved), persists it via `onTurnPaused` right away
+   * — the pending-approval block was just appended to `messages` by
+   * `collectDecisions`'s own `setMessages` call, applied in order before
+   * this "peek" one — so the turn survives a full app restart even if it's
+   * still paused when that happens, not just a panel close. */
+  const runPendingLoop = useCallback(
+    async (initialOutcome: ChatStreamOutcome): Promise<ChatStreamOutcome> => {
+      if (!providerId) return initialOutcome;
+      let outcome = initialOutcome;
+      while (outcome.status === "pendingApproval") {
+        const pending = outcome.value;
+        const { history, round, budgetUsed, calls, todos: updatedTodos } = pending;
+        setTodos(updatedTodos);
+        const risky = calls.filter((c) => c.requiresConfirmation);
+        const autoApprovedIds = new Set<string>();
+        const needsDecision = risky.filter((c) => {
+          // Clarifying questions must always surface — never skip via
+          // "always allow" / session trust.
+          if (c.name === "askUser") return true;
+          if (trustedToolsRef.current.has(c.name)) {
+            autoApprovedIds.add(c.id);
+            return false;
+          }
+          return true;
+        });
+
+        let decisions: ToolCallDecision[];
+        if (needsDecision.length === 0) {
+          decisions = risky.map((c) => ({ id: c.id, approved: true }));
+        } else {
+          const collected = collectDecisions(needsDecision);
+          setMessages((prev) => {
+            onTurnPaused(prev, todoListRef.current, activePlanIdRef.current, pending);
+            return prev;
+          });
+          decisions = [
+            ...(await collected),
+            ...risky.filter((c) => autoApprovedIds.has(c.id)).map((c) => ({ id: c.id, approved: true })),
+          ];
+        }
+
+        autoApprovedIdsRef.current = autoApprovedIds;
+        outcome = await streamLlmChatResume(
+          providerId,
+          history,
+          round,
+          budgetUsed,
+          decisions,
+          todoListRef.current,
+          activeFilePath,
+          conversationMode,
+        );
+      }
+      return outcome;
+    },
+    [providerId, activeFilePath, conversationMode, collectDecisions, setTodos, onTurnPaused],
+  );
+
+  /** Applies a `"done"`/`"cancelled"` outcome's authoritative final text to
+   * the in-flight assistant message — shared by `runTurn` and the
+   * cold-hydrate effect below, same as `runPendingLoop`. */
+  const settleOutcome = useCallback(
+    (outcome: ChatStreamOutcome, assistantId: string) => {
+      // `runPendingLoop` never returns while `status === "pendingApproval"`
+      // (that's its own while-loop's exit condition) — this guard is just
+      // to satisfy the type checker across the function-call boundary, not
+      // a real runtime possibility.
+      if (outcome.status === "pendingApproval") return;
+      // Same handling for `"cancelled"` as `"done"` (both carry the same
+      // `ChatStreamResult` shape) — the only difference is the extra
+      // `cancelled` flag for display and sweeping any pending-approval card
+      // `stopChat` auto-denied but that never got its settling event, since
+      // `run_tool_loop` returned before reaching it.
+      const stoppedByUser = outcome.status === "cancelled";
+      const { text, reasoning, usage, todos: finalTodos } = outcome.value;
+      setTodos(finalTodos);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId && m.role === "assistant"
+            ? {
+                ...m,
+                blocks: (() => {
+                  const corrected = correctTrailingText(correctTrailingReasoning(m.blocks, reasoning ?? ""), text);
+                  return stoppedByUser
+                    ? markRunningToolCallsAsInterrupted(corrected, "Остановлено пользователем")
+                    : corrected;
+                })(),
+                streaming: false,
+                usage: usage ?? undefined,
+                cancelled: stoppedByUser,
+              }
+            : m,
+        ),
+      );
+      if (!stoppedByUser && taskDoneSoundEnabledRef.current) {
+        playTaskDoneSound();
+      }
+    },
+    [setTodos],
+  );
+
+  /** Marks the in-flight assistant message as failed — shared by `runTurn`
+   * and the cold-hydrate effect below, same as `runPendingLoop`. */
+  const settleError = useCallback((e: unknown, assistantId: string) => {
+    const message = e instanceof Error ? e.message : String(e);
+    // Best-effort: drives the "Сжать историю и повторить" retry action
+    // (`retryWithCompaction`) rather than just showing raw error text — see
+    // `isContextLengthError`'s doc comment for why this can't be a reliable
+    // classification, only a heuristic.
+    const contextLengthExceeded = isContextLengthError(message);
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === assistantId && m.role === "assistant"
+          ? {
+              ...m,
+              blocks: markRunningToolCallsAsInterrupted(m.blocks),
+              streaming: false,
+              failed: true,
+              errorMessage: message,
+              contextLengthExceeded,
+            }
+          : m,
+      ),
+    );
+  }, []);
 
   /** Runs one full turn: an optional proactive history-compaction pass,
    * building `wireMessages` from `priorTurns` (replaying the cached
@@ -646,107 +798,19 @@ export function useLlmChat(
         // Most turns resolve in one round trip. A round that hits a call
         // needing confirmation (`writeFile`/`requestFullRepoAccess`) comes
         // back as `pendingApproval` instead — nothing in it executed yet —
-        // and this loop collects a decision for each call (skipping the
-        // card entirely for tool names already trusted, whether from this
-        // chat or persisted from an earlier one on this project) before
-        // resuming, potentially several times if later rounds pause again.
-        let outcome = await streamLlmChat(
-          providerId,
-          wireMessages,
-          todoListRef.current,
-          activeFilePath,
-          conversationMode,
+        // and `runPendingLoop` collects a decision for each call (skipping
+        // the card entirely for tool names already trusted, whether from
+        // this chat or persisted from an earlier one on this project)
+        // before resuming, potentially several times if later rounds pause
+        // again. Authoritative full text of the *final* round corrects only
+        // the trailing text block — see `correctTrailingText`'s doc comment
+        // for why that's always the right (and only) block it can apply to.
+        const outcome = await runPendingLoop(
+          await streamLlmChat(providerId, wireMessages, todoListRef.current, activeFilePath, conversationMode),
         );
-        while (outcome.status === "pendingApproval") {
-          const { history, round, budgetUsed, calls, todos: updatedTodos } = outcome.value;
-          setTodos(updatedTodos);
-          const risky = calls.filter((c) => c.requiresConfirmation);
-          const autoApprovedIds = new Set<string>();
-          const needsDecision = risky.filter((c) => {
-            // Clarifying questions must always surface — never skip via
-            // "always allow" / session trust.
-            if (c.name === "askUser") return true;
-            if (trustedToolsRef.current.has(c.name)) {
-              autoApprovedIds.add(c.id);
-              return false;
-            }
-            return true;
-          });
-
-          const decisions =
-            needsDecision.length === 0
-              ? risky.map((c) => ({ id: c.id, approved: true }))
-              : [
-                  ...(await collectDecisions(needsDecision)),
-                  ...risky.filter((c) => autoApprovedIds.has(c.id)).map((c) => ({ id: c.id, approved: true })),
-                ];
-
-          autoApprovedIdsRef.current = autoApprovedIds;
-          outcome = await streamLlmChatResume(
-            providerId,
-            history,
-            round,
-            budgetUsed,
-            decisions,
-            todoListRef.current,
-            activeFilePath,
-            conversationMode,
-          );
-        }
-
-        // Authoritative full text of the *final* round corrects only the
-        // trailing text block — see `correctTrailingText`'s doc comment for
-        // why that's always the right (and only) block it can apply to.
-        // Same handling for `"cancelled"` as `"done"` (both carry the same
-        // `ChatStreamResult` shape) — the only difference is the extra
-        // `cancelled` flag for display and sweeping any pending-approval
-        // card `stopChat` auto-denied but that never got its settling
-        // event, since `run_tool_loop` returned before reaching it.
-        const stoppedByUser = outcome.status === "cancelled";
-        const { text, reasoning, usage, todos: finalTodos } = outcome.value;
-        setTodos(finalTodos);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId && m.role === "assistant"
-              ? {
-                  ...m,
-                  blocks: (() => {
-                    const corrected = correctTrailingText(correctTrailingReasoning(m.blocks, reasoning ?? ""), text);
-                    return stoppedByUser
-                      ? markRunningToolCallsAsInterrupted(corrected, "Остановлено пользователем")
-                      : corrected;
-                  })(),
-                  streaming: false,
-                  usage: usage ?? undefined,
-                  cancelled: stoppedByUser,
-                }
-              : m,
-          ),
-        );
-        if (!stoppedByUser && taskDoneSoundEnabledRef.current) {
-          playTaskDoneSound();
-        }
+        settleOutcome(outcome, assistantId);
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        // Best-effort: drives the "Сжать историю и повторить" retry action
-        // (`retryWithCompaction`) rather than just showing raw error text —
-        // see `isContextLengthError`'s doc comment for why this can't be a
-        // reliable classification, only a heuristic.
-        const contextLengthExceeded = isContextLengthError(message);
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId && m.role === "assistant"
-              ? {
-                  ...m,
-                  blocks: markRunningToolCallsAsInterrupted(m.blocks),
-                  streaming: false,
-                  failed: true,
-                  errorMessage: message,
-                  contextLengthExceeded,
-                }
-              : m,
-          ),
-        );
+        settleError(e, assistantId);
       } finally {
         setSending(false);
         // Reads the true final state for this turn via a functional-update
@@ -770,12 +834,49 @@ export function useLlmChat(
       specsRepoInfo,
       toolDefinitions,
       docsRootRelativeToRepo,
-      collectDecisions,
+      runPendingLoop,
+      settleOutcome,
+      settleError,
       onTurnSettled,
-      setTodos,
       activeFilePath,
     ],
   );
+
+  // One-shot: if this chat was loaded with an unresolved pause — the app
+  // was fully restarted (or crashed) while paused on a tool-approval/
+  // `askUser` card, not just the panel being hidden within one running
+  // session (`RightDock` never unmounts this hook for that case) — replay
+  // the exact same `collectDecisions`/`streamLlmChatResume` flow a live
+  // pause would have used. The card itself needs no separate reconstruction
+  // — it's already part of `initialMessages` (persisted alongside
+  // `pending_resume`), so this only needs to re-arm `activeApprovalRef` so
+  // its buttons work again. Guarded on `initialMessages`' own trailing
+  // entry (not live `messages` state, which would make this effect refire
+  // on every later render) still being the paused turn's open assistant
+  // message — a stale/corrupted row must never resume blind.
+  const coldResumedRef = useRef(false);
+  useEffect(() => {
+    if (!initialPendingResume || coldResumedRef.current || !providerId) return;
+    const last = initialMessages[initialMessages.length - 1];
+    if (!last || last.role !== "assistant" || !last.streaming) return;
+    coldResumedRef.current = true;
+    const assistantId = last.id;
+    setSending(true);
+    void (async () => {
+      try {
+        const outcome = await runPendingLoop({ status: "pendingApproval", value: initialPendingResume });
+        settleOutcome(outcome, assistantId);
+      } catch (e) {
+        settleError(e, assistantId);
+      } finally {
+        setSending(false);
+        setMessages((prev) => {
+          onTurnSettled(prev, todoListRef.current, activePlanIdRef.current);
+          return prev;
+        });
+      }
+    })();
+  }, [initialPendingResume, initialMessages, providerId, runPendingLoop, settleOutcome, settleError, onTurnSettled]);
 
   const sendMessage = useCallback(
     async (text: string) => {

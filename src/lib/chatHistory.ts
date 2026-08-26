@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Task } from "./aiTools";
 import type { ChatMessage } from "./chatBlocks";
+import type { PendingApproval } from "./llm";
 
 // Mirrors `domain::chat::ChatSummary` in `src-tauri/src/domain/chat.rs`
 // (`#[serde(rename_all = "camelCase")]`). `createdAt`/`updatedAt` are unix
@@ -30,6 +31,12 @@ export type LoadedChat = {
   messages: ChatMessage[];
   todos: Task[];
   activePlanId: string | null;
+  /** Set when this chat was last saved mid-turn, paused awaiting a
+   * tool-approval/`askUser` decision that was never resolved before the app
+   * closed — lets `useLlmChat` resume the turn via `streamLlmChatResume`
+   * after a full app restart, not just a same-session panel close. `null`
+   * for a chat with no unresolved pause. */
+  pendingResume: PendingApproval | null;
 };
 
 /** One chat's full state — messages (save order) and its todo checklist —
@@ -40,7 +47,10 @@ export function loadChatMessages(chatId: string): Promise<LoadedChat> {
 
 /** Upserts the chat row (title/todos/recency) and replaces its messages
  * wholesale — call with the conversation's full current `ChatMessage[]`
- * and `Task[]` any time it should be persisted, not incremental deltas. */
+ * and `Task[]` any time it should be persisted, not incremental deltas.
+ * `pendingResume` should be the raw `PendingApproval` when saving mid-turn
+ * at a pause (see `useLlmChat`'s `persistPendingPause`), and `null` — the
+ * default — to clear it once a turn fully settles. */
 export function saveChat(
   repoRoot: string,
   chatId: string,
@@ -48,6 +58,7 @@ export function saveChat(
   messages: ChatMessage[],
   todos: Task[],
   activePlanId: string | null = null,
+  pendingResume: PendingApproval | null = null,
 ): Promise<ChatSummary> {
   return invoke<ChatSummary>("chat_save", {
     repoRoot,
@@ -56,6 +67,7 @@ export function saveChat(
     messages,
     todos,
     activePlanId,
+    pendingResume,
   });
 }
 

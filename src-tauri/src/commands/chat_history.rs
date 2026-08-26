@@ -27,6 +27,7 @@ pub fn chat_save(
     messages: Vec<serde_json::Value>,
     todos: Vec<Task>,
     active_plan_id: Option<String>,
+    pending_resume: Option<serde_json::Value>,
 ) -> Result<ChatSummary, String> {
     chat_store::save_chat(
         &repo_root,
@@ -35,6 +36,7 @@ pub fn chat_save(
         &messages,
         &todos,
         active_plan_id.as_deref(),
+        pending_resume.as_ref(),
     )
     .map_err(|e| e.to_string())
 }

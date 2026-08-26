@@ -9,6 +9,7 @@ import {
   setChatArchived,
   type ChatSummary,
 } from "../lib/chatHistory";
+import type { PendingApproval } from "../lib/llm";
 import { memoryExtractTurn } from "../lib/memoryPipeline";
 
 /** Owns chat-list/switch/archive state for one repository — lives inside
@@ -32,6 +33,10 @@ export function useChatHistory(repoRoot: string | null) {
   const [currentMessages, setCurrentMessages] = useState<ChatMessage[] | null>(null);
   const [currentTodos, setCurrentTodos] = useState<Task[] | null>(null);
   const [currentActivePlanId, setCurrentActivePlanId] = useState<string | null>(null);
+  // Set when the loaded chat was last saved mid-turn, paused awaiting a
+  // tool-approval/`askUser` decision never resolved before the app closed —
+  // see `savePendingApproval` below and `useLlmChat`'s cold-hydrate effect.
+  const [currentPendingResume, setCurrentPendingResume] = useState<PendingApproval | null>(null);
 
   // Guards against a stale async load (the initial repo scan, or a
   // `switchChat`) applying its result after a newer one has already
@@ -47,6 +52,7 @@ export function useChatHistory(repoRoot: string | null) {
     setCurrentMessages(null);
     setCurrentTodos(null);
     setCurrentActivePlanId(null);
+    setCurrentPendingResume(null);
     setArchivedChats(null);
     if (!repoRoot) {
       setActiveChats([]);
@@ -61,17 +67,20 @@ export function useChatHistory(repoRoot: string | null) {
           messages: [] as ChatMessage[],
           todos: [] as Task[],
           activePlanId: null as string | null,
+          pendingResume: null as PendingApproval | null,
         }));
         if (loadTokenRef.current !== token) return;
         setCurrentChatId(chats[0].id);
         setCurrentMessages(loaded.messages);
         setCurrentTodos(loaded.todos);
         setCurrentActivePlanId(loaded.activePlanId ?? null);
+        setCurrentPendingResume(loaded.pendingResume ?? null);
       } else {
         setCurrentChatId(crypto.randomUUID());
         setCurrentMessages([]);
         setCurrentTodos([]);
         setCurrentActivePlanId(null);
+        setCurrentPendingResume(null);
       }
     })();
   }, [repoRoot]);
@@ -82,12 +91,14 @@ export function useChatHistory(repoRoot: string | null) {
     setCurrentMessages(null);
     setCurrentTodos(null);
     setCurrentActivePlanId(null);
+    setCurrentPendingResume(null);
     void loadChatMessages(chatId)
       .then((loaded) => {
         if (loadTokenRef.current === token) {
           setCurrentMessages(loaded.messages);
           setCurrentTodos(loaded.todos);
           setCurrentActivePlanId(loaded.activePlanId ?? null);
+          setCurrentPendingResume(loaded.pendingResume ?? null);
         }
       })
       .catch(() => {
@@ -95,6 +106,7 @@ export function useChatHistory(repoRoot: string | null) {
           setCurrentMessages([]);
           setCurrentTodos([]);
           setCurrentActivePlanId(null);
+          setCurrentPendingResume(null);
         }
       });
   }, []);
@@ -105,6 +117,7 @@ export function useChatHistory(repoRoot: string | null) {
     setCurrentMessages([]);
     setCurrentTodos([]);
     setCurrentActivePlanId(null);
+    setCurrentPendingResume(null);
   }, []);
 
   const loadArchived = useCallback(async () => {
@@ -154,13 +167,16 @@ export function useChatHistory(repoRoot: string | null) {
   // Passed straight through as `useLlmChat`'s `onTurnSettled`. Fire-and-
   // forget: a failed save only means that one turn wasn't persisted, not
   // something that should interrupt an in-progress conversation — no error
-  // UI, just a console note.
+  // UI, just a console note. Explicitly clears any `pending_resume` left
+  // over from an earlier pause in this same turn — the turn just settled
+  // (done/cancelled/error), so nothing is left to resume.
   const saveTurn = useCallback(
     (messages: ChatMessage[], todos: Task[], activePlanId: string | null = null) => {
       if (!repoRoot || !currentChatId || messages.length === 0) return;
       const title = deriveChatTitle(messages);
       setCurrentActivePlanId(activePlanId);
-      void saveChat(repoRoot, currentChatId, title, messages, todos, activePlanId)
+      setCurrentPendingResume(null);
+      void saveChat(repoRoot, currentChatId, title, messages, todos, activePlanId, null)
         .then((summary) => {
           setActiveChats((prev) => [summary, ...prev.filter((c) => c.id !== summary.id)]);
           void memoryExtractTurn(repoRoot, currentChatId).catch((e: unknown) => {
@@ -174,6 +190,28 @@ export function useChatHistory(repoRoot: string | null) {
     [repoRoot, currentChatId],
   );
 
+  // Passed straight through as `useLlmChat`'s `onTurnPaused` — fired the
+  // moment a round pauses awaiting a tool-approval/`askUser` decision, not
+  // just once the whole turn finally settles like `saveTurn` above. Same
+  // fire-and-forget convention. Deliberately skips `memoryExtractTurn` —
+  // that pipeline only makes sense for a turn that actually concluded.
+  const savePendingApproval = useCallback(
+    (messages: ChatMessage[], todos: Task[], activePlanId: string | null, pendingResume: PendingApproval) => {
+      if (!repoRoot || !currentChatId || messages.length === 0) return;
+      const title = deriveChatTitle(messages);
+      setCurrentActivePlanId(activePlanId);
+      setCurrentPendingResume(pendingResume);
+      void saveChat(repoRoot, currentChatId, title, messages, todos, activePlanId, pendingResume)
+        .then((summary) => {
+          setActiveChats((prev) => [summary, ...prev.filter((c) => c.id !== summary.id)]);
+        })
+        .catch((e: unknown) => {
+          console.error("Не удалось сохранить состояние ожидающего ответа", e);
+        });
+    },
+    [repoRoot, currentChatId],
+  );
+
   return {
     activeChats,
     archivedChats,
@@ -182,11 +220,13 @@ export function useChatHistory(repoRoot: string | null) {
     currentMessages,
     currentTodos,
     currentActivePlanId,
+    currentPendingResume,
     switchChat,
     newChat,
     archiveChat,
     unarchiveChat,
     loadArchived,
     saveTurn,
+    savePendingApproval,
   };
 }
