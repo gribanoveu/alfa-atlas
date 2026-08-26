@@ -232,9 +232,14 @@ export function useWorkspaceSession(
   const remapExpandedUnder = useCallback(
     (oldPath: string, newPath: string) => {
       const prefix = oldPath.replace(/[/\\]+$/, "") + "/";
+      const base = newPath.replace(/[/\\]+$/, "");
       const remap = (p: string): string => {
         if (p === oldPath) return newPath;
-        if (p.startsWith(prefix)) return newPath + p.slice(prefix.length);
+      // `prefix` includes the trailing separator, so the slice drops it —
+      // the separator has to go back in, or `old/inner` under a move to
+      // `new/place` becomes `new/placeinner`. The backslash branch below
+      // slices from `oldPath.length` instead, so it keeps its own separator.
+        if (p.startsWith(prefix)) return `${base}/${p.slice(prefix.length)}`;
         if (p.startsWith(oldPath + "\\")) {
           return newPath + p.slice(oldPath.length);
         }

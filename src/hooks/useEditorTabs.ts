@@ -639,9 +639,14 @@ export function useEditorTabs(
   const remapTabsUnder = useCallback(
     (oldPath: string, newPath: string) => {
       const prefix = oldPath.replace(/[/\\]+$/, "") + "/";
+      const base = newPath.replace(/[/\\]+$/, "");
       const remap = (tabPath: string): string | null => {
         if (tabPath === oldPath) return newPath;
-        if (tabPath.startsWith(prefix)) return newPath + tabPath.slice(prefix.length);
+      // `prefix` includes the trailing separator, so the slice drops it —
+      // the separator has to go back in, or `old/inner` under a move to
+      // `new/place` becomes `new/placeinner`. The backslash branch below
+      // slices from `oldPath.length` instead, so it keeps its own separator.
+        if (tabPath.startsWith(prefix)) return `${base}/${tabPath.slice(prefix.length)}`;
         if (tabPath.startsWith(oldPath + "\\")) {
           return newPath + tabPath.slice(oldPath.length);
         }
