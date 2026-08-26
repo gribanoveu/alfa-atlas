@@ -25,6 +25,8 @@ use crate::services::embedding_index::EmbeddingIndex;
 use crate::services::index_store_ensure;
 use crate::services::index_watcher::IndexWatcher;
 use crate::services::project_open;
+use crate::services::repo_index::RepositoryIndex;
+use crate::services::workspace_index::WorkspaceIndex;
 
 pub(crate) const META_EMBEDDING_DIMENSIONS: &str = "embedding_dimensions";
 
@@ -363,6 +365,26 @@ pub(crate) fn is_current_index_root(index_root: &Path) -> bool {
         return false;
     };
     root == index_root
+}
+
+/// Every resident slot one embeddings use-case needs, in one place.
+///
+/// `commands` assembles this from `tauri::State` and hands it to
+/// `services::embedding_sync`, so the service signatures don't grow an
+/// eleven-parameter list that has to be kept in the same order at four call
+/// sites. Cheap to construct and to pass around — every field is an `Arc`.
+pub struct EmbeddingSession {
+    pub repo_index: Arc<RepositoryIndex>,
+    pub chunk_index: Arc<ChunkIndex>,
+    pub embedding_index: Arc<EmbeddingIndexSlot>,
+    pub index_store: Arc<IndexStoreSlot>,
+    pub embedding_provider: Arc<EmbeddingProviderSlot>,
+    pub sync_guard: Arc<EmbeddingSyncGuard>,
+    pub index_watcher: Arc<IndexWatcherSlot>,
+    pub workspace_index: Arc<WorkspaceIndex>,
+    pub priority_files: Arc<PriorityFilesSlot>,
+    pub background_backlog: Arc<BackgroundBacklogSlot>,
+    pub full_sync_active: Arc<FullSyncActiveSlot>,
 }
 
 #[cfg(test)]
