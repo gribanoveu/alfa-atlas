@@ -5,6 +5,7 @@
  * Renders are serialized because `mermaid.render()` uses shared internal state.
  */
 
+import { toMessage } from "../../lib/errors";
 type RenderResult = { kind: "ok"; svg: string } | { kind: "error"; message: string };
 
 type MermaidModule = {
@@ -98,13 +99,13 @@ export function renderMermaid(source: string): Promise<RenderResult> {
           window.clearTimeout(timer);
           resolve({
             kind: "error",
-            message: e instanceof Error ? e.message : String(e),
+            message: toMessage(e),
           });
         }
       } catch (e) {
         resolve({
           kind: "error",
-          message: e instanceof Error ? e.message : String(e),
+          message: toMessage(e),
         });
       }
     };

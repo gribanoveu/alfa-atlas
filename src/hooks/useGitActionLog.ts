@@ -6,6 +6,7 @@ import {
   type GitActionLogEntry,
   type GitActionPayload,
 } from "../lib/gitActionLog";
+import { toMessage } from "../lib/errors";
 
 type UseGitActionLogOptions = {
   active?: boolean;
@@ -36,7 +37,7 @@ export function useGitActionLog(
         if (!cancelled) setEntries(rows);
       })
       .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(toMessage(e));
       });
     return () => {
       cancelled = true;

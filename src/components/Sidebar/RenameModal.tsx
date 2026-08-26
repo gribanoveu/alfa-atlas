@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { toMessage } from "../../lib/errors";
 import type { FileTreeDeleteTarget } from "./FileTree";
 import "../Welcome/CloneRepoModal.css";
 
@@ -44,7 +45,7 @@ export function RenameModal({ target, onCancel, onConfirm }: RenameModalProps) {
     try {
       await onConfirm(trimmed);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       setBusy(false);
     }
   };

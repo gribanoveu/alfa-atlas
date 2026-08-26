@@ -8,6 +8,7 @@ import {
 } from "../../lib/standards";
 import "../Welcome/CloneRepoModal.css";
 import "./StandardsRulesTab.css";
+import { toMessage } from "../../lib/errors";
 
 export function StandardsRulesTab() {
   const [rules, setRules] = useState<RuleDef[] | null>(null);
@@ -30,7 +31,7 @@ export function StandardsRulesTab() {
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
+          setError(toMessage(e));
         }
       }
     })();
@@ -56,7 +57,7 @@ export function StandardsRulesTab() {
         await setStandardsConfig(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         const current = await getStandardsConfig().catch(() => config);
         if (current) setConfig(current);
       } finally {

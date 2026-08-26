@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { toMessage } from "../lib/errors";
 import { getAiAccessMode, setAiAccessMode, type AiAccessMode } from "../lib/aiTools";
 
 /** Drives the docs-only/full-repo toggle for the currently open project.
@@ -15,7 +16,7 @@ export function useAiAccessMode() {
       setModeState(await getAiAccessMode());
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, []);
 
@@ -31,7 +32,7 @@ export function useAiAccessMode() {
       await setAiAccessMode(next);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       setModeState(previous);
     } finally {
       setBusy(false);

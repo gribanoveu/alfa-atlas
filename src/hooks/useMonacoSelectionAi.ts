@@ -7,6 +7,7 @@ import {
   useState,
   type RefObject,
 } from "react";
+import { toMessage } from "../lib/errors";
 import { llmChatOnce } from "../lib/llm";
 import {
   buildSelectionAiMessages,
@@ -524,7 +525,7 @@ export function useMonacoSelectionAi({
         })
         .catch((e) => {
           if (requestId !== requestIdRef.current) return;
-          setError(e instanceof Error ? e.message : String(e));
+          setError(toMessage(e));
           setPhase("error");
         });
     },

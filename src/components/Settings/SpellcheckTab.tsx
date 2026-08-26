@@ -12,6 +12,7 @@ import {
 import "../Welcome/CloneRepoModal.css";
 import "./SpellcheckTab.css";
 import "./StandardsRulesTab.css";
+import { toMessage } from "../../lib/errors";
 
 type SpellcheckTabProps = {
   onConfigChange?: (config: SpellcheckConfig) => void;
@@ -31,7 +32,7 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
     try {
       setWords(await getCustomDictionaryWords());
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, []);
 
@@ -50,7 +51,7 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
+          setError(toMessage(e));
         }
       }
     })();
@@ -69,7 +70,7 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
         onConfigChange?.(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         const current = await getSpellcheckConfig().catch(() => config);
         if (current) setConfig(current);
       } finally {
@@ -129,7 +130,7 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
       await reloadWords();
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setBusy(false);
     }
@@ -143,7 +144,7 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
         await reloadWords();
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { FileText, FolderGit2, RefreshCw, Settings2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { toMessage } from "../../lib/errors";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useChatHistory } from "../../hooks/useChatHistory";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
@@ -239,7 +240,7 @@ export function AssistantPanel({
         ],
       });
     } catch (e) {
-      setExportError(e instanceof Error ? e.message : String(e));
+      setExportError(toMessage(e));
       return;
     }
     if (path === null) return;
@@ -250,7 +251,7 @@ export function AssistantPanel({
     try {
       await writeExportFile(path, content);
     } catch (e) {
-      setExportError(e instanceof Error ? e.message : String(e));
+      setExportError(toMessage(e));
     }
   };
 

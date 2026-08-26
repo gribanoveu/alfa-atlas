@@ -12,6 +12,7 @@ import {
 // `types` entry, so TypeScript resolves types through the shim in
 // `src/types/asciidoctor.d.ts`.
 import { Extensions, load, MemoryLogger, LoggerManager } from "asciidoctor";
+import { toMessage } from "../lib/errors";
 
 type AsciiDocParseRequested = {
   documentId: string;
@@ -127,7 +128,7 @@ export async function extractFacts(content: string): Promise<AsciiDocFacts> {
     }
   } catch (e) {
     facts.parseErrors.push({
-      message: e instanceof Error ? e.message : String(e),
+      message: toMessage(e),
       line: null,
       severity: "error",
     });
@@ -343,7 +344,7 @@ export function useAsciiDocParser(): void {
           images: [],
           parseErrors: [
             {
-              message: e instanceof Error ? e.message : String(e),
+              message: toMessage(e),
               line: null,
               severity: "error",
             },
@@ -366,7 +367,7 @@ export function useAsciiDocParser(): void {
           parseErrors: [
             {
               message: `IPC submit failed: ${
-                submitError instanceof Error ? submitError.message : String(submitError)
+                toMessage(submitError)
               }`,
               line: null,
               severity: "error",

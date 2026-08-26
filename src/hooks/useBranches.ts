@@ -9,6 +9,7 @@ import {
   type CheckoutOutcome,
   type GitBranchInfo,
 } from "../lib/git";
+import { toMessage } from "../lib/errors";
 
 type UseBranchesOptions = {
   active?: boolean;
@@ -33,7 +34,7 @@ export function useBranches(
       setBranches(nextBranches);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, [repoRoot]);
 
@@ -57,7 +58,7 @@ export function useBranches(
         setError(null);
         return true;
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return false;
       } finally {
         setBusy(false);
@@ -88,7 +89,7 @@ export function useBranches(
         setError(null);
         return outcome;
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return null;
       } finally {
         setBusy(false);
@@ -107,7 +108,7 @@ export function useBranches(
         setError(null);
         return outcome;
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return null;
       } finally {
         setBusy(false);

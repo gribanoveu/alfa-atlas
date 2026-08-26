@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toMessage } from "../lib/errors";
 import { docsSearch, type DocsSearchResults } from "../lib/search";
 
 const DEBOUNCE_MS = 300;
@@ -62,7 +63,7 @@ export function useDocsSearch(docsRoot: string | null): DocsSearchState {
     } catch (e) {
       if (id !== requestIdRef.current) return;
       setResults(null);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       if (id === requestIdRef.current) setLoading(false);
     }

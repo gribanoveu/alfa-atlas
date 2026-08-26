@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { toMessage } from "../../lib/errors";
 import { resolveAssetTargetDocsRelative } from "../../lib/paths";
 import { resolveAssetPath } from "../../lib/project";
 
@@ -65,7 +66,7 @@ export function MdImage({
       setState({
         kind: "error",
         message:
-          lastError instanceof Error ? lastError.message : String(lastError),
+          toMessage(lastError),
       });
     })();
 

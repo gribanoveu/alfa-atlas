@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toMessage } from "../lib/errors";
 import { INDEX_EVENT_CHANNEL, type IndexEvent } from "../lib/workspaceIndex";
 import {
   gitAbortMerge,
@@ -90,10 +91,10 @@ export function useGitPanel(
         setCommits(nextCommits);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, [repoRoot]);
 
@@ -157,7 +158,7 @@ export function useGitPanel(
         await gitStage(repoRoot, paths);
         await refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -173,7 +174,7 @@ export function useGitPanel(
         await gitUnstage(repoRoot, paths);
         await refresh();
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -195,7 +196,7 @@ export function useGitPanel(
       await refresh();
       return hash;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       return null;
     } finally {
       setBusy(false);
@@ -211,7 +212,7 @@ export function useGitPanel(
         await refresh();
         return null;
       } catch (e) {
-        return e instanceof Error ? e.message : String(e);
+        return toMessage(e);
       } finally {
         setBusy(false);
       }
@@ -228,7 +229,7 @@ export function useGitPanel(
         await refresh();
         return { status: "ok" };
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
+        const message = toMessage(e);
         // A merge conflict leaves the repo mid-merge instead of raising a
         // hard error — surface it through `status.conflicted` (picked up by
         // the fresh status below) rather than a generic error alert.
@@ -260,7 +261,7 @@ export function useGitPanel(
         setError(null);
         return file;
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return null;
       }
     },
@@ -288,7 +289,7 @@ export function useGitPanel(
         setError(null);
         return { ok: true, mergeFinished: false };
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return { ok: false, mergeFinished: false };
       } finally {
         setBusy(false);
@@ -306,7 +307,7 @@ export function useGitPanel(
       setError(null);
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       return false;
     } finally {
       setBusy(false);
@@ -325,7 +326,7 @@ export function useGitPanel(
       setError(null);
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       return false;
     } finally {
       setBusy(false);
@@ -350,7 +351,7 @@ export function useGitPanel(
         setError(null);
         return diff;
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return null;
       }
     },
@@ -367,7 +368,7 @@ export function useGitPanel(
         setError(null);
         return { ok: true, backupId };
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return { ok: false };
       } finally {
         setBusy(false);
@@ -386,7 +387,7 @@ export function useGitPanel(
         setError(null);
         return true;
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return false;
       } finally {
         setBusy(false);

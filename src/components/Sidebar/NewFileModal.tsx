@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { toMessage } from "../../lib/errors";
 import type { AsciidocFileTemplate } from "../../lib/project";
 import {
   DEFAULT_NEW_FILE_EXTENSION,
@@ -108,7 +109,7 @@ export function NewFileModal({
     try {
       await onConfirm(fileName, isAsciidoc ? template : null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       setBusy(false);
     }
   };

@@ -24,6 +24,7 @@ import {
   CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES,
   TOOL_APPROVAL_TIMEOUT_MS,
 } from "../lib/assistantConfig";
+import { toMessage } from "../lib/errors";
 import type { SpecsRepoInfo } from "../lib/openapi";
 import {
   appendDeltaToBlocks,
@@ -616,7 +617,7 @@ export function useLlmChat(
   /** Marks the in-flight assistant message as failed — shared by `runTurn`
    * and the cold-hydrate effect below, same as `runPendingLoop`. */
   const settleError = useCallback((e: unknown, assistantId: string, turnStartedAt: number) => {
-    const message = e instanceof Error ? e.message : String(e);
+    const message = toMessage(e);
     // Best-effort: drives the "Сжать историю и повторить" retry action
     // (`retryWithCompaction`) rather than just showing raw error text — see
     // `isContextLengthError`'s doc comment for why this can't be a reliable
@@ -784,7 +785,7 @@ export function useLlmChat(
         // knob) would otherwise degrade memory context for the rest of the
         // session with zero trace — see the compaction catch above for the
         // same reasoning.
-        const message = e instanceof Error ? e.message : String(e);
+        const message = toMessage(e);
         if (!message.includes("no project open")) {
           console.error("Не удалось прочитать память ассистента", e);
         }

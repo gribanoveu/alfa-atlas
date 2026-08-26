@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { toMessage } from "../../lib/errors";
 import { parseParameters, primaryRequestBodyMedia, type JsonValue } from "./openApiModel";
 import {
   buildCurl,
@@ -83,7 +84,7 @@ export function TryItOut({ path, method, operation, document }: TryItOutProps) {
       setResponse(result);
     } catch (e) {
       setResponse(null);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setExecuting(false);
     }

@@ -14,6 +14,7 @@ import {
   type LlmSettings,
   type ResolvedLlmProvider,
 } from "../lib/llm";
+import { toMessage } from "../lib/errors";
 
 /**
  * LLM provider registry state, in one place — mirrors `useEmbeddingSetup`'s
@@ -42,7 +43,7 @@ export function useLlmSetup() {
       setHasApiKeyMap(Object.fromEntries(keyChecks));
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, []);
 
@@ -60,7 +61,7 @@ export function useLlmSetup() {
         await setLlmSettings(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -92,7 +93,7 @@ export function useLlmSetup() {
         await refresh();
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -110,7 +111,7 @@ export function useLlmSetup() {
         await setLlmSettings(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -128,7 +129,7 @@ export function useLlmSetup() {
         await setLlmSettings(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -146,7 +147,7 @@ export function useLlmSetup() {
         await setLlmSettings(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -164,7 +165,7 @@ export function useLlmSetup() {
         await setLlmSettings(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -182,7 +183,7 @@ export function useLlmSetup() {
         await setLlmSettings(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -200,7 +201,7 @@ export function useLlmSetup() {
         await setLlmSettings(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -218,7 +219,7 @@ export function useLlmSetup() {
         await setLlmSettings(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -234,7 +235,7 @@ export function useLlmSetup() {
         await refresh();
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -249,7 +250,7 @@ export function useLlmSetup() {
       setHasApiKeyMap((prev) => ({ ...prev, [providerId]: true }));
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setBusy(false);
     }

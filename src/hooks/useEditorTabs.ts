@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toMessage } from "../lib/errors";
 import type { GeneralPrefs } from "../lib/prefs";
 import { DEFAULT_GENERAL_PREFS } from "../lib/prefs";
 import { planGet } from "../lib/plans";
@@ -200,7 +201,7 @@ export function useEditorTabs(
       setError(null);
       return true;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       return false;
     }
   }, []);
@@ -371,7 +372,7 @@ export function useEditorTabs(
       } catch (e) {
         // Пробрасываем ошибку наружу, чтобы caller (например openDiagnostic)
         // мог её перехватить и не оставлять «failed to resolve path» в toast.
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         throw e;
       }
     },
@@ -413,7 +414,7 @@ export function useEditorTabs(
         setActiveTabId(tab.id);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       }
     },
     [flushDebounce, saveTab, switchToTab],
@@ -464,7 +465,7 @@ export function useEditorTabs(
         setActiveTabId(tab.id);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       }
     },
     [flushDebounce, saveTab, switchToTab],

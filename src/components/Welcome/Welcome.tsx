@@ -5,6 +5,7 @@ import {
   removeRecentProject,
   type RecentProject,
 } from "../../lib/project";
+import { toMessage } from "../../lib/errors";
 import type { ProbeResult } from "../../lib/git";
 import { CloneRepoModal } from "./CloneRepoModal";
 import "./Welcome.css";
@@ -42,7 +43,7 @@ export function Welcome({ onOpenFolder, onOpenRecent, onCloneProject, onOpenSett
     try {
       await onOpenFolder();
     } catch (e) {
-      setLocalError(e instanceof Error ? e.message : String(e));
+      setLocalError(toMessage(e));
     } finally {
       setBusy(false);
     }
@@ -54,7 +55,7 @@ export function Welcome({ onOpenFolder, onOpenRecent, onCloneProject, onOpenSett
     try {
       await onOpenRecent(root);
     } catch (e) {
-      setLocalError(e instanceof Error ? e.message : String(e));
+      setLocalError(toMessage(e));
       await reloadRecent();
     } finally {
       setBusy(false);
@@ -66,7 +67,7 @@ export function Welcome({ onOpenFolder, onOpenRecent, onCloneProject, onOpenSett
       await removeRecentProject(root);
       await reloadRecent();
     } catch (e) {
-      setLocalError(e instanceof Error ? e.message : String(e));
+      setLocalError(toMessage(e));
     }
   };
 

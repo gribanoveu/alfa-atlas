@@ -10,6 +10,7 @@ import {
   type SshKeyConfig,
   type AppKeyStatus,
 } from "../../lib/git";
+import { toMessage } from "../../lib/errors";
 import { AddSshKeyModal } from "./AddSshKeyModal";
 import "../Welcome/CloneRepoModal.css";
 import "./CredentialsTab.css";
@@ -45,7 +46,7 @@ export function CredentialsTab() {
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
+          setError(toMessage(e));
         }
       }
     })();
@@ -61,7 +62,7 @@ export function CredentialsTab() {
       await gitSaveCredentials(creds);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       const current = await gitGetCredentials().catch(() => credentials);
       if (current) setCredentials(current);
     } finally {
@@ -106,7 +107,7 @@ export function CredentialsTab() {
       const status = await gitGenerateKey();
       setKeyStatus(status);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setKeyGenBusy(false);
     }
@@ -125,7 +126,7 @@ export function CredentialsTab() {
         const status = await gitImportKey(selected);
         setKeyStatus(status);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setKeyGenBusy(false);
       }

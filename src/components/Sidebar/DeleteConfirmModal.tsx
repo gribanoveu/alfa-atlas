@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import "../Welcome/CloneRepoModal.css";
+import { toMessage } from "../../lib/errors";
 import type { FileTreeDeleteTarget } from "./FileTree";
 
 type DeleteConfirmModalProps = {
@@ -27,7 +28,7 @@ export function DeleteConfirmModal({
     try {
       await onConfirm(target);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       setBusy(false);
     }
   };

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { toMessage } from "../../lib/errors";
 import { planDelete, planGet, planList, type PlanRecord, type PlanSummary } from "../../lib/plans";
 import { PlanDetailView } from "./PlanDetailView";
 import "../ToolLog/ToolCallLogModal.css";
@@ -60,7 +61,7 @@ export function PlansModal({
         return list[0]?.id ?? null;
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       setSummaries([]);
     } finally {
       setLoading(false);
@@ -98,7 +99,7 @@ export function PlansModal({
       .catch((e: unknown) => {
         if (!cancelled) {
           setDetail(null);
-          setError(e instanceof Error ? e.message : String(e));
+          setError(toMessage(e));
         }
       });
     return () => {
@@ -113,7 +114,7 @@ export function PlansModal({
       setConfirmingDelete(false);
       await refreshList();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setDeleting(false);
     }

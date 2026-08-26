@@ -13,6 +13,7 @@ import {
   type GeneralPrefs,
   type SettingsPaths,
 } from "../../lib/prefs";
+import { toMessage } from "../../lib/errors";
 import { SUPPORTED_FORMAT_LABELS } from "../../lib/supportedFiles";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
 import "../Welcome/CloneRepoModal.css";
@@ -140,7 +141,7 @@ export function SettingsDialog({
         }
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
+          setError(toMessage(e));
         }
       }
     })();
@@ -186,7 +187,7 @@ export function SettingsDialog({
         onPrefsChange?.(next);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         const current = await getGeneralPrefs().catch(() => prefs);
         if (current) setPrefs(current);
       } finally {
@@ -238,7 +239,7 @@ export function SettingsDialog({
     try {
       await openPath(paths.userSettingsDir);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, [paths]);
 

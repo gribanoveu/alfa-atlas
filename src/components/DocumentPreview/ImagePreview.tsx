@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { toMessage } from "../../lib/errors";
 import { resolveAssetPath } from "../../lib/project";
 import "./ImagePreview.css";
 
@@ -38,7 +39,7 @@ export function ImagePreview({
         if (cancelled) return;
         setState({
           kind: "error",
-          message: e instanceof Error ? e.message : String(e),
+          message: toMessage(e),
         });
       });
     return () => {

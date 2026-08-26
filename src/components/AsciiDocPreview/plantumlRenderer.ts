@@ -23,6 +23,7 @@ interface PlantumlEngine {
 
 // `viz-global.js` must be loaded as a classic <script> before the engine
 // module is imported. Vite's `?url` suffix gives us a bundleable asset URL.
+import { toMessage } from "../../lib/errors";
 import vizGlobalUrl from "@plantuml/core/viz-global.js?url";
 
 let enginePromise: Promise<PlantumlEngine> | null = null;
@@ -129,7 +130,7 @@ export function renderPlantuml(source: string): Promise<RenderResult> {
       } catch (e) {
         resolve({
           kind: "error",
-          message: e instanceof Error ? e.message : String(e),
+          message: toMessage(e),
         });
       }
     };

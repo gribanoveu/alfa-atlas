@@ -11,6 +11,7 @@ import {
 } from "../../lib/skills";
 import "../Welcome/CloneRepoModal.css";
 import "./SkillsTab.css";
+import { toMessage } from "../../lib/errors";
 
 export function SkillsTab() {
   const [items, setItems] = useState<SkillListItem[] | null>(null);
@@ -33,7 +34,7 @@ export function SkillsTab() {
           setError(null);
         }
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) setError(toMessage(e));
       }
     })();
     return () => {
@@ -48,7 +49,7 @@ export function SkillsTab() {
         await skillsSetEnabled(item.source, item.name, enabled);
         await reload();
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -64,7 +65,7 @@ export function SkillsTab() {
       await skillsImport(selected);
       await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setBusy(false);
     }
@@ -77,7 +78,7 @@ export function SkillsTab() {
         await skillsRemove(item.name);
         await reload();
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -90,7 +91,7 @@ export function SkillsTab() {
       const dir = await skillsUserDir();
       await openPath(dir);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, []);
 

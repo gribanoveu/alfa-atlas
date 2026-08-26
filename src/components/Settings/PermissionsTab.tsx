@@ -1,5 +1,6 @@
 import { ShieldOff } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toMessage } from "../../lib/errors";
 import { getAllowedTools, getAutoApprovedTools, setToolAllowed, setToolAutoApproved } from "../../lib/aiTools";
 import { AUTO_APPROVABLE_TOOL_LABELS } from "../../lib/assistantConfig";
 import "./PermissionsTab.css";
@@ -89,7 +90,7 @@ export function PermissionsTab() {
         }
       } catch (e) {
         if (!cancelled) {
-          const message = e instanceof Error ? e.message : String(e);
+          const message = toMessage(e);
           if (message.includes("no project is open")) {
             setNoProject(true);
           } else {
@@ -117,7 +118,7 @@ export function PermissionsTab() {
         }
       } catch (e) {
         if (!cancelled) {
-          const message = e instanceof Error ? e.message : String(e);
+          const message = toMessage(e);
           if (message.includes("no project is open")) {
             setAllowedNoProject(true);
           } else {
@@ -139,7 +140,7 @@ export function PermissionsTab() {
       await setToolAutoApproved(tool, false);
       setTools((prev) => prev.filter((t) => t !== tool));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setRevoking(null);
     }
@@ -151,7 +152,7 @@ export function PermissionsTab() {
       await setToolAllowed(tool, allowed);
       setAllowedTools((prev) => (allowed ? [...prev, tool] : prev.filter((t) => t !== tool)));
     } catch (e) {
-      setAllowedError(e instanceof Error ? e.message : String(e));
+      setAllowedError(toMessage(e));
     } finally {
       setTogglingTool(null);
     }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import "../Welcome/CloneRepoModal.css";
+import { toMessage } from "../../lib/errors";
 
 type NewFolderModalProps = {
   parentPath: string;
@@ -66,7 +67,7 @@ export function NewFolderModal({
     try {
       await onConfirm(trimmed, useRestTemplate);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       setBusy(false);
     }
   };

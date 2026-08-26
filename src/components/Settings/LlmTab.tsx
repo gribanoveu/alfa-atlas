@@ -1,5 +1,6 @@
 import { AlertCircle, Check, CheckCircle2, ChevronDown, ChevronRight, RefreshCw, Save, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { toMessage } from "../../lib/errors";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
 import { AUTO_MODEL_LABEL, AUTO_MODEL_VALUE } from "../../lib/assistantConfig";
 import type { LlmModelInfo } from "../../lib/llm";
@@ -141,7 +142,7 @@ export function LlmTab() {
     try {
       setModels(await loadModels(expanded.id));
     } catch (e) {
-      setModelsError(e instanceof Error ? e.message : String(e));
+      setModelsError(toMessage(e));
     } finally {
       setModelsLoading(false);
     }
@@ -155,7 +156,7 @@ export function LlmTab() {
       const reply = await testConnection(expanded.id);
       setTestResult({ ok: true, message: reply });
     } catch (e) {
-      setTestResult({ ok: false, message: e instanceof Error ? e.message : String(e) });
+      setTestResult({ ok: false, message: toMessage(e) });
     } finally {
       setTesting(false);
     }

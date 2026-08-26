@@ -20,6 +20,7 @@ import {
   type SyncProgress,
   type SyncStats,
 } from "../lib/embeddings";
+import { toMessage } from "../lib/errors";
 
 /**
  * Embedding provider config + local-model readiness + last sync result, in
@@ -93,7 +94,7 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
       if (generation !== generationRef.current || repoRootRef.current !== root) {
         return;
       }
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, []);
 
@@ -220,7 +221,7 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
         await setEmbeddingConfig(override);
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setBusy(false);
       }
@@ -235,7 +236,7 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
       setHasApiKey(true);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setBusy(false);
     }
@@ -254,7 +255,7 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
       // event already reset `modelStatus`, so don't clobber it with an
       // "error" state for something the user asked for.
       if (cancelRequestedRef.current) return;
-      const message = e instanceof Error ? e.message : String(e);
+      const message = toMessage(e);
       setError(message);
       setModelStatus({ status: "error", message });
     } finally {
@@ -273,7 +274,7 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
     try {
       await cancelEmbeddingModelDownload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, []);
 
@@ -300,7 +301,7 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
       return stats;
     } catch (e) {
       if (!stillCurrent()) return null;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       return null;
     } finally {
       if (stillCurrent()) {

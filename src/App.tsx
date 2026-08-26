@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type * as Monaco from "monaco-editor";
 import type { editor as MonacoEditor } from "monaco-editor";
+import { toMessage } from "./lib/errors";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
 import { AlertOkModal } from "./components/Git/AlertOkModal";
@@ -514,7 +515,7 @@ function App() {
             lastOpened = rel;
           }
         } catch (e) {
-          setFolderError(e instanceof Error ? e.message : String(e));
+          setFolderError(toMessage(e));
         }
       }
       session.ensureExpanded(destDirPath);
@@ -688,7 +689,7 @@ function App() {
       }
     } catch (e) {
       setGitAlert({
-        message: e instanceof Error ? e.message : String(e),
+        message: toMessage(e),
       });
     }
   }, [git, hasProject, project.repoRoot, actionLog]);
@@ -771,7 +772,7 @@ function App() {
     try {
       await project.openFolderDialog();
     } catch (e) {
-      setFolderError(e instanceof Error ? e.message : String(e));
+      setFolderError(toMessage(e));
     }
   }, [project]);
 
@@ -781,7 +782,7 @@ function App() {
       try {
         await project.beginOpenPath(root);
       } catch (e) {
-        setFolderError(e instanceof Error ? e.message : String(e));
+        setFolderError(toMessage(e));
         throw e;
       }
     },
@@ -986,7 +987,7 @@ function App() {
         actionLog.markUndone(entry.id);
         await Promise.all([git.refresh(), branches.refresh(), stash.refresh()]);
       } catch (e) {
-        setGitAlert({ message: e instanceof Error ? e.message : String(e) });
+        setGitAlert({ message: toMessage(e) });
       }
     },
     [project.repoRoot, actionLog, git, branches, stash],
@@ -1657,7 +1658,7 @@ function App() {
           try {
             await project.beginOpenPath(root);
           } catch (e) {
-            setFolderError(e instanceof Error ? e.message : String(e));
+            setFolderError(toMessage(e));
           }
         }}
         onCloneProject={async (cloned) => {
@@ -1709,7 +1710,7 @@ function App() {
                   ? await renameProjectDir(project.docsRoot, oldPath, newPath)
                   : await renameProjectFile(project.docsRoot, oldPath, newPath);
               } catch (e) {
-                setFolderError(e instanceof Error ? e.message : String(e));
+                setFolderError(toMessage(e));
                 return;
               }
               editor.remapTabsUnder(oldPath, newPath);
@@ -1747,7 +1748,7 @@ function App() {
                   await copyProjectFile(project.docsRoot, copiedItem.path, newPath);
                 }
               } catch (e) {
-                setFolderError(e instanceof Error ? e.message : String(e));
+                setFolderError(toMessage(e));
                 return;
               }
               session.ensureExpanded(destDirPath);

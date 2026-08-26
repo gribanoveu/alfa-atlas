@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { toMessage } from "../lib/errors";
 import { loadOpenApiBundle, type OpenApiBundleResult } from "../lib/openapi";
 
 /** Lazily loads the fully-resolved OpenAPI bundle only once `enabled` is true
@@ -21,7 +22,7 @@ export function useOpenApiBundle(
       setBundle(result);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setLoading(false);
     }

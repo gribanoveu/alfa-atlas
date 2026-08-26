@@ -9,6 +9,7 @@ import {
   type IndexEvent,
   type IndexStats,
 } from "../lib/workspaceIndex";
+import { toMessage } from "../lib/errors";
 
 export type IndexStatus = "idle" | "building" | "ready" | "warning" | "error";
 
@@ -104,7 +105,7 @@ export function useWorkspaceIndex(
     let cancelled = false;
     buildIndex(repoRoot).catch((e) => {
       if (cancelled) return;
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       setStatus("error");
     });
     return () => {
@@ -123,7 +124,7 @@ export function useWorkspaceIndex(
     try {
       await buildIndex(repoRoot);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       setStatus("error");
     }
   }, [active, repoRoot]);

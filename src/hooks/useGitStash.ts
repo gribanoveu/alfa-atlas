@@ -6,6 +6,7 @@ import {
   type GitStashEntry,
   type GitStashRestoreOutcome,
 } from "../lib/git";
+import { toMessage } from "../lib/errors";
 
 type UseGitStashOptions = {
   active?: boolean;
@@ -33,7 +34,7 @@ export function useGitStash(
       setEntries(next);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     }
   }, [repoRoot]);
 
@@ -57,7 +58,7 @@ export function useGitStash(
         setError(null);
         return outcome;
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return null;
       } finally {
         setBusy(false);
@@ -76,7 +77,7 @@ export function useGitStash(
         setError(null);
         return true;
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
         return false;
       } finally {
         setBusy(false);

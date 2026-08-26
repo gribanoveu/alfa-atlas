@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toMessage } from "../../lib/errors";
 import { ensureAtlasGitignore } from "../../lib/project";
 import type { DocsCandidate, ProbeResult } from "../../lib/project";
 import "./CloneRepoModal.css";
@@ -88,7 +89,7 @@ export function ConfirmOpenProjectModal({
     try {
       await onConfirm(docsRoot.trim());
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
       setBusy(false);
       return;
     }

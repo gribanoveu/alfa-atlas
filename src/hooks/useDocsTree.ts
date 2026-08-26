@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toMessage } from "../lib/errors";
 import { listDocsTree, type TreeNode } from "../lib/project";
 
 export function useDocsTree(docsRoot: string | null) {
@@ -26,7 +27,7 @@ export function useDocsTree(docsRoot: string | null) {
       hasLoadedRef.current = true;
     } catch (e) {
       setNodes([]);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       if (showLoading) setLoading(false);
     }

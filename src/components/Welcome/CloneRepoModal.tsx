@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useState } from "react";
+import { toMessage } from "../../lib/errors";
 import { gitClone } from "../../lib/git";
 import type { ProbeResult } from "../../lib/git";
 import { checkPathExists } from "../../lib/project";
@@ -101,7 +102,7 @@ export function CloneRepoModal({
       onOpened?.(project);
     } catch (e) {
       setCloning(false);
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = toMessage(e);
       if (msg.startsWith("no_ssh_credentials:")) {
         setNeedsAuth(true);
         setMessage(

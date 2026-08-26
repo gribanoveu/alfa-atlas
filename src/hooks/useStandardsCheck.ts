@@ -3,6 +3,7 @@ import {
   checkStandards,
   type StandardsReport,
 } from "../lib/standards";
+import { toMessage } from "../lib/errors";
 
 export type StandardsCheckStatus = "idle" | "running" | "done" | "error";
 
@@ -40,7 +41,7 @@ export function useStandardsCheck(
       setStatus("done");
     } catch (err) {
       if (runIdRef.current !== runId) return;
-      setError(err instanceof Error ? err.message : String(err));
+      setError(toMessage(err));
       setStatus("error");
     }
   }, [active, docsRoot]);

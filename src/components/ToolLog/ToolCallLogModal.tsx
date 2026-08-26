@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toMessage } from "../../lib/errors";
 import { clearToolCallLog, queryToolCallLog, type ToolCallLogRow } from "../../lib/toolCallLog";
 import "../Welcome/CloneRepoModal.css";
 import "./ToolCallLogModal.css";
@@ -212,7 +213,7 @@ export function ToolCallLogModal({ projectRoot, onClose }: ToolCallLogModalProps
       setTotal(page.total);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setLoading(false);
     }
@@ -244,7 +245,7 @@ export function ToolCallLogModal({ projectRoot, onClose }: ToolCallLogModalProps
       setExpandedId(null);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setClearing(false);
     }

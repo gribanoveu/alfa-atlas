@@ -10,6 +10,7 @@ import {
   probeOpenPath,
   type ProbeResult,
 } from "../lib/project";
+import { toMessage } from "../lib/errors";
 
 export type PendingOpen = ProbeResult;
 
@@ -60,7 +61,7 @@ export function useProject() {
         if (!cancelled) {
           setRepoRoot(null);
           setDocsRoot(null);
-          setError(e instanceof Error ? e.message : String(e));
+          setError(toMessage(e));
         }
       } finally {
         if (!cancelled) setReady(true);

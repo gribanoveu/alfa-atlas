@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toMessage } from "../../lib/errors";
 import { deleteMemoryLogEntry, queryMemoryLog, type MemoryLogRow } from "../../lib/memoryLog";
 import "../Welcome/CloneRepoModal.css";
 import "../ToolLog/ToolCallLogModal.css";
@@ -139,7 +140,7 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
       setGlobalStorePath(page.globalStorePath);
       setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(toMessage(e));
     } finally {
       setLoading(false);
     }
@@ -167,7 +168,7 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
         await load();
         setError(null);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(toMessage(e));
       } finally {
         setDeletingKey(null);
       }

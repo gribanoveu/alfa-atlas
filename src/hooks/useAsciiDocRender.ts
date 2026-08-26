@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Extensions, load, MemoryLogger, LoggerManager } from "asciidoctor";
 import type { Document } from "asciidoctor";
+import { toMessage } from "../lib/errors";
 import { normalizeBarePipeTables } from "../lib/normalizeBarePipeTables";
 import { readProjectFile } from "../lib/project";
 
@@ -175,7 +176,7 @@ export function useAsciiDocRender(
           if (cancelled) return;
           setState({
             doc: null,
-            error: e instanceof Error ? e.message : String(e),
+            error: toMessage(e),
             parsing: false,
           });
         })
