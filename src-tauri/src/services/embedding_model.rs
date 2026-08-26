@@ -231,7 +231,7 @@ impl Progress for ProgressReporter<'_> {
 /// as a pure function so it's testable without an `AppHandle` (this
 /// codebase has no mock/test `AppHandle` construction anywhere yet — every
 /// other `AppHandle`-taking function is left untested for the same reason,
-/// e.g. `commands::embeddings::sync_backlog_batch`'s tests call it directly
+/// e.g. `services::embedding_sync::sync_backlog_batch`'s tests call it directly
 /// rather than through the `AppHandle`-taking wrappers above it).
 fn should_emit_progress(last_emitted_fraction: f32, fraction: f32) -> bool {
     fraction - last_emitted_fraction >= 0.01 || fraction >= 1.0

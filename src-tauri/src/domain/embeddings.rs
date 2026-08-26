@@ -201,7 +201,7 @@ pub struct EmbeddingIndexStatus {
     /// Files still queued for `run_background_backlog_sync` — `0` when
     /// nothing's deferred (the common case: `embedding_sync` folds a small
     /// non-doc change set inline rather than deferring it, see
-    /// `commands::embeddings::split_sync_tiers`). Non-zero after a fresh
+    /// `services::embedding_sync::split_sync_tiers`). Non-zero after a fresh
     /// project's first sync, or after a routine sync catches a large
     /// upstream change (e.g. a big `git pull`) — either way this can be
     /// nonzero on more than just a project's very first sync now that
@@ -210,6 +210,43 @@ pub struct EmbeddingIndexStatus {
     /// hand-maintained counter, so it survives an app restart or a panicked
     /// background task without drifting.
     pub background_pending: usize,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncPhase {
+    /// Re-chunking files whose content hash changed since the last sync —
+    /// fast (no network/inference), but still worth reporting since a
+    /// large `FullRepo` change set can take a few seconds on its own.
+    Chunking,
+    /// Calling the embedding provider for pending chunks, in batches of
+    /// `EMBED_PROGRESS_BATCH` — the slow phase (network or ONNX inference).
+    Embedding,
+}
+
+/// Distinguishes a full, user-triggered `embedding_sync` from a
+/// file-watcher-driven incremental tick — so the UI's "Синхронизировать"
+/// progress display never mistakes a single background per-file update for
+/// a full-repo resync in progress.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncTrigger {
+    Full,
+    Incremental,
+    /// The low-priority catch-up for the rest of a fresh project's files,
+    /// running on its own task after the first sync's priority tier (open
+    /// files + their direct includes/xrefs) already returned to the caller
+    /// — see `run_background_backlog_sync`.
+    Background,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProgress {
+    pub phase: SyncPhase,
+    pub current: usize,
+    pub total: usize,
+    pub trigger: SyncTrigger,
 }
 
 #[cfg(test)]

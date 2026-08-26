@@ -12,6 +12,7 @@ pub mod embedding_config;
 pub mod embedding_index;
 pub mod embedding_model;
 pub mod embedding_state;
+pub mod embedding_sync;
 pub mod file_watcher;
 pub mod general_prefs;
 pub mod git_credentials;

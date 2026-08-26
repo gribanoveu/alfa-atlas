@@ -293,7 +293,7 @@ impl RepositoryIndex {
     /// whose last segment is a method/field rather than a class, see
     /// `push_import`'s doc comment in `java.rs`) is silently dropped, the
     /// same graceful-degradation philosophy
-    /// `commands::embeddings::direct_dependencies` already uses for an
+    /// `services::embedding_sync::direct_dependencies` already uses for an
     /// AsciiDoc document `WorkspaceIndex` doesn't know about. Ambiguous
     /// matches (more than one file with the same suffix, e.g. two source
     /// roots) are all included rather than guessed between.

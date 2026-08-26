@@ -134,7 +134,7 @@ pub fn scan_all_entries_with_depth(
 /// `max_depth` cap means only the levels from `root` down to `path`'s own
 /// depth are ever listed, never anything below `path`'s own directory.
 ///
-/// Used by the embeddings file watcher (`commands::embeddings::
+/// Used by the embeddings file watcher (`services::embedding_sync::
 /// run_incremental_sync`) to decide whether a brand-new, untracked file is
 /// safe to index incrementally — extension relevance is already checked
 /// by the watcher's own `is_relevant` filter before this ever runs, so

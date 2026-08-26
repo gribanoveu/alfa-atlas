@@ -82,7 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
 -- `RepositoryIndex`'s in-memory `IndexedFile.imports` — persisted so a cold
 -- start's `RepositoryIndex::build_reusing_symbols` can carry a reused (i.e.
 -- content-unchanged) file's import graph forward instead of silently
--- dropping it (see `commands::embeddings::load_persisted_symbols`). Same
+-- dropping it (see `services::embedding_sync::load_persisted_symbols`). Same
 -- shape/gating as `symbols`: no primary key, keyed by `file_id`.
 CREATE TABLE IF NOT EXISTS imports (
   file_id     TEXT NOT NULL REFERENCES files(file_id) ON DELETE CASCADE,
@@ -411,7 +411,7 @@ impl IndexStore {
     }
 
     /// Every persisted import, grouped by the file it belongs to — what
-    /// `commands::embeddings::load_persisted_symbols` reuses so a cold-start
+    /// `services::embedding_sync::load_persisted_symbols` reuses so a cold-start
     /// `RepositoryIndex::build_reusing_symbols` call carries a reused file's
     /// Java import graph forward instead of losing it.
     pub fn load_all_imports(&self) -> Result<HashMap<FileId, Vec<ImportRef>>, IndexStoreError> {
