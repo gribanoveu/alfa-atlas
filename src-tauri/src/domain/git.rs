@@ -273,10 +273,18 @@ pub struct KeyConfig {
 pub enum GitError {
     #[error("path is not a git repository: {0}")]
     NotARepository(String),
+    /// The underlying libgit2 message, already flattened to text.
+    ///
+    /// `String` rather than `git2::Error` so nothing in `domain/` depends on
+    /// the git backend. Nothing reads the cause chain (`infra::git_repo`
+    /// inspects `ErrorCode` on the raw error *before* wrapping it, never
+    /// through here), and the `Display` text is byte-identical either way —
+    /// which matters, because `src/lib/gitErrors.ts` translates these
+    /// messages by matching on them.
     #[error("failed to open repository: {0}")]
-    Open(#[source] git2::Error),
+    Open(String),
     #[error("git operation failed: {0}")]
-    Operation(#[source] git2::Error),
+    Operation(String),
     #[error("commit message is empty")]
     EmptyMessage,
     #[error("nothing staged to commit")]

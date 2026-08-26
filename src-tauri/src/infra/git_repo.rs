@@ -14,6 +14,17 @@ use crate::domain::git::{
     SshKeySource,
 };
 
+/// `git2::Error` -> `GitError`, in one place rather than at each of the ~140
+/// call sites below. `GitError` carries the message as text (see its own doc
+/// comment for why), so this is where the flattening happens.
+fn op_err(e: git2::Error) -> GitError {
+    GitError::Operation(e.to_string())
+}
+
+fn open_err(e: git2::Error) -> GitError {
+    GitError::Open(e.to_string())
+}
+
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
 pub fn discover_repo_root(path: &Path) -> PathBuf {
     match Repository::discover(path) {
@@ -56,7 +67,7 @@ fn open_repo(repo_root: &Path) -> Result<Repository, GitError> {
         if e.code() == git2::ErrorCode::NotFound {
             GitError::NotARepository(repo_root.display().to_string())
         } else {
-            GitError::Open(e)
+            open_err(e)
         }
     })
 }
@@ -206,7 +217,7 @@ pub fn status(repo_root: &Path) -> Result<GitStatusSnapshot, GitError> {
         .include_ignored(false)
         .show(StatusShow::IndexAndWorkdir);
 
-    let statuses = repo.statuses(Some(&mut opts)).map_err(GitError::Operation)?;
+    let statuses = repo.statuses(Some(&mut opts)).map_err(op_err)?;
 
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
@@ -261,19 +272,19 @@ pub fn stage_paths(repo_root: &Path, paths: &[String]) -> Result<(), GitError> {
     let workdir = repo
         .workdir()
         .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
-    let mut index = repo.index().map_err(GitError::Operation)?;
+    let mut index = repo.index().map_err(op_err)?;
 
     for path in paths {
         let rel = validate_relative_path(path)?;
         let full = workdir.join(rel);
         if full.exists() {
-            index.add_path(rel).map_err(GitError::Operation)?;
+            index.add_path(rel).map_err(op_err)?;
         } else {
             // Stage deletion.
-            index.remove_path(rel).map_err(GitError::Operation)?;
+            index.remove_path(rel).map_err(op_err)?;
         }
     }
-    index.write().map_err(GitError::Operation)?;
+    index.write().map_err(op_err)?;
     Ok(())
 }
 
@@ -287,19 +298,19 @@ pub fn unstage_paths(repo_root: &Path, paths: &[String]) -> Result<(), GitError>
     if repo.head().is_ok() {
         let head_obj = repo
             .head()
-            .map_err(GitError::Operation)?
+            .map_err(op_err)?
             .peel_to_commit()
-            .map_err(GitError::Operation)?
+            .map_err(op_err)?
             .into_object();
         repo.reset_default(Some(&head_obj), validated.iter().map(|p| p.as_path()))
-            .map_err(GitError::Operation)?;
+            .map_err(op_err)?;
     } else {
         // No HEAD yet — remove from index only.
-        let mut index = repo.index().map_err(GitError::Operation)?;
+        let mut index = repo.index().map_err(op_err)?;
         for path in &validated {
             let _ = index.remove_path(path);
         }
-        index.write().map_err(GitError::Operation)?;
+        index.write().map_err(op_err)?;
     }
     Ok(())
 }
@@ -309,7 +320,7 @@ fn has_staged_changes(repo: &Repository) -> Result<bool, GitError> {
     opts.show(StatusShow::Index)
         .include_untracked(false)
         .include_ignored(false);
-    let statuses = repo.statuses(Some(&mut opts)).map_err(GitError::Operation)?;
+    let statuses = repo.statuses(Some(&mut opts)).map_err(op_err)?;
     Ok(statuses
         .iter()
         .any(|e| index_status_letter(e.status()).is_some()))
@@ -323,7 +334,7 @@ fn commit_signature(repo: &Repository) -> Result<Signature<'static>, GitError> {
             if name.trim().is_empty() || email.trim().is_empty() {
                 return Err(GitError::MissingIdentity);
             }
-            Signature::now(&name, &email).map_err(GitError::Operation)
+            Signature::now(&name, &email).map_err(op_err)
         }
         Err(_) => Err(GitError::MissingIdentity),
     }
@@ -340,15 +351,15 @@ pub fn commit(repo_root: &Path, message: &str) -> Result<String, GitError> {
         return Err(GitError::NothingStaged);
     }
 
-    let mut index = repo.index().map_err(GitError::Operation)?;
-    let tree_oid = index.write_tree().map_err(GitError::Operation)?;
-    let tree = repo.find_tree(tree_oid).map_err(GitError::Operation)?;
+    let mut index = repo.index().map_err(op_err)?;
+    let tree_oid = index.write_tree().map_err(op_err)?;
+    let tree = repo.find_tree(tree_oid).map_err(op_err)?;
     let sig = commit_signature(&repo)?;
 
     let parent_commit = match repo.head() {
-        Ok(head) => Some(head.peel_to_commit().map_err(GitError::Operation)?),
+        Ok(head) => Some(head.peel_to_commit().map_err(op_err)?),
         Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
-        Err(e) => return Err(GitError::Operation(e)),
+        Err(e) => return Err(op_err(e)),
     };
 
     let parents: Vec<&git2::Commit> = match &parent_commit {
@@ -358,7 +369,7 @@ pub fn commit(repo_root: &Path, message: &str) -> Result<String, GitError> {
 
     let oid = repo
         .commit(Some("HEAD"), &sig, &sig, trimmed, &tree, &parents)
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
 
     let full = oid.to_string();
     Ok(full[..7.min(full.len())].to_string())
@@ -376,17 +387,17 @@ pub fn undo_commit(repo_root: &Path, commit_hash: &str) -> Result<(), GitError> 
     let repo = open_repo(repo_root)?;
     let head = repo
         .head()
-        .map_err(GitError::Operation)?
+        .map_err(op_err)?
         .peel_to_commit()
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     if short_oid(head.id()) != commit_hash {
         return Err(GitError::Message(
             "HEAD изменился с момента коммита — отмена невозможна".into(),
         ));
     }
-    let parent = head.parent(0).map_err(GitError::Operation)?;
+    let parent = head.parent(0).map_err(op_err)?;
     repo.reset(parent.as_object(), ResetType::Soft, None)
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     Ok(())
 }
 
@@ -394,19 +405,19 @@ pub fn log(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitE
     let repo = open_repo(repo_root)?;
     let mut walk = match repo.revwalk() {
         Ok(w) => w,
-        Err(e) => return Err(GitError::Operation(e)),
+        Err(e) => return Err(op_err(e)),
     };
 
     match walk.push_head() {
         Ok(()) => {}
         Err(e) if e.code() == git2::ErrorCode::UnbornBranch => return Ok(vec![]),
-        Err(e) => return Err(GitError::Operation(e)),
+        Err(e) => return Err(op_err(e)),
     }
 
     let mut commits = Vec::new();
     for oid_result in walk.take(limit) {
-        let oid = oid_result.map_err(GitError::Operation)?;
-        let commit = repo.find_commit(oid).map_err(GitError::Operation)?;
+        let oid = oid_result.map_err(op_err)?;
+        let commit = repo.find_commit(oid).map_err(op_err)?;
         let full = oid.to_string();
         let hash = full[..7.min(full.len())].to_string();
         let message = commit
@@ -444,7 +455,7 @@ fn resolve_commit<'repo>(
     let obj = repo
         .revparse_single(commit_ref)
         .map_err(|_| GitError::Message(format!("commit not found: {commit_ref}")))?;
-    obj.peel_to_commit().map_err(GitError::Operation)
+    obj.peel_to_commit().map_err(op_err)
 }
 
 fn delta_status_letter(status: Delta) -> Option<&'static str> {
@@ -462,16 +473,16 @@ fn delta_status_letter(status: Delta) -> Option<&'static str> {
 pub fn commit_files(repo_root: &Path, commit_ref: &str) -> Result<Vec<GitFileStatus>, GitError> {
     let repo = open_repo(repo_root)?;
     let commit = resolve_commit(&repo, commit_ref)?;
-    let tree = commit.tree().map_err(GitError::Operation)?;
+    let tree = commit.tree().map_err(op_err)?;
     let parent_tree = match commit.parent(0) {
-        Ok(parent) => Some(parent.tree().map_err(GitError::Operation)?),
+        Ok(parent) => Some(parent.tree().map_err(op_err)?),
         Err(_) => None,
     };
 
     let mut diff_opts = DiffOptions::new();
     let diff = repo
         .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut diff_opts))
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
 
     let mut files: Vec<GitFileStatus> = diff
         .deltas()
@@ -502,10 +513,10 @@ pub fn commit_file_diff(
     let rel = validate_relative_path(path)?;
     let repo = open_repo(repo_root)?;
     let commit = resolve_commit(&repo, commit_ref)?;
-    let tree = commit.tree().map_err(GitError::Operation)?;
+    let tree = commit.tree().map_err(op_err)?;
     let parent = commit.parent(0).ok();
     let parent_tree = match &parent {
-        Some(p) => Some(p.tree().map_err(GitError::Operation)?),
+        Some(p) => Some(p.tree().map_err(op_err)?),
         None => None,
     };
 
@@ -553,7 +564,7 @@ fn map_remote_error(err: git2::Error) -> GitError {
     if looks_like_auth_failure {
         GitError::Message(format!("authentication failed: {msg}"))
     } else {
-        GitError::Operation(err)
+        op_err(err)
     }
 }
 
@@ -741,7 +752,7 @@ struct UpstreamRef {
 }
 
 fn upstream_of_head(repo: &Repository) -> Result<UpstreamRef, GitError> {
-    let head = repo.head().map_err(GitError::Operation)?;
+    let head = repo.head().map_err(op_err)?;
     if !head.is_branch() {
         return Err(GitError::Message(
             "detached HEAD: check out a branch before pull/push".into(),
@@ -785,7 +796,7 @@ fn fetch_upstream<'repo>(
     app_private_key: Option<&str>,
     on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<AnnotatedCommit<'repo>, GitError> {
-    let config = repo.config().map_err(GitError::Operation)?;
+    let config = repo.config().map_err(op_err)?;
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, &config, credentials, app_private_key);
     configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
@@ -809,13 +820,13 @@ fn fetch_upstream<'repo>(
 
     let reference = repo
         .find_reference(&upstream.tracking_ref)
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     repo.reference_to_annotated_commit(&reference)
-        .map_err(GitError::Operation)
+        .map_err(op_err)
 }
 
 fn head_branch_refname(repo: &Repository) -> Result<String, GitError> {
-    let head = repo.head().map_err(GitError::Operation)?;
+    let head = repo.head().map_err(op_err)?;
     head.name()
         .map(str::to_string)
         .map_err(|_| GitError::Message("cannot resolve HEAD ref".into()))
@@ -824,7 +835,7 @@ fn head_branch_refname(repo: &Repository) -> Result<String, GitError> {
 fn do_merge(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitError> {
     let (analysis, _) = repo
         .merge_analysis(&[theirs])
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
 
     if analysis.is_up_to_date() {
         return Ok(());
@@ -834,22 +845,22 @@ fn do_merge(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitEr
         let refname = head_branch_refname(repo)?;
         let mut reference = repo
             .find_reference(&refname)
-            .map_err(GitError::Operation)?;
+            .map_err(op_err)?;
         reference
             .set_target(theirs.id(), "Fast-Forward")
-            .map_err(GitError::Operation)?;
-        repo.set_head(&refname).map_err(GitError::Operation)?;
+            .map_err(op_err)?;
+        repo.set_head(&refname).map_err(op_err)?;
         repo.checkout_head(Some(CheckoutBuilder::default().force()))
-            .map_err(GitError::Operation)?;
+            .map_err(op_err)?;
         return Ok(());
     }
 
     if analysis.is_normal() {
         let mut opts = MergeOptions::new();
         repo.merge(&[theirs], Some(&mut opts), None)
-            .map_err(GitError::Operation)?;
+            .map_err(op_err)?;
 
-        let mut index = repo.index().map_err(GitError::Operation)?;
+        let mut index = repo.index().map_err(op_err)?;
         if index.has_conflicts() {
             // Leave MERGE_HEAD/MERGE_MSG and the conflict-marked working tree
             // files in place — the caller resolves conflicts and finishes
@@ -857,17 +868,17 @@ fn do_merge(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitEr
             return Err(GitError::MergeConflict);
         }
 
-        let tree_oid = index.write_tree().map_err(GitError::Operation)?;
-        let tree = repo.find_tree(tree_oid).map_err(GitError::Operation)?;
+        let tree_oid = index.write_tree().map_err(op_err)?;
+        let tree = repo.find_tree(tree_oid).map_err(op_err)?;
         let sig = commit_signature(repo)?;
         let head = repo
             .head()
-            .map_err(GitError::Operation)?
+            .map_err(op_err)?
             .peel_to_commit()
-            .map_err(GitError::Operation)?;
+            .map_err(op_err)?;
         let their_commit = repo
             .find_commit(theirs.id())
-            .map_err(GitError::Operation)?;
+            .map_err(op_err)?;
         let msg = format!(
             "Merge remote-tracking branch '{}'",
             theirs.refname().unwrap_or("upstream")
@@ -880,8 +891,8 @@ fn do_merge(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitEr
             &tree,
             &[&head, &their_commit],
         )
-        .map_err(GitError::Operation)?;
-        repo.cleanup_state().map_err(GitError::Operation)?;
+        .map_err(op_err)?;
+        repo.cleanup_state().map_err(op_err)?;
         return Ok(());
     }
 
@@ -892,24 +903,24 @@ fn do_merge(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitEr
 
 fn do_rebase(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitError> {
     let head_ann = {
-        let head = repo.head().map_err(GitError::Operation)?;
+        let head = repo.head().map_err(op_err)?;
         repo.reference_to_annotated_commit(&head)
-            .map_err(GitError::Operation)?
+            .map_err(op_err)?
     };
 
     let mut rebase = repo
         .rebase(Some(&head_ann), None, Some(theirs), None)
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
 
     let sig = commit_signature(repo)?;
     while let Some(op) = rebase.next() {
         if let Err(e) = op {
             let _ = rebase.abort();
-            return Err(GitError::Operation(e));
+            return Err(op_err(e));
         }
         let index = repo.index().map_err(|e| {
             let _ = rebase.abort();
-            GitError::Operation(e)
+            op_err(e)
         })?;
         if index.has_conflicts() {
             let _ = rebase.abort();
@@ -924,12 +935,12 @@ fn do_rebase(repo: &Repository, theirs: &AnnotatedCommit<'_>) -> Result<(), GitE
             }
             Err(e) => {
                 let _ = rebase.abort();
-                return Err(GitError::Operation(e));
+                return Err(op_err(e));
             }
         }
     }
 
-    rebase.finish(None).map_err(GitError::Operation)?;
+    rebase.finish(None).map_err(op_err)?;
     Ok(())
 }
 
@@ -1000,9 +1011,9 @@ pub fn resolve_conflict(repo_root: &Path, path: &str, content: &str) -> Result<(
     std::fs::write(&full, content)
         .map_err(|e| GitError::Message(format!("failed to write file: {e}")))?;
 
-    let mut index = repo.index().map_err(GitError::Operation)?;
-    index.add_path(rel).map_err(GitError::Operation)?;
-    index.write().map_err(GitError::Operation)?;
+    let mut index = repo.index().map_err(op_err)?;
+    index.add_path(rel).map_err(op_err)?;
+    index.write().map_err(op_err)?;
     Ok(())
 }
 
@@ -1015,11 +1026,11 @@ pub fn finish_merge(repo_root: &Path) -> Result<String, GitError> {
         return Err(GitError::Message("нет активного слияния".into()));
     }
 
-    let mut index = repo.index().map_err(GitError::Operation)?;
+    let mut index = repo.index().map_err(op_err)?;
     if index.has_conflicts() {
         let remaining: Vec<String> = index
             .conflicts()
-            .map_err(GitError::Operation)?
+            .map_err(op_err)?
             .filter_map(|c| c.ok())
             .filter_map(|c| {
                 c.our
@@ -1039,20 +1050,20 @@ pub fn finish_merge(repo_root: &Path) -> Result<String, GitError> {
         their_oids.push(*oid);
         true
     })
-    .map_err(GitError::Operation)?;
+    .map_err(op_err)?;
     let their_oid = *their_oids
         .first()
         .ok_or_else(|| GitError::Message("MERGE_HEAD пуст".into()))?;
 
-    let tree_oid = index.write_tree().map_err(GitError::Operation)?;
-    let tree = repo.find_tree(tree_oid).map_err(GitError::Operation)?;
+    let tree_oid = index.write_tree().map_err(op_err)?;
+    let tree = repo.find_tree(tree_oid).map_err(op_err)?;
     let sig = commit_signature(&repo)?;
     let head_commit = repo
         .head()
-        .map_err(GitError::Operation)?
+        .map_err(op_err)?
         .peel_to_commit()
-        .map_err(GitError::Operation)?;
-    let their_commit = repo.find_commit(their_oid).map_err(GitError::Operation)?;
+        .map_err(op_err)?;
+    let their_commit = repo.find_commit(their_oid).map_err(op_err)?;
 
     let message = repo
         .message()
@@ -1067,8 +1078,8 @@ pub fn finish_merge(repo_root: &Path) -> Result<String, GitError> {
             &tree,
             &[&head_commit, &their_commit],
         )
-        .map_err(GitError::Operation)?;
-    repo.cleanup_state().map_err(GitError::Operation)?;
+        .map_err(op_err)?;
+    repo.cleanup_state().map_err(op_err)?;
 
     let full = oid.to_string();
     Ok(full[..7.min(full.len())].to_string())
@@ -1086,21 +1097,21 @@ pub fn abort_merge(repo_root: &Path) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let has_conflicts = repo
         .index()
-        .map_err(GitError::Operation)?
+        .map_err(op_err)?
         .has_conflicts();
     if repo.state() != RepositoryState::Merge && !has_conflicts {
         return Err(GitError::Message("нет активного слияния".into()));
     }
     let head = repo
         .head()
-        .map_err(GitError::Operation)?
+        .map_err(op_err)?
         .peel_to_commit()
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     let mut checkout = CheckoutBuilder::new();
     checkout.force();
     repo.reset(head.as_object(), ResetType::Hard, Some(&mut checkout))
-        .map_err(GitError::Operation)?;
-    repo.cleanup_state().map_err(GitError::Operation)?;
+        .map_err(op_err)?;
+    repo.cleanup_state().map_err(op_err)?;
     Ok(())
 }
 
@@ -1119,12 +1130,12 @@ pub fn sync_status(
     let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key, None)?;
     let local = repo
         .head()
-        .map_err(GitError::Operation)?
+        .map_err(op_err)?
         .peel_to_commit()
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     let (ahead, behind) = repo
         .graph_ahead_behind(local.id(), theirs.id())
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     Ok(GitSyncStatus { ahead, behind })
 }
 
@@ -1138,13 +1149,13 @@ pub fn reset_to_remote(
     let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key, None)?;
     let commit = repo
         .find_object(theirs.id(), Some(git2::ObjectType::Commit))
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     repo.reset(
         &commit,
         ResetType::Hard,
         Some(CheckoutBuilder::default().force()),
     )
-    .map_err(GitError::Operation)?;
+    .map_err(op_err)?;
     Ok(())
 }
 
@@ -1155,9 +1166,9 @@ pub fn head_oid(repo_root: &Path) -> Result<String, GitError> {
     let repo = open_repo(repo_root)?;
     let commit = repo
         .head()
-        .map_err(GitError::Operation)?
+        .map_err(op_err)?
         .peel_to_commit()
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     Ok(commit.id().to_string())
 }
 
@@ -1170,13 +1181,13 @@ pub fn reset_to_oid(repo_root: &Path, oid: &str) -> Result<(), GitError> {
         .map_err(|_| GitError::Message(format!("invalid commit id: {oid}")))?;
     let commit = repo
         .find_object(oid, Some(git2::ObjectType::Commit))
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     repo.reset(
         &commit,
         ResetType::Hard,
         Some(CheckoutBuilder::default().force()),
     )
-    .map_err(GitError::Operation)?;
+    .map_err(op_err)?;
     Ok(())
 }
 
@@ -1244,7 +1255,7 @@ fn path_is_untracked(repo: &Repository, path: &str) -> Result<bool, GitError> {
     opts.pathspec(path)
         .include_untracked(true)
         .recurse_untracked_dirs(false);
-    let statuses = repo.statuses(Some(&mut opts)).map_err(GitError::Operation)?;
+    let statuses = repo.statuses(Some(&mut opts)).map_err(op_err)?;
     Ok(statuses
         .iter()
         .any(|e| e.status().contains(Status::WT_NEW)))
@@ -1318,7 +1329,7 @@ pub fn blame(
 
     let blame = repo
         .blame_file(rel, Some(&mut opts))
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
 
     let mut hunks = Vec::new();
     for hunk in blame.iter() {
@@ -1418,8 +1429,8 @@ pub fn apply_diff_content(
                 .map_err(|e| GitError::Message(format!("failed to write file: {e}")))?;
         }
         GitDiffScope::Staged => {
-            let blob_id = repo.blob(content.as_bytes()).map_err(GitError::Operation)?;
-            let mut index = repo.index().map_err(GitError::Operation)?;
+            let blob_id = repo.blob(content.as_bytes()).map_err(op_err)?;
+            let mut index = repo.index().map_err(op_err)?;
             let mode = index.get_path(rel, 0).map(|e| e.mode).unwrap_or(0o100644);
             let entry = IndexEntry {
                 ctime: IndexTime::new(0, 0),
@@ -1435,8 +1446,8 @@ pub fn apply_diff_content(
                 flags_extended: 0,
                 path: path.as_bytes().to_vec(),
             };
-            index.add(&entry).map_err(GitError::Operation)?;
-            index.write().map_err(GitError::Operation)?;
+            index.add(&entry).map_err(op_err)?;
+            index.write().map_err(op_err)?;
         }
     }
     Ok(())
@@ -1468,7 +1479,7 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<Option<Strin
         .recurse_untracked_dirs(true);
     let has_changes = !repo
         .statuses(Some(&mut check_opts))
-        .map_err(GitError::Operation)?
+        .map_err(op_err)?
         .is_empty();
     if !has_changes {
         return Ok(None);
@@ -1499,7 +1510,7 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<Option<Strin
         }
         let bytes = std::fs::read(&full)
             .map_err(|e| GitError::Message(format!("failed to read file: {e}")))?;
-        let blob_oid = repo.blob(&bytes).map_err(GitError::Operation)?;
+        let blob_oid = repo.blob(&bytes).map_err(op_err)?;
         std::fs::remove_file(&full)
             .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
         return Ok(Some(format!("{UNTRACKED_BACKUP_PREFIX}{blob_oid}:{path}")));
@@ -1510,7 +1521,7 @@ pub fn discard_file_changes(repo_root: &Path, path: &str) -> Result<Option<Strin
     save_opts.pathspec(rel);
     let oid = repo
         .stash_save_ext(Some(&mut save_opts))
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     Ok(Some(oid.to_string()))
 }
 
@@ -1536,9 +1547,9 @@ fn discard_on_unborn_branch(
                 .map_err(|e| GitError::Message(format!("failed to remove file: {e}")))?;
         }
     } else {
-        let mut index = repo.index().map_err(GitError::Operation)?;
+        let mut index = repo.index().map_err(op_err)?;
         let _ = index.remove_path(rel);
-        index.write().map_err(GitError::Operation)?;
+        index.write().map_err(op_err)?;
         let full = workdir.join(rel);
         if full.is_dir() {
             std::fs::remove_dir_all(&full)
@@ -1573,7 +1584,7 @@ fn find_stash_index_by_oid_only(repo: &mut Repository, target: git2::Oid) -> Res
         }
         true
     })
-    .map_err(GitError::Operation)?;
+    .map_err(op_err)?;
     found.ok_or_else(|| GitError::StashNotFound(target.to_string()))
 }
 
@@ -1594,7 +1605,7 @@ pub fn restore_discard_backup(repo_root: &Path, backup_id: &str) -> Result<(), G
         let repo = open_repo(repo_root)?;
         let oid = git2::Oid::from_str(oid_str)
             .map_err(|_| GitError::StashNotFound(backup_id.to_string()))?;
-        let blob = repo.find_blob(oid).map_err(GitError::Operation)?;
+        let blob = repo.find_blob(oid).map_err(op_err)?;
         let workdir = repo
             .workdir()
             .ok_or_else(|| GitError::Message("bare repository is not supported".into()))?;
@@ -1619,14 +1630,14 @@ pub fn restore_discard_backup(repo_root: &Path, backup_id: &str) -> Result<(), G
         .map_err(|_| GitError::StashNotFound(backup_id.to_string()))?;
     let index = find_stash_index_by_oid_only(&mut repo, target)?;
     repo.stash_apply(index, Some(&mut StashApplyOptions::new()))
-        .map_err(GitError::Operation)?;
-    if repo.index().map_err(GitError::Operation)?.has_conflicts() {
+        .map_err(op_err)?;
+    if repo.index().map_err(op_err)?.has_conflicts() {
         return Err(GitError::Message(
             "не удалось восстановить — файл был изменён после отмены".into(),
         ));
     }
     let drop_index = find_stash_index_by_oid_only(&mut repo, target)?;
-    repo.stash_drop(drop_index).map_err(GitError::Operation)?;
+    repo.stash_drop(drop_index).map_err(op_err)?;
     Ok(())
 }
 
@@ -1636,7 +1647,7 @@ pub fn restore_discard_backup(repo_root: &Path, backup_id: &str) -> Result<(), G
 /// identifies the repository — same "which remote is *the* remote"
 /// question, so the same preference order applies.
 pub(crate) fn default_remote_name(repo: &Repository) -> Result<String, GitError> {
-    let remotes = repo.remotes().map_err(GitError::Operation)?;
+    let remotes = repo.remotes().map_err(op_err)?;
     let names: Vec<&str> = remotes.iter().filter_map(|r| r.ok().flatten()).collect();
     if names.contains(&"origin") {
         return Ok("origin".to_string());
@@ -1661,7 +1672,7 @@ fn push_refspec(
     app_private_key: Option<&str>,
     on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
-    let config = repo.config().map_err(GitError::Operation)?;
+    let config = repo.config().map_err(op_err)?;
     let mut callbacks = RemoteCallbacks::new();
     configure_credentials(&mut callbacks, &config, credentials, app_private_key);
     configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
@@ -1686,7 +1697,7 @@ pub fn push(
     on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
-    let head = repo.head().map_err(GitError::Operation)?;
+    let head = repo.head().map_err(op_err)?;
     if !head.is_branch() {
         return Err(GitError::Message(
             "detached HEAD: check out a branch before pushing".into(),
@@ -1722,10 +1733,10 @@ pub fn push(
             )?;
             let mut branch = repo
                 .find_branch(&local_branch, BranchType::Local)
-                .map_err(GitError::Operation)?;
+                .map_err(op_err)?;
             branch
                 .set_upstream(Some(&format!("{remote_name}/{local_branch}")))
-                .map_err(GitError::Operation)
+                .map_err(op_err)
         }
         Err(e) => Err(e),
     }
@@ -1757,7 +1768,7 @@ fn has_tracked_uncommitted_changes(repo: &Repository) -> Result<bool, GitError> 
         .recurse_untracked_dirs(true)
         .include_ignored(false)
         .show(StatusShow::IndexAndWorkdir);
-    let statuses = repo.statuses(Some(&mut opts)).map_err(GitError::Operation)?;
+    let statuses = repo.statuses(Some(&mut opts)).map_err(op_err)?;
     Ok(statuses.iter().any(|e| {
         index_status_letter(e.status()).is_some()
             || tracked_workdir_status_letter(e.status()).is_some()
@@ -1765,14 +1776,14 @@ fn has_tracked_uncommitted_changes(repo: &Repository) -> Result<bool, GitError> 
 }
 
 fn discard_tracked_changes(repo: &Repository) -> Result<(), GitError> {
-    let head = repo.head().map_err(GitError::Operation)?;
-    let commit = head.peel_to_commit().map_err(GitError::Operation)?;
+    let head = repo.head().map_err(op_err)?;
+    let commit = head.peel_to_commit().map_err(op_err)?;
     repo.reset(
         commit.as_object(),
         ResetType::Hard,
         Some(CheckoutBuilder::new().force()),
     )
-    .map_err(GitError::Operation)?;
+    .map_err(op_err)?;
     Ok(())
 }
 
@@ -1813,7 +1824,7 @@ fn stash_entry_metadata(
     branch: String,
     oid: git2::Oid,
 ) -> Result<GitStashEntry, GitError> {
-    let commit = repo.find_commit(oid).map_err(GitError::Operation)?;
+    let commit = repo.find_commit(oid).map_err(op_err)?;
     let files_changed = commit
         .parent(0)
         .ok()
@@ -1847,7 +1858,7 @@ fn auto_stash_tracked_changes(
     let sig = commit_signature(repo)?;
     let oid = repo
         .stash_save2(&sig, Some(&stash_message_for_branch(branch)), None)
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     Ok(Some(stash_entry_metadata(repo, branch.to_string(), oid)?))
 }
 
@@ -1866,7 +1877,7 @@ fn find_stash_index_by_id(repo: &mut Repository, stash_id: &str) -> Result<usize
         }
         true
     })
-    .map_err(GitError::Operation)?;
+    .map_err(op_err)?;
     found.ok_or_else(|| GitError::StashNotFound(stash_id.to_string()))
 }
 
@@ -1882,7 +1893,7 @@ fn find_stash_branch_for_oid(
         }
         true
     })
-    .map_err(GitError::Operation)?;
+    .map_err(op_err)?;
     found.ok_or_else(|| GitError::StashNotFound(target.to_string()))
 }
 
@@ -1907,12 +1918,12 @@ fn do_stash_apply(
     let index = find_stash_index_by_id(repo, stash_id)?;
     match repo.stash_apply(index, Some(&mut StashApplyOptions::new())) {
         Ok(()) => {
-            let has_conflicts = repo.index().map_err(GitError::Operation)?.has_conflicts();
+            let has_conflicts = repo.index().map_err(op_err)?.has_conflicts();
             if has_conflicts {
                 Ok(GitStashRestoreOutcome::Conflict { entry })
             } else {
                 let drop_index = find_stash_index_by_id(repo, stash_id)?;
-                repo.stash_drop(drop_index).map_err(GitError::Operation)?;
+                repo.stash_drop(drop_index).map_err(op_err)?;
                 Ok(GitStashRestoreOutcome::Applied { entry })
             }
         }
@@ -1920,7 +1931,7 @@ fn do_stash_apply(
             entry,
             reason: "на этой ветке уже есть добавленные в индекс изменения".into(),
         }),
-        Err(e) => Err(GitError::Operation(e)),
+        Err(e) => Err(op_err(e)),
     }
 }
 
@@ -1939,7 +1950,7 @@ fn maybe_auto_restore(
         }
         true
     })
-    .map_err(GitError::Operation)?;
+    .map_err(op_err)?;
 
     match raw.len() {
         0 => Ok(None),
@@ -1962,7 +1973,7 @@ pub fn list_stash_shelf(repo_root: &Path) -> Result<Vec<GitStashEntry>, GitError
         }
         true
     })
-    .map_err(GitError::Operation)?;
+    .map_err(op_err)?;
 
     let mut entries = raw
         .into_iter()
@@ -1996,7 +2007,7 @@ pub fn apply_stash_entry(repo_root: &Path, stash_id: &str) -> Result<GitStashRes
 pub fn drop_stash_entry(repo_root: &Path, stash_id: &str) -> Result<(), GitError> {
     let mut repo = open_repo(repo_root)?;
     let index = find_stash_index_by_id(&mut repo, stash_id)?;
-    repo.stash_drop(index).map_err(GitError::Operation)
+    repo.stash_drop(index).map_err(op_err)
 }
 
 fn switch_to_branch(repo: &Repository, branch_name: &str) -> Result<(), GitError> {
@@ -2006,12 +2017,12 @@ fn switch_to_branch(repo: &Repository, branch_name: &str) -> Result<(), GitError
     let commit = branch
         .get()
         .peel_to_commit()
-        .map_err(GitError::Operation)?;
-    let tree = commit.tree().map_err(GitError::Operation)?;
+        .map_err(op_err)?;
+    let tree = commit.tree().map_err(op_err)?;
     repo.checkout_tree(tree.as_object(), Some(&mut CheckoutBuilder::new().force()))
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     repo.set_head(&format!("refs/heads/{branch_name}"))
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     Ok(())
 }
 
@@ -2024,12 +2035,12 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
 
     let locals = repo
         .branches(Some(BranchType::Local))
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     for branch_result in locals {
-        let (branch, _) = branch_result.map_err(GitError::Operation)?;
+        let (branch, _) = branch_result.map_err(op_err)?;
         let name = branch
             .name()
-            .map_err(GitError::Operation)?
+            .map_err(op_err)?
             .ok_or_else(|| GitError::Message("branch has invalid name".into()))?
             .to_string();
         let behind = branch_behind_count(&repo, &branch);
@@ -2045,10 +2056,10 @@ pub fn list_branches(repo_root: &Path) -> Result<Vec<GitBranchInfo>, GitError> {
 
     let remotes = repo
         .branches(Some(BranchType::Remote))
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     for branch_result in remotes {
-        let (branch, _) = branch_result.map_err(GitError::Operation)?;
-        let Some(name) = branch.name().map_err(GitError::Operation)? else {
+        let (branch, _) = branch_result.map_err(op_err)?;
+        let Some(name) = branch.name().map_err(op_err)? else {
             continue;
         };
         if name.rsplit('/').next() == Some("HEAD") {
@@ -2091,8 +2102,8 @@ pub fn fetch_branches(
     mut on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
-    let config = repo.config().map_err(GitError::Operation)?;
-    let remote_names = repo.remotes().map_err(GitError::Operation)?;
+    let config = repo.config().map_err(op_err)?;
+    let remote_names = repo.remotes().map_err(op_err)?;
 
     for name in remote_names.iter() {
         let Ok(Some(name)) = name else { continue };
@@ -2121,10 +2132,10 @@ pub fn create_branch(repo_root: &Path, name: &str, discard_changes: bool) -> Res
         return Err(GitError::BranchAlreadyExists(name.to_string()));
     }
     ensure_clean_or_discard(&repo, discard_changes)?;
-    let head = repo.head().map_err(GitError::Operation)?;
-    let commit = head.peel_to_commit().map_err(GitError::Operation)?;
+    let head = repo.head().map_err(op_err)?;
+    let commit = head.peel_to_commit().map_err(op_err)?;
     repo.branch(name, &commit, false)
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     switch_to_branch(&repo, name)
 }
 
@@ -2137,7 +2148,7 @@ pub fn delete_branch(repo_root: &Path, name: &str) -> Result<(), GitError> {
     let mut branch = repo
         .find_branch(name, BranchType::Local)
         .map_err(|_| GitError::BranchNotFound(name.to_string()))?;
-    branch.delete().map_err(GitError::Operation)
+    branch.delete().map_err(op_err)
 }
 
 /// Undoes `delete_branch()` by recreating a local branch at an explicit
@@ -2154,9 +2165,9 @@ pub fn create_branch_at_oid(repo_root: &Path, name: &str, oid: &str) -> Result<(
     }
     let oid = git2::Oid::from_str(oid)
         .map_err(|_| GitError::Message(format!("invalid commit id: {oid}")))?;
-    let commit = repo.find_commit(oid).map_err(GitError::Operation)?;
+    let commit = repo.find_commit(oid).map_err(op_err)?;
     repo.branch(name, &commit, false)
-        .map_err(GitError::Operation)?;
+        .map_err(op_err)?;
     Ok(())
 }
 
@@ -2220,7 +2231,7 @@ pub fn checkout_remote_branch(
         remote_branch
             .get()
             .peel_to_commit()
-            .map_err(GitError::Operation)?
+            .map_err(op_err)?
             .id()
     };
 
@@ -2249,13 +2260,13 @@ pub fn checkout_remote_branch(
     if repo.find_branch(&local_name, BranchType::Local).is_err() {
         let commit = repo
             .find_commit(remote_commit_oid)
-            .map_err(GitError::Operation)?;
+            .map_err(op_err)?;
         let mut local_branch = repo
             .branch(&local_name, &commit, false)
-            .map_err(GitError::Operation)?;
+            .map_err(op_err)?;
         local_branch
             .set_upstream(Some(remote_branch_name))
-            .map_err(GitError::Operation)?;
+            .map_err(op_err)?;
     }
 
     switch_to_branch(&repo, &local_name)?;
