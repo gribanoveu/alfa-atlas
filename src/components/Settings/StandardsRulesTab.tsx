@@ -1,71 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  getStandardsConfig,
-  getStandardsRules,
-  setStandardsConfig,
-  type RuleDef,
-  type StandardsRuleConfig,
-} from "../../lib/standards";
+import { useStandardsRules } from "../../hooks/useStandardsRules";
 import "../Welcome/CloneRepoModal.css";
 import "./StandardsRulesTab.css";
-import { toMessage } from "../../lib/errors";
 
 export function StandardsRulesTab() {
-  const [rules, setRules] = useState<RuleDef[] | null>(null);
-  const [config, setConfig] = useState<StandardsRuleConfig | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [nextRules, nextConfig] = await Promise.all([
-          getStandardsRules(),
-          getStandardsConfig(),
-        ]);
-        if (!cancelled) {
-          setRules(nextRules);
-          setConfig(nextConfig);
-          setError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(toMessage(e));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const isEnabled = useCallback(
-    (rule: RuleDef) => config?.rules[rule.id] ?? rule.defaultEnabled,
-    [config],
-  );
-
-  const toggleRule = useCallback(
-    async (rule: RuleDef, enabled: boolean) => {
-      if (!config) return;
-      const next: StandardsRuleConfig = {
-        rules: { ...config.rules, [rule.id]: enabled },
-      };
-      setConfig(next);
-      setBusy(true);
-      try {
-        await setStandardsConfig(next);
-        setError(null);
-      } catch (e) {
-        setError(toMessage(e));
-        const current = await getStandardsConfig().catch(() => config);
-        if (current) setConfig(current);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [config],
-  );
+  const { rules, config, error, busy, isEnabled, toggleRule } = useStandardsRules();
 
   return (
     <>

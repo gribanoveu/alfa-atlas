@@ -1,7 +1,5 @@
 import { ShieldOff } from "lucide-react";
-import { useEffect, useState } from "react";
-import { toMessage } from "../../lib/errors";
-import { getAllowedTools, getAutoApprovedTools, setToolAllowed, setToolAutoApproved } from "../../lib/aiTools";
+import { useToolPermissions } from "../../hooks/useToolPermissions";
 import { AUTO_APPROVABLE_TOOL_LABELS } from "../../lib/assistantConfig";
 import "./PermissionsTab.css";
 
@@ -58,105 +56,15 @@ const ALLOWED_TOOL_ORDER = [
  * loop") — granting happens from an approval card's "Разрешать всегда"
  * button in the chat panel; this tab is the only place to revoke it. */
 export function PermissionsTab() {
-  // Unlike every other Settings tab, this one is scoped to the currently
-  // open project rather than global `AppSettings` — so `getAutoApprovedTools`
-  // can fail with "no project is open" on a perfectly healthy install, which
-  // is not an error worth an `.settings-error` banner; `noProject` renders a
-  // plain hint instead.
-  const [tools, setTools] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [noProject, setNoProject] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [revoking, setRevoking] = useState<string | null>(null);
-
-  // Independent state for the "which tools are allowed at all" section
-  // below — a separate backend call (`ai_get_allowed_tools`/
-  // `ai_set_tool_allowed`), same "no project is open" degrade shape.
-  const [allowedTools, setAllowedTools] = useState<string[]>([]);
-  const [allowedLoading, setAllowedLoading] = useState(true);
-  const [allowedNoProject, setAllowedNoProject] = useState(false);
-  const [allowedError, setAllowedError] = useState<string | null>(null);
-  const [togglingTool, setTogglingTool] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const next = await getAutoApprovedTools();
-        if (!cancelled) {
-          setTools(next);
-          setNoProject(false);
-          setError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          const message = toMessage(e);
-          if (message.includes("no project is open")) {
-            setNoProject(true);
-          } else {
-            setError(message);
-          }
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const next = await getAllowedTools();
-        if (!cancelled) {
-          setAllowedTools(next);
-          setAllowedNoProject(false);
-          setAllowedError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          const message = toMessage(e);
-          if (message.includes("no project is open")) {
-            setAllowedNoProject(true);
-          } else {
-            setAllowedError(message);
-          }
-        }
-      } finally {
-        if (!cancelled) setAllowedLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleRevoke = async (tool: string) => {
-    setRevoking(tool);
-    try {
-      await setToolAutoApproved(tool, false);
-      setTools((prev) => prev.filter((t) => t !== tool));
-    } catch (e) {
-      setError(toMessage(e));
-    } finally {
-      setRevoking(null);
-    }
-  };
-
-  const handleToggleAllowed = async (tool: string, allowed: boolean) => {
-    setTogglingTool(tool);
-    try {
-      await setToolAllowed(tool, allowed);
-      setAllowedTools((prev) => (allowed ? [...prev, tool] : prev.filter((t) => t !== tool)));
-    } catch (e) {
-      setAllowedError(toMessage(e));
-    } finally {
-      setTogglingTool(null);
-    }
-  };
+  const { autoApproved, allowed, revokeAutoApproval, toggleAllowed } = useToolPermissions();
+  const { tools, loading, noProject, error, pending: revoking } = autoApproved;
+  const {
+    tools: allowedTools,
+    loading: allowedLoading,
+    noProject: allowedNoProject,
+    error: allowedError,
+    pending: togglingTool,
+  } = allowed;
 
   return (
     <div className="permissions-tab">
@@ -184,7 +92,7 @@ export function PermissionsTab() {
                   type="checkbox"
                   checked={allowedTools.includes(tool)}
                   disabled={togglingTool === tool}
-                  onChange={(e) => void handleToggleAllowed(tool, e.target.checked)}
+                  onChange={(e) => void toggleAllowed(tool, e.target.checked)}
                 />
                 {ALLOWED_TOOL_LABELS[tool] ?? tool}
               </label>
@@ -228,7 +136,7 @@ export function PermissionsTab() {
                 type="button"
                 className="settings-link-btn danger permissions-item-revoke"
                 disabled={revoking === tool}
-                onClick={() => void handleRevoke(tool)}
+                onClick={() => void revokeAutoApproval(tool)}
               >
                 <ShieldOff size={14} aria-hidden />
                 {revoking === tool ? "Отзывается…" : "Отозвать"}

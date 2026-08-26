@@ -1,19 +1,14 @@
-import { openPath } from "@tauri-apps/plugin-opener";
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { useGeneralPrefsEditor } from "../../hooks/useGeneralPrefsEditor";
 import {
   AUTOSAVE_DELAY_LIMITS,
   clampAutosaveDelayMs,
   clampFontSizePx,
   DEFAULT_GENERAL_PREFS,
   FONT_SIZE_LIMITS,
-  getGeneralPrefs,
-  getSettingsPaths,
-  setGeneralPrefs,
   type ErrorLanguage,
   type GeneralPrefs,
-  type SettingsPaths,
 } from "../../lib/prefs";
-import { toMessage } from "../../lib/errors";
 import { SUPPORTED_FORMAT_LABELS } from "../../lib/supportedFiles";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
 import "../Welcome/CloneRepoModal.css";
@@ -119,36 +114,20 @@ export function SettingsDialog({
   initialSection,
 }: SettingsDialogProps) {
   const [section, setSection] = useState<SectionId>(initialSection ?? "general");
-  const [prefs, setPrefs] = useState<GeneralPrefs | null>(null);
-  const [paths, setPaths] = useState<SettingsPaths | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const {
+    prefs,
+    paths,
+    error,
+    busy,
+    patchPrefs,
+    stagePref,
+    persistPref,
+    resetFontPrefs,
+    openUserSettingsDir,
+  } = useGeneralPrefsEditor(onPrefsChange);
   const [langOpen, setLangOpen] = useState(false);
   const langRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [nextPrefs, nextPaths] = await Promise.all([
-          getGeneralPrefs(),
-          getSettingsPaths(),
-        ]);
-        if (!cancelled) {
-          setPrefs(nextPrefs);
-          setPaths(nextPaths);
-          setError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(toMessage(e));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -177,71 +156,6 @@ export function SettingsDialog({
   useEffect(() => {
     setLangOpen(false);
   }, [section]);
-
-  const persistPrefs = useCallback(
-    async (next: GeneralPrefs) => {
-      setPrefs(next);
-      setBusy(true);
-      try {
-        await setGeneralPrefs(next);
-        onPrefsChange?.(next);
-        setError(null);
-      } catch (e) {
-        setError(toMessage(e));
-        const current = await getGeneralPrefs().catch(() => prefs);
-        if (current) setPrefs(current);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [onPrefsChange, prefs],
-  );
-
-  const patchPrefs = useCallback(
-    (patch: Partial<GeneralPrefs>) => {
-      if (!prefs) return;
-      void persistPrefs({ ...prefs, ...patch });
-    },
-    [persistPrefs, prefs],
-  );
-
-  const stageFontPref = useCallback(
-    (patch: Partial<GeneralPrefs>) => {
-      if (!prefs) return;
-      const next = { ...prefs, ...patch };
-      setPrefs(next);
-      onPrefsChange?.(next);
-    },
-    [onPrefsChange, prefs],
-  );
-
-  const persistFontPref = useCallback(
-    (patch: Partial<GeneralPrefs>) => {
-      if (!prefs) return;
-      void persistPrefs({ ...prefs, ...patch });
-    },
-    [persistPrefs, prefs],
-  );
-
-  const resetFontPrefs = useCallback(() => {
-    if (!prefs) return;
-    void persistPrefs({
-      ...prefs,
-      uiFontSizePx: DEFAULT_GENERAL_PREFS.uiFontSizePx,
-      sidebarFontSizePx: DEFAULT_GENERAL_PREFS.sidebarFontSizePx,
-      editorFontSizePx: DEFAULT_GENERAL_PREFS.editorFontSizePx,
-      previewFontSizePx: DEFAULT_GENERAL_PREFS.previewFontSizePx,
-    });
-  }, [persistPrefs, prefs]);
-
-  const openUserSettingsDir = useCallback(async () => {
-    if (!paths?.userSettingsDir) return;
-    try {
-      await openPath(paths.userSettingsDir);
-    } catch (e) {
-      setError(toMessage(e));
-    }
-  }, [paths]);
 
   return (
     <div
@@ -403,13 +317,13 @@ export function SettingsDialog({
                             if (!prefs) return;
                             const raw = Number(event.target.value);
                             if (!Number.isFinite(raw)) return;
-                            stageFontPref({
+                            stagePref({
                               [key]: clampFontSizePx(raw),
                             } as Pick<GeneralPrefs, FontSizePrefKey>);
                           }}
                           onBlur={() => {
                             if (!prefs) return;
-                            void persistFontPref({
+                            void persistPref({
                               [key]: clampFontSizePx(prefs[key]),
                             } as Pick<GeneralPrefs, FontSizePrefKey>);
                           }}
@@ -475,18 +389,12 @@ export function SettingsDialog({
                       if (!prefs) return;
                       const raw = Number(event.target.value);
                       if (!Number.isFinite(raw)) return;
-                      setPrefs({
-                        ...prefs,
-                        autosaveDelayMs: clampAutosaveDelayMs(raw),
-                      });
+                      stagePref({ autosaveDelayMs: clampAutosaveDelayMs(raw) });
                     }}
                     onBlur={() => {
                       if (!prefs) return;
-                      void persistPrefs({
-                        ...prefs,
-                        autosaveDelayMs: clampAutosaveDelayMs(
-                          prefs.autosaveDelayMs,
-                        ),
+                      persistPref({
+                        autosaveDelayMs: clampAutosaveDelayMs(prefs.autosaveDelayMs),
                       });
                     }}
                   />
