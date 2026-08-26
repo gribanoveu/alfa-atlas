@@ -134,12 +134,12 @@ pub fn k4_2(lang: ErrorLanguage) -> String {
         ErrorLanguage::Ru => fail(
             lang,
             "Таблица с входными параметрами не заполнена.",
-            "Каждая ячейка таблицы входных параметров должна быть заполнена.",
+            "Каждая ячейка таблицы входных параметров должна быть заполнена. Если в ячейке действительно нечего писать (нет вариантов значений, поле не применимо и т.п.) — поставьте прочерк `-`, не оставляйте её пустой и не выдумывайте содержимое.",
         ),
         ErrorLanguage::En => fail(
             lang,
             "The input-parameters table is incomplete.",
-            "Every cell in the input-parameters table must be filled in.",
+            "Every cell in the input-parameters table must be filled in. If a cell genuinely has nothing to put there (no value variants, field not applicable, etc.), put a dash `-` — do not leave it empty and do not invent content.",
         ),
     }
 }
@@ -194,12 +194,12 @@ pub fn k5_2(lang: ErrorLanguage) -> String {
         ErrorLanguage::Ru => fail(
             lang,
             "Таблица с выходными параметрами не заполнена.",
-            "Каждая ячейка таблицы выходных параметров должна быть заполнена.",
+            "Каждая ячейка таблицы выходных параметров должна быть заполнена. Если в ячейке действительно нечего писать (нет вариантов значений, поле не применимо и т.п.) — поставьте прочерк `-`, не оставляйте её пустой и не выдумывайте содержимое.",
         ),
         ErrorLanguage::En => fail(
             lang,
             "The output-parameters table is incomplete.",
-            "Every cell in the output-parameters table must be filled in.",
+            "Every cell in the output-parameters table must be filled in. If a cell genuinely has nothing to put there (no value variants, field not applicable, etc.), put a dash `-` — do not leave it empty and do not invent content.",
         ),
     }
 }
@@ -315,6 +315,16 @@ mod tests {
         for msg in fail_messages(ErrorLanguage::En) {
             assert!(msg.contains("What's wrong:"), "{msg}");
             assert!(msg.contains("How it should be:"), "{msg}");
+        }
+    }
+
+    #[test]
+    fn empty_table_cell_messages_tell_to_use_a_dash() {
+        for msg in [k4_2(ErrorLanguage::Ru), k5_2(ErrorLanguage::Ru)] {
+            assert!(msg.contains("прочерк `-`"), "{msg}");
+        }
+        for msg in [k4_2(ErrorLanguage::En), k5_2(ErrorLanguage::En)] {
+            assert!(msg.contains("dash `-`"), "{msg}");
         }
     }
 }

@@ -126,6 +126,32 @@ impl MethodFolderCtx {
         }
         out
     }
+
+    /// Main doc + request example — where К.4.x expects input-parameter tables.
+    fn input_content(&self) -> String {
+        let mut out = String::new();
+        if let Some(f) = self.main_doc() {
+            out.push_str(&f.content);
+            out.push('\n');
+        }
+        if let Some(f) = self.request_doc() {
+            out.push_str(&f.content);
+        }
+        out
+    }
+
+    /// Main doc + response example — where К.5.x expects output-parameter tables.
+    fn output_content(&self) -> String {
+        let mut out = String::new();
+        if let Some(f) = self.main_doc() {
+            out.push_str(&f.content);
+            out.push('\n');
+        }
+        if let Some(f) = self.response_doc() {
+            out.push_str(&f.content);
+        }
+        out
+    }
 }
 
 fn contains_ci(haystack: &str, needle: &str) -> bool {
@@ -184,12 +210,66 @@ fn non_blank_len(text: &str) -> usize {
     text.chars().filter(|c| !c.is_whitespace()).count()
 }
 
+/// True when a parsed table cell counts as intentionally filled. A lone `-`
+/// (or em dash) is the house placeholder for «nothing to put here».
+fn table_cell_is_filled(cell: &str) -> bool {
+    let trimmed = cell.trim();
+    !trimmed.is_empty()
+}
+
+/// Extract cell text from the body of one `|===` block. Handles the two layouts
+/// seen in real postanovki:
+/// - compact rows: `| a | b | c | d`
+/// - multi-line cells: a lone `|` line, then continuation lines without `|`
+///   until the next row (common in long output-parameter tables).
+fn extract_table_cells(body_lines: &[&str]) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut pending_multiline: Option<String> = None;
+
+    for line in body_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if let Some(pending) = pending_multiline.as_mut() {
+                pending.push('\n');
+            }
+            continue;
+        }
+
+        if trimmed == "|" {
+            if let Some(prev) = pending_multiline.take() {
+                cells.push(prev);
+            }
+            pending_multiline = Some(String::new());
+            continue;
+        }
+
+        if trimmed.starts_with('|') {
+            if let Some(prev) = pending_multiline.take() {
+                cells.push(prev);
+            }
+            for cell in trimmed.split('|').skip(1) {
+                cells.push(cell.trim().to_string());
+            }
+        } else if let Some(pending) = pending_multiline.as_mut() {
+            if !pending.is_empty() {
+                pending.push('\n');
+            }
+            pending.push_str(trimmed);
+        }
+    }
+
+    if let Some(prev) = pending_multiline.take() {
+        cells.push(prev);
+    }
+    cells
+}
+
 /// Find AsciiDoc table blocks (`|===` ... `|===`) in `content`, returning
 /// `(column_count, cells)` for each. Column count is the pipe count on the
 /// first non-empty row inside the block. This is a pragmatic heuristic, not
 /// a full AsciiDoc table parser — it covers the simple `|===` tables used
-/// throughout the standard's own examples, but won't understand multi-line
-/// cells or `cols` attribute shorthand like `4*`.
+/// throughout the standard's own examples, but won't understand `cols`
+/// attribute shorthand like `4*`.
 fn find_tables(content: &str) -> Vec<(usize, Vec<String>)> {
     let lines: Vec<&str> = content.lines().collect();
     let mut tables = Vec::new();
@@ -203,12 +283,7 @@ fn find_tables(content: &str) -> Vec<(usize, Vec<String>)> {
                 j += 1;
             }
 
-            let mut cells: Vec<String> = Vec::new();
-            for line in &body_lines {
-                for cell in line.split('|').skip(1) {
-                    cells.push(cell.trim().to_string());
-                }
-            }
+            let cells = extract_table_cells(&body_lines);
 
             let column_count = body_lines
                 .iter()
@@ -225,6 +300,15 @@ fn find_tables(content: &str) -> Vec<(usize, Vec<String>)> {
         }
     }
     tables
+}
+
+fn wide_tables_filled(content: &str) -> bool {
+    let tables = find_tables(content);
+    let wide_tables: Vec<_> = tables.iter().filter(|(cols, _)| *cols >= 4).collect();
+    !wide_tables.is_empty()
+        && wide_tables
+            .iter()
+            .all(|(_, cells)| cells.iter().all(|c| table_cell_is_filled(c)))
 }
 
 fn current_error_language() -> ErrorLanguage {
@@ -332,7 +416,7 @@ fn check_k3_1(ctx: &MethodFolderCtx) -> RuleOutcome {
 
 fn check_k4_1(ctx: &MethodFolderCtx) -> RuleOutcome {
     let lang = current_error_language();
-    let passed = find_tables(&ctx.combined_content())
+    let passed = find_tables(&ctx.input_content())
         .iter()
         .any(|(cols, _)| *cols >= 4);
     RuleOutcome {
@@ -343,12 +427,7 @@ fn check_k4_1(ctx: &MethodFolderCtx) -> RuleOutcome {
 
 fn check_k4_2(ctx: &MethodFolderCtx) -> RuleOutcome {
     let lang = current_error_language();
-    let tables = find_tables(&ctx.combined_content());
-    let wide_tables: Vec<_> = tables.iter().filter(|(cols, _)| *cols >= 4).collect();
-    let passed = !wide_tables.is_empty()
-        && wide_tables
-            .iter()
-            .all(|(_, cells)| cells.iter().all(|c| !c.trim().is_empty()));
+    let passed = wide_tables_filled(&ctx.input_content());
     RuleOutcome {
         passed,
         message: if passed { msgs::passed(lang) } else { msgs::k4_2(lang) },
@@ -407,7 +486,7 @@ fn check_k4_4(ctx: &MethodFolderCtx) -> RuleOutcome {
 
 fn check_k5_1(ctx: &MethodFolderCtx) -> RuleOutcome {
     let lang = current_error_language();
-    let passed = find_tables(&ctx.combined_content())
+    let passed = find_tables(&ctx.output_content())
         .iter()
         .any(|(cols, _)| *cols >= 4);
     RuleOutcome {
@@ -418,12 +497,7 @@ fn check_k5_1(ctx: &MethodFolderCtx) -> RuleOutcome {
 
 fn check_k5_2(ctx: &MethodFolderCtx) -> RuleOutcome {
     let lang = current_error_language();
-    let tables = find_tables(&ctx.combined_content());
-    let wide_tables: Vec<_> = tables.iter().filter(|(cols, _)| *cols >= 4).collect();
-    let passed = !wide_tables.is_empty()
-        && wide_tables
-            .iter()
-            .all(|(_, cells)| cells.iter().all(|c| !c.trim().is_empty()));
+    let passed = wide_tables_filled(&ctx.output_content());
     RuleOutcome {
         passed,
         message: if passed { msgs::passed(lang) } else { msgs::k5_2(lang) },
@@ -785,6 +859,95 @@ mod tests {
         let c = ctx("m", &[("m.adoc", content)]);
         assert!(check_k4_1(&c).passed);
         assert!(!check_k4_2(&c).passed);
+    }
+
+    #[test]
+    fn k4_2_ignores_unfilled_output_tables_in_response_adoc() {
+        let c = ctx(
+            "m",
+            &[
+                (
+                    "m.adoc",
+                    "== Описание входных параметров\ninclude::request.adoc[]\n== Описание выходных параметров\ninclude::response.adoc[]\n",
+                ),
+                (
+                    "request.adoc",
+                    "|===\n| Имя | Тип | Обязательный | Описание\n| id | string | да | идентификатор\n|===\n",
+                ),
+                (
+                    "response.adoc",
+                    "|===\n| Имя | Тип | Обязательный | Описание\n| id | | да | идентификатор\n|===\n",
+                ),
+            ],
+        );
+        assert!(check_k4_2(&c).passed, "{:?}", check_k4_2(&c));
+        assert!(!check_k5_2(&c).passed);
+    }
+
+    #[test]
+    fn k5_2_passes_multiline_output_table_cells() {
+        let response_table = r#"[cols="4"]
+|===
+|*Параметр* |*Тип данных* |*Обязательность* |*Описание*
+
+|
+1: transaction[].id +
+2: transaction[].organizationId
+|
+1:  string  +
+2:  string
+|
+1: required +
+2: required
+|
+1: Ключ полупроводки. +
+2: `CUS` Клиента
+|==="#;
+        let c = ctx("fetchAusnTransactions", &[("response.adoc", response_table)]);
+        assert!(check_k5_1(&c).passed);
+        assert!(check_k5_2(&c).passed, "{:?}", check_k5_2(&c));
+    }
+
+    #[test]
+    fn k5_2_passes_rowspan_tables() {
+        let response_table = r#"|===
+3+| *Поле* | *Тип* | *Обязательность* |*Описание*
+.15+|specifics .5+|single[] | OperationTaxbaseCode | String | required | Разметка 1
+|OperationCategory |string |optional|Разметка 2
+|===
+
+[cols="5"]
+|===
+2+|*Поле* |*Тип данных*|*Обязательность* |*Описание*
+.4+|page|number|i32|required |Номер страницы
+|size|i32|required|Кол-во элементов на странице
+|==="#;
+        let c = ctx("fetchAusnTransactions", &[("response.adoc", response_table)]);
+        assert!(check_k5_2(&c).passed, "{:?}", check_k5_2(&c));
+    }
+
+    #[test]
+    fn fetch_ausn_transactions_tables_pass_k4_2_and_k5_2() {
+        let root = PathBuf::from(
+            "/Users/eugene/WORK_REPOS/WLBUH/corp-wlbuh-ausn-api/src/docs/asciidoc/fetchAusnTransactions",
+        );
+        if !root.is_dir() {
+            return;
+        }
+        let read = |name: &str| -> String {
+            std::fs::read_to_string(root.join(name)).unwrap_or_default()
+        };
+        let c = ctx(
+            "fetchAusnTransactions",
+            &[
+                ("fetchAusnTransactions.adoc", &read("fetchAusnTransactions.adoc")),
+                ("fetchAusnTransactions.puml", &read("fetchAusnTransactions.puml")),
+                ("request.adoc", &read("request.adoc")),
+                ("response.adoc", &read("response.adoc")),
+            ],
+        );
+        assert!(check_k4_2(&c).passed, "{:?}", check_k4_2(&c));
+        assert!(check_k5_2(&c).passed, "{:?}", check_k5_2(&c));
     }
 
     #[test]

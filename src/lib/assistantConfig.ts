@@ -327,6 +327,8 @@ Covers only supported indexed documentation types (.adoc, .md, .json, .yaml, .tx
 
 When a folder fails (score ≤ 80% or any finding with \`passed: false\`), the user-facing reply must cover **each** failing criterion: its code (К.x.x), what is wrong, and how it should look. Use each finding's \`message\` (it already has both parts). Do not invent extra criteria. Do not stop at «не соответствует стандарту».
 
+**К.4.2 / К.5.2 empty table cells:** if a finding says a cell is empty and there is genuinely nothing to put there (no value variants, field not applicable), put a dash \`-\`. Do not leave the cell blank and do not invent content.
+
 **К.6.1 «Алгоритм работы»:** the section must not be a wall of prose. Write a numbered list of steps (first item always «Валидация входных параметров»), then expand each item below as its own subsection with the same title and a detailed description.
 
 After you create or change documentation files (\`writeFile\` / \`editFile\`, or filling a REST method folder), run verification — these checks are cheap local file reads, not something to skip to save a round. Call \`check\` with \`kind: "problems"\` on the edited file (or omit \`path\` for the whole tree). If the file lives in an API method folder, also call \`kind: "standards"\` on that folder. Prefer running the check yourself in the same turn after the write settles; if you cannot, offer the user once to run it — do not finish silently.

@@ -104,7 +104,7 @@ pub const RATE_LIMIT_CHANGED_EVENT: &str = "llm:rate-limit-changed";
 /// a backstop alongside `MAX_TOOL_BUDGET` (a misconfigured/zero tool
 /// weight must never make the loop unstoppable), but `MAX_TOOL_BUDGET` is
 /// the more sensitive limit in practice — see its doc comment.
-const MAX_TOOL_ITERATIONS: usize = 50;
+const MAX_TOOL_ITERATIONS: usize = 60;
 
 /// Converts the frontend's docs-root-relative `EditorTab.path` (sent
 /// verbatim, same convention `embedding_set_priority_files` already
@@ -493,7 +493,7 @@ fn run_tool_loop(
         }
         if round >= MAX_TOOL_ITERATIONS as u32 || budget_used >= MAX_TOOL_BUDGET {
             return Err(format!(
-                "Ассистент не дал окончательный ответ за {MAX_TOOL_ITERATIONS} раундов обращения к инструментам. Попросите асистента продолжить, если вы уверены, что он ещё не закончил работу."
+                "Ассистент не дал окончательный ответ за {MAX_TOOL_ITERATIONS} раундов обращения к инструментам. Попросите ассистента продолжить, если вы уверены, что он ещё не закончил работу."
             ));
         }
         round += 1;
