@@ -108,25 +108,6 @@ impl MethodFolderCtx {
         if matches.len() == 1 { Some(matches[0]) } else { None }
     }
 
-    /// Content of the main doc plus, if present, the request/response docs —
-    /// used by rules that accept either location (К.4.1/К.5.1 tables, link
-    /// checks). Concatenated so a single substring/regex search covers both.
-    fn combined_content(&self) -> String {
-        let mut out = String::new();
-        if let Some(f) = self.main_doc() {
-            out.push_str(&f.content);
-            out.push('\n');
-        }
-        if let Some(f) = self.request_doc() {
-            out.push_str(&f.content);
-            out.push('\n');
-        }
-        if let Some(f) = self.response_doc() {
-            out.push_str(&f.content);
-        }
-        out
-    }
-
     /// Main doc + request example — where К.4.x expects input-parameter tables.
     fn input_content(&self) -> String {
         let mut out = String::new();
@@ -927,23 +908,58 @@ mod tests {
     }
 
     #[test]
-    fn fetch_ausn_transactions_tables_pass_k4_2_and_k5_2() {
-        let root = PathBuf::from(
-            "/Users/eugene/WORK_REPOS/WLBUH/corp-wlbuh-ausn-api/src/docs/asciidoc/fetchAusnTransactions",
-        );
-        if !root.is_dir() {
-            return;
-        }
-        let read = |name: &str| -> String {
-            std::fs::read_to_string(root.join(name)).unwrap_or_default()
-        };
+    fn k4_2_and_k5_2_pass_realistic_thrift_method_tables() {
+        const REQUEST: &str = r#"[cols="4"]
+|===
+|*Параметр* |*Тип данных* |*Обязательность* |*Описание*
+|userData.id
+|string
+|required
+|Мнемоника пользователя
+|transactionFilter.organizationId
+|string
+|required
+|Идентификатор организации
+|="#;
+
+        const RESPONSE: &str = r#"[cols="4"]
+|===
+|*Параметр* |*Тип данных* |*Обязательность* |*Описание*
+|lastRequestDateTime|UNIX datetime|required|Дата и время последнего запроса
+|===
+
+[cols="4"]
+|===
+|*Параметр* |*Тип данных* |*Обязательность* |*Описание*
+
+|
+1: transaction[].id +
+2: transaction[].organizationId
+|
+1: string +
+2: string
+|
+1: required +
+2: required
+|
+1: Ключ полупроводки. +
+2: CUS Клиента
+|===
+
+|===
+3+| *Поле* | *Тип* | *Обязательность* |*Описание*
+.15+|specifics .5+|single[] | OperationTaxbaseCode | String | required | Разметка 1
+|="#;
+
         let c = ctx(
             "fetchAusnTransactions",
             &[
-                ("fetchAusnTransactions.adoc", &read("fetchAusnTransactions.adoc")),
-                ("fetchAusnTransactions.puml", &read("fetchAusnTransactions.puml")),
-                ("request.adoc", &read("request.adoc")),
-                ("response.adoc", &read("response.adoc")),
+                (
+                    "fetchAusnTransactions.adoc",
+                    "== Описание входных параметров\ninclude::request.adoc[]\n== Описание выходных параметров\ninclude::response.adoc[]\n",
+                ),
+                ("request.adoc", REQUEST),
+                ("response.adoc", RESPONSE),
             ],
         );
         assert!(check_k4_2(&c).passed, "{:?}", check_k4_2(&c));

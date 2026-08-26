@@ -234,6 +234,122 @@ mod tests {
         fs::write(dir.join("response.adoc"), "{}").unwrap();
     }
 
+    /// Thrift-style method folder with vertical input tables and multi-line /
+    /// rowspan output tables — the layout that previously tripped K.4.2/K.5.2.
+    fn write_thrift_method_with_multiline_tables(root: &Path) {
+        const METHOD: &str = "fetchAusnTransactions";
+        let dir = root.join(METHOD);
+        fs::create_dir_all(&dir).unwrap();
+
+        fs::write(dir.join(format!("{METHOD}.puml")), "@startuml\n@enduml").unwrap();
+
+        fs::write(
+            dir.join(format!("{METHOD}.adoc")),
+            r#"= fetchAusnTransactions
+:toc:
+
+== Назначение метода
+
+Данный метод предназначен для получения транзакций Клиента на режиме АУСН.
+
+== Описание входных/выходных параметров
+
+=== Входные параметры
+
+include::request.adoc[]
+
+=== Выходные параметры
+
+include::response.adoc[]
+
+== Схема работы
+
+include::./fetchAusnTransactions.puml[]
+
+== Алгоритм работы
+
+1. Валидация входных параметров.
+
+== Обработка ошибок
+
+|===
+|*Условие* |*Описание* |*Type* |*Code*
+
+| Не прошла валидация userData
+| Входные параметры не прошли валидацию
+| ValidationException
+| validationError
+|="#,
+        )
+        .unwrap();
+
+        fs::write(
+            dir.join("request.adoc"),
+            r#"[cols="4"]
+|===
+|*Параметр* |*Тип данных* |*Обязательность* |*Описание*
+|userData.id
+|string
+|required
+|Мнемоника пользователя
+|transactionFilter.organizationId
+|string
+|required
+|Идентификатор организации
+|===
+
+.Endpoint:${HOST}/wlbuh-ausn-api/tapi
+{"organizationId":"UBV1IL"}
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            dir.join("response.adoc"),
+            r#"[cols="4"]
+|===
+|*Параметр* |*Тип данных* |*Обязательность* |*Описание*
+|lastRequestDateTime|UNIX datetime|required|Дата и время последнего запроса
+|transactions|object[]|required|Список транзакций
+|===
+
+[cols="4"]
+|===
+|*Параметр* |*Тип данных* |*Обязательность* |*Описание*
+
+|
+1: transaction[].id +
+2: transaction[].organizationId
+|
+1: string +
+2: string
+|
+1: required +
+2: required
+|
+1: Ключ полупроводки. +
+2: CUS Клиента
+|===
+
+|===
+3+| *Поле* | *Тип* | *Обязательность* |*Описание*
+.15+|specifics .5+|single[] | OperationTaxbaseCode | String | required | Разметка 1
+|OperationCategory |string |optional|Разметка 2
+|===
+
+[cols="5"]
+|===
+2+|*Поле* |*Тип данных*|*Обязательность* |*Описание*
+.4+|page|number|i32|required |Номер страницы
+|size|i32|required|Кол-во элементов на странице
+|===
+
+{"lastRequestDateTime":null}
+"#,
+        )
+        .unwrap();
+    }
+
     #[test]
     fn full_method_folder_passes() {
         let root = temp_dir();
@@ -340,6 +456,30 @@ mod tests {
         let report = check_repository(&root, &config);
         assert!(report.folders.is_empty());
         assert!(!report.overall_passed);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn thrift_method_with_multiline_tables_passes_standards_check() {
+        let root = temp_dir();
+        write_thrift_method_with_multiline_tables(&root);
+        let config = StandardsRuleConfig::default();
+        let report = check_repository(&root, &config);
+        assert_eq!(report.folders.len(), 1);
+        let folder = &report.folders[0];
+        let failures: Vec<_> = folder
+            .findings
+            .iter()
+            .filter(|f| !f.passed)
+            .map(|f| format!("{}: {}", f.rule_id, f.message))
+            .collect();
+        assert!(
+            folder.passed,
+            "score {}/{}; failures: {:?}",
+            folder.score,
+            folder.max_score,
+            failures
+        );
         fs::remove_dir_all(&root).ok();
     }
 }
