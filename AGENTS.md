@@ -13,7 +13,7 @@ Context for AI coding agents (Claude Code and others) working in this repository
 Tech stack
 Frontend: React 19 + TypeScript, Vite build, plain CSS files per component (no CSS-in-JS/Tailwind), lucide-react for icons. No global state library (Redux/Zustand/Context store) — state lives in custom hooks (src/hooks/*) composed directly into components (e.g. useLlmChat, useLlmSetup).
 
-Backend: Tauri v2 (Rust), ureq (blocking HTTP client, not reqwest) for LLM provider calls, tauri::async_runtime::spawn_blocking to run them off the async runtime, tauri::Emitter events to push streaming deltas to the frontend.
+Backend: Tauri v2 (Rust), ureq (blocking HTTP client, not reqwest) for LLM provider calls, tauri::async_runtime::spawn_blocking to run them off the async runtime. Streaming deltas and other progress reach the frontend as tauri::Emitter events, emitted in commands/ only — services report through sinks (see Architecture).
 
 ## Setup & commands
 
@@ -38,7 +38,7 @@ The app is layered; keep new code in the right layer instead of adding logic to 
 src/                      # React frontend
 ├── components/           # render only — no fetching, no business rules
 ├── hooks/                 # frontend application layer: call invoke() wrappers, hold state
-└── lib/                    # boundary: one typed function per Tauri command, no logic
+└── lib/                    # two things: one typed wrapper per Tauri command, plus shared pure helpers
 
 src-tauri/src/
 ├── commands/              # boundary: thin #[tauri::command] fns — validate input, call a service, map errors to String
@@ -47,11 +47,13 @@ src-tauri/src/
 └── infra/                    # git2 / filesystem / network — concrete implementations of domain traits
 ```
 
-Dependency direction points inward: `commands → services → domain`, and `infra` implements traits that `domain`/`services` define — never the reverse. Don't reach for `git2` or `tauri::` types from inside `domain/`.
+Dependency direction points inward: `commands → services → domain`, and `infra` implements traits that `domain`/`services` define — never the reverse. Don't reach for `git2` or `tauri::` types from inside `domain/` or `services/`.
+
+**Reporting outward crosses a port, never an `AppHandle`.** A service that needs to tell the UI something takes a sink — `Arc<dyn Fn(Event) + Send + Sync>`, with the event type in `domain/` — and the command layer is the only place that turns those into Tauri events. Existing sinks: `embedding_sync::ProgressSink`, `domain::llm::ChatEventSink`, `domain::workspace_index::WorkspaceIndexEventSink`, `domain::embeddings::ModelDownloadSink`; their adapters live in `commands/chat_events.rs`, `commands/workspace_events.rs` and next to the relevant commands. When a service reports more than one kind of thing, use one enum rather than several callbacks. `tauri::async_runtime` used purely as a thread pool (`spawn_blocking`) is fine in `services/` — that's a runtime, not the UI.
 
 Don't pre-build all four layers for something trivial. Introduce a trait boundary when there's a real second implementation (e.g. a test double) or a use-case spanning multiple infra calls — not speculatively.
 
-See [`AI_HARNESS.md`](AI_HARNESS.md) for the AI-agent tool-access infrastructure (`domain/ai_access.rs`, `domain/ai_tools.rs`, `services/ai_tools.rs`) — backend-only scaffolding, not yet wired to any LLM or UI.
+See [`AI_HARNESS.md`](AI_HARNESS.md) for the AI-agent tool-access infrastructure (`domain/ai_access.rs`, `domain/ai_tools.rs`, `services/ai_tools.rs`). It is fully wired: `services::llm_chat` runs the tool-calling loop against it, and the assistant panel drives it from the UI.
 
 ## Errors
 
@@ -62,7 +64,7 @@ See [`AI_HARNESS.md`](AI_HARNESS.md) for the AI-agent tool-access infrastructure
 ## IPC conventions
 
 - Every `#[tauri::command]` gets a matching typed wrapper in `src/lib/` — components/hooks call the wrapper, never `invoke()` directly.
-- New commands must be registered in `generate_handler![]` in `main.rs`, and any new plugin/API surface needs a corresponding entry in `src-tauri/capabilities/*.json` — a command that "does nothing" at runtime usually means a missing capability entry, not a missing registration.
+- New commands must be registered in `generate_handler![]` in `lib.rs` (`main.rs` only calls `run()`), and any new plugin/API surface needs a corresponding entry in `src-tauri/capabilities/*.json` — a command that "does nothing" at runtime usually means a missing capability entry, not a missing registration.
 - Long-running git operations (clone, fetch) run as `async` commands or via `spawn_blocking`, not on the IPC event loop.
 
 ## Filesystem & git

@@ -1,7 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, ChevronLeft, ChevronRight, FolderOpen, GitBranch } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { exitApp } from "../../lib/app";
 import { appConfig } from "../../lib/appConfig";
 import type { MenuActionId } from "../../lib/menuActions";
 import type { GeneralPrefs } from "../../lib/prefs";
@@ -144,7 +144,7 @@ export function TopBar({
           if (hasProject) void onCloseProject();
           break;
         case "file.exit":
-          void invoke("exit_app");
+          void exitApp();
           break;
         case "edit.undo":
           onUndo?.();
