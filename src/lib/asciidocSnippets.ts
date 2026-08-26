@@ -204,6 +204,46 @@ Job не принимает входных параметров.
 `,
   },
   {
+    id: "thrift-method",
+    label: "Параметры Thrift-запроса",
+    category: "tables",
+    description: "Таблица стандартного конверта Thrift-запроса (userData) и endpoint",
+    template: `== Входные параметры
+
+[cols="1,1,1,3"]
+|===
+| *Параметр* | *Формат* | *Обязательный* | *Описание*
+
+|Endpoint         3+| {host}/<сервис>/tapi
+
+| userData
+| struct
+| да
+| Данные пользователя
+
+| userData.id
+| string
+| да
+| Идентификатор пользователя (xpin/acus)
+
+| userData.authorizedApplicationId
+| string
+| да
+| Идентификатор приложения
+
+| userData.ip
+| string
+| да
+| IP-адрес пользователя
+
+| userData.customerId
+| string
+| да
+| Идентификатор клиента
+|===
+`,
+  },
+  {
     id: "response-fields",
     label: "Поля ответа",
     category: "tables",

@@ -124,7 +124,7 @@ static EPHEMERAL: LazyLock<regex::Regex> = LazyLock::new(|| {
 /// Atlas skills / harness tools — product capabilities, not repo facts.
 static ASSISTANT_META: LazyLock<regex::Regex> = LazyLock::new(|| {
     RegexBuilder::new(
-        r"(?i)(rest-endpoint-docs|openapi-specs-layout|getasciidoctemplates|built-in skill|semanticsearch|listfiles|readfile|writefile|editfile|createdirectory|deletedirectory|requestfullrepoaccess|requestmodeswitch|createplan|updateplan|readplan|updateplantodo)",
+        r"(?i)(method-spec|openapi-specs-layout|getasciidoctemplates|built-in skill|semanticsearch|listfiles|readfile|writefile|editfile|createdirectory|deletedirectory|requestfullrepoaccess|requestmodeswitch|createplan|updateplan|readplan|updateplantodo)",
     )
     .build()
     .expect("static assistant-meta regex")
@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn rejects_assistant_meta_skills_from_real_log() {
         let samples = [
-            "Assistant has built-in skill 'rest-endpoint-docs' for filling REST method documentation folder after skeleton creation",
+            "Assistant has built-in skill 'method-spec' for filling REST method documentation folder after skeleton creation",
             "Assistant has built-in skill 'openapi-specs-layout' for multi-file OpenAPI spec structure of Atlas project",
             "Documentation uses corporate templates via getAsciidocTemplates and integrity checks for broken links, anchors, cyclic includes",
         ];

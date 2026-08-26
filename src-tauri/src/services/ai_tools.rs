@@ -1330,7 +1330,7 @@ pub fn llm_tool_definitions(
         defs.push(LlmToolDefinition {
             name: "skill".to_string(),
             description:
-                "Search and load specialized instruction packs (skills) on demand. Do not guess skill names and do not expect a catalog in this description. First call with op \"search\" and a short query about the current task (required — empty query is rejected). Then op \"load\" with a matching name to get full instructions. If those instructions point to a companion file, op \"read\" with name and path. Use this before filling a REST method folder after its scaffold, or when working with OpenAPI specs layout (schemas/operations/$ref) or any user-installed pack. Ordinary AsciiDoc authoring does not need a skill."
+                "Search and load specialized instruction packs (skills) on demand. Do not guess skill names and do not expect a catalog in this description. First call with op \"search\" and a short query about the current task (required — empty query is rejected). Then op \"load\" with a matching name to get full instructions. If those instructions point to a companion file, op \"read\" with name and path. Use this before writing or filling REST/Thrift method documentation, or when working with OpenAPI specs layout (schemas/operations/$ref) or any user-installed pack. Ordinary AsciiDoc authoring does not need a skill — do not search for one just because the request mentions documentation in general."
                     .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -6535,7 +6535,7 @@ mod tests {
         crate::infra::settings_store::test_support::with_temp_home(|| {
             crate::services::agent_skills::set_skill_enabled(
                 crate::domain::agent_skills::SkillSource::Bundled,
-                "rest-endpoint-docs",
+                "method-spec",
                 false,
             )
             .unwrap();
@@ -6555,7 +6555,7 @@ mod tests {
             .unwrap();
             match result {
                 ToolResult::SkillSearch(hits) => {
-                    assert!(!hits.matches.iter().any(|m| m.name == "rest-endpoint-docs"));
+                    assert!(!hits.matches.iter().any(|m| m.name == "method-spec"));
                 }
                 other => panic!("expected SkillSearch, got {other:?}"),
             }

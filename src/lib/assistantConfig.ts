@@ -35,7 +35,7 @@ ${openApi}`;
 /** Compact router hint — skills catalog is never inlined into the prompt. */
 const SKILLS_ROUTER_HINT = `## Skills
 
-Specialized workflows (filling a REST method folder after its scaffold, OpenAPI specs layout, and any user-installed packs) live behind the \`skill\` tool. Before that kind of work, call \`skill\` with \`op: "search"\` and a short query, then \`op: "load"\` a match and follow it. Do not skip this for those tasks. Ordinary AsciiDoc authoring does not need a skill. Empty search queries are rejected.`;
+Specialized workflows (writing or filling REST/Thrift method documentation, OpenAPI specs layout, and any user-installed packs) live behind the \`skill\` tool. Before that kind of work, call \`skill\` with \`op: "search"\` and a short query, then \`op: "load"\` a match and follow it. Do not skip this for those tasks. Ordinary AsciiDoc authoring does not need a skill — do not search for one just because the request mentions documentation in general. Empty search queries are rejected.`;
 
 // System prompt for the assistant embedded in Alfa Atlas. Built by a
 // function rather than a plain const so the date/timezone context line is

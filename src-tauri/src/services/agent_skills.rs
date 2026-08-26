@@ -199,7 +199,7 @@ mod tests {
     fn enabled_catalog_includes_bundled_by_default() {
         with_temp_home(|| {
             let catalog = enabled_catalog().unwrap();
-            assert!(catalog.iter().any(|s| s.name == "rest-endpoint-docs"));
+            assert!(catalog.iter().any(|s| s.name == "method-spec"));
             assert!(catalog.iter().any(|s| s.name == "openapi-specs-layout"));
         });
     }
@@ -207,13 +207,13 @@ mod tests {
     #[test]
     fn disabled_bundled_skill_is_absent_from_search() {
         with_temp_home(|| {
-            set_skill_enabled(SkillSource::Bundled, "rest-endpoint-docs", false).unwrap();
+            set_skill_enabled(SkillSource::Bundled, "method-spec", false).unwrap();
             let err_or_hits = search("REST method folder documentation");
             let result = err_or_hits.unwrap();
             let ToolResult::SkillSearch(SkillSearchResult { matches }) = result else {
                 panic!("expected search result");
             };
-            assert!(!matches.iter().any(|m| m.name == "rest-endpoint-docs"));
+            assert!(!matches.iter().any(|m| m.name == "method-spec"));
         });
     }
 
@@ -242,16 +242,16 @@ mod tests {
     fn user_skill_overlays_bundled_name() {
         with_temp_home(|| {
             let dir = ensure_user_skills_dir().unwrap();
-            let skill_dir = dir.join("rest-endpoint-docs");
+            let skill_dir = dir.join("method-spec");
             std::fs::create_dir_all(&skill_dir).unwrap();
             std::fs::write(
                 skill_dir.join("SKILL.md"),
-                "---\nname: rest-endpoint-docs\ndescription: User overlay of the REST method fill guide.\n---\n# Overlay\n",
+                "---\nname: method-spec\ndescription: User overlay of the REST method fill guide.\n---\n# Overlay\n",
             )
             .unwrap();
             // It's already in the user dir — scan picks it up without import.
             let catalog = enabled_catalog().unwrap();
-            let rest = catalog.iter().find(|s| s.name == "rest-endpoint-docs").unwrap();
+            let rest = catalog.iter().find(|s| s.name == "method-spec").unwrap();
             assert_eq!(rest.source, SkillSource::User);
             assert!(rest.description.contains("User overlay"));
         });
@@ -261,7 +261,7 @@ mod tests {
     fn remove_bundled_is_forbidden() {
         with_temp_home(|| {
             assert!(matches!(
-                remove_skill("rest-endpoint-docs").unwrap_err(),
+                remove_skill("method-spec").unwrap_err(),
                 SkillError::CannotRemoveBundled
             ));
         });

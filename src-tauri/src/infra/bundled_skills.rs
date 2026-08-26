@@ -18,19 +18,36 @@ pub struct BundledSkill {
     pub files: &'static [BundledFile],
 }
 
-const REST_ENDPOINT_DOCS: BundledSkill = BundledSkill {
-    name: "rest-endpoint-docs",
-    skill_md: include_str!("../../assets/skills/rest-endpoint-docs/SKILL.md"),
-    files: &[],
-};
-
 const OPENAPI_SPECS_LAYOUT: BundledSkill = BundledSkill {
     name: "openapi-specs-layout",
     skill_md: include_str!("../../assets/skills/openapi-specs-layout/SKILL.md"),
     files: &[],
 };
 
-pub const BUNDLED_SKILLS: &[BundledSkill] = &[REST_ENDPOINT_DOCS, OPENAPI_SPECS_LAYOUT];
+const METHOD_SPEC: BundledSkill = BundledSkill {
+    name: "method-spec",
+    skill_md: include_str!("../../assets/skills/method-spec/SKILL.md"),
+    files: &[
+        BundledFile {
+            path: "references/structure.md",
+            content: include_str!("../../assets/skills/method-spec/references/structure.md"),
+        },
+        BundledFile {
+            path: "references/errors.md",
+            content: include_str!("../../assets/skills/method-spec/references/errors.md"),
+        },
+        BundledFile {
+            path: "references/glossary.md",
+            content: include_str!("../../assets/skills/method-spec/references/glossary.md"),
+        },
+        BundledFile {
+            path: "assets/template.adoc",
+            content: include_str!("../../assets/skills/method-spec/assets/template.adoc"),
+        },
+    ],
+};
+
+pub const BUNDLED_SKILLS: &[BundledSkill] = &[OPENAPI_SPECS_LAYOUT, METHOD_SPEC];
 
 pub fn bundled_skill(name: &str) -> Option<&'static BundledSkill> {
     BUNDLED_SKILLS.iter().find(|s| s.name == name)

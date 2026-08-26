@@ -97,6 +97,13 @@ pub const ASCIIDOC_ELEMENT_TEMPLATES: &[AsciidocElementTemplate] = &[
         template: "== Входные параметры\n\n[cols=\"1,1,1,1,3,1\"]\n|===\n| *Тип параметра*   | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*\n\n|Метод            5+| POST\n|Endpoint         5+| corp-\n\n| Header          \n| A-userId     \n| string\n| required\n| X-pin клиента, инициатора запроса\n| XAAAAA\n\n| Header          \n| A-userIp    \n| string\n| optional\n| Ip-адресс клиента\n| 64.233.165.113\n\n| Header          \n| A-customerId  \n| string\n| required\n| U-pin клиента, инициатора запроса\n| UAAAAA\n\n| Header          \n| A-projectId\n| string\n| required\n| Идентификатор приложения инициатора запроса\n| WOWTAX\n\n| Header          \n| A-clientType\n| string\n| required\n| Тип сервиса инициатора запроса\n| FRONT\n\n| Header          \n| A-channelId\n| string\n| required\n| Идентификатор вызывающей системы (канала) NIB/ABM/BAAS\n| NIB\n\n6+| Тело запроса\n\n| Body          \n| -\n| -\n| required\n| -\n| -\n|===\n",
     },
     AsciidocElementTemplate {
+        id: "thrift-method",
+        label: "Параметры Thrift-запроса",
+        category: "tables",
+        description: "Таблица стандартного конверта Thrift-запроса (userData) и endpoint",
+        template: "== Входные параметры\n\n[cols=\"1,1,1,3\"]\n|===\n| *Параметр* | *Формат* | *Обязательный* | *Описание*\n\n|Endpoint         3+| {host}/<сервис>/tapi\n\n| userData\n| struct\n| да\n| Данные пользователя\n\n| userData.id\n| string\n| да\n| Идентификатор пользователя (xpin/acus)\n\n| userData.authorizedApplicationId\n| string\n| да\n| Идентификатор приложения\n\n| userData.ip\n| string\n| да\n| IP-адрес пользователя\n\n| userData.customerId\n| string\n| да\n| Идентификатор клиента\n|===\n",
+    },
+    AsciidocElementTemplate {
         id: "response-fields",
         label: "Поля ответа",
         category: "tables",
@@ -217,12 +224,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_has_twenty_five_entries_with_unique_ids() {
-        assert_eq!(ASCIIDOC_ELEMENT_TEMPLATES.len(), 25);
+    fn catalog_has_twenty_six_entries_with_unique_ids() {
+        assert_eq!(ASCIIDOC_ELEMENT_TEMPLATES.len(), 26);
         let mut ids: Vec<&str> = ASCIIDOC_ELEMENT_TEMPLATES.iter().map(|t| t.id).collect();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), 25);
+        assert_eq!(ids.len(), 26);
     }
 
     #[test]

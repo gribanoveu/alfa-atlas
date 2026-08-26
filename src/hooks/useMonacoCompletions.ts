@@ -156,6 +156,45 @@ const BANG_COMMANDS: BangCommand[] = [
       "$0",
   },
   {
+    command: "thrift",
+    detail: "Таблица входных параметров Thrift-запроса (userData)",
+    insertText:
+      "== Входные параметры\n" +
+      "\n" +
+      '[cols="1,1,1,3"]\n' +
+      "|===\n" +
+      "| *Параметр* | *Формат* | *Обязательный* | *Описание*\n" +
+      "\n" +
+      "|Endpoint         3+| ${1:\\{host\\}/<сервис>/tapi}\n" +
+      "\n" +
+      "| userData\n" +
+      "| struct\n" +
+      "| да\n" +
+      "| Данные пользователя\n" +
+      "\n" +
+      "| userData.id\n" +
+      "| string\n" +
+      "| да\n" +
+      "| Идентификатор пользователя (xpin/acus)\n" +
+      "\n" +
+      "| userData.authorizedApplicationId\n" +
+      "| string\n" +
+      "| да\n" +
+      "| Идентификатор приложения\n" +
+      "\n" +
+      "| userData.ip\n" +
+      "| string\n" +
+      "| да\n" +
+      "| IP-адрес пользователя\n" +
+      "\n" +
+      "| userData.customerId\n" +
+      "| string\n" +
+      "| да\n" +
+      "| Идентификатор клиента\n" +
+      "|===\n" +
+      "$0",
+  },
+  {
     command: "response",
     detail: "Таблица полей ответа",
     insertText:
