@@ -106,7 +106,7 @@ pub struct EmbeddingDeps {
     /// than resolving a second one just for this. `None` disables the
     /// fallback entirely (`edit_file` then behaves exactly as it always
     /// did: a plain deterministic `EditTextNotFound`/`EditTextAmbiguous` on
-    /// a non-exact match). `commands::llm::run_tool_loop` is the one caller
+    /// a non-exact match). `services::llm_chat::run_tool_loop` is the one caller
     /// that sets this; `commands::ai_tools::ai_execute_tool` (a standalone
     /// endpoint with no chat turn to reuse a resolved provider from) leaves
     /// it `None`. Reuses this struct rather than adding a second
@@ -115,8 +115,7 @@ pub struct EmbeddingDeps {
     pub fast_apply: Option<(Arc<dyn LlmProvider>, String)>,
     /// The user's currently-open editor tab, if any — `FileId`-space
     /// (already converted from the frontend's docs-root-relative
-    /// `EditorTab.path` by `commands::llm::llm_chat_stream`/
-    /// `llm_chat_stream_resume`, the same conversion
+    /// `EditorTab.path` by `services::llm_chat::setup`, the same conversion
     /// `embedding_set_priority_files` already establishes as precedent).
     /// `semantic_search` uses this to boost chunks from files related to it
     /// (via `related_files`) — `None` disables the boost entirely, same as
@@ -211,7 +210,7 @@ pub fn execute_tool(
         // No state to mutate — `ConversationMode` isn't persisted anywhere
         // server-side (see `domain::conversation_mode`'s doc comment); this
         // is a pure acknowledgement the frontend reacts to once the call
-        // settles, same as `commands::llm::run_tool_loop` deliberately does
+        // settles, same as `services::llm_chat::run_tool_loop` deliberately does
         // *not* re-scope mid-round for this tool the way it does for
         // `RequestFullRepoAccess`.
         ToolCall::RequestModeSwitch(args) => {
@@ -291,7 +290,7 @@ fn execute_skill(args: SkillArgs) -> Result<ToolResult, ToolError> {
 /// ToolCallLogRow` for what each field means. Built fresh by each caller
 /// from whatever it already has on hand (`commands::ai_tools::
 /// ai_execute_tool` has no chat turn to draw `round`/`provider_id`/`model`
-/// from; `commands::llm::run_tool_loop` does).
+/// from; `services::llm_chat::run_tool_loop` does).
 pub struct ToolCallLogContext {
     pub enabled: bool,
     pub source: &'static str,
@@ -307,7 +306,7 @@ pub struct ToolCallLogContext {
 /// exercise it as the pure, I/O-free function it already is — folding
 /// logging into it would force every one of those tests to also touch a
 /// SQLite file. The two real callers (`commands::ai_tools::ai_execute_tool`,
-/// `commands::llm::run_tool_loop`) call this instead.
+/// `services::llm_chat::run_tool_loop`) call this instead.
 pub fn execute_tool_logged(
     scope: &ToolScope,
     call: ToolCall,

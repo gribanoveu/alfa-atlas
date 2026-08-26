@@ -607,4 +607,303 @@ mod tests {
         // progress against the budget, same as the cheapest real tool.
         assert_eq!(round_cost(&[call("notARealTool")]), 1);
     }
+
+    // --- `run_tool_loop` ---
+
+    use crate::domain::ai_access::{default_allowed_tools, AiAccessMode};
+    use crate::domain::llm::{ChatResponse, ChatStreamResult, ChatUsage, LlmError, LlmModelInfo};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU64, AtomicUsize};
+    use std::sync::Mutex;
+
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn fixture_repo(label: &str) -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("alfa-atlas-llm-chat-{label}-{nanos}-{n}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("intro.adoc"), "= Intro\n\nHello.\n").unwrap();
+        dir
+    }
+
+    /// Hands back one programmed round per `chat_stream` call. `fallback` is
+    /// repeated once the script runs out, so a test can assert termination
+    /// without scripting sixty rounds by hand.
+    struct ScriptedProvider {
+        rounds: Mutex<VecDeque<ChatStreamResult>>,
+        fallback: Option<ChatStreamResult>,
+        calls: AtomicUsize,
+    }
+
+    impl ScriptedProvider {
+        fn new(rounds: Vec<ChatStreamResult>) -> Self {
+            Self { rounds: Mutex::new(rounds.into()), fallback: None, calls: AtomicUsize::new(0) }
+        }
+
+        fn repeating(round: ChatStreamResult) -> Self {
+            Self {
+                rounds: Mutex::new(VecDeque::new()),
+                fallback: Some(round),
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl LlmProvider for ScriptedProvider {
+        fn chat(&self, _request: ChatRequest) -> Result<ChatResponse, LlmError> {
+            unimplemented!("the tool loop only ever calls chat_stream()")
+        }
+
+        fn chat_stream(
+            &self,
+            _request: ChatRequest,
+            on_delta: &dyn Fn(&str),
+            _on_reasoning: &dyn Fn(&str),
+            _cancelled: &dyn Fn() -> bool,
+        ) -> Result<ChatStreamResult, LlmError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let next = self.rounds.lock().unwrap().pop_front();
+            let round = match (next, &self.fallback) {
+                (Some(r), _) => r,
+                (None, Some(f)) => f.clone(),
+                (None, None) => panic!("the loop asked for more rounds than the test scripted"),
+            };
+            if !round.text.is_empty() {
+                on_delta(&round.text);
+            }
+            Ok(round)
+        }
+
+        fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
+            unimplemented!("the tool loop never lists models")
+        }
+    }
+
+    fn round(text: &str, calls: Vec<LlmToolCall>) -> ChatStreamResult {
+        ChatStreamResult {
+            text: text.to_string(),
+            reasoning: String::new(),
+            usage: None,
+            tool_calls: calls,
+        }
+    }
+
+    fn tool_call(id: &str, name: &str, arguments: &str) -> LlmToolCall {
+        LlmToolCall {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+        }
+    }
+
+    fn collector() -> (ChatEventSink, Arc<Mutex<Vec<ChatEvent>>>) {
+        let seen: Arc<Mutex<Vec<ChatEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink_target = seen.clone();
+        let sink: ChatEventSink = Arc::new(move |e| sink_target.lock().unwrap().push(e));
+        (sink, seen)
+    }
+
+    /// Drives `run_tool_loop` directly — no open project, no `$HOME`, no
+    /// Tauri runtime. Everything the loop branches on is a parameter.
+    fn run(
+        provider: &dyn LlmProvider,
+        root: &std::path::Path,
+        events: &ChatEventSink,
+        cancel_flag: &ChatCancelFlag,
+    ) -> Result<ChatStreamOutcome, String> {
+        let scope = ToolScope::new(
+            root,
+            root,
+            AiAccessMode::FullRepo,
+            default_allowed_tools(AiAccessMode::FullRepo),
+        );
+        let settings = LlmSettings::default();
+        let deps = EmbeddingDeps::empty();
+        let ctx = LoopCtx {
+            events,
+            provider,
+            provider_id: "test-provider",
+            model: "test-model",
+            settings: &settings,
+            deps: &deps,
+            cancel_flag,
+            conversation_mode: ConversationMode::Agent,
+        };
+        run_tool_loop(&ctx, scope, Vec::new(), Vec::new(), 0, 0, None, Vec::new())
+    }
+
+    fn tool_events(seen: &Arc<Mutex<Vec<ChatEvent>>>) -> Vec<(String, String)> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ChatEvent::ToolCall(c) => Some(("call".to_string(), c.id.clone())),
+                ChatEvent::ToolResult(r) => Some(("result".to_string(), r.id.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_round_with_no_tool_calls_resolves_immediately() {
+        let root = fixture_repo("plain");
+        let provider = ScriptedProvider::new(vec![round("Готово.", vec![])]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome = run(&provider, &root, &events, &cancel).unwrap();
+
+        let ChatStreamOutcome::Done(done) = outcome else {
+            panic!("expected Done, got something else");
+        };
+        assert_eq!(done.result.text, "Готово.");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1, "one round, one model call");
+        assert!(tool_events(&seen).is_empty(), "nothing was executed");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_tool_round_executes_then_the_next_round_finishes_the_turn() {
+        let root = fixture_repo("tool-round");
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![tool_call("c1", "readFile", r#"{"path":"intro.adoc"}"#)]),
+            round("Прочитал.", vec![]),
+        ]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome = run(&provider, &root, &events, &cancel).unwrap();
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2, "tool round + answer round");
+        // The frontend pairs a call with its result by id (`chatBlocks.ts`),
+        // so both the pairing and the order are contract, not incidental.
+        assert_eq!(
+            tool_events(&seen),
+            vec![
+                ("call".to_string(), "c1".to_string()),
+                ("result".to_string(), "c1".to_string()),
+            ]
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_round_needing_confirmation_pauses_without_executing_anything() {
+        let root = fixture_repo("approval");
+        // A confirmation-gated call bundled with a harmless one: neither may
+        // run, or the user would be approving something already done.
+        let provider = ScriptedProvider::new(vec![round(
+            "",
+            vec![
+                tool_call("safe", "readFile", r#"{"path":"intro.adoc"}"#),
+                tool_call("risky", "writeFile", r#"{"path":"new.adoc","content":"x"}"#),
+            ],
+        )]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome = run(&provider, &root, &events, &cancel).unwrap();
+
+        let ChatStreamOutcome::PendingApproval(pending) = outcome else {
+            panic!("expected PendingApproval");
+        };
+        assert_eq!(pending.calls.len(), 2);
+        assert!(pending.calls.iter().any(|c| c.id == "risky" && c.requires_confirmation));
+        assert!(pending.calls.iter().any(|c| c.id == "safe" && !c.requires_confirmation));
+        assert!(tool_events(&seen).is_empty(), "nothing in the round may execute");
+        assert!(!root.join("new.adoc").exists(), "the gated write must not have happened");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_cancelled_turn_stops_before_executing_the_round_it_was_in() {
+        let root = fixture_repo("cancel");
+        let provider = ScriptedProvider::new(vec![round(
+            "",
+            vec![tool_call("c1", "readFile", r#"{"path":"intro.adoc"}"#)],
+        )]);
+        let (events, seen) = collector();
+        // Set before the first checkpoint — the turn resolves as cancelled
+        // without ever calling the model.
+        let cancel = ChatCancelFlag::new(true);
+
+        let outcome = run(&provider, &root, &events, &cancel).unwrap();
+
+        assert!(matches!(outcome, ChatStreamOutcome::Cancelled(_)));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert!(tool_events(&seen).is_empty());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_model_that_never_stops_asking_for_tools_hits_the_limit_instead_of_looping() {
+        let root = fixture_repo("budget");
+        // Every round asks for another tool, forever. Without the
+        // iteration/budget ceiling this test would hang rather than fail.
+        let provider = ScriptedProvider::repeating(round(
+            "",
+            vec![tool_call("c", "readFile", r#"{"path":"intro.adoc"}"#)],
+        ));
+        let (events, _seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let err = run(&provider, &root, &events, &cancel).unwrap_err();
+
+        assert!(err.contains("инструментам"), "user-facing limit message, got: {err}");
+        assert!(
+            provider.calls.load(Ordering::SeqCst) <= MAX_TOOL_ITERATIONS,
+            "must stop at the ceiling, not past it"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_call_failing_path_preflight_becomes_a_tool_error_with_no_approval_card() {
+        let root = fixture_repo("preflight");
+        let provider = ScriptedProvider::new(vec![
+            // Outside the scope root — an impossible write must fail as a
+            // tool error, not surface a confirmation card for it.
+            round("", vec![tool_call("c1", "writeFile", r#"{"path":"../escape.adoc","content":"x"}"#)]),
+            round("Не вышло.", vec![]),
+        ]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome = run(&provider, &root, &events, &cancel).unwrap();
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)), "no approval card");
+        let events = seen.lock().unwrap();
+        let errored = events.iter().any(|e| matches!(e, ChatEvent::ToolResult(r) if r.error.is_some()));
+        assert!(errored, "the rejected call should have reported a tool error");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn reported_usage_is_recorded_and_announced() {
+        let root = fixture_repo("usage");
+        let mut only = round("Готово.", vec![]);
+        only.usage = Some(ChatUsage { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 });
+        let provider = ScriptedProvider::new(vec![only]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        assert!(
+            seen.lock().unwrap().iter().any(|e| matches!(e, ChatEvent::RateLimitChanged)),
+            "the status-bar chip is driven by this event"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
 }

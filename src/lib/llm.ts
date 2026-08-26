@@ -381,7 +381,7 @@ export function listenLlmChatReasoningDelta(
   return listen<LlmChatStreamReasoningDelta>("llm:chat-stream-reasoning-delta", (event) => onDelta(event.payload));
 }
 
-// Mirrors `commands::llm::ToolCallEventPayload` — fired just before the
+// Mirrors `domain::llm::ToolCallEvent` — fired just before the
 // backend executes one tool call inside a `streamLlmChat()` round (the
 // whole tool-calling loop is internal to that one call; this and
 // `LlmToolResultEvent` are what surface a round's activity mid-flight).
@@ -405,7 +405,7 @@ export function listenLlmToolCall(
   return listen<LlmToolCallEvent>("llm:tool-call", (event) => onToolCall(event.payload));
 }
 
-// Mirrors `commands::llm::ToolResultEventPayload` — fires once the tool
+// Mirrors `domain::llm::ToolResultEvent` — fires once the tool
 // call started by a matching `LlmToolCallEvent` (same `id`) has settled.
 // Exactly one of `result`/`error` is ever non-null.
 export type LlmToolResultEvent = {

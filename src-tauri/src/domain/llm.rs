@@ -442,7 +442,7 @@ pub struct PendingApproval {
     /// resuming can't bypass `MAX_TOOL_ITERATIONS` by pausing repeatedly.
     pub round: u32,
     /// Weighted tool-call budget consumed so far (this round included,
-    /// via `commands::llm::round_cost`) — same anti-bypass purpose as
+    /// via `services::llm_chat::round_cost`) — same anti-bypass purpose as
     /// `round`, but sensitive to which tools were actually called instead
     /// of treating every round as equal cost. See `MAX_TOOL_BUDGET`.
     pub budget_used: u32,
@@ -529,7 +529,7 @@ pub trait LlmProvider: Send + Sync {
     /// this. Returning early this way is not an error: whatever text/tool
     /// calls had accumulated so far come back as a normal `Ok(..)`, same
     /// shape as a stream that ended naturally — the caller
-    /// (`commands::llm::run_tool_loop`) is what decides, by checking the
+    /// (`services::llm_chat::run_tool_loop`) is what decides, by checking the
     /// same flag itself right after this returns, whether to treat that as
     /// `Done` or `Cancelled`.
     fn chat_stream(

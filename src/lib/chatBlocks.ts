@@ -232,7 +232,7 @@ export function appendPendingApprovalBlock(
  * array, not just the tail — the matching `toolCall` block can be several
  * blocks back by the time this fires) and settles it to `done`/`error`. A
  * `result` that isn't `null` always means success, matching
- * `ToolResultEventPayload`'s "exactly one of result/error is Some"
+ * `ToolResultEvent`'s "exactly one of result/error is Some"
  * contract on the Rust side. */
 export function settleToolCallBlock(
   blocks: MessageBlock[],

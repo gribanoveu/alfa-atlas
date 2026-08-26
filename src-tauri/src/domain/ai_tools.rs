@@ -761,7 +761,7 @@ pub enum ToolResult {
     AccessModeChanged { mode: AiAccessMode },
     /// Full updated list after a `todo write` — both this call's own
     /// result (fed back to the model as a `Tool`-role message) and, via
-    /// `commands::llm::run_tool_loop`, what becomes the turn's `todos`
+    /// `services::llm_chat::run_tool_loop`, what becomes the turn's `todos`
     /// state going forward.
     TodoWritten(Vec<Task>),
     /// Same shape/role as `TodoWritten`, after a `todo update`.
