@@ -20,6 +20,7 @@ pub mod gitignore;
 pub mod git_ops;
 pub mod index_store_ensure;
 pub mod index_watcher;
+pub mod llm_chat;
 pub mod llm_config;
 pub mod llm_rate_limit;
 pub mod llm_session;

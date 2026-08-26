@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::ai_tools::Task;
+use super::ai_tools::{Task, ToolResult};
 
 /// Token limits for a provider's (currently configured) model — informational
 /// only, not enforced anywhere in this client; surfaced to the frontend so
@@ -538,6 +538,71 @@ pub trait LlmProvider: Send + Sync {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError>;
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError>;
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStreamDelta {
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatStreamReasoning {
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallEvent {
+    /// The model's own `LlmToolCall::id` — lets the frontend correlate this
+    /// call with its later `ToolResultEvent` regardless of how many
+    /// other calls/rounds happen in between.
+    pub id: String,
+    pub name: String,
+    /// Raw JSON-encoded string, same as `LlmToolCall::arguments` — the
+    /// frontend parses it if it wants structured display, this event
+    /// doesn't pre-parse it.
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolResultEvent {
+    /// Matches the `id` on the `ToolCallEvent` this settles.
+    pub id: String,
+    /// `Some` on success — the same typed `ToolResult` that gets
+    /// JSON-serialized into the wire `content` sent back to the model, just
+    /// cloned rather than reserialized into a display string here.
+    /// Formatting it into a human-readable summary is the frontend's job
+    /// (`describeToolResult` in `src/lib/assistantConfig.ts`), matching how
+    /// `describeToolActivity` already handles the "what is being done" line
+    /// client-side rather than this command inventing display text.
+    pub result: Option<ToolResult>,
+    /// `Some` on failure — `ToolError`'s `Display` text (the same string
+    /// that already goes into the `Tool` message's `content` as
+    /// `"Error: {e}"`).
+    pub error: Option<String>,
+}
+
+/// Everything a chat turn reports outward while it runs. `services::llm_chat`
+/// hands these to a sink; `commands::llm` is the only thing that knows they
+/// become Tauri events. Grouped into one enum rather than five separate
+/// callbacks so adding a sixth kind of report does not change every
+/// signature along the way.
+#[derive(Debug, Clone)]
+pub enum ChatEvent {
+    Delta(ChatStreamDelta),
+    Reasoning(ChatStreamReasoning),
+    /// Fired just before a tool executes; always followed by exactly one
+    /// `ToolResult` carrying the same `id`. The frontend pairs them by that
+    /// id (see `chatBlocks.ts`), so the order is a contract, not an
+    /// incidental detail.
+    ToolCall(ToolCallEvent),
+    ToolResult(ToolResultEvent),
+    /// The provider reported token usage and it has been recorded — the
+    /// status-bar chip should re-read its snapshot.
+    RateLimitChanged,
 }
 
 #[cfg(test)]
