@@ -44,11 +44,11 @@ use tauri::{AppHandle, Emitter, State};
 use crate::domain::ai_tools::Task;
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::{
-    ChatRequest, ChatResponse, ChatStreamOutcome, LlmMessage, LlmModelInfo,
+    ChatResponse, ChatStreamOutcome, LlmMessage, LlmModelInfo,
     LlmProviderConfig, LlmSettings, ResolvedLlmProvider, ToolCallDecision,
 };
 use crate::domain::llm_rate_limit::RateLimitSnapshot;
-use crate::infra::{llm_credentials_store, llm_debug_log};
+use crate::infra::llm_credentials_store;
 use crate::services::ai_tools::EmbeddingDeps;
 use crate::services::embedding_state::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
@@ -231,32 +231,11 @@ pub async fn llm_chat_once(
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
 ) -> Result<ChatResponse, String> {
     let llm_provider = llm_provider.inner().clone();
+    let events = chat_event_sink(&app);
+
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatResponse, String> {
-        let llm_session::LlmSession { provider, model, settings, .. } =
-            llm_session::resolve(&provider_id, &llm_provider)?;
-        let request = ChatRequest {
-            messages,
-            tools: Vec::new(),
-            model,
-        };
-        // Same debug log as the tool-calling loop — selection-AI ("Сократить")
-        // and history compaction both go through here; previously only
-        // `run_tool_loop` wrote to `llm.jsonl`, so one-shot failures were invisible.
-        llm_debug_log::log_request(
-            settings.debug_logging,
-            &provider_id,
-            llm_debug_log::ONCE_ROUND,
-            &request,
-        );
-        let outcome = provider.chat(request).map_err(|e| e.to_string());
-        llm_debug_log::log_chat_once_result(settings.debug_logging, &provider_id, &outcome);
-        if let Ok(ref response) = outcome {
-            if let Some(usage) = response.usage {
-                llm_rate_limit::record(&provider_id, usage.completion_tokens);
-                let _ = app.emit(RATE_LIMIT_CHANGED_EVENT, ());
-            }
-        }
-        outcome
+        let session = llm_session::resolve(&provider_id, &llm_provider)?;
+        llm_session::chat_once(&session, messages, &events)
     })
     .await
     .map_err(|e| e.to_string())?

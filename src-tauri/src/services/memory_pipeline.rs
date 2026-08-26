@@ -16,13 +16,12 @@ use crate::domain::memory_policy::{
     apply_policy, neighbors_for_facts, ApprovedFact, MemoryEntrySnapshot, MemoryPolicyConfig,
     SimilarEntry,
 };
-use crate::domain::llm::{ChatEvent, ChatRequest, LlmMessage, LlmRole};
+use crate::domain::llm::{ChatEventSink, LlmMessage, LlmRole};
 
-use crate::infra::{chat_store, llm_debug_log};
+use crate::infra::chat_store;
 use crate::services::agent_memory::{self, AgentMemoryError, MemoryScope};
-use crate::services::llm_chat::ChatEventSink;
 use crate::services::llm_session::LlmProviderSlot;
-use crate::services::{llm_config, llm_rate_limit, llm_session};
+use crate::services::{llm_config, llm_session};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryPipelineError {
@@ -247,33 +246,18 @@ pub fn run_pending_pass(
             return Ok(());
         };
 
-        let llm_session::LlmSession { provider, model, .. } =
-            llm_session::resolve(&provider_id, slot)?;
-        let debug = settings.debug_logging;
+        let session = llm_session::resolve(&provider_id, slot)?;
         let events = events.clone();
-        let provider_id_for_log = provider_id.clone();
 
         let mut llm = |prompt: &str| -> Result<String, String> {
-            let request = ChatRequest {
-                messages: vec![LlmMessage {
-                    role: LlmRole::User,
-                    content: Some(prompt.to_string()),
-                    tool_call_id: None,
-                    tool_calls: vec![],
-                }],
-                tools: Vec::new(),
-                model: model.clone(),
-            };
-            llm_debug_log::log_request(debug, &provider_id_for_log, llm_debug_log::ONCE_ROUND, &request);
-            let outcome = provider.chat(request).map_err(|e| e.to_string());
-            llm_debug_log::log_chat_once_result(debug, &provider_id_for_log, &outcome);
-            if let Ok(ref response) = outcome {
-                if let Some(usage) = response.usage {
-                    llm_rate_limit::record(&provider_id_for_log, usage.completion_tokens);
-                    events(ChatEvent::RateLimitChanged);
-                }
-            }
-            outcome.map(|resp| resp.content.unwrap_or_default())
+            let messages = vec![LlmMessage {
+                role: LlmRole::User,
+                content: Some(prompt.to_string()),
+                tool_call_id: None,
+                tool_calls: vec![],
+            }];
+            llm_session::chat_once(&session, messages, &events)
+                .map(|resp| resp.content.unwrap_or_default())
         };
 
         let config = MemoryPolicyConfig::from_threshold(settings.memory_confidence_threshold);

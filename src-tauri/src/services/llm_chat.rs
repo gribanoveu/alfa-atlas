@@ -22,7 +22,8 @@ use crate::domain::ai_access::{call_requires_confirmation, ToolName};
 use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
 use crate::domain::conversation_mode::{mode_tools, ConversationMode};
 use crate::domain::llm::{
-    sanitize_tool_call_arguments, ChatDone, ChatEvent, ChatRequest, ChatStreamDelta,
+    sanitize_tool_call_arguments, ChatDone, ChatEvent, ChatEventSink, ChatRequest,
+    ChatStreamDelta,
     ChatStreamResult,
     ChatStreamOutcome, ChatStreamReasoning, LlmMessage, LlmProvider, LlmRole, LlmSettings,
     LlmToolCall, LlmToolDefinition, PendingApproval, PendingToolCall, ToolCallDecision,
@@ -36,10 +37,6 @@ use crate::services::llm_rate_limit;
 use crate::services::llm_session;
 use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot};
 
-/// Where a turn's outward reports go. `Arc<dyn Fn>` rather than a generic
-/// bound because the sink is moved into the `on_delta`/`on_reasoning`
-/// closures handed to `LlmProvider::chat_stream`.
-pub type ChatEventSink = Arc<dyn Fn(ChatEvent) + Send + Sync>;
 
 /// A misbehaving/looping model shouldn't be able to hold the UI in a
 /// "thinking" state indefinitely — this caps how many model↔tool round

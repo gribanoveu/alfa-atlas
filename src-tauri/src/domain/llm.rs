@@ -16,6 +16,8 @@
 //! EmbeddingProviderKind` followed: that enum only grew a second variant
 //! once a second real implementation existed, not in anticipation of one.
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -604,6 +606,14 @@ pub enum ChatEvent {
     /// status-bar chip should re-read its snapshot.
     RateLimitChanged,
 }
+
+/// Where a turn's `ChatEvent`s go. A port like `LlmProvider`: the services
+/// that report through it never learn what is on the other side, and
+/// `commands::chat_events` is the only implementation that turns them into
+/// Tauri events. `Arc<dyn Fn>` rather than a generic bound because the sink
+/// is moved into the `on_delta`/`on_reasoning` closures handed to
+/// `LlmProvider::chat_stream`, which outlive the call that installed them.
+pub type ChatEventSink = Arc<dyn Fn(ChatEvent) + Send + Sync>;
 
 #[cfg(test)]
 mod tests {

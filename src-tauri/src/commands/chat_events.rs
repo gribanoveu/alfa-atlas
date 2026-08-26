@@ -10,8 +10,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter};
 
-use crate::domain::llm::ChatEvent;
-use crate::services::llm_chat::ChatEventSink;
+use crate::domain::llm::{ChatEvent, ChatEventSink};
 
 /// Fires once per non-empty text chunk while `llm_chat_stream`'s promise is
 /// still in flight. Global/unscoped, matching `SYNC_PROGRESS_EVENT`'s

@@ -12,9 +12,12 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use crate::domain::llm::{LlmProvider, LlmSettings, ResolvedLlmProvider};
-use crate::infra::{llm_credentials_store, llm_providers};
-use crate::services::llm_config;
+use crate::domain::llm::{
+    ChatEvent, ChatEventSink, ChatRequest, ChatResponse, LlmMessage, LlmProvider, LlmSettings,
+    ResolvedLlmProvider,
+};
+use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
+use crate::services::{llm_config, llm_rate_limit};
 
 /// Caches the constructed `LlmProvider` across calls, same reasoning as
 /// `services::embedding_state::EmbeddingProviderSlot`: keyed by
@@ -95,4 +98,44 @@ pub fn resolve(provider_id: &str, slot: &LlmProviderSlot) -> Result<LlmSession, 
         model,
         settings,
     })
+}
+
+/// One completion with no tools and no streaming: build the request, record
+/// it in the debug log, send it, record the outcome, and account for whatever
+/// tokens it burned.
+///
+/// The three callers that need this — the selection-AI/history-compaction
+/// command, and the post-turn memory extraction pass — had a copy each. The
+/// debug logging in particular is why they are worth sharing: it is what
+/// makes an opaque provider error diagnosable after the fact, and it is
+/// exactly the kind of thing a copy quietly loses.
+pub fn chat_once(
+    session: &LlmSession,
+    messages: Vec<LlmMessage>,
+    events: &ChatEventSink,
+) -> Result<ChatResponse, String> {
+    let request = ChatRequest {
+        messages,
+        tools: Vec::new(),
+        model: session.model.clone(),
+    };
+    llm_debug_log::log_request(
+        session.settings.debug_logging,
+        &session.provider_id,
+        llm_debug_log::ONCE_ROUND,
+        &request,
+    );
+    let outcome = session.provider.chat(request).map_err(|e| e.to_string());
+    llm_debug_log::log_chat_once_result(
+        session.settings.debug_logging,
+        &session.provider_id,
+        &outcome,
+    );
+    if let Ok(ref response) = outcome {
+        if let Some(usage) = response.usage {
+            llm_rate_limit::record(&session.provider_id, usage.completion_tokens);
+            events(ChatEvent::RateLimitChanged);
+        }
+    }
+    outcome
 }
