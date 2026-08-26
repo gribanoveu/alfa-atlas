@@ -9,11 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::llm::{ensure_llm_provider, LlmProviderSlot, RATE_LIMIT_CHANGED_EVENT};
+use crate::commands::llm::RATE_LIMIT_CHANGED_EVENT;
+use crate::services::llm_session::{self, LlmProviderSlot};
 use crate::domain::llm::{ChatRequest, LlmMessage, LlmRole};
 use crate::domain::memory_extract::pending_turn;
 use crate::domain::memory_policy::MemoryPolicyConfig;
-use crate::infra::{chat_store, llm_credentials_store, llm_debug_log};
+use crate::infra::{chat_store, llm_debug_log};
 use crate::services::{llm_config, llm_rate_limit, memory_pipeline};
 
 /// Per-chat in-flight + dirty flag so a save that lands while a pass is
@@ -123,12 +124,8 @@ fn run_one_pass(
             return Ok(());
         };
 
-        let resolved =
-            llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
-        let api_key = llm_credentials_store::get_api_key(&provider_id);
-        let provider = ensure_llm_provider(slot, &resolved, api_key)?;
-        let model = llm_config::effective_model(&resolved, provider.as_ref())
-            .map_err(|e| e.to_string())?;
+        let llm_session::LlmSession { provider, model, .. } =
+            llm_session::resolve(&provider_id, slot)?;
         let debug = settings.debug_logging;
         let app_handle = app.clone();
         let provider_id_for_log = provider_id.clone();

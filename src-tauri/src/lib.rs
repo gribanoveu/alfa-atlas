@@ -13,7 +13,7 @@ use crate::services::embedding_state::{
     BackgroundBacklogSlot, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard,
     FullSyncActiveSlot, IndexStoreSlot, IndexWatcherSlot, PriorityFilesSlot,
 };
-use crate::commands::llm::{ChatCancelFlag, LlmProviderSlot};
+use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot};
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::embedding_model::DownloadState;

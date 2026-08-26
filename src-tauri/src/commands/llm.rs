@@ -37,8 +37,8 @@
 //! and one-shot `llm_chat_once` / memory auto-nap callers.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, State};
 
@@ -56,8 +56,9 @@ use crate::domain::llm::{
 };
 use crate::domain::paths;
 use crate::domain::repo_index::FileId;
-use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
+use crate::infra::{llm_credentials_store, llm_debug_log};
 use crate::services::ai_tools::{self, EmbeddingDeps, ToolCallLogContext};
+use crate::services::llm_session::{self, ChatCancelFlag, LlmProviderSlot};
 use crate::services::{
     chunk_builder::ChunkIndex, llm_config, llm_rate_limit, repo_index::RepositoryIndex,
     workspace_index::WorkspaceIndex,
@@ -174,27 +175,6 @@ struct ToolResultEventPayload {
     error: Option<String>,
 }
 
-/// Caches the constructed `LlmProvider` across calls, same reasoning as
-/// `services::embedding_state::EmbeddingProviderSlot`: keyed by
-/// `(resolved, api_key)` rather than just the provider id, so a key
-/// rotation or a settings-layer override change (a different `base_url`/
-/// `trusted_cert_pem`) invalidates the cache instead of silently reusing a
-/// stale `ureq::Agent`.
-pub type LlmProviderSlot = Mutex<Option<(ResolvedLlmProvider, Option<String>, Arc<dyn LlmProvider>)>>;
-
-/// One flag for "the user asked the in-flight turn to stop" — this app has
-/// exactly one chat panel / one in-flight conversation at a time (same
-/// assumption `CHAT_STREAM_DELTA_EVENT` already makes), so a single
-/// `Arc<AtomicBool>` needs no per-turn/per-request id to disambiguate.
-/// `llm_chat_stream` resets this to `false` at the start of every *fresh*
-/// turn (never `llm_chat_stream_resume`, which continues a turn already in
-/// progress and must not lose a cancellation that landed while a
-/// `PendingApproval` card was showing — see `llm_cancel_chat`'s doc
-/// comment); `run_tool_loop` polls it at the checkpoints documented on its
-/// own doc comment and resolves `ChatStreamOutcome::Cancelled` instead of
-/// continuing once it reads `true`.
-pub type ChatCancelFlag = AtomicBool;
-
 /// Requests that the currently in-flight `llm_chat_stream`/
 /// `llm_chat_stream_resume` call (if any) stop as soon as it next checks —
 /// mid-stream (within roughly one SSE chunk, see
@@ -209,21 +189,6 @@ pub type ChatCancelFlag = AtomicBool;
 #[tauri::command]
 pub fn llm_cancel_chat(cancel_flag: State<'_, Arc<ChatCancelFlag>>) {
     cancel_flag.store(true, Ordering::SeqCst);
-}
-
-pub(crate) fn ensure_llm_provider(
-    slot: &LlmProviderSlot,
-    resolved: &ResolvedLlmProvider,
-    api_key: Option<String>,
-) -> Result<Arc<dyn LlmProvider>, String> {
-    let mut guard = slot.lock().map_err(|_| "llm provider lock poisoned".to_string())?;
-    let stale = !matches!(guard.as_ref(), Some((r, k, _)) if r == resolved && *k == api_key);
-    if stale {
-        let provider =
-            llm_providers::provider_for(resolved, api_key.clone()).map_err(|e| e.to_string())?;
-        *guard = Some((resolved.clone(), api_key, Arc::from(provider)));
-    }
-    Ok(guard.as_ref().expect("just set above if missing").2.clone())
 }
 
 #[tauri::command]
@@ -289,11 +254,8 @@ pub async fn llm_list_models(
 ) -> Result<Vec<LlmModelInfo>, String> {
     let llm_provider = llm_provider.inner().clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<Vec<LlmModelInfo>, String> {
-        let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
-        let resolved =
-            llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
-        let api_key = llm_credentials_store::get_api_key(&provider_id);
-        let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
+        let (provider, _resolved, _settings) =
+            llm_session::resolve_provider_only(&provider_id, &llm_provider)?;
         provider.list_models().map_err(|e| e.to_string())
     })
     .await
@@ -313,11 +275,8 @@ pub async fn llm_test_connection(
 ) -> Result<String, String> {
     let llm_provider = llm_provider.inner().clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
-        let resolved =
-            llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
-        let api_key = llm_credentials_store::get_api_key(&provider_id);
-        let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
+        let (provider, _resolved, _settings) =
+            llm_session::resolve_provider_only(&provider_id, &llm_provider)?;
 
         let models = provider.list_models().map_err(|e| e.to_string())?;
         Ok(match models.len() {
@@ -346,13 +305,8 @@ pub async fn llm_chat_once(
 ) -> Result<ChatResponse, String> {
     let llm_provider = llm_provider.inner().clone();
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatResponse, String> {
-        let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
-        let resolved =
-            llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
-        let api_key = llm_credentials_store::get_api_key(&provider_id);
-        let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
-        let model = llm_config::effective_model(&resolved, provider.as_ref())
-            .map_err(|e| e.to_string())?;
+        let llm_session::LlmSession { provider, model, settings, .. } =
+            llm_session::resolve(&provider_id, &llm_provider)?;
         let request = ChatRequest {
             messages,
             tools: Vec::new(),
@@ -846,13 +800,8 @@ pub async fn llm_chat_stream(
         active_file: None,
     };
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
-        let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
-        let resolved =
-            llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
-        let api_key = llm_credentials_store::get_api_key(&provider_id);
-        let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
-        let model = llm_config::effective_model(&resolved, provider.as_ref())
-            .map_err(|e| e.to_string())?;
+        let llm_session::LlmSession { provider, model, settings, .. } =
+            llm_session::resolve(&provider_id, &llm_provider)?;
         deps.fast_apply = Some((provider.clone(), model.clone()));
 
         // No project open is not something the model can recover from by
@@ -937,13 +886,8 @@ pub async fn llm_chat_stream_resume(
         active_file: None,
     };
     tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
-        let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
-        let resolved =
-            llm_config::resolve_provider(&provider_id, &settings).map_err(|e| e.to_string())?;
-        let api_key = llm_credentials_store::get_api_key(&provider_id);
-        let provider = ensure_llm_provider(&llm_provider, &resolved, api_key)?;
-        let model = llm_config::effective_model(&resolved, provider.as_ref())
-            .map_err(|e| e.to_string())?;
+        let llm_session::LlmSession { provider, model, settings, .. } =
+            llm_session::resolve(&provider_id, &llm_provider)?;
         deps.fast_apply = Some((provider.clone(), model.clone()));
 
         let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
