@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { SkillListItem } from "../lib/skills";
+import * as actualSkills from "../lib/skills";
 
 const listed: SkillListItem[][] = [];
 let listCalls = 0;
@@ -14,6 +15,7 @@ function skill(name: string, enabled = true): SkillListItem {
 // The IPC wrappers are exactly the seam this layer exists to provide: thin,
 // typed, and the only thing standing between the hook and Tauri.
 mock.module("../lib/skills", () => ({
+  ...actualSkills,
   skillsList: async () => {
     listCalls += 1;
     if (listRejectsWith) throw listRejectsWith;
