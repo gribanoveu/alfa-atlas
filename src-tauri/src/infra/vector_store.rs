@@ -168,6 +168,7 @@ fn vector_store_err(e: cxx::Exception) -> EmbeddingError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use super::*;
 
     #[test]
@@ -207,12 +208,18 @@ mod tests {
         assert!(store.is_empty());
     }
 
+    /// Several tests in this module call this concurrently. A nanosecond
+    /// timestamp alone does not reliably disambiguate them on a coarser
+    /// system clock — two would share a directory and clobber each other.
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
     fn temp_vectors_path() -> PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("alfa-atlas-vector-store-{nanos}.usearch"))
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("alfa-atlas-vector-store-{nanos}-{n}.usearch"))
     }
 
     #[test]

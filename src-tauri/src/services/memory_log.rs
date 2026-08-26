@@ -120,17 +120,24 @@ fn parse_scope(raw: &str) -> Result<MemoryScope, MemoryLogError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU64, Ordering};
     use super::*;
     use crate::infra::settings_store::test_support::with_temp_home;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Several tests in this module call this concurrently. A nanosecond
+    /// timestamp alone does not reliably disambiguate them on a coarser
+    /// system clock — two would share a directory and clobber each other.
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temp_repo() -> std::path::PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("memory-log-repo-{nanos}"));
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("memory-log-repo-{nanos}-{n}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
