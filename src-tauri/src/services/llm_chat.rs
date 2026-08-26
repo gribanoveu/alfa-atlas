@@ -14,6 +14,7 @@
 //! Provider resolution and the resident provider cache live next door in
 //! `services::llm_session`.
 
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -32,7 +33,8 @@ use crate::domain::repo_index::FileId;
 use crate::infra::llm_debug_log;
 use crate::services::ai_tools::{self, EmbeddingDeps, ToolCallLogContext};
 use crate::services::llm_rate_limit;
-use crate::services::llm_session::ChatCancelFlag;
+use crate::services::llm_session;
+use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot};
 
 /// Where a turn's outward reports go. `Arc<dyn Fn>` rather than a generic
 /// bound because the sink is moved into the `on_delta`/`on_reasoning`
@@ -53,7 +55,7 @@ const MAX_TOOL_ITERATIONS: usize = 60;
 /// `EmbeddingDeps::active_file`. `None` on any resolution failure (no path,
 /// or a path outside `scope.repo_root`) — degrades to "no boost" rather
 /// than failing the whole chat turn over a best-effort ranking hint.
-pub(crate) fn resolve_active_file(scope: &ToolScope, active_file_path: Option<String>) -> Option<FileId> {
+fn resolve_active_file(scope: &ToolScope, active_file_path: Option<String>) -> Option<FileId> {
     let path = active_file_path?;
     let absolute = paths::join_relative(&scope.docs_root, &path).ok()?;
     paths::relative_to_lenient(&scope.repo_root, &absolute).ok().map(FileId)
@@ -87,21 +89,21 @@ fn round_cost(calls: &[LlmToolCall]) -> u32 {
 /// Bundles the read-only pieces `run_tool_loop` needs so its own signature
 /// doesn't grow a long, drifting parameter list — everything here is fixed
 /// for the lifetime of one `llm_chat_stream`/`llm_chat_stream_resume` call.
-pub(crate) struct LoopCtx<'a> {
-    pub(crate) events: &'a ChatEventSink,
-    pub(crate) provider: &'a dyn LlmProvider,
-    pub(crate) provider_id: &'a str,
-    pub(crate) model: &'a str,
-    pub(crate) settings: &'a LlmSettings,
-    pub(crate) deps: &'a EmbeddingDeps,
-    pub(crate) cancel_flag: &'a ChatCancelFlag,
+struct LoopCtx<'a> {
+    events: &'a ChatEventSink,
+    provider: &'a dyn LlmProvider,
+    provider_id: &'a str,
+    model: &'a str,
+    settings: &'a LlmSettings,
+    deps: &'a EmbeddingDeps,
+    cancel_flag: &'a ChatCancelFlag,
     /// Pinned for the whole call — unlike `scope`/`tools` (which
     /// `RequestFullRepoAccess` widens mid-loop), a `RequestModeSwitch`
     /// deliberately does *not* take effect within the same turn (see
     /// `domain::conversation_mode`'s doc comment and `services::ai_tools::
     /// execute_tool`'s `RequestModeSwitch` arm) — so this never changes for
     /// the lifetime of one `run_tool_loop` call.
-    pub(crate) conversation_mode: ConversationMode,
+    conversation_mode: ConversationMode,
 }
 
 /// The shared tool-calling loop both `llm_chat_stream` (fresh start,
@@ -149,7 +151,7 @@ pub(crate) struct LoopCtx<'a> {
 /// `appendDeltaToBlocks` doc comment), so an empty string correctly leaves
 /// it untouched via `correctTrailingText` on the frontend rather than
 /// clobbering it.
-pub(crate) fn run_tool_loop(
+fn run_tool_loop(
     ctx: &LoopCtx,
     mut scope: ToolScope,
     mut tools: Vec<LlmToolDefinition>,
@@ -445,6 +447,139 @@ pub(crate) fn run_tool_loop(
             });
         }
     }
+}
+
+
+/// Everything one turn needs that is not the conversation itself.
+/// `commands::llm` assembles this from `tauri::State`, so neither use-case
+/// below grows a nine-parameter signature that has to stay in the same order
+/// at two call sites.
+pub struct ChatTurnContext {
+    pub provider_slot: Arc<LlmProviderSlot>,
+    pub cancel_flag: Arc<ChatCancelFlag>,
+    /// `fast_apply` and `active_file` are filled in here, once the provider
+    /// and scope are resolved — callers leave them `None`.
+    pub deps: EmbeddingDeps,
+    pub provider_id: String,
+    pub active_file_path: Option<String>,
+    pub conversation_mode: ConversationMode,
+}
+
+/// The checkpoint a `ChatStreamOutcome::PendingApproval` handed the frontend,
+/// sent back verbatim. The backend keeps no session state between calls, so
+/// this is the entire resumable state of a paused turn.
+pub struct ResumePoint {
+    pub history: Vec<LlmMessage>,
+    pub round: u32,
+    pub budget_used: u32,
+    pub decisions: Vec<ToolCallDecision>,
+    pub todos: Vec<Task>,
+}
+
+/// Resolved once per turn: provider, model, scope, advertised tools.
+struct TurnSetup {
+    provider: Arc<dyn LlmProvider>,
+    model: String,
+    settings: LlmSettings,
+    scope: ToolScope,
+    tools: Vec<LlmToolDefinition>,
+}
+
+fn setup(ctx: &mut ChatTurnContext) -> Result<TurnSetup, String> {
+    let llm_session::LlmSession { provider, model, settings, .. } =
+        llm_session::resolve(&ctx.provider_id, &ctx.provider_slot)?;
+    // `EditFile`'s fast-apply fallback reuses the exact provider/model this
+    // turn is already using for chat, rather than resolving a second one.
+    ctx.deps.fast_apply = Some((provider.clone(), model.clone()));
+
+    // No project open is not something the model can recover from by trying
+    // again — hard-fail the whole turn, same as `ai_execute_tool` does.
+    let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
+    ctx.deps.active_file = resolve_active_file(&scope, ctx.active_file_path.take());
+    let tools = ai_tools::llm_tool_definitions(&scope, ctx.conversation_mode);
+
+    Ok(TurnSetup { provider, model, settings, scope, tools })
+}
+
+/// A fresh conversation turn. Runs the tool-calling loop from round zero and
+/// resolves once the model stops asking for tools, a round needs
+/// confirmation, or the turn is cancelled.
+pub fn stream(
+    mut ctx: ChatTurnContext,
+    messages: Vec<LlmMessage>,
+    todos: Vec<Task>,
+    events: &ChatEventSink,
+) -> Result<ChatStreamOutcome, String> {
+    // A *fresh* turn always starts with a clean flag — a stray cancel from an
+    // already-finished previous turn must never bleed into this one.
+    // `stream_resume` deliberately does not do this (see `ChatCancelFlag`).
+    ctx.cancel_flag.store(false, Ordering::SeqCst);
+
+    let setup = setup(&mut ctx)?;
+    let loop_ctx = LoopCtx {
+        events,
+        provider: setup.provider.as_ref(),
+        provider_id: &ctx.provider_id,
+        model: &setup.model,
+        settings: &setup.settings,
+        deps: &ctx.deps,
+        cancel_flag: &ctx.cancel_flag,
+        conversation_mode: ctx.conversation_mode,
+    };
+    run_tool_loop(&loop_ctx, setup.scope, setup.tools, messages, 0, 0, None, todos)
+}
+
+/// Continues a turn paused by `PendingApproval`. `resume` must be exactly
+/// what that outcome carried: the history must still end with the assistant's
+/// tool-call turn, and the decisions must cover exactly the calls that needed
+/// confirmation — anything else is rejected up front rather than silently
+/// executing calls the user never actually saw.
+pub fn stream_resume(
+    mut ctx: ChatTurnContext,
+    resume: ResumePoint,
+    events: &ChatEventSink,
+) -> Result<ChatStreamOutcome, String> {
+    let setup = setup(&mut ctx)?;
+
+    let ResumePoint { history, round, budget_used, decisions, todos } = resume;
+    let last = history
+        .last()
+        .ok_or_else(|| "resume: history must not be empty".to_string())?;
+    if last.role != LlmRole::Assistant || last.tool_calls.is_empty() {
+        return Err("resume: history must end with the assistant's tool-call turn".to_string());
+    }
+    let calls = last.tool_calls.clone();
+
+    let expected: HashSet<&str> = calls
+        .iter()
+        .filter(|c| call_requires_confirmation(&c.name, &c.arguments))
+        .map(|c| c.id.as_str())
+        .collect();
+    let provided: HashSet<&str> = decisions.iter().map(|d| d.id.as_str()).collect();
+    if expected != provided {
+        return Err("resume: decisions do not match this round's pending calls".to_string());
+    }
+
+    let loop_ctx = LoopCtx {
+        events,
+        provider: setup.provider.as_ref(),
+        provider_id: &ctx.provider_id,
+        model: &setup.model,
+        settings: &setup.settings,
+        deps: &ctx.deps,
+        cancel_flag: &ctx.cancel_flag,
+        conversation_mode: ctx.conversation_mode,
+    };
+    run_tool_loop(
+        &loop_ctx,
+        setup.scope,
+        setup.tools,
+        history,
+        round,
+        budget_used,
+        Some((calls, decisions)),
+        todos,
+    )
 }
 
 #[cfg(test)]

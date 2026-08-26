@@ -36,81 +36,69 @@
 //! sitting in `~/.atlas/logs/llm.jsonl`. Covers both the tool-calling loop
 //! and one-shot `llm_chat_once` / memory auto-nap callers.
 
-use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::domain::ai_access::call_requires_confirmation;
 use crate::domain::ai_tools::Task;
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::{
-    ChatEvent, ChatRequest, ChatResponse, ChatStreamOutcome, LlmMessage, LlmModelInfo,
-    LlmProviderConfig, LlmRole, LlmSettings, ResolvedLlmProvider, ToolCallDecision,
+    ChatRequest, ChatResponse, ChatStreamOutcome, LlmMessage, LlmModelInfo,
+    LlmProviderConfig, LlmSettings, ResolvedLlmProvider, ToolCallDecision,
 };
 use crate::domain::llm_rate_limit::RateLimitSnapshot;
 use crate::infra::{llm_credentials_store, llm_debug_log};
-use crate::services::ai_tools::{self, EmbeddingDeps};
+use crate::services::ai_tools::EmbeddingDeps;
 use crate::services::embedding_state::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
-use crate::services::llm_chat::{resolve_active_file, run_tool_loop, ChatEventSink, LoopCtx};
+use crate::commands::chat_events::{chat_event_sink, RATE_LIMIT_CHANGED_EVENT};
+use crate::services::llm_chat::{self, ChatTurnContext};
 use crate::services::llm_session::{self, ChatCancelFlag, LlmProviderSlot};
 use crate::services::{
     chunk_builder::ChunkIndex, llm_config, llm_rate_limit, repo_index::RepositoryIndex,
     workspace_index::WorkspaceIndex,
 };
 
-/// Fires once per non-empty text chunk while `llm_chat_stream`'s promise is
-/// still in flight. Global/unscoped, matching `SYNC_PROGRESS_EVENT`'s
-/// precedent in `commands::embeddings` — this app has exactly one chat
-/// panel / one in-flight conversation at a time, so no per-request id is
-/// threaded through.
-pub const CHAT_STREAM_DELTA_EVENT: &str = "llm:chat-stream-delta";
-
-/// Same shape/lifecycle as `CHAT_STREAM_DELTA_EVENT`, but for a
-/// reasoning-capable model's "thinking" text (`reasoning_content` on the
-/// wire, see `infra::llm_providers::openai_compatible::StreamDelta`) —
-/// fires while the model is still reasoning, ahead of any
-/// `CHAT_STREAM_DELTA_EVENT` for that round. Never fires at all for a
-/// provider/model that doesn't send `reasoning_content`.
-pub const CHAT_STREAM_REASONING_EVENT: &str = "llm:chat-stream-reasoning-delta";
-
-/// Fires immediately before executing one tool call in a `llm_chat_stream`
-/// round — before, not after, so the UI can show e.g. "reading
-/// docs/x.adoc…" while the (possibly slow — `SemanticSearch` can hit an
-/// embedding provider) execution is actually in flight. Always followed by
-/// exactly one `TOOL_RESULT_EVENT` carrying the same `id`, once execution
-/// settles.
-pub const TOOL_CALL_EVENT: &str = "llm:tool-call";
-
-/// Fires once a tool call started via `TOOL_CALL_EVENT` has settled —
-/// carries the same `id` so the frontend can find and close out the
-/// matching entry in its transcript. Exactly one of `result`/`error` is
-/// ever `Some`.
-pub const TOOL_RESULT_EVENT: &str = "llm:tool-result";
-
-/// Fires after completion tokens are recorded into the rate-limit store,
-/// and after LLM settings are saved (the tracking toggle lives there) —
-/// the status-bar chip refreshes without waiting for its poll interval.
-pub const RATE_LIMIT_CHANGED_EVENT: &str = "llm:rate-limit-changed";
-
-/// Turns `services::llm_chat`'s framework-free reports into real Tauri
-/// events. This is the only place any of the five `llm:*` events above is
-/// emitted — the chat loop itself has no `AppHandle` and no idea a UI is
-/// listening.
-fn chat_event_sink(app: &AppHandle) -> ChatEventSink {
-    let app = app.clone();
-    Arc::new(move |event: ChatEvent| {
-        let _ = match event {
-            ChatEvent::Delta(p) => app.emit(CHAT_STREAM_DELTA_EVENT, p),
-            ChatEvent::Reasoning(p) => app.emit(CHAT_STREAM_REASONING_EVENT, p),
-            ChatEvent::ToolCall(p) => app.emit(TOOL_CALL_EVENT, p),
-            ChatEvent::ToolResult(p) => app.emit(TOOL_RESULT_EVENT, p),
-            ChatEvent::RateLimitChanged => app.emit(RATE_LIMIT_CHANGED_EVENT, ()),
-        };
-    })
+/// Unwraps the managed slots into the aggregate `services::llm_chat` works
+/// with. Both turn use-cases need the identical set, so building it in one
+/// place keeps the two commands from drifting apart.
+#[allow(clippy::too_many_arguments)]
+fn turn_context_from_state(
+    provider_id: String,
+    active_file_path: Option<String>,
+    conversation_mode: ConversationMode,
+    llm_provider: &State<'_, Arc<LlmProviderSlot>>,
+    cancel_flag: &State<'_, Arc<ChatCancelFlag>>,
+    repo_index: &State<'_, Arc<RepositoryIndex>>,
+    chunk_index: &State<'_, Arc<ChunkIndex>>,
+    embedding_index: &State<'_, Arc<EmbeddingIndexSlot>>,
+    index_store: &State<'_, Arc<IndexStoreSlot>>,
+    embedding_provider: &State<'_, Arc<EmbeddingProviderSlot>>,
+    sync_guard: &State<'_, Arc<EmbeddingSyncGuard>>,
+    workspace_index: &State<'_, Arc<WorkspaceIndex>>,
+) -> ChatTurnContext {
+    ChatTurnContext {
+        provider_slot: llm_provider.inner().clone(),
+        cancel_flag: cancel_flag.inner().clone(),
+        deps: EmbeddingDeps {
+            repo_index: repo_index.inner().clone(),
+            chunk_index: chunk_index.inner().clone(),
+            embedding_index: embedding_index.inner().clone(),
+            index_store: index_store.inner().clone(),
+            embedding_provider: embedding_provider.inner().clone(),
+            sync_guard: sync_guard.inner().clone(),
+            workspace_index: workspace_index.inner().clone(),
+            // Both filled in by `llm_chat::setup`, once provider and scope
+            // are resolved.
+            fast_apply: None,
+            active_file: None,
+        },
+        provider_id,
+        active_file_path,
+        conversation_mode,
+    }
 }
 
 
@@ -324,57 +312,25 @@ pub async fn llm_chat_stream(
     sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
     workspace_index: State<'_, Arc<WorkspaceIndex>>,
 ) -> Result<ChatStreamOutcome, String> {
-    let llm_provider = llm_provider.inner().clone();
-    let cancel_flag = cancel_flag.inner().clone();
-    // A *fresh* turn always starts with a clean flag — a stray cancel from
-    // an already-finished previous turn must never bleed into this one.
-    // `llm_chat_stream_resume` deliberately does not do this (see
-    // `ChatCancelFlag`'s doc comment).
-    cancel_flag.store(false, Ordering::SeqCst);
-    let mut deps = EmbeddingDeps {
-        repo_index: repo_index.inner().clone(),
-        chunk_index: chunk_index.inner().clone(),
-        embedding_index: embedding_index.inner().clone(),
-        index_store: index_store.inner().clone(),
-        embedding_provider: embedding_provider.inner().clone(),
-        sync_guard: sync_guard.inner().clone(),
-        workspace_index: workspace_index.inner().clone(),
-        // Set below, once `provider`/`model` are resolved — `EditFile`'s
-        // fast-apply fallback reuses the exact same provider/model this
-        // turn is already using for chat, rather than resolving a second
-        // one just for this.
-        fast_apply: None,
-        // Set below, once `scope` is resolved — the conversion needs
-        // `scope.docs_root`/`scope.repo_root`. See `resolve_active_file`.
-        active_file: None,
-    };
+    let ctx = turn_context_from_state(
+        provider_id,
+        active_file_path,
+        conversation_mode,
+        &llm_provider,
+        &cancel_flag,
+        &repo_index,
+        &chunk_index,
+        &embedding_index,
+        &index_store,
+        &embedding_provider,
+        &sync_guard,
+        &workspace_index,
+    );
     let events = chat_event_sink(&app);
-    tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
-        let llm_session::LlmSession { provider, model, settings, .. } =
-            llm_session::resolve(&provider_id, &llm_provider)?;
-        deps.fast_apply = Some((provider.clone(), model.clone()));
 
-        // No project open is not something the model can recover from by
-        // trying again — hard-fail the whole command, same as
-        // `ai_execute_tool` does for the same condition.
-        let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
-        deps.active_file = resolve_active_file(&scope, active_file_path);
-        let tools = ai_tools::llm_tool_definitions(&scope, conversation_mode);
-
-        let ctx = LoopCtx {
-            events: &events,
-            provider: provider.as_ref(),
-            provider_id: &provider_id,
-            model: &model,
-            settings: &settings,
-            deps: &deps,
-            cancel_flag: &cancel_flag,
-            conversation_mode,
-        };
-        run_tool_loop(&ctx, scope, tools, messages, 0, 0, None, todos)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || llm_chat::stream(ctx, messages, todos, &events))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Continues a conversation paused by a `ChatStreamOutcome::PendingApproval`
@@ -413,72 +369,27 @@ pub async fn llm_chat_stream_resume(
     sync_guard: State<'_, Arc<EmbeddingSyncGuard>>,
     workspace_index: State<'_, Arc<WorkspaceIndex>>,
 ) -> Result<ChatStreamOutcome, String> {
-    let llm_provider = llm_provider.inner().clone();
-    // Deliberately not reset here — a cancel that landed while the
-    // `PendingApproval` card this call is resuming was still on screen must
-    // survive into this call so `run_tool_loop`'s first checkpoint can still
-    // see it. See `ChatCancelFlag`'s doc comment.
-    let cancel_flag = cancel_flag.inner().clone();
-    let mut deps = EmbeddingDeps {
-        repo_index: repo_index.inner().clone(),
-        chunk_index: chunk_index.inner().clone(),
-        embedding_index: embedding_index.inner().clone(),
-        index_store: index_store.inner().clone(),
-        embedding_provider: embedding_provider.inner().clone(),
-        sync_guard: sync_guard.inner().clone(),
-        workspace_index: workspace_index.inner().clone(),
-        // Set below, once `provider`/`model` are resolved — `EditFile`'s
-        // fast-apply fallback reuses the exact same provider/model this
-        // turn is already using for chat, rather than resolving a second
-        // one just for this.
-        fast_apply: None,
-        // Set below, once `scope` is resolved — see `resolve_active_file`.
-        active_file: None,
-    };
+    // The cancel flag is deliberately *not* reset for a resume — a cancel
+    // that landed while the `PendingApproval` card was still on screen must
+    // survive into this call. See `ChatCancelFlag`'s doc comment.
+    let ctx = turn_context_from_state(
+        provider_id,
+        active_file_path,
+        conversation_mode,
+        &llm_provider,
+        &cancel_flag,
+        &repo_index,
+        &chunk_index,
+        &embedding_index,
+        &index_store,
+        &embedding_provider,
+        &sync_guard,
+        &workspace_index,
+    );
+    let resume = llm_chat::ResumePoint { history, round, budget_used, decisions, todos };
     let events = chat_event_sink(&app);
-    tauri::async_runtime::spawn_blocking(move || -> Result<ChatStreamOutcome, String> {
-        let llm_session::LlmSession { provider, model, settings, .. } =
-            llm_session::resolve(&provider_id, &llm_provider)?;
-        deps.fast_apply = Some((provider.clone(), model.clone()));
 
-        let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
-        deps.active_file = resolve_active_file(&scope, active_file_path);
-        let tools = ai_tools::llm_tool_definitions(&scope, conversation_mode);
-
-        let last = history
-            .last()
-            .ok_or_else(|| "resume: history must not be empty".to_string())?;
-        if last.role != LlmRole::Assistant || last.tool_calls.is_empty() {
-            return Err(
-                "resume: history must end with the assistant's tool-call turn".to_string()
-            );
-        }
-        let calls = last.tool_calls.clone();
-
-        let expected: HashSet<&str> = calls
-            .iter()
-            .filter(|c| call_requires_confirmation(&c.name, &c.arguments))
-            .map(|c| c.id.as_str())
-            .collect();
-        let provided: HashSet<&str> = decisions.iter().map(|d| d.id.as_str()).collect();
-        if expected != provided {
-            return Err(
-                "resume: decisions do not match this round's pending calls".to_string()
-            );
-        }
-
-        let ctx = LoopCtx {
-            events: &events,
-            provider: provider.as_ref(),
-            provider_id: &provider_id,
-            model: &model,
-            settings: &settings,
-            deps: &deps,
-            cancel_flag: &cancel_flag,
-            conversation_mode,
-        };
-        run_tool_loop(&ctx, scope, tools, history, round, budget_used, Some((calls, decisions)), todos)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || llm_chat::stream_resume(ctx, resume, &events))
+        .await
+        .map_err(|e| e.to_string())?
 }

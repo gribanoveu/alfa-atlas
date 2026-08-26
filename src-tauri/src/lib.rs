@@ -124,7 +124,7 @@ pub fn run() {
             app.manage(Arc::new(DownloadState::default()));
             app.manage(Arc::new(LlmProviderSlot::new(None)));
             app.manage(Arc::new(ChatCancelFlag::new(false)));
-            app.manage(Arc::new(commands::memory_pipeline::MemoryExtractGuard::new()));
+            app.manage(Arc::new(services::memory_pipeline::MemoryExtractGuard::new()));
 
             Ok(())
         })

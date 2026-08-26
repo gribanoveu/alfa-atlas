@@ -1,5 +1,6 @@
 pub mod ai_tools;
 pub mod asciidoc;
+pub mod chat_events;
 pub mod chat_history;
 pub mod embeddings;
 pub mod export;

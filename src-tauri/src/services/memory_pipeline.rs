@@ -4,17 +4,25 @@
 //! asynchronously after a chat turn is persisted.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::domain::memory_extract::{
     extractor_prompt, parse_extractor_output, reconcile_prompt, ExtractorOutput, MemoryExtractError,
     MemoryFactScope, ReconcileNeighbor, TurnTranscript,
 };
+use crate::domain::memory_extract::pending_turn;
 use crate::domain::memory_policy::{
     apply_policy, neighbors_for_facts, ApprovedFact, MemoryEntrySnapshot, MemoryPolicyConfig,
     SimilarEntry,
 };
+use crate::domain::llm::{ChatEvent, ChatRequest, LlmMessage, LlmRole};
+
+use crate::infra::{chat_store, llm_debug_log};
 use crate::services::agent_memory::{self, AgentMemoryError, MemoryScope};
+use crate::services::llm_chat::ChatEventSink;
+use crate::services::llm_session::LlmProviderSlot;
+use crate::services::{llm_config, llm_rate_limit, llm_session};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryPipelineError {
@@ -148,6 +156,136 @@ where
     let prompt = reconcile_prompt(&drafts.facts, &shown);
     let raw = llm(&prompt).map_err(MemoryPipelineError::Llm)?;
     Ok(parse_extractor_output(&raw)?)
+}
+
+/// Per-chat in-flight + dirty flag so a save that lands while a pass is
+/// running is not dropped: the running job loops until the dirty bit is
+/// clear.
+pub struct MemoryExtractGuard {
+    inner: Mutex<GuardInner>,
+}
+
+struct GuardInner {
+    in_flight: HashSet<String>,
+    dirty: HashSet<String>,
+}
+
+impl MemoryExtractGuard {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new(GuardInner {
+                in_flight: HashSet::new(),
+                dirty: HashSet::new(),
+            }),
+        }
+    }
+
+    /// `true` = this caller should run the job. `false` = already running;
+    /// the current pass will re-check after it finishes.
+    pub fn try_start(&self, chat_id: &str) -> bool {
+        let Ok(mut g) = self.inner.lock() else {
+            return false;
+        };
+        if g.in_flight.contains(chat_id) {
+            g.dirty.insert(chat_id.to_string());
+            false
+        } else {
+            g.in_flight.insert(chat_id.to_string());
+            g.dirty.remove(chat_id);
+            true
+        }
+    }
+
+    /// After one pass: `true` if another pass is needed.
+    pub fn should_rerun(&self, chat_id: &str) -> bool {
+        let Ok(mut g) = self.inner.lock() else {
+            return false;
+        };
+        if g.dirty.remove(chat_id) {
+            true
+        } else {
+            g.in_flight.remove(chat_id);
+            false
+        }
+    }
+}
+
+
+/// One extraction pass over whatever of `chat_id` is not yet extracted.
+///
+/// Reports through `events` rather than emitting directly — the only thing
+/// it reports is `ChatEvent::RateLimitChanged`, after the extraction call's
+/// token usage is recorded. That keeps this module free of `tauri::` and
+/// removes the last reason `commands::memory_pipeline` had to import from
+/// `commands::llm`.
+pub fn run_pending_pass(
+    events: &ChatEventSink,
+    chat_id: &str,
+    repo_root: &str,
+    slot: &LlmProviderSlot,
+) -> Result<(), String> {
+    let settings = llm_config::load_llm_settings().map_err(|e| e.to_string())?;
+    if !settings.memory_extraction_enabled {
+        return Ok(());
+    }
+    let stored_root = chat_store::chat_repo_root(chat_id).map_err(|e| e.to_string())?;
+    if stored_root != repo_root {
+        return Err(format!(
+            "chat {chat_id} belongs to {stored_root}, not {repo_root}"
+        ));
+    }
+
+    let watermark = chat_store::memory_extracted_ordinal(chat_id).map_err(|e| e.to_string())?;
+    let loaded = chat_store::load_chat(chat_id).map_err(|e| e.to_string())?;
+    let Some(pending) = pending_turn(&loaded.messages, watermark) else {
+        return Ok(());
+    };
+
+    if let Some(transcript) = pending.transcript {
+        let Some(provider_id) = llm_config::effective_active_provider_id(&settings) else {
+            // No resolvable provider — leave the watermark so a later save retries.
+            return Ok(());
+        };
+
+        let llm_session::LlmSession { provider, model, .. } =
+            llm_session::resolve(&provider_id, slot)?;
+        let debug = settings.debug_logging;
+        let events = events.clone();
+        let provider_id_for_log = provider_id.clone();
+
+        let mut llm = |prompt: &str| -> Result<String, String> {
+            let request = ChatRequest {
+                messages: vec![LlmMessage {
+                    role: LlmRole::User,
+                    content: Some(prompt.to_string()),
+                    tool_call_id: None,
+                    tool_calls: vec![],
+                }],
+                tools: Vec::new(),
+                model: model.clone(),
+            };
+            llm_debug_log::log_request(debug, &provider_id_for_log, llm_debug_log::ONCE_ROUND, &request);
+            let outcome = provider.chat(request).map_err(|e| e.to_string());
+            llm_debug_log::log_chat_once_result(debug, &provider_id_for_log, &outcome);
+            if let Ok(ref response) = outcome {
+                if let Some(usage) = response.usage {
+                    llm_rate_limit::record(&provider_id_for_log, usage.completion_tokens);
+                    events(ChatEvent::RateLimitChanged);
+                }
+            }
+            outcome.map(|resp| resp.content.unwrap_or_default())
+        };
+
+        let config = MemoryPolicyConfig::from_threshold(settings.memory_confidence_threshold);
+        let root = PathBuf::from(repo_root);
+        // LLM failure must not advance the watermark — the next save retries.
+        run_turn(&transcript, &root, &config, &mut llm)
+            .map_err(|e| e.to_string())?;
+    }
+
+    chat_store::set_memory_extracted_ordinal(chat_id, pending.last_ordinal)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
