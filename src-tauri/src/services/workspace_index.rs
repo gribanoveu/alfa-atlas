@@ -15,11 +15,10 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::SystemTime;
 
 use dashmap::DashMap;
-use tauri::{AppHandle, Emitter};
 
 use crate::domain::asciidoc_facts::{
     AsciiDocFacts, AsciiDocParseRequested, ParseErrorFact,
@@ -28,14 +27,13 @@ use crate::domain::supported_files::is_supported_file;
 use crate::domain::workspace_index::{
     relative_key, relative_key_lenient, resolve_against_document, unix_seconds, Anchor, Attribute,
     Diagnostic, DiagnosticKind, Document, DocumentId, DocumentType, Image, Include, IndexEvent,
-    IndexStats, ParsedDocument, Reference, Severity, WorkspaceIndexError,
+    IndexStats, ParsedDocument, Reference, Severity, WorkspaceIndexError, WorkspaceIndexEvent,
+    WorkspaceIndexEventSink,
 };
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::infra::workspace_scanner;
 use crate::services::diagnostics;
 
-const EVENT_CHANNEL: &str = "workspace-index://event";
-const ASCIIDOC_PARSE_REQUESTED_CHANNEL: &str = "asciidoc:parse-requested";
 const PARSE_TIMEOUT_SECS: u64 = 30;
 
 /// Reverse-dependency map: for each target `DocumentId`, the set of documents
@@ -57,7 +55,9 @@ pub struct WorkspaceIndex {
     diagnostics: DashMap<DocumentId, Vec<Diagnostic>>,
     dependents: DependentsMap,
     parsers: ParserRegistry,
-    app_handle: RwLock<Option<AppHandle>>,
+    /// `None` until the command layer installs one — the index still
+    /// works headless (tests do exactly that), it just reports nowhere.
+    event_sink: RwLock<Option<WorkspaceIndexEventSink>>,
     watcher: RwLock<Option<crate::services::file_watcher::FileWatcher>>,
 
     // --- AsciiDoc async coordinator state ---
@@ -105,7 +105,7 @@ impl WorkspaceIndex {
             diagnostics: DashMap::new(),
             dependents: DashMap::new(),
             parsers,
-            app_handle: RwLock::new(None),
+            event_sink: RwLock::new(None),
             watcher: RwLock::new(None),
             doc_versions: DashMap::new(),
             pending_adoc_queue: RwLock::new(VecDeque::new()),
@@ -128,16 +128,55 @@ impl WorkspaceIndex {
         idx
     }
 
-    pub fn set_app_handle(&self, handle: AppHandle) {
-        *self.app_handle.write().unwrap() = Some(handle);
+    pub fn set_event_sink(&self, sink: WorkspaceIndexEventSink) {
+        *self.event_sink_write() = Some(sink);
+    }
+
+    // --- Lock accessors ---
+    //
+    // Every `RwLock` here is read/written through these rather than
+    // `.unwrap()` on the guard. What each lock protects is a plain value —
+    // a path, a sink, a watcher handle, a queue — so a panic while one is
+    // held leaves no torn state behind; only the mutual-exclusion property
+    // matters, and that survives the unwind intact. Propagating
+    // `PoisonError` instead would mean one panic anywhere disables the
+    // whole workspace index for the rest of the process's life. Same policy
+    // and same reasoning as `services::embedding_state::lock_sync_guard`.
+
+    fn repo_root_read(&self) -> RwLockReadGuard<'_, Option<PathBuf>> {
+        self.repo_root.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn repo_root_write(&self) -> RwLockWriteGuard<'_, Option<PathBuf>> {
+        self.repo_root.write().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn event_sink_read(&self) -> RwLockReadGuard<'_, Option<WorkspaceIndexEventSink>> {
+        self.event_sink.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn event_sink_write(&self) -> RwLockWriteGuard<'_, Option<WorkspaceIndexEventSink>> {
+        self.event_sink.write().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn watcher_read(&self) -> RwLockReadGuard<'_, Option<crate::services::file_watcher::FileWatcher>> {
+        self.watcher.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn watcher_write(&self) -> RwLockWriteGuard<'_, Option<crate::services::file_watcher::FileWatcher>> {
+        self.watcher.write().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn adoc_queue_write(&self) -> RwLockWriteGuard<'_, VecDeque<AsciiDocParseRequested>> {
+        self.pending_adoc_queue.write().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub fn is_open(&self) -> bool {
-        self.repo_root.read().unwrap().is_some()
+        self.repo_root_read().is_some()
     }
 
     pub fn repo_root(&self) -> Option<PathBuf> {
-        self.repo_root.read().unwrap().clone()
+        self.repo_root_read().clone()
     }
 
     /// Build the index from scratch. Clears any previous state and emits
@@ -159,7 +198,7 @@ impl WorkspaceIndex {
 
         self.clear();
 
-        *self.repo_root.write().unwrap() = Some(canonical.clone());
+        *self.repo_root_write() = Some(canonical.clone());
         self.emit(IndexEvent::IndexBuildingStarted);
         self.building_in_progress.store(true, Ordering::SeqCst);
 
@@ -219,23 +258,23 @@ impl WorkspaceIndex {
         let root = self
             .repo_root()
             .ok_or(WorkspaceIndexError::NotOpen)?;
-        if self.watcher.read().unwrap().is_some() {
+        if self.watcher_read().is_some() {
             return Ok(());
         }
         let watcher = crate::services::file_watcher::FileWatcher::start(root, self.clone())?;
-        *self.watcher.write().unwrap() = Some(watcher);
+        *self.watcher_write() = Some(watcher);
         Ok(())
     }
 
     /// Stop the file watcher if running. Called by `clear`.
     pub fn stop_watcher(&self) {
-        *self.watcher.write().unwrap() = None;
+        *self.watcher_write() = None;
     }
 
     /// Drop all state. Called on `build()` (before repopulating) and on project close.
     pub fn clear(&self) {
         self.stop_watcher();
-        *self.repo_root.write().unwrap() = None;
+        *self.repo_root_write() = None;
         self.documents.clear();
         self.anchors.clear();
         self.anchors_by_doc.clear();
@@ -255,7 +294,7 @@ impl WorkspaceIndex {
             false
         });
         self.doc_versions.clear();
-        *self.pending_adoc_queue.write().unwrap() = VecDeque::new();
+        *self.adoc_queue_write() = VecDeque::new();
         self.inflight_adoc_count.store(0, Ordering::SeqCst);
         self.build_adoc_pending.store(0, Ordering::SeqCst);
         self.building_in_progress.store(false, Ordering::SeqCst);
@@ -266,7 +305,7 @@ impl WorkspaceIndex {
 
     /// Incremental update on a file change/create.
     pub fn update_document(self: &Arc<Self>, path: PathBuf) -> Result<(), WorkspaceIndexError> {
-        let root = self.repo_root.read().unwrap().clone().ok_or(WorkspaceIndexError::NotOpen)?;
+        let root = self.repo_root_read().clone().ok_or(WorkspaceIndexError::NotOpen)?;
         let path_str = path.to_string_lossy().into_owned();
         if !is_supported_file(&path_str) {
             return Ok(());
@@ -296,7 +335,7 @@ impl WorkspaceIndex {
 
     /// Incremental update on a file removal.
     pub fn remove_document(&self, path: PathBuf) -> Result<(), WorkspaceIndexError> {
-        let root = self.repo_root.read().unwrap().clone().ok_or(WorkspaceIndexError::NotOpen)?;
+        let root = self.repo_root_read().clone().ok_or(WorkspaceIndexError::NotOpen)?;
         let id = self.document_id_for_path(&root, &path);
         let path_str = path.to_string_lossy().into_owned();
         self.remove_entries_for_doc(&id);
@@ -319,7 +358,7 @@ impl WorkspaceIndex {
         old: PathBuf,
         new: PathBuf,
     ) -> Result<(), WorkspaceIndexError> {
-        let root = self.repo_root.read().unwrap().clone().ok_or(WorkspaceIndexError::NotOpen)?;
+        let root = self.repo_root_read().clone().ok_or(WorkspaceIndexError::NotOpen)?;
         let old_id = self.document_id_for_path(&root, &old);
         // Remove old entries (anchors/attributes/etc. were tied to old_id).
         self.remove_entries_for_doc(&old_id);
@@ -376,7 +415,7 @@ impl WorkspaceIndex {
         };
         self.documents.insert(id.clone(), document);
 
-        if doc_type == DocumentType::AsciiDoc && self.app_handle.read().unwrap().is_some() {
+        if doc_type == DocumentType::AsciiDoc && self.event_sink_read().is_some() {
             // Production: delegate AsciiDoc parsing to the frontend.
             self_arc.dispatch_asciidoc_parse(&id, content, relative);
         } else {
@@ -582,8 +621,12 @@ impl WorkspaceIndex {
     }
 
     fn emit(&self, event: IndexEvent) {
-        if let Some(handle) = self.app_handle.read().unwrap().as_ref() {
-            let _ = handle.emit(EVENT_CHANNEL, &event);
+        self.report(WorkspaceIndexEvent::Index(event));
+    }
+
+    fn report(&self, event: WorkspaceIndexEvent) {
+        if let Some(sink) = self.event_sink_read().as_ref() {
+            sink(event);
         }
     }
 
@@ -596,9 +639,7 @@ impl WorkspaceIndex {
     // --- AsciiDoc async coordinator ---
 
     fn try_emit_parse_request(&self, payload: AsciiDocParseRequested) {
-        if let Some(handle) = self.app_handle.read().unwrap().as_ref() {
-            let _ = handle.emit(ASCIIDOC_PARSE_REQUESTED_CHANNEL, &payload);
-        }
+        self.report(WorkspaceIndexEvent::AsciiDocParseRequested(payload));
     }
 
     /// Dispatch a parse request for `doc_id` to the frontend.
@@ -638,7 +679,7 @@ impl WorkspaceIndex {
             .insert((doc_id.clone(), version), handle);
 
         if !self.frontend_ready.load(Ordering::SeqCst) {
-            self.pending_adoc_queue.write().unwrap().push_back(payload);
+            self.adoc_queue_write().push_back(payload);
             if self.building_in_progress.load(Ordering::SeqCst) {
                 self.build_adoc_pending.fetch_add(1, Ordering::SeqCst);
             }
@@ -650,7 +691,7 @@ impl WorkspaceIndex {
             self.inflight_adoc_count.fetch_add(1, Ordering::SeqCst);
             self.try_emit_parse_request(payload);
         } else {
-            self.pending_adoc_queue.write().unwrap().push_back(payload);
+            self.adoc_queue_write().push_back(payload);
         }
         if self.building_in_progress.load(Ordering::SeqCst) {
             self.build_adoc_pending.fetch_add(1, Ordering::SeqCst);
@@ -661,7 +702,7 @@ impl WorkspaceIndex {
     /// buffered queue up to `max_inflight`.
     pub fn frontend_ready(&self) {
         self.frontend_ready.store(true, Ordering::SeqCst);
-        let mut queue = self.pending_adoc_queue.write().unwrap();
+        let mut queue = self.adoc_queue_write();
         loop {
             let current = self.inflight_adoc_count.load(Ordering::SeqCst);
             if current >= self.max_inflight {
@@ -674,7 +715,7 @@ impl WorkspaceIndex {
             if let Some(payload) = next {
                 self.inflight_adoc_count.fetch_add(1, Ordering::SeqCst);
                 self.try_emit_parse_request(payload);
-                queue = self.pending_adoc_queue.write().unwrap();
+                queue = self.adoc_queue_write();
             } else {
                 break;
             }
@@ -753,7 +794,7 @@ impl WorkspaceIndex {
         self.inflight_adoc_count.fetch_sub(1, Ordering::SeqCst);
 
         // Drain queue. Release the lock before dispatch — `next` is owned.
-        let next = self.pending_adoc_queue.write().unwrap().pop_front();
+        let next = self.adoc_queue_write().pop_front();
         if let Some(payload) = next {
             self.inflight_adoc_count.fetch_add(1, Ordering::SeqCst);
             self.try_emit_parse_request(payload);
@@ -867,7 +908,7 @@ impl WorkspaceIndex {
     // --- Public read API (spec section 7) ---
 
     pub fn get_document(&self, path: &Path) -> Option<Document> {
-        let root = self.repo_root.read().unwrap().clone()?;
+        let root = self.repo_root_read().clone()?;
         let id = relative_key_lenient(&root, path).ok().map(DocumentId::new)?;
         self.documents.get(&id).map(|r| r.clone())
     }
@@ -1004,7 +1045,7 @@ impl WorkspaceIndex {
 
     /// Does the image path resolve to an existing file under the repo root?
     pub(crate) fn image_exists(&self, path: &str) -> bool {
-        let root = match self.repo_root.read().unwrap().clone() {
+        let root = match self.repo_root_read().clone() {
             Some(r) => r,
             None => return false,
         };

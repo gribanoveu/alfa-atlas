@@ -22,4 +22,5 @@ pub mod spellcheck;
 pub mod standards;
 pub mod tool_call_log;
 pub mod workspace;
+pub mod workspace_events;
 pub mod workspace_index;

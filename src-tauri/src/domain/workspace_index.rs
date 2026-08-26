@@ -1,8 +1,11 @@
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use super::asciidoc_facts::AsciiDocParseRequested;
 
 /// Relative path normalized as a key. Equal relative paths share the same `DocumentId`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -167,6 +170,26 @@ pub enum IndexEvent {
     IndexUpdated { document: String },
     DiagnosticsUpdated { document: String },
 }
+
+/// Everything `services::workspace_index` reports outward.
+///
+/// One enum rather than a callback per channel, for the same reason
+/// `domain::llm::ChatEvent` is one: the index reports two unrelated kinds of
+/// thing (index lifecycle, and a request for the frontend to parse an
+/// AsciiDoc document), and threading two callbacks through the index would
+/// put two parameters on every signature that can report.
+#[derive(Debug, Clone)]
+pub enum WorkspaceIndexEvent {
+    Index(IndexEvent),
+    /// The backend cannot parse AsciiDoc itself — it asks the frontend to do
+    /// it and send the facts back (`commands::asciidoc::submit_asciidoc_facts`).
+    AsciiDocParseRequested(AsciiDocParseRequested),
+}
+
+/// Where `WorkspaceIndexEvent`s go. A port, like `domain::llm::ChatEventSink`
+/// beside it: the index never learns what is on the other side, and the
+/// command layer is the only thing that turns these into Tauri events.
+pub type WorkspaceIndexEventSink = Arc<dyn Fn(WorkspaceIndexEvent) + Send + Sync>;
 
 #[derive(Debug, Error)]
 pub enum WorkspaceIndexError {

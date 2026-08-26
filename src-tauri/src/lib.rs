@@ -107,7 +107,9 @@ pub fn run() {
 
             let index = Arc::new(WorkspaceIndex::new(ParserRegistry::new()));
             if let Some(window) = app.get_webview_window("main") {
-                index.set_app_handle(window.app_handle().clone());
+                index.set_event_sink(commands::workspace_events::workspace_index_event_sink(
+                    window.app_handle(),
+                ));
             }
             app.manage(index);
             app.manage(Arc::new(SpellcheckEngine::load()));
