@@ -82,14 +82,24 @@ pub fn ensure_atlas_gitignore(repo_root: &str) -> Result<(), ProjectError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Seven tests in this module call this concurrently. A nanosecond
+    /// timestamp alone does not reliably disambiguate them on a coarser
+    /// system clock — two would land in the same directory and clobber each
+    /// other's `.gitignore`. The counter guarantees uniqueness within the
+    /// process regardless of clock resolution, same as
+    /// `services::embedding_state::tests::fixture_dir`.
+    static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temp_dir() -> std::path::PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("gitignore-test-{nanos}"));
+        let n = FIXTURE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("gitignore-test-{nanos}-{n}"));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
