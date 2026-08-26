@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
-use crate::commands::embeddings::{
+use crate::services::embedding_state::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
 use crate::domain::ai_access::{AiAccessMode, ToolName};

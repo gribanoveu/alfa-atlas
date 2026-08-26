@@ -42,7 +42,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::embeddings::{
+use crate::services::embedding_state::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
 use crate::domain::ai_access::{call_requires_confirmation, ToolName};
@@ -175,7 +175,7 @@ struct ToolResultEventPayload {
 }
 
 /// Caches the constructed `LlmProvider` across calls, same reasoning as
-/// `commands::embeddings::EmbeddingProviderSlot`: keyed by
+/// `services::embedding_state::EmbeddingProviderSlot`: keyed by
 /// `(resolved, api_key)` rather than just the provider id, so a key
 /// rotation or a settings-layer override change (a different `base_url`/
 /// `trusted_cert_pem`) invalidates the cache instead of silently reusing a

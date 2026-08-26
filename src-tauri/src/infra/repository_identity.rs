@@ -1,7 +1,7 @@
 //! Derives a stable identity for a repository so its embeddings index
 //! (`infra::index_store`/`infra::vector_store`) can live in a global,
 //! per-repository cache (`~/.atlas/embeddings/{repository_id}`, see
-//! `commands::embeddings::resolve_index_paths`) instead of inside the repo
+//! `services::embedding_state::resolve_index_paths`) instead of inside the repo
 //! itself. Identity is the repo's canonical remote URL — deliberately
 //! *not* the current revision, so switching branches or committing doesn't
 //! change which cache folder a repo maps to; `resolve_index_paths` still
@@ -19,7 +19,7 @@ pub struct RepositoryIdentity {
     /// Normalized remote URL, or `None` if the path isn't a git repository
     /// or has no remotes configured (a purely local repo). Callers fall
     /// back to a persisted per-project UUID in that case — see
-    /// `commands::embeddings::local_identity`.
+    /// `services::embedding_state::local_identity`.
     pub canonical_url: Option<String>,
     /// Full HEAD commit OID, or `None` for a non-repo or an unborn HEAD
     /// (no commits yet). Informational only — not part of `repository_id`.
@@ -100,7 +100,7 @@ fn canonicalize_remote_url(url: &str) -> String {
 
 /// `repository_id = SHA-256(source)`, hex-encoded. `source` is
 /// `RepositoryIdentity::canonical_url` when available, otherwise the
-/// caller's persisted fallback identity (see `commands::embeddings::
+/// caller's persisted fallback identity (see `services::embedding_state::
 /// local_identity`) — either way, a stable string that never changes for
 /// the same repo across clones/worktrees/commits.
 pub fn repository_id(source: &str) -> String {

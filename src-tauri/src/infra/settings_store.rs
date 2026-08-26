@@ -39,7 +39,7 @@ pub fn save(settings: &AppSettings) -> Result<(), SettingsError> {
 }
 
 /// Shared test seam for anything that resolves through `settings_dir()`
-/// (`chat_store`, `commands::embeddings::resolve_index_paths`, …).
+/// (`chat_store`, `services::embedding_state::resolve_index_paths`, …).
 /// `$HOME` is process-global and `cargo test` runs on multiple threads by
 /// default, so every test module that redirects it must serialize against
 /// every *other* one too, not just against tests in its own module —

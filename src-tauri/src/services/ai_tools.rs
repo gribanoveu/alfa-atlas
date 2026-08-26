@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, TryLockError};
 
-use crate::commands::embeddings::{
+use crate::services::embedding_state::{
     attach_embedding_index, attach_index_store, ensure_provider, resolve_index_paths,
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
@@ -2984,7 +2984,7 @@ fn is_semantic_ready(deps: &EmbeddingDeps) -> bool {
     // `WouldBlock` (a sync is actively running right now) is the only
     // `try_lock` outcome that should degrade this call — `Poisoned` must
     // not, or a single panic elsewhere while holding this guard (see
-    // `commands::embeddings::lock_sync_guard`'s doc comment) would disable
+    // `services::embedding_state::lock_sync_guard`'s doc comment) would disable
     // semantic search for the rest of the app's lifetime instead of just
     // this one call.
     if matches!(deps.sync_guard.try_lock(), Err(TryLockError::WouldBlock)) {

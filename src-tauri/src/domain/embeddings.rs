@@ -206,7 +206,7 @@ pub struct EmbeddingIndexStatus {
     /// upstream change (e.g. a big `git pull`) — either way this can be
     /// nonzero on more than just a project's very first sync now that
     /// documentation is prioritized on every sync, not just the first.
-    /// Read from `commands::embeddings::BackgroundBacklogSlot`, not a
+    /// Read from `services::embedding_state::BackgroundBacklogSlot`, not a
     /// hand-maintained counter, so it survives an app restart or a panicked
     /// background task without drifting.
     pub background_pending: usize,

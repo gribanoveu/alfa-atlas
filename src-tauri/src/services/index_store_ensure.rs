@@ -1,6 +1,6 @@
 //! Opens the per-project `infra::index_store::IndexStore` (a global,
 //! per-repository-identity location since the embeddings cache moved out
-//! of the repo — see `commands::embeddings::resolve_index_paths`) and
+//! of the repo — see `services::embedding_state::resolve_index_paths`) and
 //! decides whether its persisted content is safe to reload as-is, or is
 //! stale (an incompatible chunking/indexing algorithm version) and must
 //! not be trusted. Deliberately read-only: deciding "is this stale" must
@@ -29,7 +29,7 @@ const META_INDEX_ROOT: &str = "index_root";
 /// Informational only, from `repository_identity::resolve`. Lets a stored
 /// index be compared against what it was last built from without making
 /// the revision part of the store's identity or its staleness check — see
-/// `commands::embeddings::resolve_index_paths` for why revision is
+/// `services::embedding_state::resolve_index_paths` for why revision is
 /// deliberately excluded from `repository_id` itself.
 const META_REPOSITORY_URL: &str = "repository_url";
 const META_REVISION: &str = "revision";

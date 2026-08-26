@@ -14,7 +14,7 @@ use crate::infra::{plan_store, project_store, repository_identity};
 use crate::services::project_open;
 
 /// Stable identity string used as the folder name under `~/.atlas/plans/`
-/// (and embeddings). Same rules as `commands::embeddings::resolve_index_paths`.
+/// (and embeddings). Same rules as `services::embedding_state::resolve_index_paths`.
 pub fn resolve_repository_id(repo_root: &Path) -> Result<String, PlanError> {
     let identity = repository_identity::resolve(repo_root);
     let source = match identity.canonical_url {

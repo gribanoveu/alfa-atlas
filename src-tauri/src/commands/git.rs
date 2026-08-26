@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::embeddings::FullSyncActiveSlot;
+use crate::services::embedding_state::FullSyncActiveSlot;
 use crate::domain::git::{
     AppKeyStatus, CheckoutOutcome, GitBranchInfo, GitCommitSummary, GitConflictFile,
     GitCredentials, GitDiffScope, GitFileDiff, GitFileStatus, GitProgressEvent, GitStashEntry,

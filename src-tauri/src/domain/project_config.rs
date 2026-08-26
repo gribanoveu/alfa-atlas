@@ -33,7 +33,7 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub ai_auto_approved_tools: Option<Vec<ToolName>>,
     /// Stable fallback identity for the global embeddings cache
-    /// (`~/.atlas/embeddings/{repository_id}`, see `commands::embeddings::
+    /// (`~/.atlas/embeddings/{repository_id}`, see `services::embedding_state::
     /// resolve_index_paths`), used only when the repo has no resolvable
     /// canonical remote URL (no git repo, or a git repo with no remotes).
     /// Generated once (a random UUID) and persisted here so the same
