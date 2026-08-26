@@ -30,6 +30,7 @@ import { useGitStash } from "./hooks/useGitStash";
 import { useGitActionLog } from "./hooks/useGitActionLog";
 import { useDocsTree } from "./hooks/useDocsTree";
 import { useDocNavigation } from "./hooks/useDocNavigation";
+import { useFileTreeActions } from "./hooks/useFileTreeActions";
 import { useEditorTabActions } from "./hooks/useEditorTabActions";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useSpecsRepo } from "./hooks/useSpecsRepo";
@@ -65,19 +66,15 @@ import {
   createRestEndpointFolder,
   deleteProjectDir,
   deleteProjectFile,
-  importExternalFile,
   readProjectFile,
   renameProjectDir,
   renameProjectFile,
   type UpdatedReference,
 } from "./lib/project";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import type { FileTreeDeleteTarget } from "./components/Sidebar/FileTree";
 import {
   formatLabelFor,
   isAsciiDocPath,
-  isImageAsset,
-  isSupportedFile,
   lineEndingLabelFor,
 } from "./lib/supportedFiles";
 import {
@@ -207,32 +204,29 @@ function App() {
   });
   const { toast: activeToast, showSuccess, folderError, setFolderError } =
     useAppToasts(editor.error);
+  const fileTree = useFileTreeActions({
+    project,
+    tree,
+    session,
+    editor,
+    git,
+    showSuccess,
+    setError: setFolderError,
+  });
+  const {
+    newFileParent,
+    setNewFileParent,
+    newFolderParent,
+    setNewFolderParent,
+    deleteTarget,
+    setDeleteTarget,
+    copiedItem,
+    setCopiedItem,
+    renameTarget,
+    setRenameTarget,
+    applyRenameReport,
+  } = fileTree;
 
-  // Переименование/перемещение файла или папки могло переписать include::/
-  // image::/xref: в других документах — подхватываем это в открытых вкладках
-  // (reloadTabFromDisk молча ничего не делает, если файл сейчас не открыт)
-  // и сообщаем пользователю, что именно поменялось.
-  const applyRenameReport = useCallback(
-    async (report: { updatedFiles: { docsRelativePath: string; count: number }[] }) => {
-      if (report.updatedFiles.length === 0) return;
-      await Promise.all(
-        report.updatedFiles.map((f) => editor.reloadTabFromDisk(f.docsRelativePath)),
-      );
-      const totalRefs = report.updatedFiles.reduce((sum, f) => sum + f.count, 0);
-      // Родительный падеж числительного не согласуем со словом — как в
-      // «Найдено результатов: N» — чтобы не городить русскую плюрализацию
-      // ради тоста.
-      showSuccess(
-        `Ссылки обновлены — файлов: ${report.updatedFiles.length}, ссылок: ${totalRefs}`,
-      );
-    },
-    [editor.reloadTabFromDisk, showSuccess],
-  );
-  const [newFileParent, setNewFileParent] = useState<string | null>(null);
-  const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<FileTreeDeleteTarget | null>(null);
-  const [copiedItem, setCopiedItem] = useState<FileTreeDeleteTarget | null>(null);
-  const [renameTarget, setRenameTarget] = useState<FileTreeDeleteTarget | null>(null);
   const [docsSearchOpen, setDocsSearchOpen] = useState(false);
   const [insertRequest, setInsertRequest] = useState<{
     id: number;
@@ -395,38 +389,10 @@ function App() {
     showSuccess,
   });
 
-  const handleOsImportExternal = useCallback(
-    async (destDirPath: string, absolutePaths: string[]) => {
-      const docsRoot = project.docsRoot;
-      if (!docsRoot) return;
-      let lastOpened: string | null = null;
-      for (const sourceAbsolute of absolutePaths) {
-        try {
-          const rel = await importExternalFile(
-            docsRoot,
-            destDirPath,
-            sourceAbsolute,
-          );
-          if (isSupportedFile(rel) || isImageAsset(rel)) {
-            lastOpened = rel;
-          }
-        } catch (e) {
-          setFolderError(toMessage(e));
-        }
-      }
-      session.ensureExpanded(destDirPath);
-      await tree.refresh();
-      git.scheduleRefresh();
-      if (lastOpened) {
-        void editor.openFile(lastOpened);
-      }
-    },
-    [project.docsRoot, session, tree, git, editor],
-  );
 
   const { osDropTargetPath } = useOsFileDrop(hasProject, {
     onImportExternal: (destDirPath, paths) => {
-      void handleOsImportExternal(destDirPath, paths);
+      void fileTree.importExternal(destDirPath, paths);
     },
     onOpenExternal: (absolutePath) => {
       void editor.openExternalFile(absolutePath);
