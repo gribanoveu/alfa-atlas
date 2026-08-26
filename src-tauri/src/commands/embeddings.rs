@@ -5,8 +5,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::domain::embeddings::{
-    EmbeddingIndexStatus, EmbeddingProviderConfig, ModelStatus, ResolvedEmbeddingConfig,
-    SyncProgress, SyncStats,
+    EmbeddingIndexStatus, EmbeddingProviderConfig, ModelDownloadProgress, ModelDownloadSink,
+    ModelStatus, ResolvedEmbeddingConfig, SyncProgress, SyncStats,
 };
 use crate::domain::paths;
 use crate::domain::repo_index::FileId;
@@ -25,6 +25,17 @@ use crate::services::repo_index::RepositoryIndex;
 use crate::services::workspace_index::WorkspaceIndex;
 
 pub const SYNC_PROGRESS_EVENT: &str = "embedding:sync-progress";
+
+pub const MODEL_DOWNLOAD_PROGRESS_EVENT: &str = "embedding:model-download-progress";
+
+/// Adapts `services::embedding_model`'s progress reports to a real Tauri
+/// event — the one place `MODEL_DOWNLOAD_PROGRESS_EVENT` is emitted.
+fn model_download_sink(app: &AppHandle) -> ModelDownloadSink {
+    let app = app.clone();
+    Arc::new(move |p: ModelDownloadProgress| {
+        let _ = app.emit(MODEL_DOWNLOAD_PROGRESS_EVENT, p);
+    })
+}
 
 /// Adapts `services::embedding_sync`'s `ProgressSink` to a real Tauri event.
 /// This is the only place `SYNC_PROGRESS_EVENT` is emitted — the sync
@@ -106,8 +117,9 @@ pub async fn embedding_download_model(
     state: State<'_, Arc<DownloadState>>,
 ) -> Result<(), String> {
     let state = state.inner().clone();
+    let progress = model_download_sink(&app);
     tauri::async_runtime::spawn_blocking(move || {
-        embedding_model::download_model(&app, &state).map_err(|e| e.to_string())
+        embedding_model::download_model(&progress, &state).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

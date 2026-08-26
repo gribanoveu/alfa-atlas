@@ -11,10 +11,10 @@ use fastembed::{Bgem3Embedding, Bgem3InitOptions, Bgem3Model};
 use hf_hub::api::sync::ApiBuilder;
 use hf_hub::api::Progress;
 use hf_hub::{Cache, Repo, RepoType};
-use serde::Serialize;
-use tauri::{AppHandle, Emitter};
 
-use crate::domain::embeddings::{EmbeddingError, ModelStatus};
+use crate::domain::embeddings::{
+    EmbeddingError, ModelDownloadProgress, ModelDownloadSink, ModelStatus,
+};
 use crate::infra::embedding_providers::local::{model_cache_dir, MODEL_FILE, MODEL_REPO};
 
 /// Mirrors `HF_ENDPOINT`'s hardcoded default inside `hf_hub`/`fastembed`
@@ -24,17 +24,6 @@ use crate::infra::embedding_providers::local::{model_cache_dir, MODEL_FILE, MODE
 /// `download_weights_with_progress`'s doc comment for why that reproduction
 /// has to match exactly, not just approximately).
 const HF_ENDPOINT_DEFAULT: &str = "https://huggingface.co";
-
-pub const MODEL_DOWNLOAD_PROGRESS_EVENT: &str = "embedding:model-download-progress";
-
-#[derive(Debug, Clone, Serialize)]
-struct ModelDownloadProgressPayload {
-    progress: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cancelled: Option<bool>,
-}
 
 /// `fastembed`'s blocking download (via `hf_hub`) has no interrupt hook, so
 /// a "cancel" button can't actually stop in-flight network I/O — the
@@ -113,12 +102,12 @@ pub fn cancel_download(state: &DownloadState) {
 /// `try_new` fetches after that stay coarse (no dedicated progress) since
 /// they're negligible next to the weights file's size — not worth a second
 /// progress-reporting path for a few hundred KB.
-pub fn download_model(app_handle: &AppHandle, state: &DownloadState) -> Result<(), EmbeddingError> {
+pub fn download_model(progress: &ModelDownloadSink, state: &DownloadState) -> Result<(), EmbeddingError> {
     let generation = state.begin();
-    emit_progress(app_handle, 0.0, None, None);
+    emit_progress(progress, 0.0, None, None);
 
     let cache_dir = model_cache_dir()?;
-    let result = download_weights_with_progress(app_handle, cache_dir.clone()).and_then(|_| {
+    let result = download_weights_with_progress(progress, cache_dir.clone()).and_then(|_| {
         let options = Bgem3InitOptions::new(Bgem3Model::BGEM3Q)
             .with_cache_dir(cache_dir)
             .with_show_download_progress(false);
@@ -131,18 +120,18 @@ pub fn download_model(app_handle: &AppHandle, state: &DownloadState) -> Result<(
     });
 
     if state.is_cancelled(generation) {
-        emit_progress(app_handle, 0.0, None, Some(true));
+        emit_progress(progress, 0.0, None, Some(true));
         return Err(EmbeddingError::Message("download cancelled".to_string()));
     }
 
     match result {
         Ok(_) => {
-            emit_progress(app_handle, 1.0, None, None);
+            emit_progress(progress, 1.0, None, None);
             Ok(())
         }
         Err(e) => {
             let message = e.to_string();
-            emit_progress(app_handle, 0.0, Some(message.clone()), None);
+            emit_progress(progress, 0.0, Some(message.clone()), None);
             Err(e)
         }
     }
@@ -160,7 +149,7 @@ pub fn download_model(app_handle: &AppHandle, state: &DownloadState) -> Result<(
 /// if the file's already cached — `download_with_progress` checks the
 /// blob's etag-keyed path itself, same as a plain cache lookup would.
 fn download_weights_with_progress(
-    app_handle: &AppHandle,
+    progress: &ModelDownloadSink,
     default_cache_dir: PathBuf,
 ) -> Result<(), EmbeddingError> {
     let cache_dir = std::env::var("HF_HOME")
@@ -176,7 +165,7 @@ fn download_weights_with_progress(
         .map_err(|e| EmbeddingError::Provider(e.to_string()))?;
     let repo = api.model(MODEL_REPO.to_string());
 
-    repo.download_with_progress(MODEL_FILE, ProgressReporter::new(app_handle))
+    repo.download_with_progress(MODEL_FILE, ProgressReporter::new(progress))
         .map_err(|e| EmbeddingError::Provider(e.to_string()))?;
     Ok(())
 }
@@ -188,16 +177,16 @@ fn download_weights_with_progress(
 /// on every call would flood the frontend with tens of thousands of events
 /// for one download.
 struct ProgressReporter<'a> {
-    app_handle: &'a AppHandle,
+    progress: &'a ModelDownloadSink,
     total: usize,
     downloaded: usize,
     last_emitted_fraction: f32,
 }
 
 impl<'a> ProgressReporter<'a> {
-    fn new(app_handle: &'a AppHandle) -> Self {
+    fn new(progress: &'a ModelDownloadSink) -> Self {
         Self {
-            app_handle,
+            progress,
             total: 0,
             downloaded: 0,
             last_emitted_fraction: 0.0,
@@ -220,7 +209,7 @@ impl Progress for ProgressReporter<'_> {
         let fraction = (self.downloaded as f32 / self.total as f32).min(1.0);
         if should_emit_progress(self.last_emitted_fraction, fraction) {
             self.last_emitted_fraction = fraction;
-            emit_progress(self.app_handle, fraction, None, None);
+            emit_progress(self.progress, fraction, None, None);
         }
     }
 
@@ -228,24 +217,22 @@ impl Progress for ProgressReporter<'_> {
 }
 
 /// The throttling decision itself, pulled out of `ProgressReporter::update`
-/// as a pure function so it's testable without an `AppHandle` (this
-/// codebase has no mock/test `AppHandle` construction anywhere yet — every
-/// other `AppHandle`-taking function is left untested for the same reason,
+/// as a pure function so it's testable without a live download (the sink
+/// itself is trivial to fake, but the surrounding `hf_hub` machinery is not,
 /// e.g. `services::embedding_sync::sync_backlog_batch`'s tests call it directly
-/// rather than through the `AppHandle`-taking wrappers above it).
+/// so the throttling decision is tested here rather than through the
+/// download wrappers above it).
 fn should_emit_progress(last_emitted_fraction: f32, fraction: f32) -> bool {
     fraction - last_emitted_fraction >= 0.01 || fraction >= 1.0
 }
 
-fn emit_progress(app_handle: &AppHandle, progress: f32, error: Option<String>, cancelled: Option<bool>) {
-    let _ = app_handle.emit(
-        MODEL_DOWNLOAD_PROGRESS_EVENT,
-        &ModelDownloadProgressPayload {
-            progress,
-            error,
-            cancelled,
-        },
-    );
+fn emit_progress(
+    sink: &ModelDownloadSink,
+    progress: f32,
+    error: Option<String>,
+    cancelled: Option<bool>,
+) {
+    sink(ModelDownloadProgress { progress, error, cancelled });
 }
 
 #[cfg(test)]

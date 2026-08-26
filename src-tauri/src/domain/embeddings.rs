@@ -3,6 +3,8 @@
 //! `fastembed`, ONNX, `usearch`, or HTTP — those are `infra` concerns
 //! implementing `EmbeddingProvider`/the vector store against these types.
 
+use std::sync::Arc;
+
 use thiserror::Error;
 
 /// A dense embedding vector. BGE-M3 (the local provider) produces 1024
@@ -248,6 +250,20 @@ pub struct SyncProgress {
     pub total: usize,
     pub trigger: SyncTrigger,
 }
+
+/// One step of the local model download, as the UI sees it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelDownloadProgress {
+    pub progress: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancelled: Option<bool>,
+}
+
+/// Where download progress goes. A port, like `ChatEventSink`: the download
+/// never learns what is on the other side.
+pub type ModelDownloadSink = Arc<dyn Fn(ModelDownloadProgress) + Send + Sync>;
 
 #[cfg(test)]
 mod tests {
