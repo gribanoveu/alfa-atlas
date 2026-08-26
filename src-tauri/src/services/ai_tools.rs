@@ -7056,4 +7056,56 @@ mod tests {
         let err = parse_tool_call(&call).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "todo"));
     }
+
+    /// Regression guard for the readiness de-duplication.
+    ///
+    /// `is_semantic_ready` and `embedding_sync::status` used to be two
+    /// hand-maintained copies of the same four-step sequence — this file's
+    /// copy literally opened with "Mirrors `embedding_index_status`'s
+    /// readiness check exactly". They now share `attach_current` +
+    /// `embedded_count`, and this pins the property that comment was
+    /// asserting on trust: on identical state, the two must agree.
+    #[test]
+    fn semantic_readiness_agrees_with_the_reported_index_status() {
+        use crate::services::embedding_state::tests::with_open_project;
+        use crate::services::embedding_sync::{status, sync, ProgressSink};
+
+        with_open_project(
+            "semantic-readiness",
+            &[("a.json", "{\"a\": 1}")],
+            |_root, session| {
+                let noop: ProgressSink = Arc::new(|_| {});
+                // Shares the session's slots rather than fresh ones — the two
+                // paths must be looking at the same state for the comparison
+                // to mean anything.
+                let deps = EmbeddingDeps {
+                    repo_index: session.repo_index.clone(),
+                    chunk_index: session.chunk_index.clone(),
+                    embedding_index: session.embedding_index.clone(),
+                    index_store: session.index_store.clone(),
+                    embedding_provider: session.embedding_provider.clone(),
+                    sync_guard: session.sync_guard.clone(),
+                    workspace_index: session.workspace_index.clone(),
+                    fast_apply: None,
+                    active_file: None,
+                };
+
+                assert_eq!(
+                    is_semantic_ready(&deps),
+                    status(session, &noop).unwrap().synced,
+                    "before any sync, both paths should report not-ready"
+                );
+
+                sync(session, &noop).unwrap();
+
+                assert_eq!(
+                    is_semantic_ready(&deps),
+                    status(session, &noop).unwrap().synced,
+                    "after a sync, both paths should report ready"
+                );
+                assert!(is_semantic_ready(&deps), "the sync did embed something");
+            },
+        );
+    }
+
 }

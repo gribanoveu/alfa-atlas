@@ -1347,4 +1347,177 @@ mod tests {
     }
 
     // --- `attach_index_store` / project-switch safety ---
+
+    // --- `sync` / `status` use-cases ---
+
+    use crate::services::embedding_state::tests::with_open_project;
+    use crate::services::embedding_state::{
+        FullSyncActiveSlot, IndexStoreSlot, PriorityFilesSlot,
+    };
+    use std::sync::Mutex;
+
+    fn noop_progress() -> ProgressSink {
+        Arc::new(|_| {})
+    }
+
+    /// The 299-line `embedding_sync` body had no test of its own before it
+    /// moved here — only its individual helpers did. This covers the whole
+    /// use-case end to end, including the part that actually matters for a
+    /// user: a second sync with nothing changed must not re-embed the world.
+    #[test]
+    fn sync_embeds_a_fresh_project_then_skips_everything_unchanged() {
+        with_open_project(
+            "sync-fresh",
+            &[("a.json", "{\"a\": 1}"), ("b.json", "{\"b\": 2}")],
+            |_root, session| {
+                let first = sync(session, &noop_progress()).unwrap();
+                assert!(
+                    first.embedded > 0,
+                    "a fresh project should embed something, got {first:?}"
+                );
+
+                let second = sync(session, &noop_progress()).unwrap();
+                assert_eq!(
+                    second.embedded, 0,
+                    "nothing changed between the two syncs, so nothing should re-embed"
+                );
+                assert!(
+                    second.skipped_unchanged > 0,
+                    "the second pass should recognize the first pass's work as unchanged"
+                );
+            },
+        );
+    }
+
+    /// Guards the `ProgressSink` port itself: the pipeline no longer holds an
+    /// `AppHandle`, so if it stopped reporting, the UI's progress bar would
+    /// silently go dead with nothing else failing.
+    #[test]
+    fn sync_reports_progress_through_the_sink() {
+        with_open_project("sync-progress", &[("a.json", "{\"a\": 1}")], |_root, session| {
+            let seen: Arc<Mutex<Vec<SyncProgress>>> = Arc::new(Mutex::new(Vec::new()));
+            let collector = seen.clone();
+            let progress: ProgressSink = Arc::new(move |p| collector.lock().unwrap().push(p));
+
+            sync(session, &progress).unwrap();
+
+            let seen = seen.lock().unwrap();
+            assert!(!seen.is_empty(), "a sync that embedded files reported nothing");
+            assert!(
+                seen.iter().all(|p| matches!(p.trigger, SyncTrigger::Full)),
+                "a user-triggered sync must never report as Incremental/Background"
+            );
+            // Chunking always precedes embedding for a given file set — the
+            // UI relies on that ordering to label its progress bar.
+            let first_embedding = seen.iter().position(|p| matches!(p.phase, SyncPhase::Embedding));
+            let first_chunking = seen.iter().position(|p| matches!(p.phase, SyncPhase::Chunking));
+            if let (Some(e), Some(c)) = (first_embedding, first_chunking) {
+                assert!(c < e, "Chunking must be reported before Embedding");
+            }
+        });
+    }
+
+    #[test]
+    fn status_reports_a_synced_index_after_a_sync() {
+        with_open_project("status-synced", &[("a.json", "{\"a\": 1}")], |_root, session| {
+            // A brand-new store has no version meta yet, so `index_store_ensure`
+            // reports it as stale — "nothing to trust yet either way", per its
+            // own doc comment. Worth pinning down: it is the one case where
+            // `stale` does *not* mean "left over from an older binary".
+            let before = status(session, &noop_progress()).unwrap();
+            assert!(!before.synced, "nothing has been embedded yet");
+            assert_eq!(before.embedded_count, 0);
+            assert!(before.stale, "a never-synced store carries no version meta");
+
+            sync(session, &noop_progress()).unwrap();
+
+            // The sync repaired the store and wrote its version meta, so the
+            // same call now reports a real, trustworthy index.
+            let after = status(session, &noop_progress()).unwrap();
+            assert!(after.synced);
+            assert!(after.embedded_count > 0);
+            assert!(!after.stale, "a synced store is no longer stale");
+            assert_eq!(after.background_pending, 0, "a two-file project defers nothing");
+        });
+    }
+
+    /// No project open is a normal state, not an error — the UI calls this on
+    /// mount, before anything is necessarily open.
+    #[test]
+    fn status_reports_unsynced_when_no_project_is_open() {
+        use crate::infra::settings_store::test_support::with_temp_home;
+
+        with_temp_home(|| {
+            let session = EmbeddingSession {
+                repo_index: Arc::new(RepositoryIndex::new()),
+                chunk_index: Arc::new(ChunkIndex::new()),
+                embedding_index: Arc::new(EmbeddingIndexSlot::new(None)),
+                index_store: Arc::new(IndexStoreSlot::new(None)),
+                embedding_provider: Arc::new(EmbeddingProviderSlot::new(None)),
+                sync_guard: Arc::new(EmbeddingSyncGuard::new(())),
+                index_watcher: Arc::new(IndexWatcherSlot::new(None)),
+                workspace_index: Arc::new(WorkspaceIndex::new(
+                    crate::infra::parsers::registry::ParserRegistry::new(),
+                )),
+                priority_files: Arc::new(PriorityFilesSlot::new(HashSet::new())),
+                background_backlog: Arc::new(BackgroundBacklogSlot::new(None)),
+                full_sync_active: Arc::new(FullSyncActiveSlot::new(false)),
+            };
+
+            let s = status(&session, &noop_progress()).unwrap();
+            assert!(!s.synced);
+            assert_eq!(s.embedded_count, 0);
+            assert!(!s.stale);
+            assert_eq!(s.background_pending, 0);
+        });
+    }
+
+
+    /// The background drain outlives the sync that spawned it, so a project
+    /// switch mid-drain must stop it — otherwise it keeps mutating the shared
+    /// `ChunkIndex`/`EmbeddingIndexSlot` on behalf of a project the app has
+    /// already moved on from. It must also clear only *its own* backlog
+    /// entry, never one a newer project's sync has already claimed.
+    #[test]
+    fn background_backlog_abandons_a_drain_whose_project_went_away() {
+        with_open_project("backlog-abandon", &[("a.json", "{\"a\": 1}")], |_root, session| {
+            let store_dir = fixture_dir("backlog-abandon-store");
+            let store = Arc::new(IndexStore::open(&store_dir).unwrap());
+            // Not the open project's root — stands in for "the drain started
+            // for a project that has since been closed or switched away from".
+            let stale_root = fixture_dir("backlog-abandon-other");
+
+            {
+                let mut guard = session.background_backlog.lock().unwrap();
+                *guard = Some(BackgroundBacklog {
+                    index_root: stale_root.clone(),
+                    pending: HashSet::from([FileId("a.json".to_string())]),
+                    running: true,
+                });
+            }
+
+            // Returns rather than looping forever, and takes its own entry
+            // with it.
+            run_background_backlog_sync(
+                session.repo_index.clone(),
+                session.chunk_index.clone(),
+                session.embedding_index.clone(),
+                session.embedding_provider.clone(),
+                session.sync_guard.clone(),
+                store,
+                stale_root.clone(),
+                noop_progress(),
+                session.background_backlog.clone(),
+            );
+
+            assert!(
+                session.background_backlog.lock().unwrap().is_none(),
+                "the abandoned drain should have cleared its own backlog entry"
+            );
+
+            fs::remove_dir_all(&store_dir).ok();
+            fs::remove_dir_all(&stale_root).ok();
+        });
+    }
+
 }

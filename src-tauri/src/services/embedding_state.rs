@@ -499,6 +499,52 @@ pub(crate) mod tests {
         EmbeddingProviderSlot::new(Some((config, api_key, provider)))
     }
 
+    /// A temp repo containing `files`, opened as *the* current project, plus
+    /// an `EmbeddingSession` wired to fresh slots and the mock provider.
+    ///
+    /// Runs inside `with_temp_home` because `project_open::get_project` and
+    /// `resolve_index_paths` both resolve through the process-global `$HOME`
+    /// — without it these tests would fight each other and the developer's
+    /// real project state. Returns the *canonicalized* root, since
+    /// `open_project` canonicalizes (on macOS `/var/...` -> `/private/var/...`)
+    /// and every `FileId` the pipeline produces is relative to that.
+    pub(crate) fn with_open_project<T>(
+        label: &str,
+        files: &[(&str, &str)],
+        f: impl FnOnce(&Path, &EmbeddingSession) -> T,
+    ) -> T {
+        use crate::infra::parsers::registry::ParserRegistry;
+        use crate::infra::settings_store::test_support::with_temp_home;
+
+        with_temp_home(|| {
+            let root = fixture_dir(label);
+            for (name, body) in files {
+                fs::write(root.join(name), body).unwrap();
+            }
+            let root_str = root.to_string_lossy().into_owned();
+            project_open::open_project(&root_str, &root_str).unwrap();
+            let root = root.canonicalize().unwrap();
+
+            let session = EmbeddingSession {
+                repo_index: Arc::new(RepositoryIndex::new()),
+                chunk_index: Arc::new(ChunkIndex::new()),
+                embedding_index: Arc::new(EmbeddingIndexSlot::new(None)),
+                index_store: Arc::new(IndexStoreSlot::new(None)),
+                embedding_provider: Arc::new(mock_provider_slot()),
+                sync_guard: Arc::new(EmbeddingSyncGuard::new(())),
+                index_watcher: Arc::new(IndexWatcherSlot::new(None)),
+                workspace_index: Arc::new(WorkspaceIndex::new(ParserRegistry::new())),
+                priority_files: Arc::new(PriorityFilesSlot::new(HashSet::new())),
+                background_backlog: Arc::new(BackgroundBacklogSlot::new(None)),
+                full_sync_active: Arc::new(FullSyncActiveSlot::new(false)),
+            };
+
+            let out = f(&root, &session);
+            fs::remove_dir_all(&root).ok();
+            out
+        })
+    }
+
 
     fn remote_config(model: &str) -> ResolvedEmbeddingConfig {
         ResolvedEmbeddingConfig {
