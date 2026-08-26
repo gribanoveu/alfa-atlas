@@ -1,91 +1,33 @@
-import { useState, useEffect, useCallback } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import {
-  gitGetCredentials,
-  gitSaveCredentials,
-  gitGetKeyStatus,
-  gitGenerateKey,
-  gitImportKey,
-  type GitCredentials,
-  type SshKeyConfig,
-  type AppKeyStatus,
-} from "../../lib/git";
-import { toMessage } from "../../lib/errors";
+import { useState } from "react";
+import type { SshKeyConfig } from "../../lib/git";
+import { useGitCredentials } from "../../hooks/useGitCredentials";
 import { AddSshKeyModal } from "./AddSshKeyModal";
 import "../Welcome/CloneRepoModal.css";
 import "./CredentialsTab.css";
 
 export function CredentialsTab() {
-  const [credentials, setCredentials] = useState<GitCredentials | null>(null);
-  const [keyStatus, setKeyStatus] = useState<AppKeyStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const {
+    credentials,
+    keyStatus,
+    error,
+    busy,
+    keyGenBusy,
+    copyFeedback,
+    toggleTrustAll,
+    deleteKey,
+    saveKey,
+    generateKey,
+    importKey,
+    copyPublicKey,
+  } = useGitCredentials();
+
+  // Which dialog is open, and which row it is editing — presentation only.
   const [showAddModal, setShowAddModal] = useState(false);
   const [editIndex, setEditIndex] = useState<number | null>(null);
-  const [keyGenBusy, setKeyGenBusy] = useState(false);
-  const [copyFeedback, setCopyFeedback] = useState(false);
   const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false);
 
-  const handleToggleTrustAll = () => {
-    if (!credentials) return;
-    void persist({ ...credentials, trustAllSshHostKeys: !credentials.trustAllSshHostKeys });
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [creds, status] = await Promise.all([
-          gitGetCredentials(),
-          gitGetKeyStatus(),
-        ]);
-        if (!cancelled) {
-          setCredentials(creds);
-          setKeyStatus(status);
-          setError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(toMessage(e));
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const persist = async (creds: GitCredentials) => {
-    setCredentials(creds);
-    setBusy(true);
-    try {
-      await gitSaveCredentials(creds);
-      setError(null);
-    } catch (e) {
-      setError(toMessage(e));
-      const current = await gitGetCredentials().catch(() => credentials);
-      if (current) setCredentials(current);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDelete = (index: number) => {
-    if (!credentials) return;
-    const keys = [...credentials.sshKeys];
-    keys.splice(index, 1);
-    void persist({ ...credentials, sshKeys: keys });
-  };
-
   const handleSave = (config: SshKeyConfig) => {
-    if (!credentials) return;
-    if (editIndex !== null) {
-      const keys = [...credentials.sshKeys];
-      keys[editIndex] = config;
-      void persist({ ...credentials, sshKeys: keys });
-    } else {
-      void persist({ ...credentials, sshKeys: [...credentials.sshKeys, config] });
-    }
+    saveKey(config, editIndex);
     setShowAddModal(false);
     setEditIndex(null);
   };
@@ -99,52 +41,6 @@ export function CredentialsTab() {
     setEditIndex(index);
     setShowAddModal(true);
   };
-
-  const handleGenerateKey = async () => {
-    setKeyGenBusy(true);
-    setError(null);
-    try {
-      const status = await gitGenerateKey();
-      setKeyStatus(status);
-    } catch (e) {
-      setError(toMessage(e));
-    } finally {
-      setKeyGenBusy(false);
-    }
-  };
-
-  const handleImportKey = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        title: "Выберите файл приватного SSH ключа",
-      });
-      if (selected === null || Array.isArray(selected)) return;
-      setKeyGenBusy(true);
-      setError(null);
-      try {
-        const status = await gitImportKey(selected);
-        setKeyStatus(status);
-      } catch (e) {
-        setError(toMessage(e));
-      } finally {
-        setKeyGenBusy(false);
-      }
-    } catch {
-      // dialog cancelled
-    }
-  };
-
-  const handleCopyPublicKey = useCallback(async () => {
-    if (!keyStatus?.publicKey) return;
-    try {
-      await navigator.clipboard.writeText(keyStatus.publicKey);
-      setCopyFeedback(true);
-      setTimeout(() => setCopyFeedback(false), 2000);
-    } catch {
-      // clipboard not available
-    }
-  }, [keyStatus?.publicKey]);
 
   if (!credentials || !keyStatus) {
     return (
@@ -182,7 +78,7 @@ export function CredentialsTab() {
               type="button"
               className="settings-btn primary"
               disabled={keyGenBusy}
-              onClick={() => void handleGenerateKey()}
+              onClick={() => void generateKey()}
             >
               {keyGenBusy ? "Генерация..." : "Сгенерировать ключ"}
             </button>
@@ -190,7 +86,7 @@ export function CredentialsTab() {
               type="button"
               className="settings-btn"
               disabled={keyGenBusy}
-              onClick={() => void handleImportKey()}
+              onClick={() => void importKey()}
             >
               Импортировать из файла...
             </button>
@@ -225,7 +121,7 @@ export function CredentialsTab() {
             <button
               type="button"
               className="settings-btn primary"
-              onClick={handleCopyPublicKey}
+              onClick={copyPublicKey}
             >
               {copyFeedback ? "Скопировано!" : "Копировать"}
             </button>
@@ -241,7 +137,7 @@ export function CredentialsTab() {
               type="button"
               className="settings-btn"
               disabled={keyGenBusy}
-              onClick={() => void handleImportKey()}
+              onClick={() => void importKey()}
             >
               Импортировать из файла...
             </button>
@@ -257,7 +153,7 @@ export function CredentialsTab() {
         <input
           type="checkbox"
           checked={credentials.trustAllSshHostKeys}
-          onChange={handleToggleTrustAll}
+          onChange={toggleTrustAll}
           disabled={busy}
           className="credentials-checkbox"
         />
@@ -309,7 +205,7 @@ export function CredentialsTab() {
                   type="button"
                   className="settings-link-btn danger"
                   disabled={busy}
-                  onClick={() => handleDelete(index)}
+                  onClick={() => deleteKey(index)}
                 >
                   Удалить
                 </button>
@@ -375,7 +271,7 @@ export function CredentialsTab() {
                 className="clone-modal-btn primary danger"
                 onClick={() => {
                   setShowRegenerateConfirm(false);
-                  void handleGenerateKey();
+                  void generateKey();
                 }}
               >
                 Перегенерировать
