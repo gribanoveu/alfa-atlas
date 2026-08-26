@@ -1067,169 +1067,209 @@ mod tests {
 
     #[test]
     fn sync_backlog_batch_only_touches_the_given_file_ids() {
-        let root = fixture_dir("repo");
-        fs::write(root.join("a.json"), "0123456789").unwrap();
-        fs::write(root.join("b.json"), "abcdefghij").unwrap();
+        // Wrapped in `with_temp_home` for the *lock*, not just the isolation:
+        // `mock_provider_slot` caches a provider under whatever config
+        // `$HOME` resolves to right now, and the code under test re-resolves
+        // it to check that cache. A concurrent `with_temp_home` test (see
+        // `with_open_project`) swapping the process-global `$HOME` in between
+        // turns that into a cache miss, and `ensure_provider` then builds a
+        // real provider — "remote provider selected without an API key", or a
+        // 570MB ONNX load. Taking the same lock serializes against that.
+        with_temp_home(|| {
+            let root = fixture_dir("repo");
+            fs::write(root.join("a.json"), "0123456789").unwrap();
+            fs::write(root.join("b.json"), "abcdefghij").unwrap();
 
-        let repo_index = RepositoryIndex::new();
-        repo_index.build(&root).unwrap();
-        let chunk_index = ChunkIndex::new();
-        let embedding_index = EmbeddingIndexSlot::new(None);
-        let embedding_provider = mock_provider_slot();
+            let repo_index = RepositoryIndex::new();
+            repo_index.build(&root).unwrap();
+            let chunk_index = ChunkIndex::new();
+            let embedding_index = EmbeddingIndexSlot::new(None);
+            let embedding_provider = mock_provider_slot();
 
-        let store_dir = fixture_dir("store");
-        let store = IndexStore::open(&store_dir).unwrap();
+            let store_dir = fixture_dir("store");
+            let store = IndexStore::open(&store_dir).unwrap();
 
-        let batch = vec![FileId("a.json".to_string())];
-        let stats = sync_backlog_batch(
-            &repo_index,
-            &chunk_index,
-            &embedding_index,
-            &embedding_provider,
-            &root,
-            &store,
-            &batch,
-            None,
-        )
-        .unwrap();
+            let batch = vec![FileId("a.json".to_string())];
+            let stats = sync_backlog_batch(
+                &repo_index,
+                &chunk_index,
+                &embedding_index,
+                &embedding_provider,
+                &root,
+                &store,
+                &batch,
+                None,
+            )
+            .unwrap();
 
-        assert_eq!(stats.embedded, 1);
-        assert!(chunk_index.file_ids().contains(&FileId("a.json".to_string())));
-        assert!(!chunk_index.file_ids().contains(&FileId("b.json".to_string())));
+            assert_eq!(stats.embedded, 1);
+            assert!(chunk_index.file_ids().contains(&FileId("a.json".to_string())));
+            assert!(!chunk_index.file_ids().contains(&FileId("b.json".to_string())));
 
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&store_dir).ok();
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&store_dir).ok();
+        });
     }
 
     #[test]
     fn sync_backlog_batch_skips_unchanged_files_on_a_second_pass() {
-        let root = fixture_dir("repo");
-        fs::write(root.join("a.json"), "0123456789").unwrap();
+        // Wrapped in `with_temp_home` for the *lock*, not just the isolation:
+        // `mock_provider_slot` caches a provider under whatever config
+        // `$HOME` resolves to right now, and the code under test re-resolves
+        // it to check that cache. A concurrent `with_temp_home` test (see
+        // `with_open_project`) swapping the process-global `$HOME` in between
+        // turns that into a cache miss, and `ensure_provider` then builds a
+        // real provider — "remote provider selected without an API key", or a
+        // 570MB ONNX load. Taking the same lock serializes against that.
+        with_temp_home(|| {
+            let root = fixture_dir("repo");
+            fs::write(root.join("a.json"), "0123456789").unwrap();
 
-        let repo_index = RepositoryIndex::new();
-        repo_index.build(&root).unwrap();
-        let chunk_index = ChunkIndex::new();
-        let embedding_index = EmbeddingIndexSlot::new(None);
-        let embedding_provider = mock_provider_slot();
+            let repo_index = RepositoryIndex::new();
+            repo_index.build(&root).unwrap();
+            let chunk_index = ChunkIndex::new();
+            let embedding_index = EmbeddingIndexSlot::new(None);
+            let embedding_provider = mock_provider_slot();
 
-        let store_dir = fixture_dir("store");
-        let store = IndexStore::open(&store_dir).unwrap();
+            let store_dir = fixture_dir("store");
+            let store = IndexStore::open(&store_dir).unwrap();
 
-        let batch = vec![FileId("a.json".to_string())];
-        sync_backlog_batch(
-            &repo_index,
-            &chunk_index,
-            &embedding_index,
-            &embedding_provider,
-            &root,
-            &store,
-            &batch,
-            None,
-        )
-        .unwrap();
+            let batch = vec![FileId("a.json".to_string())];
+            sync_backlog_batch(
+                &repo_index,
+                &chunk_index,
+                &embedding_index,
+                &embedding_provider,
+                &root,
+                &store,
+                &batch,
+                None,
+            )
+            .unwrap();
 
-        // Same batch again, nothing changed on disk in between.
-        let stats = sync_backlog_batch(
-            &repo_index,
-            &chunk_index,
-            &embedding_index,
-            &embedding_provider,
-            &root,
-            &store,
-            &batch,
-            None,
-        )
-        .unwrap();
+            // Same batch again, nothing changed on disk in between.
+            let stats = sync_backlog_batch(
+                &repo_index,
+                &chunk_index,
+                &embedding_index,
+                &embedding_provider,
+                &root,
+                &store,
+                &batch,
+                None,
+            )
+            .unwrap();
 
-        assert_eq!(stats.embedded, 0);
-        assert_eq!(stats.skipped_unchanged, 1);
+            assert_eq!(stats.embedded, 0);
+            assert_eq!(stats.skipped_unchanged, 1);
 
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&store_dir).ok();
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&store_dir).ok();
+        });
     }
 
     // --- `run_incremental_sync` ---
 
     #[test]
     fn run_incremental_sync_indexes_a_brand_new_untracked_file() {
-        let root = fixture_dir("repo");
-        fs::write(root.join("existing.json"), "1").unwrap();
+        // Wrapped in `with_temp_home` for the *lock*, not just the isolation:
+        // `mock_provider_slot` caches a provider under whatever config
+        // `$HOME` resolves to right now, and the code under test re-resolves
+        // it to check that cache. A concurrent `with_temp_home` test (see
+        // `with_open_project`) swapping the process-global `$HOME` in between
+        // turns that into a cache miss, and `ensure_provider` then builds a
+        // real provider — "remote provider selected without an API key", or a
+        // 570MB ONNX load. Taking the same lock serializes against that.
+        with_temp_home(|| {
+            let root = fixture_dir("repo");
+            fs::write(root.join("existing.json"), "1").unwrap();
 
-        let repo_index = RepositoryIndex::new();
-        repo_index.build(&root).unwrap();
-        let chunk_index = ChunkIndex::new();
-        let embedding_index = EmbeddingIndexSlot::new(None);
-        let embedding_provider = mock_provider_slot();
-        let sync_guard = EmbeddingSyncGuard::new(());
-        let store_dir = fixture_dir("store");
-        let store = IndexStore::open(&store_dir).unwrap();
+            let repo_index = RepositoryIndex::new();
+            repo_index.build(&root).unwrap();
+            let chunk_index = ChunkIndex::new();
+            let embedding_index = EmbeddingIndexSlot::new(None);
+            let embedding_provider = mock_provider_slot();
+            let sync_guard = EmbeddingSyncGuard::new(());
+            let store_dir = fixture_dir("store");
+            let store = IndexStore::open(&store_dir).unwrap();
 
-        // `new.json` never went through `repo_index.build()` above — the
-        // exact "watcher saw a Create for a path RepositoryIndex has never
-        // heard of" scenario this fix targets.
-        let new_path = root.join("new.json");
-        fs::write(&new_path, "2").unwrap();
-        assert!(repo_index.get(&FileId("new.json".to_string())).is_none());
+            // `new.json` never went through `repo_index.build()` above — the
+            // exact "watcher saw a Create for a path RepositoryIndex has never
+            // heard of" scenario this fix targets.
+            let new_path = root.join("new.json");
+            fs::write(&new_path, "2").unwrap();
+            assert!(repo_index.get(&FileId("new.json".to_string())).is_none());
 
-        run_incremental_sync(
-            &repo_index,
-            &chunk_index,
-            &embedding_index,
-            &embedding_provider,
-            &sync_guard,
-            &root,
-            &store,
-            new_path,
-            FileChangeKind::Upserted,
-            &|_, _| {},
-        )
-        .unwrap();
+            run_incremental_sync(
+                &repo_index,
+                &chunk_index,
+                &embedding_index,
+                &embedding_provider,
+                &sync_guard,
+                &root,
+                &store,
+                new_path,
+                FileChangeKind::Upserted,
+                &|_, _| {},
+            )
+            .unwrap();
 
-        assert!(repo_index.get(&FileId("new.json".to_string())).is_some());
-        assert!(chunk_index.file_ids().contains(&FileId("new.json".to_string())));
+            assert!(repo_index.get(&FileId("new.json".to_string())).is_some());
+            assert!(chunk_index.file_ids().contains(&FileId("new.json".to_string())));
 
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&store_dir).ok();
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&store_dir).ok();
+        });
     }
 
     #[test]
     fn run_incremental_sync_ignores_a_new_gitignored_file() {
-        let root = fixture_dir("repo");
-        git2::Repository::init(&root).unwrap();
-        fs::write(root.join(".gitignore"), "ignored.json\n").unwrap();
-        fs::write(root.join("existing.json"), "1").unwrap();
+        // Wrapped in `with_temp_home` for the *lock*, not just the isolation:
+        // `mock_provider_slot` caches a provider under whatever config
+        // `$HOME` resolves to right now, and the code under test re-resolves
+        // it to check that cache. A concurrent `with_temp_home` test (see
+        // `with_open_project`) swapping the process-global `$HOME` in between
+        // turns that into a cache miss, and `ensure_provider` then builds a
+        // real provider — "remote provider selected without an API key", or a
+        // 570MB ONNX load. Taking the same lock serializes against that.
+        with_temp_home(|| {
+            let root = fixture_dir("repo");
+            git2::Repository::init(&root).unwrap();
+            fs::write(root.join(".gitignore"), "ignored.json\n").unwrap();
+            fs::write(root.join("existing.json"), "1").unwrap();
 
-        let repo_index = RepositoryIndex::new();
-        repo_index.build(&root).unwrap();
-        let chunk_index = ChunkIndex::new();
-        let embedding_index = EmbeddingIndexSlot::new(None);
-        let embedding_provider = mock_provider_slot();
-        let sync_guard = EmbeddingSyncGuard::new(());
-        let store_dir = fixture_dir("store");
-        let store = IndexStore::open(&store_dir).unwrap();
+            let repo_index = RepositoryIndex::new();
+            repo_index.build(&root).unwrap();
+            let chunk_index = ChunkIndex::new();
+            let embedding_index = EmbeddingIndexSlot::new(None);
+            let embedding_provider = mock_provider_slot();
+            let sync_guard = EmbeddingSyncGuard::new(());
+            let store_dir = fixture_dir("store");
+            let store = IndexStore::open(&store_dir).unwrap();
 
-        let new_path = root.join("ignored.json");
-        fs::write(&new_path, "2").unwrap();
+            let new_path = root.join("ignored.json");
+            fs::write(&new_path, "2").unwrap();
 
-        run_incremental_sync(
-            &repo_index,
-            &chunk_index,
-            &embedding_index,
-            &embedding_provider,
-            &sync_guard,
-            &root,
-            &store,
-            new_path,
-            FileChangeKind::Upserted,
-            &|_, _| {},
-        )
-        .unwrap();
+            run_incremental_sync(
+                &repo_index,
+                &chunk_index,
+                &embedding_index,
+                &embedding_provider,
+                &sync_guard,
+                &root,
+                &store,
+                new_path,
+                FileChangeKind::Upserted,
+                &|_, _| {},
+            )
+            .unwrap();
 
-        assert!(repo_index.get(&FileId("ignored.json".to_string())).is_none());
-        assert!(!chunk_index.file_ids().contains(&FileId("ignored.json".to_string())));
+            assert!(repo_index.get(&FileId("ignored.json".to_string())).is_none());
+            assert!(!chunk_index.file_ids().contains(&FileId("ignored.json".to_string())));
 
-        fs::remove_dir_all(&root).ok();
-        fs::remove_dir_all(&store_dir).ok();
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&store_dir).ok();
+        });
     }
 
     // --- `split_sync_tiers` ---
@@ -1350,6 +1390,7 @@ mod tests {
 
     // --- `sync` / `status` use-cases ---
 
+    use crate::infra::settings_store::test_support::with_temp_home;
     use crate::services::embedding_state::tests::with_open_project;
     use crate::services::embedding_state::{
         FullSyncActiveSlot, IndexStoreSlot, PriorityFilesSlot,
