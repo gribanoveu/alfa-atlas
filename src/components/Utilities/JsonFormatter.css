@@ -1,0 +1,213 @@
+.jsonfmt {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+
+.jsonfmt-desc {
+  font-size: calc(var(--font-preview) * 0.78);
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.jsonfmt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-end;
+}
+
+.jsonfmt-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.jsonfmt-group-label {
+  font-size: calc(var(--font-preview) * 0.72);
+  color: var(--text-2);
+}
+
+.jsonfmt-segmented {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.jsonfmt-segment {
+  padding: 4px 10px;
+  font-size: calc(var(--font-preview) * 0.75);
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.jsonfmt-segment:hover {
+  color: var(--text-1);
+  background: var(--bg-1);
+}
+
+.jsonfmt-segment.is-active {
+  color: var(--text-0);
+  background: var(--bg-1);
+  border-color: var(--border);
+}
+
+.jsonfmt-segment:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.jsonfmt-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.jsonfmt-input-label {
+  font-size: calc(var(--font-preview) * 0.75);
+  color: var(--text-2);
+}
+
+.jsonfmt-input {
+  width: 100%;
+  min-height: 160px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.82);
+  line-height: 1.45;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  resize: vertical;
+}
+
+.jsonfmt-input:focus {
+  border-color: var(--accent);
+}
+
+.jsonfmt-input::placeholder {
+  color: var(--text-2);
+}
+
+.jsonfmt-error {
+  padding: 8px 10px;
+  font-size: calc(var(--font-preview) * 0.8);
+  color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--orange) 30%, transparent);
+  border-radius: 5px;
+}
+
+.jsonfmt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.jsonfmt-action {
+  padding: 6px 12px;
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.78);
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.jsonfmt-action:hover {
+  background: var(--bg-2);
+}
+
+.jsonfmt-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.jsonfmt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: calc(var(--font-preview) * 0.75);
+  color: var(--text-2);
+}
+
+.jsonfmt-meta strong {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.jsonfmt-output-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jsonfmt-output-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.jsonfmt-section-title {
+  font-size: calc(var(--font-preview) * 0.72);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.jsonfmt-copy-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.jsonfmt-copy-btn:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.jsonfmt-copy-btn.is-copied,
+.jsonfmt-copy-btn.is-copied:hover {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+  background: transparent;
+}
+
+.jsonfmt-output {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.82);
+  line-height: 1.45;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}

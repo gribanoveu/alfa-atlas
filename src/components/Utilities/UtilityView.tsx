@@ -2,6 +2,7 @@ import { findUtility, type UtilityId } from "../../data/utilities";
 import { HttpStatusReference } from "./HttpStatusReference";
 import { IdGenerator } from "./IdGenerator";
 import { JsonDiff } from "./JsonDiff";
+import { JsonFormatter } from "./JsonFormatter";
 import { JwtParser } from "./JwtParser";
 import { UnixtimeConverter } from "./UnixtimeConverter";
 import "./UtilityView.css";
@@ -35,6 +36,7 @@ export function UtilityView({ utilityId }: UtilityViewProps) {
       {utilityId === "jwt" ? <JwtParser /> : null}
       {utilityId === "http-status" ? <HttpStatusReference /> : null}
       {utilityId === "json-diff" ? <JsonDiff /> : null}
+      {utilityId === "json-format" ? <JsonFormatter /> : null}
       {utility.stub ? (
         <div className="utility-view-stub" role="status">
           Утилита ещё не реализована
