@@ -1,0 +1,172 @@
+.jwt-parser {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+
+.jwt-panel-desc {
+  font-size: calc(var(--font-preview) * 0.78);
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.jwt-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.jwt-input-label {
+  font-size: calc(var(--font-preview) * 0.75);
+  color: var(--text-2);
+}
+
+.jwt-input {
+  width: 100%;
+  min-height: 88px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.82);
+  line-height: 1.45;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  resize: vertical;
+}
+
+.jwt-input:focus {
+  border-color: var(--accent);
+}
+
+.jwt-input::placeholder {
+  color: var(--text-2);
+}
+
+.jwt-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: calc(var(--font-preview) * 0.78);
+  color: var(--text-2);
+}
+
+.jwt-summary strong {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.jwt-error {
+  padding: 8px 10px;
+  font-size: calc(var(--font-preview) * 0.8);
+  color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--orange) 30%, transparent);
+  border-radius: 5px;
+}
+
+.jwt-section-title {
+  font-size: calc(var(--font-preview) * 0.72);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.jwt-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jwt-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.jwt-copy-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.jwt-copy-btn:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.jwt-copy-btn.is-copied,
+.jwt-copy-btn.is-copied:hover {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+  background: transparent;
+}
+
+.jwt-pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.8);
+  line-height: 1.45;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.jwt-rows {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.jwt-row {
+  display: grid;
+  grid-template-columns: minmax(5rem, 8rem) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.jwt-row-label {
+  font-size: calc(var(--font-preview) * 0.75);
+  color: var(--text-2);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.jwt-row-value {
+  min-width: 0;
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.82);
+  color: var(--text-0);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+@media (max-width: 640px) {
+  .jwt-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}

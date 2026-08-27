@@ -1,5 +1,6 @@
 import { findUtility, type UtilityId } from "../../data/utilities";
 import { IdGenerator } from "./IdGenerator";
+import { JwtParser } from "./JwtParser";
 import { UnixtimeConverter } from "./UnixtimeConverter";
 import "./UtilityView.css";
 
@@ -29,6 +30,7 @@ export function UtilityView({ utilityId }: UtilityViewProps) {
       </header>
       {utilityId === "unixtime" ? <UnixtimeConverter /> : null}
       {utilityId === "ids" ? <IdGenerator /> : null}
+      {utilityId === "jwt" ? <JwtParser /> : null}
       {utility.stub ? (
         <div className="utility-view-stub" role="status">
           Утилита ещё не реализована
