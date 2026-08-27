@@ -1,6 +1,7 @@
 import { Folder, FolderOpen, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { GitCommitSummary, GitFileStatus } from "../../lib/git";
+import { GitCommitList } from "../Git/GitCommitList";
 import "./GitPanel.css";
 import "./CommitHistoryPanel.css";
 
@@ -22,19 +23,6 @@ const STATUS_LABELS: Record<string, string> = {
 
 function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status;
-}
-
-function formatCommitTime(unixSeconds: number): string {
-  try {
-    return new Date(unixSeconds * 1000).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return "";
-  }
 }
 
 type FileTreeDir = {
@@ -238,33 +226,11 @@ export function CommitHistoryPanel({
               Записей в истории пока нет
             </div>
           ) : (
-            <ul className="git-commit-list">
-              {commits.map((item) => (
-                <li
-                  key={item.hash + String(item.time)}
-                  className={`git-commit-row git-commit-row-flat${
-                    selectedHash === item.hash ? " git-commit-row-selected" : ""
-                  }`}
-                >
-                  <button
-                    type="button"
-                    className="git-commit-row-btn"
-                    onClick={() => setSelectedHash(item.hash)}
-                    aria-pressed={selectedHash === item.hash}
-                  >
-                    <div className="git-commit-line">
-                      <span className="git-commit-hash">{item.hash}</span>
-                      <span className="git-commit-msg">{item.message}</span>
-                    </div>
-                    <div className="git-commit-meta">
-                      {item.author}
-                      {item.author ? " · " : null}
-                      {formatCommitTime(item.time)}
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <GitCommitList
+              commits={commits}
+              selectedHash={selectedHash}
+              onSelect={setSelectedHash}
+            />
           )}
         </div>
 

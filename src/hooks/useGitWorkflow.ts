@@ -8,12 +8,15 @@ import {
   gitCommitFiles,
   gitCreateBranchAtOid,
   gitHeadOid,
+  gitIncomingCommits,
   gitResetToOid,
   gitRestoreDiscardBackup,
   gitUndoCommit,
+  gitUnpushedCommits,
   hasTrackedGitChanges,
   type CheckoutOutcome,
   type GitBranchInfo,
+  type GitCommitSummary,
   type GitDiffScope,
   type GitFileDiff,
   type GitFileStatus,
@@ -97,6 +100,10 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
   const [pullModalOpen, setPullModalOpen] = useState(false);
   const [resetRemoteConfirmOpen, setResetRemoteConfirmOpen] = useState(false);
   const [pushConfirmOpen, setPushConfirmOpen] = useState(false);
+  const [pushCommits, setPushCommits] = useState<GitCommitSummary[]>([]);
+  const [pushCommitsLoading, setPushCommitsLoading] = useState(false);
+  const [pullCommits, setPullCommits] = useState<GitCommitSummary[]>([]);
+  const [pullCommitsLoading, setPullCommitsLoading] = useState(false);
   // Checking out an existing branch no longer blocks on uncommitted changes
   // (see performCheckout/handleCheckoutOutcome — those changes get
   // auto-stashed instead), so this only ever fires for "create branch",
@@ -159,6 +166,58 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     if (!hasProject) return;
     setPullModalOpen(true);
   }, [hasProject]);
+  const openPushModal = useCallback(() => {
+    if (!hasProject) return;
+    setPushConfirmOpen(true);
+  }, [hasProject]);
+  const currentBranchBehind =
+    branches.branches.find((b) => b.isCurrent)?.behind ?? 0;
+  useEffect(() => {
+    if (!pushConfirmOpen || !project.repoRoot) {
+      setPushCommits([]);
+      setPushCommitsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPushCommitsLoading(true);
+    void gitUnpushedCommits(project.repoRoot)
+      .then((commits) => {
+        if (cancelled) return;
+        setPushCommits(commits);
+        setPushCommitsLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPushCommits([]);
+        setPushCommitsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pushConfirmOpen, project.repoRoot]);
+  useEffect(() => {
+    if (!pullModalOpen || !project.repoRoot) {
+      setPullCommits([]);
+      setPullCommitsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setPullCommitsLoading(true);
+    void gitIncomingCommits(project.repoRoot)
+      .then((commits) => {
+        if (cancelled) return;
+        setPullCommits(commits);
+        setPullCommitsLoading(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPullCommits([]);
+        setPullCommitsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pullModalOpen, project.repoRoot]);
   const syncPillState = deriveSyncPillState({
     status: git.status,
     currentBranchBehind: branches.branches.find((b) => b.isCurrent)?.behind ?? null,
@@ -186,6 +245,7 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
         return;
       }
       const err = await git.push();
+      setPushConfirmOpen(false);
       if (err) {
         setGitAlert({ message: err });
       } else {
@@ -198,6 +258,7 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
         });
       }
     } catch (e) {
+      setPushConfirmOpen(false);
       setGitAlert({
         message: toMessage(e),
       });
@@ -254,7 +315,6 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     }
   }, [branches, deleteBranchTarget, actionLog]);
   const onPushConfirm = useCallback(async () => {
-    setPushConfirmOpen(false);
     await runPush();
   }, [runPush]);
   const refreshAfterBranchChange = useCallback(async () => {
@@ -679,9 +739,15 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     openConflict,
     openGitFileDiff,
     openPullModal,
+    openPushModal,
     pendingStashConflict,
+    pullCommits,
+    pullCommitsLoading,
     pullModalOpen,
+    pushCommits,
+    pushCommitsLoading,
     pushConfirmOpen,
+    currentBranchBehind,
     resetRemoteConfirmOpen,
     runPush,
     setBranchSwitchBlocked,

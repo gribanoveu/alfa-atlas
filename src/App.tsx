@@ -301,11 +301,16 @@ function App() {
     openConflict,
     openGitFileDiff,
     openPullModal,
+    openPushModal,
     pendingStashConflict,
+    pullCommits,
+    pullCommitsLoading,
     pullModalOpen,
+    pushCommits,
+    pushCommitsLoading,
     pushConfirmOpen,
+    currentBranchBehind,
     resetRemoteConfirmOpen,
-    runPush,
     setBranchSwitchBlocked,
     setCommitFileDiffTarget,
     setConflictTarget,
@@ -582,7 +587,7 @@ function App() {
         onToggleGit={toggleGitPanel}
         onOpenBranches={() => layout.setRightTool(layout.activeTool === "branches" ? null : "branches")}
         onPull={openPullModal}
-        onPush={() => void runPush()}
+        onPush={() => openPushModal()}
         onGoBack={() => void editor.goBack()}
         onGoForward={() => void editor.goForward()}
         onFindInDocs={() => setDocsSearchOpen(true)}
@@ -1005,6 +1010,9 @@ function App() {
 
       {pullModalOpen ? (
         <PullUpdateModal
+          behind={currentBranchBehind}
+          commits={pullCommits}
+          commitsLoading={pullCommitsLoading}
           busy={git.busy}
           onCancel={() => setPullModalOpen(false)}
           onConfirm={(mode) => void onPullConfirm(mode)}
@@ -1034,6 +1042,8 @@ function App() {
           branchName={project.branchName}
           hasUpstream={git.status.hasUpstream}
           ahead={git.status.ahead}
+          commits={pushCommits}
+          commitsLoading={pushCommitsLoading}
           busy={git.busy}
           onCancel={() => setPushConfirmOpen(false)}
           onConfirm={() => void onPushConfirm()}

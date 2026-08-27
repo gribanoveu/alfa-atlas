@@ -1,0 +1,37 @@
+.git-commit-list-modal {
+  margin: 12px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  max-height: 200px;
+  overflow: auto;
+}
+
+.git-commit-list-modal .git-commit-list {
+  margin: 0;
+}
+
+.git-commit-list-modal .git-commit-row {
+  padding: 0;
+}
+
+.git-commit-row-static {
+  padding: 3px 8px 4px;
+}
+
+.git-commit-list-modal-status {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.git-commit-list-overflow {
+  padding: 4px 8px 6px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  border-top: 1px solid var(--border);
+}

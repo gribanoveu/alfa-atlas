@@ -11,6 +11,12 @@ mock.module("../lib/git", () => ({
     if (syncStatusThrows) throw syncStatusThrows;
     return syncStatus;
   },
+  gitUnpushedCommits: async () => [
+    { hash: "abc1234", message: "local change", author: "Test", time: 1 },
+  ],
+  gitIncomingCommits: async () => [
+    { hash: "def5678", message: "remote change", author: "Test", time: 2 },
+  ],
   gitHeadOid: async () => "abc123",
   gitCommitFiles: async () => [],
   gitCommitFileDiff: async () => ({}),
@@ -84,6 +90,12 @@ describe("useGitWorkflow — modals", () => {
     const { result } = render();
     act(() => result.current.openPullModal());
     expect(result.current.pullModalOpen).toBe(true);
+  });
+
+  test("the push dialog opens with a project", () => {
+    const { result } = render();
+    act(() => result.current.openPushModal());
+    expect(result.current.pushConfirmOpen).toBe(true);
   });
 });
 
@@ -168,16 +180,63 @@ describe("useGitWorkflow — push", () => {
     expect(result.current.gitAlert).toBeNull();
   });
 
-  test("confirming closes the dialog and pushes", async () => {
+  test("confirming keeps the dialog open until push completes", async () => {
     const { deps, result } = render();
     act(() => result.current.setPushConfirmOpen(true));
 
+    let resolvePush: () => void;
+    deps.git.push = mock(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolvePush = () => resolve(null);
+        }),
+    );
+
+    let confirmPromise!: Promise<void>;
     await act(async () => {
-      await result.current.onPushConfirm();
+      confirmPromise = result.current.onPushConfirm();
+      await Promise.resolve();
+    });
+
+    expect(result.current.pushConfirmOpen).toBe(true);
+    expect(deps.git.push).toHaveBeenCalled();
+
+    await act(async () => {
+      resolvePush!();
+      await confirmPromise;
     });
 
     expect(result.current.pushConfirmOpen).toBe(false);
-    expect(deps.git.push).toHaveBeenCalled();
+  });
+});
+
+describe("useGitWorkflow — commit lists", () => {
+  test("opening the push dialog loads unpushed commits", async () => {
+    const { result } = render();
+    act(() => result.current.openPushModal());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.pushCommits).toEqual([
+      { hash: "abc1234", message: "local change", author: "Test", time: 1 },
+    ]);
+    expect(result.current.pushCommitsLoading).toBe(false);
+  });
+
+  test("opening the pull dialog loads incoming commits", async () => {
+    const { result } = render();
+    act(() => result.current.openPullModal());
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.pullCommits).toEqual([
+      { hash: "def5678", message: "remote change", author: "Test", time: 2 },
+    ]);
+    expect(result.current.pullCommitsLoading).toBe(false);
   });
 });
 

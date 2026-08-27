@@ -34,6 +34,24 @@ pub fn log(repo_root: &str, limit: usize) -> Result<Vec<GitCommitSummary>, GitEr
     git_repo::log(Path::new(repo_root), limit)
 }
 
+pub fn unpushed_commits(repo_root: &str, limit: usize) -> Result<Vec<GitCommitSummary>, GitError> {
+    let limit = if limit == 0 { 50 } else { limit.min(100) };
+    git_repo::unpushed_commits(Path::new(repo_root), limit)
+}
+
+pub fn incoming_commits(repo_root: &str, limit: usize) -> Result<Vec<GitCommitSummary>, GitError> {
+    let limit = if limit == 0 { 50 } else { limit.min(100) };
+    let credentials = git_credentials_store::load()
+        .map_err(|e| GitError::Message(e.to_string()))?;
+    let app_private_key = key_management::get_decrypted_private_key();
+    git_repo::incoming_commits(
+        Path::new(repo_root),
+        &credentials,
+        app_private_key.as_deref(),
+        limit,
+    )
+}
+
 pub fn pull(
     repo_root: &str,
     mode: PullMode,

@@ -77,6 +77,26 @@ pub fn git_log(repo_root: String, limit: Option<usize>) -> Result<Vec<GitCommitS
 }
 
 #[tauri::command]
+pub fn git_unpushed_commits(
+    repo_root: String,
+    limit: Option<usize>,
+) -> Result<Vec<GitCommitSummary>, String> {
+    git_ops::unpushed_commits(&repo_root, limit.unwrap_or(50)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn git_incoming_commits(
+    repo_root: String,
+    limit: Option<usize>,
+) -> Result<Vec<GitCommitSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git_ops::incoming_commits(&repo_root, limit.unwrap_or(50)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn git_pull(repo_root: String, mode: PullMode, app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut emit = progress_emitter(app);

@@ -1,10 +1,15 @@
+import type { GitCommitSummary } from "../../lib/git";
 import { formatGitProgress, useGitProgress } from "../../hooks/useGitProgress";
+import { GitCommitList } from "./GitCommitList";
 import "../Welcome/CloneRepoModal.css";
+import "./PushConfirmModal.css";
 
 type PushConfirmModalProps = {
   branchName: string | null;
   hasUpstream: boolean;
   ahead: number;
+  commits: GitCommitSummary[];
+  commitsLoading: boolean;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -14,6 +19,8 @@ export function PushConfirmModal({
   branchName,
   hasUpstream,
   ahead,
+  commits,
+  commitsLoading,
   busy,
   onCancel,
   onConfirm,
@@ -23,6 +30,8 @@ export function PushConfirmModal({
   const message = hasUpstream
     ? `Будет отправлено ${ahead} ${commitWord(ahead)} из ветки «${branchName}» на сервер.`
     : `Ветка «${branchName}» ещё не отправлялась на сервер. Она будет создана в удалённом репозитории и привязана как upstream.`;
+  const overflowCount = hasUpstream && ahead > commits.length ? ahead - commits.length : 0;
+  const showCommitList = hasUpstream ? ahead > 0 : commits.length > 0;
 
   return (
     <div
@@ -33,7 +42,7 @@ export function PushConfirmModal({
       }}
     >
       <div
-        className="clone-modal"
+        className="clone-modal push-confirm-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="push-confirm-title"
@@ -43,6 +52,14 @@ export function PushConfirmModal({
           Отправить изменения на сервер?
         </div>
         <div className="clone-modal-message">{message}</div>
+        {showCommitList ? (
+          <GitCommitList
+            commits={commits}
+            loading={commitsLoading}
+            emptyMessage="Коммиты не найдены"
+            overflowCount={overflowCount}
+          />
+        ) : null}
         <div className="clone-modal-actions">
           <button
             type="button"

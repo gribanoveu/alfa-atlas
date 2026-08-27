@@ -1,5 +1,16 @@
 .pull-update-modal {
-  width: min(480px, 100%);
+  width: min(520px, 100%);
+}
+
+.pull-update-commits-label {
+  margin-top: 4px;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.pull-update-merge-prompt {
+  margin-top: 14px;
 }
 
 .pull-update-options {

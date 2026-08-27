@@ -1,10 +1,14 @@
 import { useState } from "react";
-import type { PullMode } from "../../lib/git";
+import type { GitCommitSummary, PullMode } from "../../lib/git";
 import { formatGitProgress, useGitProgress } from "../../hooks/useGitProgress";
+import { GitCommitList } from "./GitCommitList";
 import "../Welcome/CloneRepoModal.css";
 import "./PullUpdateModal.css";
 
 type PullUpdateModalProps = {
+  behind: number;
+  commits: GitCommitSummary[];
+  commitsLoading: boolean;
   busy: boolean;
   onCancel: () => void;
   onConfirm: (mode: PullMode) => void;
@@ -12,6 +16,9 @@ type PullUpdateModalProps = {
 };
 
 export function PullUpdateModal({
+  behind,
+  commits,
+  commitsLoading,
   busy,
   onCancel,
   onConfirm,
@@ -20,6 +27,9 @@ export function PullUpdateModal({
   const [mode, setMode] = useState<PullMode>("merge");
   const gitProgress = useGitProgress();
   const progressLabel = busy ? formatGitProgress(gitProgress.event) : null;
+  const displayCount = commitsLoading ? behind : Math.max(behind, commits.length);
+  const overflowCount =
+    displayCount > commits.length ? displayCount - commits.length : 0;
 
   return (
     <div
@@ -39,6 +49,24 @@ export function PullUpdateModal({
           Обновить проект
         </div>
         <div className="clone-modal-message">
+          {commitsLoading
+            ? "Проверяем изменения на сервере…"
+            : displayCount > 0
+              ? `С сервера придёт ${displayCount} ${commitWord(displayCount)}.`
+              : "Нет новых коммитов на сервере."}
+        </div>
+
+        <div className="pull-update-commits-label">Придёт с сервера</div>
+        <GitCommitList
+          commits={commits}
+          loading={commitsLoading}
+          emptyMessage={
+            commitsLoading ? "Загрузка списка…" : "Нет новых коммитов"
+          }
+          overflowCount={overflowCount}
+        />
+
+        <div className="clone-modal-message pull-update-merge-prompt">
           Как объединить изменения с сервера с текущей веткой?
         </div>
 
@@ -104,4 +132,14 @@ export function PullUpdateModal({
       </div>
     </div>
   );
+}
+
+function commitWord(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return "коммит";
+  if ([2, 3, 4].includes(mod10) && ![12, 13, 14].includes(mod100)) {
+    return "коммита";
+  }
+  return "коммитов";
 }

@@ -159,6 +159,8 @@ pub fn run() {
             commands::git::git_unstage,
             commands::git::git_commit,
             commands::git::git_log,
+            commands::git::git_unpushed_commits,
+            commands::git::git_incoming_commits,
             commands::git::git_pull,
             commands::git::git_conflict_file_content,
             commands::git::git_resolve_conflict,

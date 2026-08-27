@@ -227,6 +227,20 @@ export function gitLog(
   return invoke<GitCommitSummary[]>("git_log", { repoRoot, limit });
 }
 
+export function gitUnpushedCommits(
+  repoRoot: string,
+  limit = 50,
+): Promise<GitCommitSummary[]> {
+  return invoke<GitCommitSummary[]>("git_unpushed_commits", { repoRoot, limit });
+}
+
+export function gitIncomingCommits(
+  repoRoot: string,
+  limit = 50,
+): Promise<GitCommitSummary[]> {
+  return invoke<GitCommitSummary[]>("git_incoming_commits", { repoRoot, limit });
+}
+
 export function gitPull(repoRoot: string, mode: PullMode): Promise<void> {
   return invoke<void>("git_pull", { repoRoot, mode });
 }

@@ -401,6 +401,47 @@ pub fn undo_commit(repo_root: &Path, commit_hash: &str) -> Result<(), GitError> 
     Ok(())
 }
 
+fn commit_summary_from_oid(repo: &Repository, oid: git2::Oid) -> Result<GitCommitSummary, GitError> {
+    let commit = repo.find_commit(oid).map_err(op_err)?;
+    Ok(commit_summary_from_commit(&commit))
+}
+
+fn commit_summary_from_commit(commit: &git2::Commit<'_>) -> GitCommitSummary {
+    let full = commit.id().to_string();
+    let hash = full[..7.min(full.len())].to_string();
+    let message = commit
+        .summary()
+        .ok()
+        .flatten()
+        .or_else(|| commit.message().ok())
+        .unwrap_or("")
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let author = commit.author().name().unwrap_or("").to_string();
+    let time = commit.time().seconds();
+    GitCommitSummary {
+        hash,
+        message,
+        author,
+        time,
+    }
+}
+
+fn collect_commits_from_walk(
+    repo: &Repository,
+    walk: &mut git2::Revwalk<'_>,
+    limit: usize,
+) -> Result<Vec<GitCommitSummary>, GitError> {
+    let mut commits = Vec::new();
+    for oid_result in walk.take(limit) {
+        let oid = oid_result.map_err(op_err)?;
+        commits.push(commit_summary_from_oid(repo, oid)?);
+    }
+    Ok(commits)
+}
+
 pub fn log(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitError> {
     let repo = open_repo(repo_root)?;
     let mut walk = match repo.revwalk() {
@@ -414,32 +455,70 @@ pub fn log(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitE
         Err(e) => return Err(op_err(e)),
     }
 
-    let mut commits = Vec::new();
-    for oid_result in walk.take(limit) {
-        let oid = oid_result.map_err(op_err)?;
-        let commit = repo.find_commit(oid).map_err(op_err)?;
-        let full = oid.to_string();
-        let hash = full[..7.min(full.len())].to_string();
-        let message = commit
-            .summary()
-            .ok()
-            .flatten()
-            .or_else(|| commit.message().ok())
-            .unwrap_or("")
-            .lines()
-            .next()
-            .unwrap_or("")
-            .to_string();
-        let author = commit.author().name().unwrap_or("").to_string();
-        let time = commit.time().seconds();
-        commits.push(GitCommitSummary {
-            hash,
-            message,
-            author,
-            time,
-        });
+    collect_commits_from_walk(&repo, &mut walk, limit)
+}
+
+/// Commits on HEAD that haven't been pushed yet (`upstream..HEAD`).
+/// When the branch has no upstream, every commit on it is returned.
+pub fn unpushed_commits(repo_root: &Path, limit: usize) -> Result<Vec<GitCommitSummary>, GitError> {
+    let repo = open_repo(repo_root)?;
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => return Ok(vec![]),
+        Err(e) => return Err(op_err(e)),
+    };
+    if !head.is_branch() {
+        return Ok(vec![]);
     }
-    Ok(commits)
+    let local_oid = match head.target() {
+        Some(oid) => oid,
+        None => return Ok(vec![]),
+    };
+
+    let mut walk = repo.revwalk().map_err(op_err)?;
+    walk.push(local_oid).map_err(op_err)?;
+
+    if let Ok(branch_name) = head.shorthand() {
+        if let Ok(branch) = repo.find_branch(branch_name, BranchType::Local) {
+            if let Ok(upstream) = branch.upstream() {
+                if let Some(upstream_oid) = upstream.get().target() {
+                    walk.hide(upstream_oid).map_err(op_err)?;
+                }
+            }
+        }
+    }
+
+    collect_commits_from_walk(&repo, &mut walk, limit)
+}
+
+/// Commits on the remote upstream that aren't on HEAD yet (`HEAD..upstream`).
+/// Fetches the upstream ref first so the list reflects the live remote state.
+pub fn incoming_commits(
+    repo_root: &Path,
+    credentials: &GitCredentials,
+    app_private_key: Option<&str>,
+    limit: usize,
+) -> Result<Vec<GitCommitSummary>, GitError> {
+    let repo = open_repo(repo_root)?;
+    let upstream = match upstream_of_head(&repo) {
+        Ok(upstream) => upstream,
+        Err(GitError::NoUpstream) => return Ok(vec![]),
+        Err(e) => return Err(e),
+    };
+    let theirs = fetch_upstream(&repo, &upstream, credentials, app_private_key, None)?;
+    let local = repo
+        .head()
+        .map_err(op_err)?
+        .peel_to_commit()
+        .map_err(op_err)?;
+    let local_oid = local.id();
+    let upstream_oid = theirs.id();
+
+    let mut walk = repo.revwalk().map_err(op_err)?;
+    walk.push(upstream_oid).map_err(op_err)?;
+    walk.hide(local_oid).map_err(op_err)?;
+
+    collect_commits_from_walk(&repo, &mut walk, limit)
 }
 
 fn short_oid(oid: git2::Oid) -> String {
@@ -2876,6 +2955,92 @@ mod tests {
         let status = unpushed_status(&repo);
         assert!(status.has_upstream);
         assert_eq!(status.ahead, 1);
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn unpushed_commits_lists_commits_without_upstream() {
+        let dir = temp_dir("unpushed-commits-no-upstream");
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "first");
+
+        let commits = unpushed_commits(&dir, 50).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].message, "first");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unpushed_commits_lists_only_ahead_commits_with_upstream() {
+        let base = temp_dir("unpushed-commits-ahead");
+        let remote = base.join("remote");
+        let local = base.join("local");
+
+        Repository::init_bare(&remote).unwrap();
+        let repo = Repository::init(&local).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "first");
+        repo.remote("origin", remote.to_str().unwrap()).unwrap();
+        push(&local, &GitCredentials::default(), None, None).unwrap();
+
+        assert!(unpushed_commits(&local, 50).unwrap().is_empty());
+
+        commit_file(&repo, "b.txt", "two", "second");
+        let commits = unpushed_commits(&local, 50).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].message, "second");
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn incoming_commits_lists_remote_commits_not_on_local() {
+        let base = temp_dir("incoming-commits");
+        let remote = base.join("remote");
+        let local = base.join("local");
+        let other = base.join("other");
+
+        Repository::init_bare(&remote).unwrap();
+
+        let repo = Repository::init(&local).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "first");
+        repo.remote("origin", remote.to_str().unwrap()).unwrap();
+        push(&local, &GitCredentials::default(), None, None).unwrap();
+
+        let other_repo = Repository::clone(remote.to_str().unwrap(), &other).unwrap();
+        {
+            let mut config = other_repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&other_repo, "b.txt", "two", "remote-only");
+        push(&other, &GitCredentials::default(), None, None).unwrap();
+
+        let commits = incoming_commits(
+            &local,
+            &GitCredentials::default(),
+            None,
+            50,
+        )
+        .unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].message, "remote-only");
 
         fs::remove_dir_all(&base).ok();
     }
