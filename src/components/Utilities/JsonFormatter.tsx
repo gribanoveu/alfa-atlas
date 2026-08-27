@@ -6,6 +6,7 @@ import {
   type JsonFormatMode,
   type JsonIndent,
 } from "../../lib/jsonFormat";
+import { UtilityInputHead } from "./UtilityClearButton";
 import "./JsonFormatter.css";
 
 const SAMPLE = '{"id":1,"name":"Alpha","tags":["docs","api"],"meta":{"version":2}}';
@@ -129,8 +130,8 @@ export function JsonFormatter() {
         </div>
       </div>
 
-      <label className="jsonfmt-input-wrap">
-        <span className="jsonfmt-input-label">JSON</span>
+      <div className="jsonfmt-input-wrap">
+        <UtilityInputHead label="JSON" onClear={() => setRaw("")} clearDisabled={!raw} />
         <textarea
           className="jsonfmt-input"
           value={raw}
@@ -139,7 +140,7 @@ export function JsonFormatter() {
           spellCheck={false}
           aria-label="JSON"
         />
-      </label>
+      </div>
 
       {showError ? (
         <p className="jsonfmt-error" role="status">

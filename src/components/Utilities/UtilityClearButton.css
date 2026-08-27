@@ -1,0 +1,36 @@
+.utility-input-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.utility-input-head-label {
+  font-size: calc(var(--font-preview) * 0.75);
+  color: var(--text-2);
+}
+
+.utility-clear-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.utility-clear-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.utility-clear-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}

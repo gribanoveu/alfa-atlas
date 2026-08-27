@@ -7,6 +7,7 @@ import {
   type Base64Alphabet,
 } from "../../lib/base64Codec";
 import { TEXT_ENCODING_OPTIONS, type TextEncodingId } from "../../lib/textEncoding";
+import { UtilityInputHead } from "./UtilityClearButton";
 import "./Base64Codec.css";
 
 type CodecTab = "encode" | "decode";
@@ -159,8 +160,12 @@ export function Base64Codec() {
           )}
         </div>
 
-        <label className="b64-input-wrap">
-          <span className="b64-input-label">{inputLabel}</span>
+        <div className="b64-input-wrap">
+          <UtilityInputHead
+            label={inputLabel}
+            onClear={() => setRaw("")}
+            clearDisabled={!raw}
+          />
           <textarea
             className="b64-input"
             value={raw}
@@ -169,7 +174,7 @@ export function Base64Codec() {
             spellCheck={false}
             aria-label={inputLabel}
           />
-        </label>
+        </div>
 
         {showError ? (
           <p className="b64-error" role="status">

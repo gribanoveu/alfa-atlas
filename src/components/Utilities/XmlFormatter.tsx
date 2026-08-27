@@ -6,6 +6,7 @@ import {
   type XmlFormatMode,
   type XmlIndent,
 } from "../../lib/xmlFormat";
+import { UtilityInputHead } from "./UtilityClearButton";
 import "./XmlFormatter.css";
 
 const SAMPLE = `<root><item id="1"><name>Alpha</name><tags><tag>docs</tag><tag>api</tag></tags></item></root>`;
@@ -104,8 +105,8 @@ export function XmlFormatter() {
         </div>
       </div>
 
-      <label className="xmfmt-input-wrap">
-        <span className="xmfmt-input-label">XML</span>
+      <div className="xmfmt-input-wrap">
+        <UtilityInputHead label="XML" onClear={() => setRaw("")} clearDisabled={!raw} />
         <textarea
           className="xmfmt-input"
           value={raw}
@@ -114,7 +115,7 @@ export function XmlFormatter() {
           spellCheck={false}
           aria-label="XML"
         />
-      </label>
+      </div>
 
       {showError ? (
         <p className="xmfmt-error" role="status">

@@ -1,11 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { decodeBase64String, encodeBase64String } from "../lib/base64Codec";
-import {
-  decodeBytesAsText,
-  detectTextEncoding,
-  encodeWindows1251ForTest,
-  normalizeEncodingName,
-} from "../lib/textEncoding";
+import { decodeBytesAsText, detectTextEncoding, normalizeEncodingName } from "../lib/textEncoding";
+import { encodeWindows1251ForTest } from "./helpers/windows1251";
 
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";

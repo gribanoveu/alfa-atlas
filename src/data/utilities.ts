@@ -1,4 +1,4 @@
-import { Binary, Braces, Clock, CodeXml, FileJson2, Globe, Hash, KeyRound, type LucideIcon } from "lucide-react";
+import { Binary, Braces, Clock, CodeXml, FileJson2, FileStack, Globe, Hash, KeyRound, type LucideIcon } from "lucide-react";
 
 export type UtilityId =
   | "unixtime"
@@ -8,7 +8,8 @@ export type UtilityId =
   | "json-diff"
   | "json-format"
   | "xml-format"
-  | "base64";
+  | "base64"
+  | "base64-file";
 
 export type UtilityDef = {
   id: UtilityId;
@@ -79,6 +80,13 @@ export const UTILITIES: UtilityDef[] = [
     title: "Base64-кодек",
     description: "Кодирование и декодирование строк",
     icon: Binary,
+    stub: false,
+  },
+  {
+    id: "base64-file",
+    title: "Base64 файлов",
+    description: "Файлы в Base64 и обратно, предпросмотр PDF и изображений",
+    icon: FileStack,
     stub: false,
   },
 ];

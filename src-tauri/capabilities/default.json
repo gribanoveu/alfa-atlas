@@ -16,6 +16,7 @@
       ]
     },
     "dialog:default",
+    "fs:default",
     "clipboard-manager:allow-write-text",
     "notification:default",
     "mcp-bridge:default",

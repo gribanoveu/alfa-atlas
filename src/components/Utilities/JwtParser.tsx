@@ -6,6 +6,7 @@ import {
   jwtSummary,
   parseJwt,
 } from "../../lib/jwt";
+import { UtilityInputHead } from "./UtilityClearButton";
 import "./JwtParser.css";
 
 const SAMPLE =
@@ -94,8 +95,8 @@ export function JwtParser() {
         Разбор заголовка и payload. Подпись не проверяется.
       </p>
 
-      <label className="jwt-input-wrap">
-        <span className="jwt-input-label">JWT</span>
+      <div className="jwt-input-wrap">
+        <UtilityInputHead label="JWT" onClear={() => setRaw("")} clearDisabled={!raw} />
         <textarea
           className="jwt-input"
           value={raw}
@@ -104,7 +105,7 @@ export function JwtParser() {
           spellCheck={false}
           aria-label="JWT"
         />
-      </label>
+      </div>
 
       {parsed.ok ? (
         <>

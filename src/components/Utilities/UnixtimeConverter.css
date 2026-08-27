@@ -73,8 +73,15 @@
   display: contents;
 }
 
-.unix-form-row-toolbar .unix-btn {
+.unix-form-row-toolbar .unix-btn,
+.unix-form-row-toolbar .utility-clear-btn {
   height: 30px;
+}
+
+.unix-form-row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .unix-form-label {

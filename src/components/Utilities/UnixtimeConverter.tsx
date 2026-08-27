@@ -15,6 +15,7 @@ import {
   type DateZone,
   type UnixUnitMode,
 } from "../../lib/unixtime";
+import { UtilityClearButton } from "./UtilityClearButton";
 import "./UnixtimeConverter.css";
 
 type ConverterTab = "decode" | "encode";
@@ -79,6 +80,20 @@ function fieldsFromDate(date: Date, zone: DateZone): FieldsState {
     second: String(parts.second),
     millisecond: String(parts.millisecond),
   };
+}
+
+const EMPTY_FIELDS: FieldsState = {
+  year: "",
+  month: "",
+  day: "",
+  hour: "",
+  minute: "",
+  second: "",
+  millisecond: "",
+};
+
+function fieldsAreEmpty(fields: FieldsState): boolean {
+  return Object.values(fields).every((value) => value.trim().length === 0);
 }
 
 function ResultRow({
@@ -269,6 +284,11 @@ export function UnixtimeConverter() {
                     spellCheck={false}
                     aria-label="Unix-время"
                   />
+                  <UtilityClearButton
+                    onClear={() => setRaw("")}
+                    disabled={!raw}
+                    label="Очистить timestamp"
+                  />
                   <button
                     type="button"
                     className="unix-btn"
@@ -359,13 +379,20 @@ export function UnixtimeConverter() {
                     ariaLabel="Часовой пояс вводимой даты"
                   />
                 </div>
-                <button
-                  type="button"
-                  className="unix-btn"
-                  onClick={() => setFields(fieldsFromDate(new Date(), zone))}
-                >
-                  Сейчас
-                </button>
+                <div className="unix-form-row-actions">
+                  <button
+                    type="button"
+                    className="unix-btn"
+                    onClick={() => setFields(fieldsFromDate(new Date(), zone))}
+                  >
+                    Сейчас
+                  </button>
+                  <UtilityClearButton
+                    onClear={() => setFields(EMPTY_FIELDS)}
+                    disabled={fieldsAreEmpty(fields)}
+                    label="Очистить дату и время"
+                  />
+                </div>
               </div>
 
               <div className="unix-datetime">

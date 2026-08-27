@@ -69,7 +69,23 @@ function bytesToBase64(bytes: Uint8Array, alphabet: Base64Alphabet, padding: boo
   return encoded;
 }
 
-function decodeBase64ToBytes(input: string, alphabet: Base64Alphabet): Uint8Array {
+export function encodeBytesToBase64(
+  bytes: Uint8Array,
+  alphabet: Base64Alphabet,
+  padding: boolean,
+): string {
+  return bytesToBase64(bytes, alphabet, padding);
+}
+
+export function stripBase64Whitespace(text: string): string {
+  return stripWhitespace(text);
+}
+
+export function isValidBase64Text(input: string, alphabet: Base64Alphabet): boolean {
+  return isValidBase64Input(input, alphabet);
+}
+
+export function decodeBase64ToBytes(input: string, alphabet: Base64Alphabet): Uint8Array {
   const normalized = normalizeBase64Input(input, alphabet);
   const binary = atob(normalized);
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));

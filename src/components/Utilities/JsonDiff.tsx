@@ -10,6 +10,7 @@ import {
   summarizeJsonDiff,
   type JsonDiffChange,
 } from "../../lib/jsonDiff";
+import { UtilityInputHead } from "./UtilityClearButton";
 import "./JsonDiff.css";
 
 const SAMPLE_LEFT = `{
@@ -109,8 +110,12 @@ export function JsonDiff() {
       </p>
 
       <div className="json-diff-inputs">
-        <label className="json-diff-input-wrap">
-          <span className="json-diff-input-label">Исходный JSON</span>
+        <div className="json-diff-input-wrap">
+          <UtilityInputHead
+            label="Исходный JSON"
+            onClear={() => setLeftRaw("")}
+            clearDisabled={!leftRaw}
+          />
           <textarea
             className="json-diff-input"
             value={leftRaw}
@@ -119,10 +124,14 @@ export function JsonDiff() {
             spellCheck={false}
             aria-label="Исходный JSON"
           />
-        </label>
+        </div>
 
-        <label className="json-diff-input-wrap">
-          <span className="json-diff-input-label">Новый JSON</span>
+        <div className="json-diff-input-wrap">
+          <UtilityInputHead
+            label="Новый JSON"
+            onClear={() => setRightRaw("")}
+            clearDisabled={!rightRaw}
+          />
           <textarea
             className="json-diff-input"
             value={rightRaw}
@@ -131,7 +140,7 @@ export function JsonDiff() {
             spellCheck={false}
             aria-label="Новый JSON"
           />
-        </label>
+        </div>
       </div>
 
       {leftError ? (
