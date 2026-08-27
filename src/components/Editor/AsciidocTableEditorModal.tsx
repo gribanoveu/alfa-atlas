@@ -3,6 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import {
   cloneEditableTable,
   distributeColumnWidths,
+  insertColsWeightAfter,
+  removeColsWeightAt,
   serializeAsciidocTable,
   tableColumnCount,
   type EditableCell,
@@ -124,6 +126,7 @@ function removeRowAt(table: EditableTable, rowIndex: number): EditableTable {
 }
 
 function insertColumnAfter(table: EditableTable, colIndex: number): EditableTable {
+  const columnCount = tableColumnCount(table);
   const next = cloneEditableTable(table);
   for (const row of next.rows) {
     const found = findCellAtLogicalColumn(row, colIndex);
@@ -151,11 +154,13 @@ function insertColumnAfter(table: EditableTable, colIndex: number): EditableTabl
       row.cells.splice(found.cellIndex + 1, 0, emptyCell());
     }
   }
+  next.colsAttribute = insertColsWeightAfter(next.colsAttribute, colIndex, columnCount);
   return next;
 }
 
 function removeColumnAt(table: EditableTable, colIndex: number): EditableTable {
-  if (tableColumnCount(table) <= 1) return table;
+  const columnCount = tableColumnCount(table);
+  if (columnCount <= 1) return table;
   const next = cloneEditableTable(table);
   for (const row of next.rows) {
     const found = findCellAtLogicalColumn(row, colIndex);
@@ -167,6 +172,7 @@ function removeColumnAt(table: EditableTable, colIndex: number): EditableTable {
       row.cells.splice(found.cellIndex, 1);
     }
   }
+  next.colsAttribute = removeColsWeightAt(next.colsAttribute, colIndex, columnCount);
   return next;
 }
 

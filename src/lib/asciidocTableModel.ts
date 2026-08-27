@@ -191,6 +191,51 @@ export function parseColsWeights(
   return weights as number[];
 }
 
+function replaceColsWeights(colsAttribute: string, weights: number[]): string {
+  const colsValue = weights.join(",");
+  const replaced = colsAttribute.replace(
+    /cols=(["'])([^"']*)\1/,
+    (_match, quote: string) => `cols=${quote}${colsValue}${quote}`,
+  );
+  if (replaced !== colsAttribute) return replaced;
+  return `[cols="${colsValue}"]`;
+}
+
+/** Drop the weight at `colIndex` from `[cols=...]` when it matches `columnCount`. */
+export function removeColsWeightAt(
+  colsAttribute: string | null,
+  colIndex: number,
+  columnCount: number,
+): string | null {
+  if (!colsAttribute || columnCount <= 0 || colIndex < 0 || colIndex >= columnCount) {
+    return colsAttribute;
+  }
+  const weights = parseColsWeights(colsAttribute, columnCount);
+  if (!weights) return colsAttribute;
+  const nextWeights = weights.filter((_, index) => index !== colIndex);
+  return replaceColsWeights(colsAttribute, nextWeights);
+}
+
+/** Insert a weight after `colIndex` in `[cols=...]` when it matches `columnCount`. */
+export function insertColsWeightAfter(
+  colsAttribute: string | null,
+  colIndex: number,
+  columnCount: number,
+  weight = 1,
+): string | null {
+  if (!colsAttribute || columnCount <= 0 || colIndex < 0 || colIndex >= columnCount) {
+    return colsAttribute;
+  }
+  const weights = parseColsWeights(colsAttribute, columnCount);
+  if (!weights) return colsAttribute;
+  const nextWeights = [
+    ...weights.slice(0, colIndex + 1),
+    weight,
+    ...weights.slice(colIndex + 1),
+  ];
+  return replaceColsWeights(colsAttribute, nextWeights);
+}
+
 function distributeEqual(count: number, totalWidth: number): number[] {
   if (count <= 0) return [];
   const minTotal = count * 48;

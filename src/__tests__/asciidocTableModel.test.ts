@@ -4,8 +4,10 @@ import {
   distributeColumnWidths,
   findTableBlockAtLine,
   findTableBlocks,
+  insertColsWeightAfter,
   parseAsciidocTable,
   parseColsWeights,
+  removeColsWeightAt,
   serializeAsciidocTable,
   sliceTableSource,
   tablesStructurallyEqual,
@@ -141,5 +143,14 @@ describe("parseColsWeights", () => {
     const widths = distributeColumnWidths(4, 400, '[cols="1,1,1,3"]');
     expect(widths.reduce((sum, width) => sum + width, 0)).toBe(400);
     expect(widths[3]).toBeGreaterThan(widths[0]);
+  });
+
+  test("removeColsWeightAt drops weight for removed column", () => {
+    expect(removeColsWeightAt('[cols="1,1,1,3"]', 3, 4)).toBe('[cols="1,1,1"]');
+    expect(removeColsWeightAt('[cols="1,1,1,3"]', 0, 4)).toBe('[cols="1,1,3"]');
+  });
+
+  test("insertColsWeightAfter adds weight for new column", () => {
+    expect(insertColsWeightAfter('[cols="1,1,1,3"]', 1, 4)).toBe('[cols="1,1,1,1,3"]');
   });
 });
