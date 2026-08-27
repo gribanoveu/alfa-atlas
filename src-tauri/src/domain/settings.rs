@@ -91,6 +91,7 @@ pub const DEFAULT_UI_FONT_SIZE_PX: f32 = 12.5;
 pub const DEFAULT_SIDEBAR_FONT_SIZE_PX: f32 = 12.0;
 pub const DEFAULT_EDITOR_FONT_SIZE_PX: f32 = 13.0;
 pub const DEFAULT_PREVIEW_FONT_SIZE_PX: f32 = 14.0;
+pub const DEFAULT_ASSISTANT_FONT_SIZE_PX: f32 = 13.0;
 
 fn clamp_font_size_px(value: f32) -> f32 {
     let clamped = value.clamp(MIN_FONT_SIZE_PX, MAX_FONT_SIZE_PX);
@@ -111,6 +112,10 @@ fn default_editor_font_size_px() -> f32 {
 
 fn default_preview_font_size_px() -> f32 {
     DEFAULT_PREVIEW_FONT_SIZE_PX
+}
+
+fn default_assistant_font_size_px() -> f32 {
+    DEFAULT_ASSISTANT_FONT_SIZE_PX
 }
 
 fn default_true() -> bool {
@@ -172,9 +177,17 @@ pub struct GeneralPrefs {
     pub editor_font_size_px: f32,
     #[serde(default = "default_preview_font_size_px")]
     pub preview_font_size_px: f32,
+    #[serde(default = "default_assistant_font_size_px")]
+    pub assistant_font_size_px: f32,
     /// Последняя выбранная папка для клонирования репозитория (без имени репозитория).
     #[serde(default)]
     pub last_clone_dir: Option<String>,
+    /// Раскрыта ли секция «Уведомления» на вкладке уведомлений.
+    #[serde(default = "default_true")]
+    pub notifications_alerts_expanded: bool,
+    /// Раскрыта ли секция «Начать работу» на вкладке уведомлений.
+    #[serde(default = "default_true")]
+    pub notifications_onboarding_expanded: bool,
 }
 
 impl GeneralPrefs {
@@ -187,6 +200,7 @@ impl GeneralPrefs {
             sidebar_font_size_px: clamp_font_size_px(self.sidebar_font_size_px),
             editor_font_size_px: clamp_font_size_px(self.editor_font_size_px),
             preview_font_size_px: clamp_font_size_px(self.preview_font_size_px),
+            assistant_font_size_px: clamp_font_size_px(self.assistant_font_size_px),
             ..self
         }
     }
@@ -206,7 +220,10 @@ impl Default for GeneralPrefs {
             sidebar_font_size_px: DEFAULT_SIDEBAR_FONT_SIZE_PX,
             editor_font_size_px: DEFAULT_EDITOR_FONT_SIZE_PX,
             preview_font_size_px: DEFAULT_PREVIEW_FONT_SIZE_PX,
+            assistant_font_size_px: DEFAULT_ASSISTANT_FONT_SIZE_PX,
             last_clone_dir: None,
+            notifications_alerts_expanded: true,
+            notifications_onboarding_expanded: true,
         }
     }
 }
@@ -426,6 +443,10 @@ mod tests {
         assert_eq!(prefs.sidebar_font_size_px, DEFAULT_SIDEBAR_FONT_SIZE_PX);
         assert_eq!(prefs.editor_font_size_px, DEFAULT_EDITOR_FONT_SIZE_PX);
         assert_eq!(prefs.preview_font_size_px, DEFAULT_PREVIEW_FONT_SIZE_PX);
+        assert_eq!(
+            prefs.assistant_font_size_px,
+            DEFAULT_ASSISTANT_FONT_SIZE_PX
+        );
     }
 
     #[test]
@@ -433,6 +454,14 @@ mod tests {
         let prefs: GeneralPrefs =
             serde_json::from_str(r#"{"restoreLastProject":false}"#).unwrap();
         assert_eq!(prefs.last_clone_dir, None);
+    }
+
+    #[test]
+    fn deserializes_legacy_general_without_notifications_sections() {
+        let prefs: GeneralPrefs =
+            serde_json::from_str(r#"{"restoreLastProject":false}"#).unwrap();
+        assert!(prefs.notifications_alerts_expanded);
+        assert!(prefs.notifications_onboarding_expanded);
     }
 
     #[test]
@@ -449,6 +478,7 @@ mod tests {
             sidebar_font_size_px: 25.0,
             editor_font_size_px: 13.3,
             preview_font_size_px: 14.7,
+            assistant_font_size_px: 12.2,
             ..GeneralPrefs::default()
         }
         .clamped();
@@ -456,5 +486,6 @@ mod tests {
         assert_eq!(prefs.sidebar_font_size_px, MAX_FONT_SIZE_PX);
         assert_eq!(prefs.editor_font_size_px, 13.5);
         assert_eq!(prefs.preview_font_size_px, 14.5);
+        assert_eq!(prefs.assistant_font_size_px, 12.0);
     }
 }

@@ -14,7 +14,10 @@ export type GeneralPrefs = {
   sidebarFontSizePx: number;
   editorFontSizePx: number;
   previewFontSizePx: number;
+  assistantFontSizePx: number;
   lastCloneDir: string | null;
+  notificationsAlertsExpanded: boolean;
+  notificationsOnboardingExpanded: boolean;
 };
 
 export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
@@ -29,7 +32,10 @@ export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
   sidebarFontSizePx: 12,
   editorFontSizePx: 13,
   previewFontSizePx: 14,
+  assistantFontSizePx: 13,
   lastCloneDir: null,
+  notificationsAlertsExpanded: true,
+  notificationsOnboardingExpanded: true,
 };
 
 export const AUTOSAVE_DELAY_LIMITS = { min: 300, max: 10_000 } as const;
@@ -59,6 +65,7 @@ export function clampGeneralPrefs(prefs: GeneralPrefs): GeneralPrefs {
     sidebarFontSizePx: clampFontSizePx(prefs.sidebarFontSizePx),
     editorFontSizePx: clampFontSizePx(prefs.editorFontSizePx),
     previewFontSizePx: clampFontSizePx(prefs.previewFontSizePx),
+    assistantFontSizePx: clampFontSizePx(prefs.assistantFontSizePx),
   };
 }
 

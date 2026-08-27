@@ -11,7 +11,8 @@ type FontSizePrefKey =
   | "uiFontSizePx"
   | "sidebarFontSizePx"
   | "editorFontSizePx"
-  | "previewFontSizePx";
+  | "previewFontSizePx"
+  | "assistantFontSizePx";
 
 const FONT_SIZE_FIELDS: {
   key: FontSizePrefKey;
@@ -42,6 +43,12 @@ const FONT_SIZE_FIELDS: {
     id: "font-preview-size",
     label: "Превью",
     hint: "AsciiDoc, Markdown, JSON/YAML",
+  },
+  {
+    key: "assistantFontSizePx",
+    id: "font-assistant-size",
+    label: "Ассистент",
+    hint: "Текст ответов в чате",
   },
 ];
 

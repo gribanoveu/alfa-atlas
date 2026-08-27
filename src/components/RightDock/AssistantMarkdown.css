@@ -6,6 +6,7 @@
    `AssistantPanel.css`), so code here uses `--bg-0` instead for contrast. */
 
 .assistant-md {
+  font-size: var(--font-assistant);
   line-height: 1.6;
 }
 

@@ -8,6 +8,7 @@ const DEFAULTS = {
   sidebarFontSizePx: 13,
   editorFontSizePx: 14,
   previewFontSizePx: 15,
+  assistantFontSizePx: 13,
   autosaveEnabled: true,
   autosaveDelayMs: 1000,
 } as unknown as GeneralPrefs;
@@ -103,6 +104,7 @@ describe("useGeneralPrefsEditor", () => {
       sidebarFontSizePx: 20,
       editorFontSizePx: 20,
       previewFontSizePx: 20,
+      assistantFontSizePx: 20,
       autosaveDelayMs: 4000,
     } as GeneralPrefs;
     const { result } = renderHook(() => useGeneralPrefsEditor());
@@ -116,6 +118,7 @@ describe("useGeneralPrefsEditor", () => {
     const written = writes[0]!;
     expect(written.uiFontSizePx).toBe(DEFAULTS.uiFontSizePx);
     expect(written.previewFontSizePx).toBe(DEFAULTS.previewFontSizePx);
+    expect(written.assistantFontSizePx).toBe(DEFAULTS.assistantFontSizePx);
     // Non-font settings are untouched by a font reset.
     expect(written.autosaveDelayMs).toBe(4000);
   });

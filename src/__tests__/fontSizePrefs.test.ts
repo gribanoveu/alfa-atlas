@@ -23,5 +23,6 @@ describe("fontSizePrefs", () => {
     expect(result.editorFontSizePx).toBe(10);
     expect(result.sidebarFontSizePx).toBe(DEFAULT_GENERAL_PREFS.sidebarFontSizePx);
     expect(result.previewFontSizePx).toBe(DEFAULT_GENERAL_PREFS.previewFontSizePx);
+    expect(result.assistantFontSizePx).toBe(DEFAULT_GENERAL_PREFS.assistantFontSizePx);
   });
 });

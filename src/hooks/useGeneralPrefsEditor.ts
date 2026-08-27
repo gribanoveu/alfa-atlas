@@ -101,6 +101,7 @@ export function useGeneralPrefsEditor(
       sidebarFontSizePx: DEFAULT_GENERAL_PREFS.sidebarFontSizePx,
       editorFontSizePx: DEFAULT_GENERAL_PREFS.editorFontSizePx,
       previewFontSizePx: DEFAULT_GENERAL_PREFS.previewFontSizePx,
+      assistantFontSizePx: DEFAULT_GENERAL_PREFS.assistantFontSizePx,
     });
   }, [persistPrefs, prefs]);
 

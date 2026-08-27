@@ -312,10 +312,6 @@ export function BranchesPanel({
         <p className="branches-panel-hint">
           От текущей ветки <strong>{currentBranch}</strong> будет создана новая ветка с именем <strong>{newBranchName}</strong>. 
         </p>
-        <p className="branches-panel-hint">
-            Если у вас есть файлы добавленные в коммит, но коммит не сделан, то удалите их из отслеживания или сделайте коммит,
-            иначе переключение будет заблокировано.
-        </p>
         {error ? <div className="branches-panel-error">{error}</div> : null}
       </form>
     </div>

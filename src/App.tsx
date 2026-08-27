@@ -424,6 +424,7 @@ function App() {
     ["--font-sidebar" as string]: `${generalPrefs.prefs.sidebarFontSizePx}px`,
     ["--font-editor" as string]: `${generalPrefs.prefs.editorFontSizePx}px`,
     ["--font-preview" as string]: `${generalPrefs.prefs.previewFontSizePx}px`,
+    ["--font-assistant" as string]: `${generalPrefs.prefs.assistantFontSizePx}px`,
   };
 
   const openFolder = useCallback(async () => {

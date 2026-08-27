@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Undo2 } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { useNotificationsLayout } from "../../hooks/useNotificationsLayout";
 import { useOnboarding } from "../../hooks/useOnboarding";
 import type { GitActionLogEntry } from "../../lib/gitActionLog";
 import { OnboardingCard } from "./OnboardingCard";
@@ -16,16 +17,7 @@ function formatLogTime(unixMillis: number): string {
   return `${diffD} дн назад`;
 }
 
-function GitActionLogRow({
-  entry,
-  busy,
-  onUndo,
-}: {
-  entry: GitActionLogEntry;
-  busy: boolean;
-  onUndo: () => void;
-}) {
-  const showUndo = entry.undoable && !entry.undone;
+function GitActionLogRow({ entry }: { entry: GitActionLogEntry }) {
   return (
     <div className={`git-action-log-row${entry.undone ? " git-action-log-row-undone" : ""}`}>
       <div className="git-action-log-row-main">
@@ -35,20 +27,33 @@ function GitActionLogRow({
           {entry.undone ? " · отменено" : ""}
         </span>
       </div>
-      {showUndo ? (
-        <button
-          type="button"
-          className="git-action-log-undo-btn"
-          disabled={busy}
-          onClick={onUndo}
-          title="Отменить это действие"
-          aria-label={`Отменить: ${entry.summary}`}
-        >
-          <Undo2 size={13} aria-hidden />
-          Отменить
-        </button>
-      ) : null}
     </div>
+  );
+}
+
+function SectionToggle({
+  expanded,
+  label,
+  controlsId,
+  onToggle,
+}: {
+  expanded: boolean;
+  label: string;
+  controlsId: string;
+  onToggle: () => void;
+}) {
+  const Chevron = expanded ? ChevronDown : ChevronRight;
+  return (
+    <button
+      type="button"
+      className="notifications-section-toggle"
+      aria-expanded={expanded}
+      aria-controls={controlsId}
+      onClick={onToggle}
+    >
+      <Chevron className="notifications-section-chevron" size={14} aria-hidden />
+      <span className="notifications-section-title">{label}</span>
+    </button>
   );
 }
 
@@ -62,42 +67,63 @@ type NotificationsPanelProps = {
 
 export function NotificationsPanel({ gitActionLog }: NotificationsPanelProps) {
   const { cards, complete } = useOnboarding();
+  const { alertsExpanded, onboardingExpanded, toggleAlerts, toggleOnboarding } =
+    useNotificationsLayout();
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const activeCard = cards.find((card) => card.id === activeCardId) ?? null;
   const entries = gitActionLog?.entries ?? [];
 
   return (
-    <div className="notifications-panel">
+    <div
+      className={
+        "notifications-panel" +
+        (alertsExpanded ? "" : " alerts-collapsed") +
+        (onboardingExpanded ? "" : " onboarding-collapsed")
+      }
+    >
       <section className="notifications-section notifications-section-alerts">
-        <h3 className="notifications-section-title">Уведомления</h3>
-        {entries.length === 0 ? (
-          <div className="panel-empty">Нет активных уведомлений</div>
-        ) : (
-          <div className="git-action-log-list">
-            {entries.map((entry) => (
-              <GitActionLogRow
-                key={entry.id}
-                entry={entry}
-                busy={gitActionLog?.busy ?? false}
-                onUndo={() => gitActionLog?.onUndo(entry)}
-              />
-            ))}
+        <SectionToggle
+          expanded={alertsExpanded}
+          label="Уведомления"
+          controlsId="notifications-alerts-body"
+          onToggle={toggleAlerts}
+        />
+        {alertsExpanded ? (
+          <div className="notifications-section-body" id="notifications-alerts-body">
+            {entries.length === 0 ? (
+              <div className="panel-empty">Нет активных уведомлений</div>
+            ) : (
+              <div className="git-action-log-list">
+                {entries.map((entry) => (
+                  <GitActionLogRow key={entry.id} entry={entry} />
+                ))}
+              </div>
+            )}
           </div>
-        )}
+        ) : null}
       </section>
 
       <section className="notifications-section notifications-section-onboarding">
-        <h3 className="notifications-section-title">Начать работу</h3>
-        <div className="onboarding-card-list">
-          {cards.map((card) => (
-            <OnboardingCard
-              key={card.id}
-              card={card}
-              onOpen={setActiveCardId}
-              onDismiss={complete}
-            />
-          ))}
-        </div>
+        <SectionToggle
+          expanded={onboardingExpanded}
+          label="Начать работу"
+          controlsId="notifications-onboarding-body"
+          onToggle={toggleOnboarding}
+        />
+        {onboardingExpanded ? (
+          <div className="notifications-section-body" id="notifications-onboarding-body">
+            <div className="onboarding-card-list">
+              {cards.map((card) => (
+                <OnboardingCard
+                  key={card.id}
+                  card={card}
+                  onOpen={setActiveCardId}
+                  onDismiss={complete}
+                />
+              ))}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       {activeCard ? (
