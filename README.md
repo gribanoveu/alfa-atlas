@@ -47,6 +47,7 @@ xattr -dr com.apple.quarantine "/Applications/Alfa Atlas.app"
 |----------|------------|
 | [doc/implemented-features.md](./doc/implemented-features.md) | **Что уже реализовано** и как это работает |
 | [doc/business-requirements/](./doc/business-requirements/) | Целевые бизнес-требования (vision / backlog) |
+| [doc/releasing.md](./doc/releasing.md) | Как выпустить релиз: версии, тег, CI |
 | [AGENTS.md](./AGENTS.md) | Конвенции для AI-агентов и архитектура слоёв |
 
 ## Быстрый старт
