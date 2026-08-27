@@ -111,10 +111,17 @@ jobs:
       # WebKitGTK is the webview Tauri renders into on Linux; the rest are
       # what the bundler itself needs (patchelf to rewrite rpaths, librsvg
       # to rasterize icons, libxdo for the tray/input plumbing).
+      # gcc-12 is not optional: `numkong` (a C SIMD kernel pulled in by
+      # usearch) uses the `avx512fp16` target attribute, which GCC only
+      # learned in 12. The stock compiler on 22.04 is GCC 11 and fails with
+      # "attribute 'avx512fp16' argument 'target' is unknown". Installing a
+      # newer compiler keeps the older glibc this image is pinned for.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            gcc-12 \
+            g++-12 \
             libwebkit2gtk-4.1-dev \
             build-essential \
             curl \
@@ -130,6 +137,9 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build Tauri app
+        env:
+          CC: gcc-12
+          CXX: g++-12
         run: bun run tauri build
 
       - name: Upload Linux bundles
