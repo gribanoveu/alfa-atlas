@@ -1,7 +1,7 @@
 import type { FileEdit } from "./aiTools";
 
 /** Mirrors `services::ai_tools::apply_edits_exact`'s result shape
- * (`src-tauri/src/services/ai_tools.rs`) — used client-side purely to
+ * (`src-tauri/src/services/ai_tools/tools/edit_file.rs`) — used client-side purely to
  * render a pre-approval diff preview for a pending `editFile` call
  * (`EditFileDiffReview.tsx`), never sent anywhere. The actual edit is still
  * applied server-side by the real Rust implementation; this only has to

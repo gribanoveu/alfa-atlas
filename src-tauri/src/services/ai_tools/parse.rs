@@ -289,3 +289,589 @@ pub fn preflight_tool_call(scope: &ToolScope, call: &LlmToolCall) -> Result<(), 
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use crate::domain::ai_access::AiAccessMode;
+    use crate::domain::ai_tools::{
+    CheckArgs, CheckKind, CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs,
+    EditFileArgs, FileEdit, GitBlameArgs, GitDiffArgs, GrepArgs, ListFilesArgs, MoveArgs,
+    ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoUpdateArgs, TodoUpdateStatus,
+    TodoWriteArgs, ToolCall, ToolError, ToolScope, WriteFileArgs,
+};
+    use crate::domain::conversation_mode::ConversationMode;
+    use crate::domain::llm::LlmToolCall;
+    use crate::services::ai_tools::testing::*;
+    use crate::services::ai_tools::parse_tool_call;
+
+    use super::*;
+
+    #[test]
+    fn parse_tool_call_parses_read_file_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: r#"{"path":"intro.adoc"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string(), start_line: None, end_line: None }));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_list_files_args_with_null_path() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: r#"{"path":null}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None, depth: None, pattern: None }));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_list_files_args_with_empty_object() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: "{}".to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None, depth: None, pattern: None }));
+    }
+
+    /// The exact malformed shape documented on `lenient_json_object`: a
+    /// provider's streamed tool-call fragments concatenate into `{}` plus a
+    /// stray trailing `""`. Must parse the same as a plain `{}` — root path,
+    /// unlimited depth — not error out on the trailing garbage.
+    #[test]
+    fn parse_tool_call_tolerates_trailing_garbage_after_empty_object() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: r#"{}"""#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None, depth: None, pattern: None }));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_read_file_args_with_line_range() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: r#"{"path":"intro.adoc","startLine":2,"endLine":10}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::ReadFile(ReadFileArgs {
+                path: "intro.adoc".to_string(),
+                start_line: Some(2),
+                end_line: Some(10),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_list_files_args_with_depth_and_pattern() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: r#"{"path":"src","depth":2,"pattern":"*.java"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::ListFiles(ListFilesArgs {
+                path: Some("src".to_string()),
+                depth: Some(2),
+                pattern: Some("*.java".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_semantic_search_args_with_top_k() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "semanticSearch".to_string(),
+            arguments: r#"{"query":"auth flow","topK":5}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::SemanticSearch(SemanticSearchArgs { query: "auth flow".to_string(), top_k: Some(5) })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_grep_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "grep".to_string(),
+            arguments: r#"{"pattern":"Needle","glob":"*.adoc","caseInsensitive":true,"maxResults":20}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::Grep(GrepArgs {
+                pattern: "Needle".to_string(),
+                path: None,
+                glob: Some("*.adoc".to_string()),
+                case_insensitive: Some(true),
+                max_results: Some(20),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_git_diff_and_git_blame_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "gitDiff".to_string(),
+            arguments: r#"{"path":"intro.adoc","scope":"staged"}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::GitDiff(GitDiffArgs {
+                path: "intro.adoc".to_string(),
+                scope: Some("staged".to_string()),
+                commit: None,
+            })
+        );
+
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "gitDiff".to_string(),
+            arguments: r#"{"path":"intro.adoc","commit":"abc1234"}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::GitDiff(GitDiffArgs {
+                path: "intro.adoc".to_string(),
+                scope: None,
+                commit: Some("abc1234".to_string()),
+            })
+        );
+
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "gitBlame".to_string(),
+            arguments: r#"{"path":"intro.adoc","startLine":2,"endLine":10}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::GitBlame(GitBlameArgs {
+                path: "intro.adoc".to_string(),
+                start_line: Some(2),
+                end_line: Some(10),
+            })
+        );
+    }
+
+    #[test]
+    fn preflight_rejects_write_outside_documentation_before_execution() {
+        let (repo, docs) = fixture_repo();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let call = LlmToolCall {
+            id: "c1".into(),
+            name: "writeFile".into(),
+            arguments: r#"{"path":"src/main.rs","content":"x"}"#.into(),
+        };
+        let err = preflight_tool_call(&full_repo, &call).unwrap_err();
+        assert!(
+            matches!(err, ToolError::OutsideDocumentation(_)),
+            "got {err:?}"
+        );
+
+        let ok = LlmToolCall {
+            id: "c2".into(),
+            name: "writeFile".into(),
+            arguments: r#"{"path":"docs/guide.adoc","content":"= G\n"}"#.into(),
+        };
+        preflight_tool_call(&full_repo, &ok).unwrap();
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn parse_tool_call_parses_check_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "check".to_string(),
+            arguments: r#"{"kind":"problems"}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: None,
+            })
+        );
+
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "check".to_string(),
+            arguments: r#"{"kind":"problems","path":"api/foo.adoc"}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: Some("api/foo.adoc".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_unknown_check_kind() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "check".to_string(),
+            arguments: r#"{"kind":"docsVsCode"}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "check"));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_write_file_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "writeFile".to_string(),
+            arguments: r#"{"path":"guide.adoc","content":"= Guide\n"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::WriteFile(WriteFileArgs {
+                path: "guide.adoc".to_string(),
+                content: "= Guide\n".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_create_directory_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "createDirectory".to_string(),
+            arguments: r#"{"path":"guides/nested"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::CreateDirectory(CreateDirectoryArgs {
+                path: "guides/nested".to_string(),
+                template: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_create_directory_with_rest_endpoint_template() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "createDirectory".to_string(),
+            arguments: r#"{"path":"api/getUser","template":"restEndpoint"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::CreateDirectory(CreateDirectoryArgs {
+                path: "api/getUser".to_string(),
+                template: Some("restEndpoint".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_delete_file_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "deleteFile".to_string(),
+            arguments: r#"{"path":"guide.adoc"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::DeleteFile(DeleteFileArgs { path: "guide.adoc".to_string() }));
+    }
+
+    #[test]
+    fn parse_tool_call_parses_delete_directory_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "deleteDirectory".to_string(),
+            arguments: r#"{"path":"guides/nested","recursive":true}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::DeleteDirectory(DeleteDirectoryArgs {
+                path: "guides/nested".to_string(),
+                recursive: Some(true),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_move_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "move".to_string(),
+            arguments: r#"{"path":"old.adoc","newPath":"new.adoc"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::Move(MoveArgs {
+                path: "old.adoc".to_string(),
+                new_path: "new.adoc".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_edit_file_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "editFile".to_string(),
+            arguments: r#"{"path":"guide.adoc","edits":[{"old":"a","new":"b"}]}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::EditFile(EditFileArgs {
+                path: "guide.adoc".to_string(),
+                edits: vec![FileEdit { old: "a".to_string(), new: "b".to_string() }],
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_request_full_repo_access_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "requestFullRepoAccess".to_string(),
+            arguments: r#"{"reason":"need to check the config schema"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::RequestFullRepoAccess(RequestFullRepoAccessArgs {
+                reason: "need to check the config schema".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_request_mode_switch_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "requestModeSwitch".to_string(),
+            arguments: r#"{"mode":"agent","reason":"user asked to implement the change"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::RequestModeSwitch(RequestModeSwitchArgs {
+                mode: ConversationMode::Agent,
+                reason: "user asked to implement the change".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_parses_ask_user_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "askUser".to_string(),
+            arguments: r#"{"title":"Format","questions":[{"id":"fmt","prompt":"Which format?","options":[{"id":"adoc","label":"AsciiDoc"},{"id":"md","label":"Markdown"}],"allowMultiple":false}]}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        match parsed {
+            ToolCall::AskUser(args) => {
+                assert_eq!(args.title.as_deref(), Some("Format"));
+                assert_eq!(args.questions.len(), 1);
+                assert_eq!(args.questions[0].id, "fmt");
+                assert_eq!(args.questions[0].options.len(), 2);
+                assert!(!args.questions[0].allow_multiple);
+            }
+            other => panic!("expected AskUser, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_parses_skill_search_args() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "skill".to_string(),
+            arguments: r#"{"op":"search","query":"REST method folder"}"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(
+            parsed,
+            ToolCall::Skill(SkillArgs {
+                op: "search".to_string(),
+                query: Some("REST method folder".to_string()),
+                name: None,
+                path: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_ask_user_with_too_few_options() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "askUser".to_string(),
+            arguments: r#"{"questions":[{"id":"q","prompt":"Only one?","options":[{"id":"a","label":"A"}]}]}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "askUser"));
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_unknown_tool_name() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "moveFile".to_string(),
+            arguments: "{}".to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::UnknownTool(name) if name == "moveFile"));
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_malformed_arguments_json() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: "{not json}".to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "readFile"));
+    }
+
+    /// Regression test for a real observed failure: a model sent an
+    /// `editFile` call with two edits, the first correct (`old`/`new`), the
+    /// second typo'd as `oldText`/`newText`. Before `serde_path_to_error`,
+    /// this surfaced as a bare `"missing field \`old\` at line 1 column
+    /// 7275"` — technically correct but useless for a model to act on: no
+    /// indication of *which* edit (out of a much longer batch) the missing
+    /// field was in. The path-annotated error must name the array index.
+    #[test]
+    fn parse_tool_call_reports_the_array_index_of_a_malformed_edit() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "editFile".to_string(),
+            arguments: r#"{"path":"x.adoc","edits":[{"old":"a","new":"b"},{"oldText":"c","newText":"d"}]}"#
+                .to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        match err {
+            ToolError::InvalidArguments { tool, reason } => {
+                assert_eq!(tool, "editFile");
+                assert!(reason.contains("edits[1]"), "reason should name the array index: {reason}");
+                assert!(reason.contains("old"), "reason should name the missing field: {reason}");
+            }
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_tolerates_trailing_garbage_after_a_complete_object() {
+        // Real observed case: a provider streamed `listFiles` arguments as
+        // fragments that concatenated into `{}""` — a complete, valid empty
+        // object followed by a stray extra fragment. Strict `serde_json`
+        // rejects this ("trailing characters"); the lenient fallback should
+        // still recover the real (empty) arguments rather than surfacing an
+        // error the user can do nothing about.
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "listFiles".to_string(),
+            arguments: "{}\"\"".to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ListFiles(ListFilesArgs { path: None, depth: None, pattern: None }));
+    }
+
+    #[test]
+    fn parse_tool_call_tolerates_trailing_garbage_after_a_populated_object() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: r#"{"path":"intro.adoc"}garbage"#.to_string(),
+        };
+        let parsed = parse_tool_call(&call).unwrap();
+        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string(), start_line: None, end_line: None }));
+    }
+
+    #[test]
+    fn parse_tool_call_still_rejects_arguments_that_are_invalid_from_the_start() {
+        // The lenient fallback only rescues "valid value + trailing junk" —
+        // JSON that's broken from the very first token must still error,
+        // so the model still gets an honest, actionable error to learn
+        // from rather than silently defaulting to empty arguments.
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "readFile".to_string(),
+            arguments: "{not json at all".to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "readFile"));
+    }
+
+    #[test]
+    fn parse_tool_call_dispatches_todo_write_and_todo_update() {
+        let write_call = LlmToolCall {
+            id: "1".to_string(),
+            name: "todo".to_string(),
+            arguments: r#"{"op":"write","tasks":["Найти контроллер","Найти сервис"]}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&write_call).unwrap(),
+            ToolCall::TodoWrite(TodoWriteArgs {
+                titles: vec!["Найти контроллер".to_string(), "Найти сервис".to_string()]
+            }),
+        );
+
+        let update_call = LlmToolCall {
+            id: "2".to_string(),
+            name: "todo".to_string(),
+            arguments: r#"{"op":"update","id":"t2","status":"completed","note":"endpoint в UserController.java:45"}"#
+                .to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&update_call).unwrap(),
+            ToolCall::TodoUpdate(TodoUpdateArgs {
+                id: "t2".to_string(),
+                status: TodoUpdateStatus::Completed,
+                note: Some("endpoint в UserController.java:45".to_string()),
+            }),
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_todo_with_an_out_of_enum_status() {
+        let call = LlmToolCall {
+            id: "1".to_string(),
+            name: "todo".to_string(),
+            arguments: r#"{"op":"update","id":"t1","status":"in_progress"}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "todo"));
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_unknown_todo_op() {
+        let call = LlmToolCall {
+            id: "1".to_string(),
+            name: "todo".to_string(),
+            arguments: r#"{"op":"read"}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "todo"));
+    }
+}

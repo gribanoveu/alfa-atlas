@@ -53,7 +53,7 @@ Dependency direction points inward: `commands → services → domain`, and `inf
 
 Don't pre-build all four layers for something trivial. Introduce a trait boundary when there's a real second implementation (e.g. a test double) or a use-case spanning multiple infra calls — not speculatively.
 
-See [`AI_HARNESS.md`](AI_HARNESS.md) for the AI-agent tool-access infrastructure (`domain/ai_access.rs`, `domain/ai_tools.rs`, `services/ai_tools.rs`). It is fully wired: `services::llm_chat` runs the tool-calling loop against it, and the assistant panel drives it from the UI.
+See [`AI_HARNESS.md`](AI_HARNESS.md) for the AI-agent tool-access infrastructure (`domain/ai_access.rs`, `domain/ai_tools.rs`, `services/ai_tools/`). It is fully wired: `services::llm_chat` runs the tool-calling loop against it, and the assistant panel drives it from the UI.
 
 ## Errors
 

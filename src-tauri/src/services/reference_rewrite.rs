@@ -54,7 +54,7 @@ pub struct RewrittenFile {
 /// resolved under `repo_root` — callers treat that as "nothing to
 /// cascade," not as a reason to fail the caller's own operation.
 /// `commands::project::rename_project_file`/`rename_project_dir` and
-/// `services::ai_tools::move_path` both go through this — moved here
+/// `services::ai_tools::tools::move_path::move_path` both go through this — moved here
 /// (rather than staying private to `commands/project.rs`) specifically so
 /// `services` code can reuse it without depending on `commands`.
 pub fn docs_root_suffix(repo_root: &Path, docs_root: &str) -> Option<String> {
@@ -83,7 +83,7 @@ pub fn to_docs_relative(suffix: &str, repo_relative: &str) -> Option<String> {
 /// lives outside it) were still correctly rewritten on disk — they're just
 /// not reported as reloadable open tabs, since `editor.openFile` only knows
 /// docs-relative paths. Shared by `commands::project::rename_project_file`/
-/// `rename_project_dir` and `services::ai_tools::move_path` so both surfaces
+/// `rename_project_dir` and `services::ai_tools::tools::move_path::move_path` so both surfaces
 /// report the exact same shape.
 pub fn into_report(suffix: &str, rewritten: Vec<RewrittenFile>) -> RenameReport {
     RenameReport {

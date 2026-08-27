@@ -449,7 +449,7 @@ mod tests {
     static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     /// Mixed-language fixture repo, mirroring the `fixture_repo()` pattern
-    /// in `services/ai_tools.rs` tests.
+    /// in `services/ai_tools` tests.
     fn fixture_repo() -> std::path::PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)

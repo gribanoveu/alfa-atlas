@@ -179,7 +179,7 @@ pub fn delete_project_dir(docs_root: String, relative_path: String) -> Result<()
 /// Resolves the index's repo root and `docs_root`'s suffix relative to it
 /// together, so callers get both or neither in one match — `docs_root_suffix`
 /// itself now lives in `services::reference_rewrite` (shared with
-/// `services::ai_tools::move_path`, which doesn't have a `WorkspaceIndex`
+/// `services::ai_tools::tools::move_path::move_path`, which doesn't have a `WorkspaceIndex`
 /// handy the way commands here do, only `ToolScope::repo_root` directly).
 fn docs_root_suffix_and_repo_root(index: &WorkspaceIndex, docs_root: &str) -> Option<(PathBuf, String)> {
     let repo_root = index.repo_root()?;
@@ -217,7 +217,7 @@ pub fn rename_project_file(
 
     // Keep the renamed document's own index row in sync immediately,
     // rather than only once the async file-watcher gets to it — mirrors
-    // `services::ai_tools::move_path`'s identical fix for the AI-driven
+    // `services::ai_tools::tools::move_path::move_path`'s identical fix for the AI-driven
     // path. Best-effort: a rename that succeeded on disk must not be
     // reported as failed just because this lagged/errored.
     if let Some((repo_root, _)) = &resolved {

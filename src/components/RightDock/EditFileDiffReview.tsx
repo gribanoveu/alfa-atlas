@@ -18,7 +18,7 @@ function truncate(text: string, max = 80): string {
 
 /** `notFound`/`ambiguous` still leave room for the server-side fast-apply
  * fallback to reconcile the edit (see `apply_edits` in
- * `src-tauri/src/services/ai_tools.rs`), so the message says the preview is
+ * `src-tauri/src/services/ai_tools/tools/edit_file.rs`), so the message says the preview is
  * unavailable rather than that the call will fail. `overlap` gets no such
  * caveat — the backend never attempts fast-apply for it, so claiming it
  * might still work would be misleading. */

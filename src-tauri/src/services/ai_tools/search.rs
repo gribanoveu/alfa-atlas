@@ -6,8 +6,11 @@
 //! found anything. `truncate_snippet` lives here because every match kind
 //! renders its preview the same way.
 
-use super::resolve::to_access_relative;
-use super::EmbeddingDeps;
+use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
+use std::sync::TryLockError;
+
 use crate::domain::ai_access::AiAccessMode;
 use crate::domain::ai_tools::{MatchSource, ToolError, ToolMatch, ToolScope};
 use crate::domain::chunk_index::{ChunkMetadata, qualified_name_for};
@@ -17,7 +20,6 @@ use crate::domain::search_query::{
     symbol_name_matches_token,
 };
 use crate::infra::{embedding_credentials_store, embedding_providers};
-use crate::services::{embedding_config, project_open};
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::chunk_text::resolve_text;
 use crate::services::embedding_state::{
@@ -25,10 +27,10 @@ use crate::services::embedding_state::{
     ensure_provider, resolve_index_paths,
 };
 use crate::services::repo_index::RepositoryIndex;
-use std::fs;
-use std::collections::HashSet;
-use std::path::Path;
-use std::sync::TryLockError;
+use crate::services::{embedding_config, project_open};
+
+use super::EmbeddingDeps;
+use super::resolve::to_access_relative;
 
 pub(super) const DEFAULT_TOP_K: usize = 10;
 
@@ -489,4 +491,433 @@ pub(super) fn truncate_snippet(text: &str) -> String {
         end -= 1;
     }
     format!("{}…", &text[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use std::sync::Arc;
+
+    use std::collections::HashSet;
+
+    use crate::services::workspace_index::WorkspaceIndex;
+
+    use crate::domain::ai_access::AiAccessMode;
+    use crate::domain::ai_tools::{MatchSource, ToolMatch, ToolScope};
+    use crate::services::ai_tools::testing::*;
+    use crate::services::ai_tools::EmbeddingDeps;
+
+    use super::*;
+
+    #[test]
+    fn related_files_combines_java_imports_and_workspace_includes() {
+        let (repo, docs) = fixture_repo();
+
+        // JSON `$ref` side: `current.json` -> `related.json`.
+        fs::write(docs.join("current.json"), r#"{"$ref": "./related.json"}"#).unwrap();
+        fs::write(docs.join("related.json"), "{}").unwrap();
+
+        let workspace_index =
+            Arc::new(WorkspaceIndex::new(crate::infra::parsers::registry::ParserRegistry::new()));
+        workspace_index.build(repo.clone()).unwrap();
+
+        // Java side: `Current.java` imports `com.example.Related` —
+        // `java_dependencies` matches on the literal on-disk path, so the
+        // package directory layout must actually match `com/example/`.
+        let pkg = repo.join("src/com/example");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("Current.java"), "import com.example.Related;\nclass Current {}\n").unwrap();
+        fs::write(pkg.join("Related.java"), "package com.example;\nclass Related {}\n").unwrap();
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+
+        let deps = EmbeddingDeps {
+            workspace_index,
+            repo_index: Arc::new(repo_index),
+            ..EmbeddingDeps::empty()
+        };
+
+        let json_related = related_files(&deps, &FileId("docs/current.json".to_string()));
+        assert!(json_related.contains(&FileId("docs/related.json".to_string())));
+
+        let java_related = related_files(&deps, &FileId("src/com/example/Current.java".to_string()));
+        assert!(java_related.contains(&FileId("src/com/example/Related.java".to_string())));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn related_files_is_empty_for_an_unknown_file() {
+        let deps = EmbeddingDeps::empty();
+        assert!(related_files(&deps, &FileId("nowhere.json".to_string())).is_empty());
+    }
+
+    fn sample_match(path: &str, score: f32) -> ToolMatch {
+        ToolMatch {
+            path: path.to_string(),
+            snippet: String::new(),
+            score,
+            start_byte: 0,
+            end_byte: 0,
+            qualified_name: None,
+            source: MatchSource::Lexical,
+        }
+    }
+
+    #[test]
+    fn apply_related_boost_reorders_a_related_match_above_a_stronger_unrelated_one() {
+        let matches = vec![sample_match("unrelated.json", 6.0), sample_match("related.json", 5.0)];
+        let related: HashSet<FileId> = [FileId("related.json".to_string())].into_iter().collect();
+
+        // `5.0 * RELATED_FILE_BOOST` (`1.25`) = `6.25`, just enough to edge
+        // out the unboosted `6.0`.
+        let boosted = apply_related_boost(matches, &related, 2);
+
+        assert_eq!(boosted[0].path, "related.json");
+        assert_eq!(boosted[1].path, "unrelated.json");
+    }
+
+    #[test]
+    fn apply_related_boost_is_a_no_op_with_no_related_files() {
+        let matches = vec![sample_match("a.json", 6.0), sample_match("b.json", 5.0)];
+
+        let unboosted = apply_related_boost(matches, &HashSet::new(), 2);
+
+        assert_eq!(unboosted[0].path, "a.json");
+        assert_eq!(unboosted[0].score, 6.0);
+        assert_eq!(unboosted[1].path, "b.json");
+        assert_eq!(unboosted[1].score, 5.0);
+    }
+
+    #[test]
+    fn apply_related_boost_truncates_to_budget_after_resorting() {
+        let matches = vec![sample_match("unrelated.json", 6.0), sample_match("related.json", 5.0)];
+        let related: HashSet<FileId> = [FileId("related.json".to_string())].into_iter().collect();
+
+        let boosted = apply_related_boost(matches, &related, 1);
+
+        assert_eq!(boosted.len(), 1);
+        assert_eq!(boosted[0].path, "related.json");
+    }
+
+    #[test]
+    fn symbol_matches_finds_an_exact_case_insensitive_name() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/UserService.java"),
+            "public class UserService {\n    public String getName() { return null; }\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(&repo_index, &scope, "userservice", 10);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].source, MatchSource::Symbol);
+        assert!(matches[0].path.ends_with("UserService.java"));
+        assert_eq!(matches[0].score, 1.0);
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_extracts_tokens_from_natural_language_query() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/CollectNotificationService.java"),
+            "public class CollectNotificationService {\n    public void run() {}\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(
+            &repo_index,
+            &scope,
+            "алгоритм формирования списка уведомлений для подачи notifications",
+            10,
+        );
+        assert!(!matches.is_empty());
+        assert!(matches.iter().any(|m| m.path.contains("CollectNotificationService")));
+        assert!(matches.iter().all(|m| m.source == MatchSource::Symbol));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_finds_multiple_identifiers_in_one_query() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/CollectNotificationService.java"),
+            "public class CollectNotificationService {}\n",
+        )
+        .unwrap();
+        fs::write(
+            docs.join("getPatentNotifications.adoc"),
+            "= getPatentNotifications\n",
+        )
+        .unwrap();
+        // AsciiDoc section may or may not index as a symbol named
+        // getPatentNotifications — path match still covers the folder/file.
+        fs::create_dir_all(docs.join("getPatentNotifications")).unwrap();
+        fs::write(
+            docs.join("getPatentNotifications/getPatentNotifications.adoc"),
+            "= Method\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(
+            &repo_index,
+            &scope,
+            "CollectNotificationService getPatentNotifications",
+            10,
+        );
+        assert!(matches.iter().any(|m| m.path.contains("CollectNotificationService")));
+        assert!(matches.iter().any(|m| m.path.contains("getPatentNotifications")));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_dedupes_symbol_over_path_for_same_file() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/UserService.java"),
+            "public class UserService {\n    public String getName() { return null; }\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(&repo_index, &scope, "UserService", 10);
+        let path_hits: Vec<_> = matches
+            .iter()
+            .filter(|m| m.path.ends_with("UserService.java"))
+            .collect();
+        assert_eq!(path_hits.len(), 1);
+        assert_eq!(path_hits[0].score, 1.0);
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_is_empty_for_an_unknown_name() {
+        let (repo, docs) = fixture_repo();
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        assert!(symbol_matches(&repo_index, &scope, "NoSuchSymbol", 10).is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_cyrillic_only_query_finds_via_ru_en() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/CollectNotificationService.java"),
+            "public class CollectNotificationService {}\n",
+        )
+        .unwrap();
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(
+            &repo_index,
+            &scope,
+            "алгоритм формирования списка уведомлений",
+            10,
+        );
+        assert!(
+            matches.iter().any(|m| m.path.contains("CollectNotificationService")),
+            "RU→EN Notification + stem should find CollectNotificationService"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_stem_finds_notification_service() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/CollectNotificationService.java"),
+            "public class CollectNotificationService {}\n",
+        )
+        .unwrap();
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = symbol_matches(&repo_index, &scope, "notifications", 10);
+        assert!(matches.iter().any(|m| m.path.contains("CollectNotificationService")));
+        assert!(matches.iter().any(|m| (m.score - 0.95).abs() < 0.01 || m.score >= 0.95));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn symbol_matches_excludes_non_doc_symbols_in_docs_only() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/UserService.java"),
+            "public class UserService {\n    public String getName() { return null; }\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        assert!(symbol_matches(&repo_index, &scope, "userservice", 10).is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn lexical_matches_finds_a_case_insensitive_substring() {
+        use crate::domain::chunk_index::ChunkBuildOptions;
+        use crate::services::chunk_builder::ChunkBuilder;
+
+        let (repo, docs) = fixture_repo();
+        fs::write(repo.join("docs/needle.adoc"), "= Guide\n\nfind the NEEDLE here\n").unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let chunk_index = ChunkIndex::new();
+        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = lexical_matches(&chunk_index, &scope, "needle", 10);
+        assert!(!matches.is_empty());
+        assert_eq!(matches[0].source, MatchSource::Lexical);
+        assert!(matches[0].snippet.to_lowercase().contains("needle"));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn lexical_matches_tokenizes_natural_language_query() {
+        use crate::domain::chunk_index::ChunkBuildOptions;
+        use crate::services::chunk_builder::ChunkBuilder;
+
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("docs/guide.adoc"),
+            "= Guide\n\nHere we describe notifications for patent submit.\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let chunk_index = ChunkIndex::new();
+        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let matches = lexical_matches(
+            &chunk_index,
+            &scope,
+            "алгоритм формирования списка уведомлений notifications",
+            10,
+        );
+        assert!(!matches.is_empty());
+        assert!(matches[0].snippet.to_lowercase().contains("notifications"));
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn lexical_matches_is_empty_for_an_empty_query() {
+        let (repo, docs) = fixture_repo();
+        let chunk_index = ChunkIndex::new();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+        assert!(lexical_matches(&chunk_index, &scope, "", 10).is_empty());
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn lexical_matches_excludes_non_doc_chunks_in_docs_only() {
+        use crate::domain::chunk_index::ChunkBuildOptions;
+        use crate::services::chunk_builder::ChunkBuilder;
+
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            repo.join("src/Needle.java"),
+            "public class Needle {\n    // find the NEEDLE here\n}\n",
+        )
+        .unwrap();
+
+        let repo_index = RepositoryIndex::new();
+        repo_index.build(&repo).unwrap();
+        let chunk_index = ChunkIndex::new();
+        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        assert!(lexical_matches(&chunk_index, &scope, "needle", 10).is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    /// Regression guard for the readiness de-duplication.
+    ///
+    /// `is_semantic_ready` and `embedding_sync::status` used to be two
+    /// hand-maintained copies of the same four-step sequence — this file's
+    /// copy literally opened with "Mirrors `embedding_index_status`'s
+    /// readiness check exactly". They now share `attach_current` +
+    /// `embedded_count`, and this pins the property that comment was
+    /// asserting on trust: on identical state, the two must agree.
+    #[test]
+    fn semantic_readiness_agrees_with_the_reported_index_status() {
+        use crate::services::embedding_state::tests::with_open_project;
+        use crate::services::embedding_sync::{ProgressSink, status, sync};
+
+        with_open_project(
+            "semantic-readiness",
+            &[("a.json", "{\"a\": 1}")],
+            |_root, session| {
+                let noop: ProgressSink = Arc::new(|_| {});
+                // Shares the session's slots rather than fresh ones — the two
+                // paths must be looking at the same state for the comparison
+                // to mean anything.
+                let deps = EmbeddingDeps {
+                    repo_index: session.repo_index.clone(),
+                    chunk_index: session.chunk_index.clone(),
+                    embedding_index: session.embedding_index.clone(),
+                    index_store: session.index_store.clone(),
+                    embedding_provider: session.embedding_provider.clone(),
+                    sync_guard: session.sync_guard.clone(),
+                    workspace_index: session.workspace_index.clone(),
+                    fast_apply: None,
+                    active_file: None,
+                };
+
+                assert_eq!(
+                    is_semantic_ready(&deps),
+                    status(session, &noop).unwrap().synced,
+                    "before any sync, both paths should report not-ready"
+                );
+
+                sync(session, &noop).unwrap();
+
+                assert_eq!(
+                    is_semantic_ready(&deps),
+                    status(session, &noop).unwrap().synced,
+                    "after a sync, both paths should report ready"
+                );
+                assert!(is_semantic_ready(&deps), "the sync did embed something");
+            },
+        );
+    }
 }

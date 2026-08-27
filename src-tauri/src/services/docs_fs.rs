@@ -34,7 +34,7 @@ pub fn list_docs_tree(docs_root: &str) -> Result<Vec<TreeNode>, ProjectError> {
 /// subdirectory of `docs_root`, already validated by the caller) instead of
 /// always walking the whole `docs_root`, and capped at `max_depth` levels
 /// below `dir`. Paths in the returned tree stay relative to `docs_root`,
-/// not `dir` — used by `services::ai_tools::list_docs_only` so a scoped
+/// not `dir` — used by `services::ai_tools::tools::list_files::list_docs_only` so a scoped
 /// `listFiles` call still returns paths the caller can round-trip into
 /// `readFile`/`writeFile` unchanged.
 ///

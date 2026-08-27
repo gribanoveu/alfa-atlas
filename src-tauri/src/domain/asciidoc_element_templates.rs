@@ -1,6 +1,6 @@
 /// Static catalog of AsciiDoc element templates (tables, admonitions,
 /// lists, includes, …) offered to the AI harness via the `getAsciidocTemplates`
-/// tool (see `services::ai_tools::get_asciidoc_templates`).
+/// tool (see `services::ai_tools::tools::asciidoc_templates::get_asciidoc_templates`).
 ///
 /// This is a manual, intentional mirror of the editor-side catalog in
 /// `src/lib/asciidocSnippets.ts` (`ASCIIDOC_SNIPPETS`) — id/label/category/

@@ -7,12 +7,13 @@
 //! unexpected path, only by the `ToolScope` itself having been built with a
 //! wider root.
 
-use crate::domain::paths;
+use std::path::{Path, PathBuf};
+
 use crate::domain::ai_access::AiAccessMode;
 use crate::domain::ai_tools::{ToolError, ToolScope};
+use crate::domain::paths;
 use crate::domain::project_config::ProjectError;
 use crate::services::agent_memory;
-use std::path::{Path, PathBuf};
 
 /// `ToolFileEntry::path` is always `/`-separated by construction
 /// (`paths::relative_to`), so a plain `rsplit` avoids any
@@ -306,4 +307,29 @@ pub(super) fn resolve_subdir(
     }
     let rel = paths::relative_to(&scope.root, &canonical)?;
     Ok(Some((rel, canonical)))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use crate::domain::ai_access::AiAccessMode;
+    use crate::domain::ai_tools::{ToolError, ToolScope};
+    use crate::services::ai_tools::testing::*;
+
+    #[test]
+    fn path_alias_does_not_invent_missing_files() {
+        let (repo, docs) = fixture_repo();
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+        let docs_only = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let err = read(&full_repo, "updateTransactionSpecifics/missing.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+        let err = list(&full_repo, Some("updateTransactionSpecifics")).unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+        let err = read(&docs_only, "docs/missing.adoc").unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)));
+
+        fs::remove_dir_all(&repo).ok();
+    }
 }

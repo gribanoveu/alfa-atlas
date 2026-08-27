@@ -42,7 +42,7 @@ pub fn scan_all(root: &Path) -> Result<Vec<ScannedFile>, WorkspaceIndexError> {
 /// Same as `scan_all`, capped to `max_depth` levels below `root`
 /// (`ignore::WalkBuilder`'s own convention: `root` itself is depth 0, its
 /// direct children are depth 1). `None` = unlimited, identical to
-/// `scan_all`. Used by `services::ai_tools::list_full_repo` when a
+/// `scan_all`. Used by `services::ai_tools::tools::list_files::list_full_repo` when a
 /// `listFiles` call supplies a `depth` argument.
 pub fn scan_all_with_depth(
     root: &Path,
@@ -64,7 +64,7 @@ pub struct ScannedEntry {
 
 /// Same gitignore-aware, depth-limited walk as `scan_all_with_depth`, but
 /// includes directory entries (tagged via `is_dir`) instead of silently
-/// dropping them — used by `services::ai_tools::list_full_repo` so a
+/// dropping them — used by `services::ai_tools::tools::list_files::list_full_repo` so a
 /// `listFiles` call in Full-repo mode can report real directories the way
 /// `list_docs_only` already does via `docs_fs::list_docs_tree_scoped`. A new
 /// function rather than a `walk()` parameter: `walk` backs `scan`/`scan_all`/

@@ -39,7 +39,7 @@ pub struct ReadFileArgs {
     pub path: String,
     /// 1-indexed, inclusive. `None` means "from the beginning of the
     /// file". Out-of-range values are clamped, not rejected — see
-    /// `services::ai_tools::slice_lines`.
+    /// `services::ai_tools::tools::read_file::slice_lines`.
     pub start_line: Option<u32>,
     /// 1-indexed, inclusive. `None` means "through the end of the file".
     pub end_line: Option<u32>,
@@ -64,7 +64,7 @@ pub struct SemanticSearchArgs {
 
 /// Exact regex content search across files under the tool scope root —
 /// read-only, secondary to `SemanticSearch` (precision vs similarity).
-/// See `services::docs_search` / `services::ai_tools::grep`.
+/// See `services::docs_search` / `services::ai_tools::tools::grep::grep`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrepArgs {
@@ -104,7 +104,7 @@ pub struct WriteFileArgs {
     /// — documentation root in Docs-only, repository root in Full-repo),
     /// same namespace as `readFile`/`listFiles`. The executor still requires
     /// the resolved path to lie under the documentation root (see
-    /// `services::ai_tools::resolve_mutable_docs_path`); only recognized
+    /// `services::ai_tools::resolve::resolve_mutable_docs_path`); only recognized
     /// document file types may be written.
     pub path: String,
     pub content: String,
@@ -112,7 +112,7 @@ pub struct WriteFileArgs {
 
 /// One search-and-replace edit within an `EditFileArgs` call. `old` must
 /// match the target file's current content exactly once — see
-/// `services::ai_tools::apply_edits` for the full validation rules
+/// `services::ai_tools::tools::edit_file::apply_edits` for the full validation rules
 /// (no match, ambiguous match, and overlapping edits all reject the whole
 /// `EditFile` call before anything is written).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,7 +127,7 @@ pub struct FileEdit {
 pub struct EditFileArgs {
     /// File path relative to the access-mode root — same rules as
     /// `WriteFileArgs::path`, but the file must already exist (see
-    /// `services::ai_tools::edit_file`); creating new files stays
+    /// `services::ai_tools::tools::edit_file::edit_file`); creating new files stays
     /// `WriteFile`'s job.
     pub path: String,
     pub edits: Vec<FileEdit>,
@@ -137,7 +137,7 @@ pub struct EditFileArgs {
 #[serde(rename_all = "camelCase")]
 pub struct DeleteFileArgs {
     /// File path relative to the access-mode root — same rules as
-    /// `WriteFileArgs::path`. See `services::ai_tools::delete_file`.
+    /// `WriteFileArgs::path`. See `services::ai_tools::tools::delete_file::delete_file`.
     pub path: String,
 }
 
@@ -145,7 +145,7 @@ pub struct DeleteFileArgs {
 #[serde(rename_all = "camelCase")]
 pub struct CreateDirectoryArgs {
     /// Directory path relative to the access-mode root — same rules as
-    /// `WriteFileArgs::path` (see `services::ai_tools::create_directory`).
+    /// `WriteFileArgs::path` (see `services::ai_tools::tools::create_directory::create_directory`).
     /// Parent directories are created as needed.
     pub path: String,
     /// Optional folder scaffold. `"restEndpoint"` populates the directory
@@ -164,14 +164,14 @@ pub struct DeleteDirectoryArgs {
     pub path: String,
     /// `None`/omitted means `false`: a non-empty directory is refused
     /// rather than silently deleted — see
-    /// `services::ai_tools::delete_directory`.
+    /// `services::ai_tools::tools::delete_directory::delete_directory`.
     pub recursive: Option<bool>,
 }
 
 /// Covers both moving and renaming, both files and directories — a new
 /// `new_path` in the same directory as `path` *is* a rename; a new
 /// `new_path` elsewhere *is* a move. Same shape either way, so there is no
-/// separate rename tool — see `services::ai_tools::move_path`.
+/// separate rename tool — see `services::ai_tools::tools::move_path::move_path`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MoveArgs {
@@ -305,7 +305,7 @@ pub struct UpdatePlanTodoArgs {
 /// Working-tree / index / commit file diff for the assistant — read-only.
 /// Paths are relative to the tool scope root (`docsRoot` in DocsOnly,
 /// `repoRoot` in FullRepo); the executor converts to a repo-relative path
-/// after `ensure_under` (see `services::ai_tools::git_diff`).
+/// after `ensure_under` (see `services::ai_tools::tools::git::git_diff`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffArgs {
@@ -399,7 +399,7 @@ pub enum CheckKind {
     Standards,
 }
 
-/// Read-only verification tool — see `services::ai_tools::check`.
+/// Read-only verification tool — see `services::ai_tools::tools::check::check`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckArgs {
@@ -706,7 +706,7 @@ pub enum ToolResult {
     },
     /// Settled `gitBlame` — contiguous hunks, optionally truncated when
     /// the requested line range exceeds
-    /// `services::ai_tools::MAX_BLAME_LINES`.
+    /// `services::ai_tools::tools::git::MAX_BLAME_LINES`.
     #[serde(rename_all = "camelCase")]
     GitBlame {
         path: String,
@@ -726,7 +726,7 @@ pub enum ToolResult {
     /// Settled `check` with `kind: "standards"` — reuses the same
     /// `StandardsReport` shape the «Стандарты» panel renders (per-folder
     /// weighted score/pass/findings). `truncated` when the folder count
-    /// exceeded `services::ai_tools::MAX_STANDARDS_FOLDERS` (failing
+    /// exceeded `services::ai_tools::tools::check::MAX_STANDARDS_FOLDERS` (failing
     /// folders are kept first).
     #[serde(rename_all = "camelCase")]
     StandardsChecked {
@@ -751,7 +751,7 @@ pub enum ToolResult {
     /// (empty when nothing referenced `from`) — the same `RenameReport`
     /// shape the manual rename/move commands return, so the frontend can
     /// reuse the same "reload these open tabs" handling for both. See
-    /// `services::ai_tools::move_path`.
+    /// `services::ai_tools::tools::move_path::move_path`.
     #[serde(rename_all = "camelCase")]
     Moved {
         from: String,
@@ -871,11 +871,11 @@ pub enum ToolError {
     #[error("semantic search failed: {0}")]
     SemanticSearch(String),
     /// A `listFiles` `pattern` that doesn't compile as a glob — see
-    /// `services::ai_tools::compile_glob`.
+    /// `services::ai_tools::tools::list_files::compile_glob`.
     #[error("invalid glob pattern: {0}")]
     InvalidPattern(String),
     /// An `editFile` edit's `old` text doesn't appear anywhere in the
-    /// file's current content — see `services::ai_tools::apply_edits`.
+    /// file's current content — see `services::ai_tools::tools::edit_file::apply_edits`.
     #[error("edit text not found: {0}")]
     EditTextNotFound(String),
     /// An `editFile` edit's `old` text appears more than once — ambiguous
@@ -890,23 +890,23 @@ pub enum ToolError {
     EditsOverlap,
     /// An `editFile` edit's `old` text didn't match exactly (the
     /// `EditTextNotFound`/`EditTextAmbiguous` case), and the fast-apply
-    /// reconciliation fallback (`services::ai_tools::run_fast_apply`) — which
+    /// reconciliation fallback (`services::ai_tools::tools::edit_file::run_fast_apply`) — which
     /// hands the whole file plus the edit's intent to the configured LLM
     /// provider and asks it to locate and make the change itself — either
     /// wasn't available (no provider resolved for this call), errored, or
     /// produced output that failed the byte-identical-outside-the-edited-
-    /// region safety check (`services::ai_tools::validate_fast_apply_output`).
+    /// region safety check (`services::ai_tools::tools::edit_file::validate_fast_apply_output`).
     /// `.0` is the edit's (possibly truncated) `old` text, `.1` explains why.
     #[error("could not automatically apply edit for \"{0}\": {1}")]
     EditApplyFailed(String, String),
     /// A `deleteDirectory` call with `recursive` omitted or `false` against
     /// a directory that has contents — see
-    /// `services::ai_tools::delete_directory`.
+    /// `services::ai_tools::tools::delete_directory::delete_directory`.
     #[error("directory is not empty: {0}")]
     DirectoryNotEmpty(String),
     /// A `move` call whose `newPath` already exists — nothing is
     /// overwritten; `rename_project_file`/`rename_project_dir` check this
-    /// before ever calling `fs::rename`. See `services::ai_tools::move_path`.
+    /// before ever calling `fs::rename`. See `services::ai_tools::tools::move_path::move_path`.
     #[error("already exists: {0}")]
     AlreadyExists(String),
     /// A model-supplied `LlmToolCall::name` that doesn't match any known
@@ -927,7 +927,7 @@ pub enum ToolError {
     #[error("invalid arguments for {tool}: {reason}")]
     InvalidArguments { tool: String, reason: String },
     /// A `todo write` whose new titles would push the list past
-    /// `services::ai_tools::MAX_TODO_TASKS` — rejected outright rather than
+    /// `services::ai_tools::tools::todo::MAX_TODO_TASKS` — rejected outright rather than
     /// silently truncated, so the model sees the failure and can decide
     /// what to drop or split.
     #[error("todo list already has {current} task(s); adding {adding} more would exceed the {max} maximum")]
@@ -1057,7 +1057,7 @@ pub struct ToolScope {
     /// which is `repo_root` in `FullRepo` mode. `WriteFile`/other mutate
     /// tools resolve the model's path against `root` first (same namespace
     /// as reads), then require containment under this
-    /// (`services::ai_tools::resolve_mutable_docs_path`): `FullRepo` grants
+    /// (`services::ai_tools::resolve::resolve_mutable_docs_path`): `FullRepo` grants
     /// broader *read* context so the assistant can write better docs, not
     /// license to mutate arbitrary repo files, so writes stay confined to
     /// the docs subtree regardless of which read boundary is currently
@@ -1082,7 +1082,7 @@ impl ToolScope {
     /// mode — the executor decides this itself rather than trusting a
     /// caller-supplied root, so a harness cannot widen its own access by
     /// passing the wrong path in. `allowed_tools` should already be
-    /// resolved (e.g. via `services::ai_tools::scope_for_config`, which
+    /// resolved (e.g. via `services::ai_tools::scope::scope_for_config`, which
     /// falls back to `default_allowed_tools` when a project hasn't
     /// customized it).
     pub fn new(
@@ -1117,7 +1117,7 @@ impl ToolScope {
     /// customization yet, use `default_allowed_tools` for `mode`.
     ///
     /// Test-only: production code resolves scopes via
-    /// `services::ai_tools::scope_for_config`, which inlines this same
+    /// `services::ai_tools::scope::scope_for_config`, which inlines this same
     /// default-vs-persisted-allowlist logic while also handling a
     /// persisted list.
     #[cfg(test)]

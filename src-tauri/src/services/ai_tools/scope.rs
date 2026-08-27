@@ -4,13 +4,14 @@
 //! `ProjectConfig`; this is the only module that reads or writes them, and
 //! the only one that builds a `ToolScope` out of them.
 
+use std::collections::HashSet;
+use std::path::Path;
+
 use crate::domain::ai_access::{AiAccessMode, ToolName, default_allowed_tools};
 use crate::domain::ai_tools::ToolScope;
 use crate::domain::project_config::{ProjectConfig, ProjectError};
 use crate::infra::project_store;
 use crate::services::project_open;
-use std::collections::HashSet;
-use std::path::Path;
 
 /// Persists a new `AiAccessMode` for the currently open project — shared by
 /// the manual `commands::ai_tools::ai_set_access_mode` toggle and the

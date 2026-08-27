@@ -121,7 +121,7 @@ pub enum PlanError {
 }
 
 /// At most one `InProgress` todo; when none and a `Pending` remains, promote
-/// the first pending — mirrors `services::ai_tools::enforce_todo_invariant`.
+/// the first pending — mirrors `services::ai_tools::tools::todo::enforce_todo_invariant`.
 pub fn enforce_plan_todo_invariant(mut todos: Vec<PlanTodo>) -> Vec<PlanTodo> {
     let has_in_progress = todos
         .iter()

@@ -138,7 +138,7 @@ impl ToolName {
     /// semantic_search`), so it costs the most. `Move` sits with
     /// `WriteFile`/`EditFile` rather than the bare-syscall tools — besides
     /// the move itself, it can rewrite `include::`/`xref:`/`$ref`
-    /// references in other files too (`services::ai_tools::move_path`).
+    /// references in other files too (`services::ai_tools::tools::move_path::move_path`).
     pub fn loop_weight(self) -> u32 {
         match self {
             ToolName::ListFiles => 1,
