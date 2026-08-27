@@ -1,4 +1,5 @@
 import { findUtility, type UtilityId } from "../../data/utilities";
+import { IdGenerator } from "./IdGenerator";
 import { UnixtimeConverter } from "./UnixtimeConverter";
 import "./UtilityView.css";
 
@@ -27,6 +28,7 @@ export function UtilityView({ utilityId }: UtilityViewProps) {
         </div>
       </header>
       {utilityId === "unixtime" ? <UnixtimeConverter /> : null}
+      {utilityId === "ids" ? <IdGenerator /> : null}
       {utility.stub ? (
         <div className="utility-view-stub" role="status">
           Утилита ещё не реализована

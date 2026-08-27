@@ -1,6 +1,6 @@
-import { Clock, type LucideIcon } from "lucide-react";
+import { Clock, Hash, type LucideIcon } from "lucide-react";
 
-export type UtilityId = "unixtime";
+export type UtilityId = "unixtime" | "ids";
 
 export type UtilityDef = {
   id: UtilityId;
@@ -22,6 +22,13 @@ export const UTILITIES: UtilityDef[] = [
     title: "Конвертер Unixtime",
     description: "Перевод Unix-времени в дату и обратно",
     icon: Clock,
+    stub: false,
+  },
+  {
+    id: "ids",
+    title: "Генератор UUID и ULID",
+    description: "Случайные UUID v4 и сортируемые ULID",
+    icon: Hash,
     stub: false,
   },
 ];
