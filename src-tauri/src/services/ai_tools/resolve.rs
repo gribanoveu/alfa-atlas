@@ -29,7 +29,7 @@ pub(super) fn basename(path: &str) -> &str {
 pub(super) fn relative_under_maybe_missing(root: &Path, absolute: &Path) -> Result<String, ToolError> {
     let root_canon = root
         .canonicalize()
-        .map_err(|e| ToolError::Io(e))?;
+        .map_err(ToolError::Io)?;
     if absolute == root_canon.as_path() {
         return Ok(".".to_string());
     }

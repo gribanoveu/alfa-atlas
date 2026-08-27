@@ -239,12 +239,6 @@ impl IndexStore {
         Ok(())
     }
 
-    pub fn clear_chunks(&self) -> Result<(), IndexStoreError> {
-        let conn = self.lock()?;
-        conn.execute("DELETE FROM chunks", [])?;
-        Ok(())
-    }
-
     /// Every persisted chunk's metadata — what `ChunkIndex::ensure_loaded`
     /// bulk-populates its resident `DashMap` from on cold start, instead of
     /// a full repo rescan.
@@ -697,7 +691,7 @@ mod tests {
 
         // Replacing again with an empty set drops the file's symbols.
         store.replace_symbols_for_file(&file_id, &[]).unwrap();
-        assert!(store.load_all_symbols().unwrap().get(&file_id).is_none());
+        assert!(!store.load_all_symbols().unwrap().contains_key(&file_id));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -725,7 +719,7 @@ mod tests {
 
         // Replacing again with an empty set drops the file's imports.
         store.replace_imports_for_file(&file_id, &[]).unwrap();
-        assert!(store.load_all_imports().unwrap().get(&file_id).is_none());
+        assert!(!store.load_all_imports().unwrap().contains_key(&file_id));
 
         std::fs::remove_dir_all(&dir).ok();
     }

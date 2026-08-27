@@ -140,10 +140,6 @@ pub fn execute_tool_logged(
 ) -> Result<ToolResult, ToolError> {
     let tool = crate::infra::tool_call_log::tool_label(&call);
     let args_json = crate::infra::tool_call_log::redact_args(&call);
-    let memory_op = match &call {
-        ToolCall::Memory(args) => Some(args.op.clone()),
-        _ => None,
-    };
     let started = std::time::Instant::now();
     let result = execute_tool(scope, call, deps, todos);
     let duration_ms = started.elapsed().as_millis() as i64;
@@ -163,7 +159,7 @@ pub fn execute_tool_logged(
             result_json: result
                 .as_ref()
                 .ok()
-                .map(|r| crate::infra::tool_call_log::redact_result(r, memory_op.as_deref())),
+                .map(crate::infra::tool_call_log::redact_result),
             duration_ms,
         },
     );

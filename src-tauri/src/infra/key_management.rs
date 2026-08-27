@@ -54,7 +54,7 @@ fn keyring_set_if_empty(key: &[u8; 32]) -> Result<(), String> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
         .map_err(|e| {
             eprintln!("[alfa-atlas] keyring::Entry::new failed: {e}");
-            return format!("{e}");
+            format!("{e}")
         })?;
 
     match entry.get_secret() {
@@ -98,7 +98,7 @@ fn file_key_get_or_create() -> Result<[u8; 32], String> {
             .map_err(|e| format!("failed to create settings dir: {e}"))?;
     }
 
-    fs::write(&path, &key)
+    fs::write(&path, key)
         .map_err(|e| format!("failed to write encryption key file: {e}"))?;
 
     // Set restrictive permissions (0o600).

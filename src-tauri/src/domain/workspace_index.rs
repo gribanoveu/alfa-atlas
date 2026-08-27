@@ -362,7 +362,7 @@ pub fn relativize(source_document: &str, target_document: &str) -> String {
         .count();
 
     let mut parts: Vec<String> = Vec::with_capacity(source_dir.len() - common + target_parts.len());
-    parts.extend(std::iter::repeat("..".to_string()).take(source_dir.len() - common));
+    parts.extend(std::iter::repeat_n("..".to_string(), source_dir.len() - common));
     parts.extend(target_parts[common..].iter().map(|s| s.to_string()));
 
     parts.join("/")

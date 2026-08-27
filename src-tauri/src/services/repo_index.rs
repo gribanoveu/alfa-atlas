@@ -13,8 +13,7 @@ use dashmap::DashMap;
 
 use crate::domain::paths;
 use crate::domain::repo_index::{
-    FileId, FileMetadata, ImportRef, IndexedFile, Language, LanguageIndexer, RepoIndexError,
-    Symbol, INDEX_VERSION,
+    FileId, FileMetadata, ImportRef, IndexedFile, Language, LanguageIndexer, RepoIndexError, Symbol,
 };
 use crate::infra::language_indexers;
 use crate::infra::workspace_scanner;
@@ -44,7 +43,6 @@ fn mtime_secs_eq(a: SystemTime, b: SystemTime) -> bool {
 
 #[derive(Debug, Clone, Default)]
 pub struct RepoIndexStats {
-    pub index_version: u32,
     pub files_indexed: usize,
     pub by_language: HashMap<Language, usize>,
 }
@@ -89,6 +87,12 @@ impl RepositoryIndex {
     /// a full record — `LanguageIndexer::index` is infallible, so a broken
     /// file never disappears from the index, only its `symbols` come back
     /// short.
+    ///
+    /// Test-only convenience: every production caller goes through
+    /// `build_reusing_symbols`, which is this same walk plus a persisted-
+    /// symbol reuse map. Tests that don't care about reuse call this to
+    /// avoid threading an empty map through.
+    #[cfg(test)]
     pub fn build(&self, repo_root: &Path) -> Result<RepoIndexStats, RepoIndexError> {
         self.build_internal(repo_root, None)
     }
@@ -138,10 +142,7 @@ impl RepositoryIndex {
         *self.repo_root.write().unwrap() = Some(repo_root.to_path_buf());
 
         let scanned = workspace_scanner::scan_all(repo_root)?;
-        let mut stats = RepoIndexStats {
-            index_version: INDEX_VERSION,
-            ..Default::default()
-        };
+        let mut stats = RepoIndexStats::default();
 
         for file in scanned {
             let path_str = file.path.to_string_lossy();
@@ -250,6 +251,9 @@ impl RepositoryIndex {
             .collect()
     }
 
+    /// Test-only: production readers either take `all_files` or look a
+    /// single `FileId` up directly — nothing slices the index by language.
+    #[cfg(test)]
     pub fn files_for_language(&self, language: Language) -> Vec<IndexedFile> {
         self.files
             .iter()
@@ -480,7 +484,6 @@ mod tests {
         let index = RepositoryIndex::new();
         let stats = index.build(&root).unwrap();
 
-        assert_eq!(stats.index_version, INDEX_VERSION);
         assert_eq!(stats.files_indexed, 5);
         assert_eq!(stats.by_language.get(&Language::Java), Some(&1));
         assert_eq!(stats.by_language.get(&Language::Json), Some(&1));

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   cancelEmbeddingModelDownload,
+  deleteEmbeddingRemoteApiKey,
   downloadEmbeddingModel,
   getEmbeddingConfig,
   getEmbeddingIndexStatus,
@@ -242,6 +243,25 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
     }
   }, []);
 
+  /** Mirrors `saveApiKey`, including the optimistic `hasApiKey` flip — the
+   * backend delete is idempotent, so the only way this leaves the flag
+   * wrong is a genuine failure, which the catch block surfaces and the
+   * next `refresh()` corrects. `providerConfigured` derives from
+   * `hasApiKey`, so a remote setup drops back to "not configured" here
+   * without touching the base URL / model the user typed in. */
+  const deleteApiKey = useCallback(async () => {
+    setBusy(true);
+    try {
+      await deleteEmbeddingRemoteApiKey();
+      setHasApiKey(false);
+      setError(null);
+    } catch (e) {
+      setError(toMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const downloadModel = useCallback(async () => {
     cancelRequestedRef.current = false;
     setModelStatus({ status: "downloading", progress: 0 });
@@ -330,6 +350,7 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
     providerConfigured,
     updateConfig,
     saveApiKey,
+    deleteApiKey,
     downloadModel,
     cancelDownload,
     sync,

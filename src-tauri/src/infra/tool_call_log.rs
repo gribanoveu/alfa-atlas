@@ -278,15 +278,11 @@ pub fn redact_args(call: &ToolCall) -> serde_json::Value {
                 }
             }
         }
-        ToolCall::Memory(_) => {
-            if args.contains_key("text") {
-                args.insert("text".to_string(), redacted());
-            }
+        ToolCall::Memory(_) if args.contains_key("text") => {
+            args.insert("text".to_string(), redacted());
         }
-        ToolCall::CreatePlan(_) | ToolCall::UpdatePlan(_) => {
-            if args.contains_key("plan") {
-                args.insert("plan".to_string(), redacted());
-            }
+        ToolCall::CreatePlan(_) | ToolCall::UpdatePlan(_) if args.contains_key("plan") => {
+            args.insert("plan".to_string(), redacted());
         }
         _ => {}
     }
@@ -299,16 +295,7 @@ pub fn redact_args(call: &ToolCall) -> serde_json::Value {
 /// `diff.unifiedDiff` wherever a `FileDiffStats` appears (`gitDiff`,
 /// `fileWritten`/`fileEdited`/`fileDeleted` — `linesAdded`/`linesRemoved`
 /// are kept, since those are counts, not content).
-///
-/// `memory_op` is the originating call's `op` (from the `ToolCall::Memory`
-/// this result settled, extracted by the caller before it's moved into
-/// `execute_tool`) — needed because whether a `memory` result is safe to
-/// keep depends on which op produced it, not just the result's shape.
-/// Model-facing ops (`note`/`recall`/`forget`) and retired harness ops
-/// (`wake`/`nap`/`zoom`) are redacted — they embed or touch raw memory
-/// lines. Legacy `"config"` results (knob sizes only) stay unredacted so
-/// older transcripts remain diagnosable.
-pub fn redact_result(result: &ToolResult, memory_op: Option<&str>) -> serde_json::Value {
+pub fn redact_result(result: &ToolResult) -> serde_json::Value {
     let mut value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
     let Some(inner) = value.get_mut("result") else {
         return value;
@@ -334,11 +321,6 @@ pub fn redact_result(result: &ToolResult, memory_op: Option<&str>) -> serde_json
         | ToolResult::FileDeleted { .. } => {
             if let Some(diff) = inner.get_mut("diff").and_then(|v| v.as_object_mut()) {
                 diff.insert("unifiedDiff".to_string(), redacted());
-            }
-        }
-        ToolResult::Memory { .. } if memory_op != Some("config") => {
-            if let Some(obj) = inner.as_object_mut() {
-                obj.insert("text".to_string(), redacted());
             }
         }
         ToolResult::PlanRead { .. } => {
@@ -478,7 +460,7 @@ mod tests {
     #[test]
     fn redact_result_strips_file_content_but_keeps_line_counts() {
         let result = ToolResult::File { content: "SECRET".to_string(), start_line: 1, end_line: 3, total_lines: 3 };
-        let redacted = redact_result(&result, None);
+        let redacted = redact_result(&result);
         assert_eq!(redacted["result"]["content"], "<redacted>");
         assert_eq!(redacted["result"]["totalLines"], 3);
     }
@@ -489,7 +471,7 @@ mod tests {
             matches: vec![crate::domain::ai_tools::GrepMatch { path: "a.adoc".to_string(), line: 1, text: "SECRET".to_string() }],
             truncated: false,
         };
-        let redacted = redact_result(&result, None);
+        let redacted = redact_result(&result);
         assert_eq!(redacted["result"]["matches"][0]["text"], "<redacted>");
         assert_eq!(redacted["result"]["matches"][0]["path"], "a.adoc");
     }
@@ -505,25 +487,9 @@ mod tests {
                 truncated: false,
             },
         };
-        let redacted = redact_result(&result, None);
+        let redacted = redact_result(&result);
         assert_eq!(redacted["result"]["diff"]["unifiedDiff"], "<redacted>");
         assert_eq!(redacted["result"]["diff"]["linesAdded"], 3);
-    }
-
-    #[test]
-    fn redact_result_strips_memory_text_for_every_op_except_config() {
-        let result = ToolResult::Memory { text: "SECRET NOTE".to_string() };
-        for op in ["wake", "note", "nap", "recall", "zoom", "forget"] {
-            let redacted = redact_result(&result, Some(op));
-            assert_eq!(redacted["result"]["text"], "<redacted>", "op {op} should be redacted");
-        }
-    }
-
-    #[test]
-    fn redact_result_keeps_memory_config_text_unredacted() {
-        let result = ToolResult::Memory { text: "WAKE_LINES 96 ...".to_string() };
-        let redacted = redact_result(&result, Some("config"));
-        assert_eq!(redacted["result"]["text"], "WAKE_LINES 96 ...");
     }
 
     #[test]

@@ -35,8 +35,12 @@ pub enum Language {
     AsciiDoc,
 }
 
-/// Every `Language` variant — used by tests and by registry construction to
-/// confirm every language has a registered indexer.
+/// Every `Language` variant. Test-only: the registries in
+/// `infra::language_indexers` and `infra::chunk_strategies` are built by
+/// hand, and their tests walk this to assert neither one forgot a language.
+/// Nothing in the production path enumerates the variants, so this is
+/// `#[cfg(test)]` rather than a `pub const` the compiler flags as dead.
+#[cfg(test)]
 pub const ALL_LANGUAGES: [Language; 5] = [
     Language::Java,
     Language::Json,

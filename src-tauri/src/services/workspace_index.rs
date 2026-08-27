@@ -602,13 +602,15 @@ impl WorkspaceIndex {
     }
 
     fn compute_stats(&self) -> IndexStats {
-        let mut stats = IndexStats::default();
-        stats.documents = self.documents.len() as u32;
-        stats.anchors = self.anchors_by_doc.iter().map(|r| r.value().len() as u32).sum();
-        stats.includes = self.includes.iter().map(|r| r.value().len() as u32).sum();
-        stats.references = self.references.iter().map(|r| r.value().len() as u32).sum();
-        stats.attributes = self.attributes_by_doc.iter().map(|r| r.value().len() as u32).sum();
-        stats.images = self.images_by_doc.iter().map(|r| r.value().len() as u32).sum();
+        let mut stats = IndexStats {
+            documents: self.documents.len() as u32,
+            anchors: self.anchors_by_doc.iter().map(|r| r.value().len() as u32).sum(),
+            includes: self.includes.iter().map(|r| r.value().len() as u32).sum(),
+            references: self.references.iter().map(|r| r.value().len() as u32).sum(),
+            attributes: self.attributes_by_doc.iter().map(|r| r.value().len() as u32).sum(),
+            images: self.images_by_doc.iter().map(|r| r.value().len() as u32).sum(),
+            ..Default::default()
+        };
         for diag in self.diagnostics.iter() {
             for d in diag.value() {
                 match d.severity {

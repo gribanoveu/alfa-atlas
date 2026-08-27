@@ -5,7 +5,6 @@
 //! "why" behind the data shapes and gap-ownership rules.
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 use dashmap::DashMap;
@@ -16,7 +15,6 @@ use crate::domain::chunk_index::{
 };
 use crate::domain::repo_index::{FileId, Language, RepoIndexError};
 use crate::infra::chunk_strategies;
-use crate::services::chunk_text::{resolve_text, ChunkTextError};
 use crate::services::repo_index::RepositoryIndex;
 
 /// Builds chunks — holds only the strategy registry, no result state.
@@ -129,6 +127,12 @@ impl ChunkBuilder {
     /// build (missing/unreadable — `build_file`'s `Err` case) is skipped
     /// with a warning, same resilience policy as `RepositoryIndex::build`;
     /// it never aborts the whole pass.
+    ///
+    /// Test-only: the production pipeline chunks incrementally, file by
+    /// file through `build_file`, so it can skip files whose hash is
+    /// unchanged. Tests across several modules use this to populate a whole
+    /// fixture repo's `ChunkIndex` in one call.
+    #[cfg(test)]
     pub fn build_all(&self, repo_index: &RepositoryIndex, options: &ChunkBuildOptions) -> Vec<Chunk> {
         let mut all = Vec::new();
         for file_id in repo_index.file_ids() {
@@ -197,9 +201,11 @@ impl ChunkIndex {
         self.insert_all(chunks);
     }
 
-    /// Every chunk's metadata belonging to one file — re-embedding,
-    /// deletion, display, debug all want this without scanning the whole
-    /// map by hand each time.
+    /// Every chunk's metadata belonging to one file. Test-only: the
+    /// production paths that need per-file chunk data go through
+    /// `file_hash_for` (incremental skip) or `file_ids` + `remove_file`
+    /// instead of materializing the metadata list.
+    #[cfg(test)]
     pub fn chunks_for_file(&self, file_id: &FileId) -> Vec<ChunkMetadata> {
         self.chunks
             .iter()
@@ -218,19 +224,6 @@ impl ChunkIndex {
     /// full `ChunkMetadata` instead of only the key.
     pub fn all(&self) -> Vec<ChunkMetadata> {
         self.chunks.iter().map(|entry| entry.value().clone()).collect()
-    }
-
-    /// `get` plus an on-demand read of the chunk's text from `repo_root`.
-    /// `None` if `id` isn't in this index; `Some(Err(_))` if the metadata
-    /// exists but the text couldn't be resolved (file missing, or changed
-    /// since indexing — see `ChunkTextError`).
-    pub fn get_with_text(
-        &self,
-        id: &ChunkId,
-        repo_root: &Path,
-    ) -> Option<Result<(ChunkMetadata, String), ChunkTextError>> {
-        let metadata = self.get(id)?;
-        Some(resolve_text(repo_root, &metadata).map(|text| (metadata.clone(), text)))
     }
 
     /// Any one stored chunk's `file_hash` for `file_id` (every chunk of a

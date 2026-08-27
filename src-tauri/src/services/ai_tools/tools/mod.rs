@@ -35,10 +35,14 @@ pub use list_files::render_file_tree;
 use super::scope::set_access_mode;
 use super::EmbeddingDeps;
 
+/// One row of `DEFINITIONS`: a tool's name plus the function that builds
+/// its schema on demand.
+type ToolDefinitionRow = (ToolName, fn() -> LlmToolDefinition);
+
 /// Every tool the harness knows how to run, paired with its schema, in the
 /// order the model is shown them. Adding a tool means adding a module and
 /// one row here — nothing else in this file changes.
-const DEFINITIONS: &[(ToolName, fn() -> LlmToolDefinition)] = &[
+const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::ListFiles, list_files::definition),
     (ToolName::ReadFile, read_file::definition),
     (ToolName::SemanticSearch, semantic_search::definition),

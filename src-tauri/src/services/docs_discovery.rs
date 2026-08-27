@@ -70,12 +70,7 @@ pub fn find_candidates(
         }
     }
 
-    walk(
-        &scan_root,
-        &scan_root,
-        0,
-        &mut stats,
-    )?;
+    walk(&scan_root, 0, &mut stats)?;
 
     apply_openapi_specs_roots(&mut stats);
 
@@ -221,7 +216,6 @@ fn apply_openapi_specs_roots(stats: &mut HashMap<PathBuf, DirStats>) {
 }
 
 fn walk(
-    scan_root: &Path,
     dir: &Path,
     depth: usize,
     stats: &mut HashMap<PathBuf, DirStats>,
@@ -250,7 +244,7 @@ fn walk(
             if SKIP_DIRS.contains(&name.as_str()) || name.starts_with('.') {
                 continue;
             }
-            walk(scan_root, &path, depth + 1, stats)?;
+            walk(&path, depth + 1, stats)?;
         } else if file_type.is_file() {
             let path_str = path.to_string_lossy();
             if is_supported_file(&path_str) {

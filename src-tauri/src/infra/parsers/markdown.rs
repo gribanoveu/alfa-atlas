@@ -16,15 +16,13 @@ pub fn parse(content: &str) -> ParsedDocument {
     for (event, range) in parser.into_offset_iter() {
         let line = line_for(range.start, &line_starts);
         match event {
-            Event::Start(Tag::Heading { id, .. }) => {
-                if let Some(anchor_id) = id {
-                    out.anchors.push(Anchor {
-                        id: anchor_id.to_string(),
-                        document: "".into(),
-                        line,
-                        column: 1,
-                    });
-                }
+            Event::Start(Tag::Heading { id: Some(anchor_id), .. }) => {
+                out.anchors.push(Anchor {
+                    id: anchor_id.to_string(),
+                    document: "".into(),
+                    line,
+                    column: 1,
+                });
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 let dest = dest_url.to_string();

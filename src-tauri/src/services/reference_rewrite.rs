@@ -223,6 +223,13 @@ fn find_referencing_lines(index: &WorkspaceIndex, old_path: &str) -> Vec<(Docume
 /// Expands a directory move into one `RenamedPath` per document that was
 /// under it, so the same per-file rewrite logic below handles a folder
 /// rename exactly like N simultaneous file renames.
+///
+/// `clippy::manual_map` fires on the `strip_prefix` arm below and its
+/// suggestion does not compile (E0505): `strip_prefix` borrows `old` for as
+/// long as the `.map()` call runs, while the closure it proposes has to
+/// move `old` into the `RenamedPath` it builds. The `if let` form is what
+/// lets the borrow end before the move.
+#[allow(clippy::manual_map)]
 pub fn renamed_paths_for_dir_move(
     index: &WorkspaceIndex,
     old_prefix: &str,

@@ -144,10 +144,6 @@ impl BlockRange {
         self.hi - self.lo
     }
 
-    /// Inclusive wire form as wake prints it: `"0-15"`.
-    pub fn inclusive_id(self) -> String {
-        format!("{}-{}", self.lo, self.hi - 1)
-    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -165,10 +161,6 @@ pub enum OptMemError {
         limit: usize,
         cyrillic_budget: usize,
     },
-    #[error("'{0}' is not a block id. Copy it from the prompt.")]
-    BadBlockId(String),
-    #[error("{0} is not a block. Copy the id printed by wake, like 16-31.")]
-    NotAlignedBlock(String),
     #[error("{name} must be a positive whole number, not '{value}'.")]
     InvalidKnobValue { name: String, value: String },
     #[error("ENTRY_CHARS is at most {max}: a memory has to fit the fixed-width records.")]
@@ -177,8 +169,6 @@ pub enum OptMemError {
     KnobTooLarge { name: String, max: usize },
     #[error("{0} is not a size. Name one of: WAKE_LINES, ENTRY_CHARS, PART_CHARS, PART_LINES.")]
     UnknownKnob(String),
-    #[error("bad regex: {0}")]
-    BadRegex(String),
 }
 
 /// Validate one memory line against `entry_chars` (byte length of UTF-8).
@@ -199,25 +189,6 @@ pub fn check_entry(text: &str, entry_chars: usize) -> Result<String, OptMemError
         });
     }
     Ok(text.to_string())
-}
-
-/// Parse `a-b` as wake prints it: inclusive at both ends, aligned power-of-two.
-pub fn parse_block_id(s: &str) -> Result<BlockRange, OptMemError> {
-    let Some((a, b)) = s.split_once('-') else {
-        return Err(OptMemError::BadBlockId(s.to_string()));
-    };
-    let lo: usize = a
-        .parse()
-        .map_err(|_| OptMemError::BadBlockId(s.to_string()))?;
-    let hi_incl: usize = b
-        .parse()
-        .map_err(|_| OptMemError::BadBlockId(s.to_string()))?;
-    let hi = hi_incl + 1;
-    let n = hi - lo;
-    if n < 2 || !n.is_power_of_two() || lo % n != 0 {
-        return Err(OptMemError::NotAlignedBlock(s.to_string()));
-    }
-    Ok(BlockRange { lo, hi })
 }
 
 fn cover_alpha(t: usize, alpha: f64) -> Vec<BlockRange> {
@@ -430,28 +401,6 @@ mod tests {
     fn check_knob_max_is_a_noop_for_entry_chars_and_unknown_names() {
         assert!(check_knob_max("ENTRY_CHARS", usize::MAX).is_ok());
         assert!(check_knob_max("SOMETHING_ELSE", usize::MAX).is_ok());
-    }
-
-    #[test]
-    fn parse_block_id_accepts_aligned_power_of_two() {
-        assert_eq!(parse_block_id("0-1").unwrap(), BlockRange { lo: 0, hi: 2 });
-        assert_eq!(parse_block_id("16-31").unwrap(), BlockRange { lo: 16, hi: 32 });
-    }
-
-    #[test]
-    fn parse_block_id_rejects_misaligned() {
-        assert!(matches!(
-            parse_block_id("5-6"),
-            Err(OptMemError::NotAlignedBlock(_))
-        ));
-        assert!(matches!(
-            parse_block_id("1-2"),
-            Err(OptMemError::NotAlignedBlock(_))
-        ));
-        assert!(matches!(
-            parse_block_id("3-4"),
-            Err(OptMemError::NotAlignedBlock(_))
-        ));
     }
 
     #[test]

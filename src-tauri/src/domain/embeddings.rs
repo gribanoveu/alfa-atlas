@@ -26,17 +26,12 @@ pub struct EmbeddingRecord {
     pub chunk_hash: blake3::Hash,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum EmbeddingProviderKind {
+    #[default]
     Local,
     Remote,
-}
-
-impl Default for EmbeddingProviderKind {
-    fn default() -> Self {
-        Self::Local
-    }
 }
 
 /// One entry from the compiled-in system providers manifest's top-level

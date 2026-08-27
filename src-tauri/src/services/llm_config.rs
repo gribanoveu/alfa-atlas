@@ -1,6 +1,6 @@
-//! Loads/saves `AppSettings.llm` and resolves a provider id (system preset
-//! + settings-layer override, or a standalone custom entry) into the
-//! merged `ResolvedLlmProvider` view the rest of the app actually uses.
+//! Loads/saves `AppSettings.llm` and resolves a provider id (a system
+//! preset plus its settings-layer override, or a standalone custom entry)
+//! into the merged `ResolvedLlmProvider` view the rest of the app uses.
 //! Pure, no I/O beyond `settings_store` — see `infra::llm_provider_manifest`
 //! for where the compiled-in preset data itself comes from.
 

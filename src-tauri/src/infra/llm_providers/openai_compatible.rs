@@ -137,45 +137,6 @@ struct WireFunction<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-struct ChatCompletionResponse {
-    choices: Vec<WireChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WireChoice {
-    message: WireResponseMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct WireResponseMessage {
-    #[serde(default)]
-    content: Option<String>,
-    // `#[serde(default)]` alone only covers a *missing* key — many
-    // OpenAI-compatible servers, once `tools` is present on the request,
-    // explicitly send `"tool_calls":null` on a turn that didn't request
-    // any, which `Vec<T>`'s own `Deserialize` rejects ("invalid type:
-    // null, expected a sequence"). `deserialize_null_default` treats an
-    // explicit `null` the same as a missing key.
-    #[serde(default, deserialize_with = "deserialize_null_default")]
-    tool_calls: Vec<WireToolCall>,
-}
-
-#[derive(Debug, Deserialize)]
-struct WireToolCall {
-    id: String,
-    function: WireToolCallFunction,
-}
-
-/// `arguments` stays a raw JSON-encoded string here, exactly as the wire
-/// format carries it (a JSON object serialized *as a string*, not nested)
-/// — no second parse happens in this layer, see `domain::llm::LlmToolCall`.
-#[derive(Debug, Deserialize)]
-struct WireToolCallFunction {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct ModelsListResponse {
     data: Vec<ModelsListDatum>,
 }
@@ -197,10 +158,13 @@ struct StreamDelta {
     /// field.
     #[serde(default)]
     reasoning_content: Option<String>,
-    // See `WireResponseMessage.tool_calls`'s comment — a content-only delta
-    // chunk commonly carries an explicit `"tool_calls":null` once `tools`
-    // was offered on the request, which plain `#[serde(default)]` doesn't
-    // cover (that only fills in a *missing* key, not an explicit `null`).
+    // `#[serde(default)]` alone only covers a *missing* key — many
+    // OpenAI-compatible servers, once `tools` is present on the request,
+    // explicitly send `"tool_calls":null` on a content-only delta chunk
+    // that didn't request any, which `Vec<T>`'s own `Deserialize` rejects
+    // ("invalid type: null, expected a sequence").
+    // `deserialize_null_default` treats an explicit `null` the same as a
+    // missing key.
     #[serde(default, deserialize_with = "deserialize_null_default")]
     tool_calls: Vec<StreamToolCallDelta>,
 }
@@ -208,8 +172,8 @@ struct StreamDelta {
 /// Treats an explicit JSON `null` the same as a missing key — plain
 /// `#[serde(default)]` only covers the latter, and `Vec<T>`'s own
 /// `Deserialize` rejects `null` outright ("invalid type: null, expected a
-/// sequence"). Generic so both `WireResponseMessage.tool_calls` and
-/// `StreamDelta.tool_calls` share one implementation.
+/// sequence"). Generic so `StreamDelta.tool_calls` and any future field
+/// with the same wire quirk share one implementation.
 fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -669,26 +633,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_plain_text_response() {
-        let json = r#"{"choices":[{"message":{"role":"assistant","content":"hello"}}]}"#;
-        let parsed: ChatCompletionResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(parsed.choices[0].message.content.as_deref(), Some("hello"));
-        assert!(parsed.choices[0].message.tool_calls.is_empty());
-    }
-
-    #[test]
-    fn parses_a_tool_calls_response_with_null_content_and_keeps_arguments_as_a_raw_string() {
-        let json = r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc123","type":"function","function":{"name":"get_current_weather","arguments":"{\n\"location\": \"Boston, MA\"\n}"}}]}}]}"#;
-        let parsed: ChatCompletionResponse = serde_json::from_str(json).unwrap();
-        let message = &parsed.choices[0].message;
-        assert_eq!(message.content, None);
-        assert_eq!(message.tool_calls.len(), 1);
-        assert_eq!(message.tool_calls[0].id, "call_abc123");
-        assert_eq!(message.tool_calls[0].function.name, "get_current_weather");
-        assert_eq!(message.tool_calls[0].function.arguments, "{\n\"location\": \"Boston, MA\"\n}");
-    }
-
-    #[test]
     fn parses_the_models_list_response_shape() {
         let json = r#"{"object":"list","data":[{"id":"model-a","object":"model","created":1,"owned_by":"org"},{"id":"model-b","object":"model","created":2,"owned_by":"org"}]}"#;
         let parsed: ModelsListResponse = serde_json::from_str(json).unwrap();
@@ -888,13 +832,6 @@ mod tests {
             parse_sse_line(line).unwrap(),
             SseLine::Chunk { delta: Some("Hello".to_string()), reasoning: None, usage: None, tool_calls: vec![] }
         );
-    }
-
-    #[test]
-    fn parses_a_response_with_an_explicit_null_tool_calls() {
-        let json = r#"{"choices":[{"message":{"role":"assistant","content":"hi","tool_calls":null}}]}"#;
-        let parsed: ChatCompletionResponse = serde_json::from_str(json).unwrap();
-        assert!(parsed.choices[0].message.tool_calls.is_empty());
     }
 
     #[test]

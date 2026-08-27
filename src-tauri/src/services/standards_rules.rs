@@ -177,7 +177,7 @@ fn sections(content: &str) -> Vec<(String, String)> {
     out
 }
 
-fn section_body_by_keywords<'a>(content: &'a str, keywords: &[&str]) -> Option<String> {
+fn section_body_by_keywords(content: &str, keywords: &[&str]) -> Option<String> {
     let secs = sections(content);
     secs.into_iter()
         .find(|(title, _)| {

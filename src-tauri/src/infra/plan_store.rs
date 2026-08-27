@@ -92,7 +92,7 @@ pub fn list(repository_id: &str) -> Result<Vec<PlanSummary>, PlanError> {
             Err(_) => continue,
         }
     }
-    out.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+    out.sort_by_key(|p| std::cmp::Reverse(p.updated_at_ms));
     Ok(out)
 }
 

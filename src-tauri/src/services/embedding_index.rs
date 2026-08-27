@@ -205,6 +205,10 @@ impl EmbeddingIndex {
         Ok(stats)
     }
 
+    /// Test-only, along with `is_empty`/`clear` below: `sync` and `search`
+    /// are the whole production surface — nothing looks a single record up
+    /// by id outside of tests asserting what a sync left behind.
+    #[cfg(test)]
     pub fn get(&self, chunk_id: &ChunkId) -> Option<EmbeddingRecord> {
         self.records.get(chunk_id).map(|entry| entry.value().clone())
     }
@@ -227,10 +231,12 @@ impl EmbeddingIndex {
         self.records.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[cfg(test)]
     pub fn clear(&self) -> Result<(), EmbeddingError> {
         self.records.clear();
         self.key_to_chunk.clear();

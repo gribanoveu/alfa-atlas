@@ -65,7 +65,12 @@ pub fn has_api_key() -> bool {
     credentials_path().map(|p| p.exists()).unwrap_or(false)
 }
 
-pub fn clear_api_key() -> Result<(), String> {
+/// Idempotent — removing a key that was never set is a success, same as
+/// `infra::llm_credentials_store::delete_api_key`'s no-op on a missing
+/// provider id. Callers reach for this to *ensure* no key is stored, and a
+/// second click on the Settings "Удалить ключ" button must not surface an
+/// error just because the first one already did the work.
+pub fn delete_api_key() -> Result<(), String> {
     let path = credentials_path()?;
     if path.exists() {
         fs::remove_file(&path).map_err(|e| format!("failed to remove embedding credentials: {e}"))?;

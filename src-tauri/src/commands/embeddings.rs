@@ -106,6 +106,20 @@ pub fn embedding_has_remote_api_key() -> bool {
     embedding_credentials_store::has_api_key()
 }
 
+/// Drops the stored key entirely, leaving the rest of the remote config
+/// (base URL, model, cert) in place — the Settings UI's counterpart to
+/// `embedding_set_remote_api_key`, for switching a remote provider off
+/// without wiping how to reach it.
+///
+/// No provider-cache invalidation needed here: `services::embedding_state::
+/// ensure_provider` keys its cached instance on `(config, api_key)`, and the
+/// next call reads `None` from the store, which no longer matches the cached
+/// `Some(..)` — so the provider is rebuilt on its own.
+#[tauri::command]
+pub fn embedding_delete_remote_api_key() -> Result<(), String> {
+    embedding_credentials_store::delete_api_key()
+}
+
 #[tauri::command]
 pub fn embedding_model_status() -> ModelStatus {
     embedding_model::model_status()

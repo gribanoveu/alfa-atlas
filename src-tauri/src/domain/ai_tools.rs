@@ -766,9 +766,6 @@ pub enum ToolResult {
     TodoWritten(Vec<Task>),
     /// Same shape/role as `TodoWritten`, after a `todo update`.
     TodoUpdated(Vec<Task>),
-    /// Settled `memory` — plain text OptMem output (wake/note/nap/…).
-    #[serde(rename_all = "camelCase")]
-    Memory { text: String },
     /// Settled `requestModeSwitch` — a pure acknowledgement, no state
     /// mutated server-side (`ConversationMode` isn't persisted, see
     /// `domain::conversation_mode`). The frontend applies `mode` to its own
@@ -946,11 +943,6 @@ pub enum ToolError {
     /// types into the tool boundary.
     #[error("git error: {0}")]
     Git(String),
-    /// OptMem / agent-memory failure — surfaced as a string so the model
-    /// sees the actionable message without pulling store types across the
-    /// tool boundary.
-    #[error("memory error: {0}")]
-    Memory(String),
     /// Plan store / validation failure.
     #[error("plan error: {0}")]
     Plan(String),

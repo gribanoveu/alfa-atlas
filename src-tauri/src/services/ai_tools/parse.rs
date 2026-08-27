@@ -85,7 +85,7 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map(ToolCall::Skill)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "askUser" => lenient_json_object::<AskUserArgs>(&call.arguments)
-            .and_then(|args| validate_ask_user_args(args).map_err(|reason| reason))
+            .and_then(validate_ask_user_args)
             .map(ToolCall::AskUser)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "createPlan" => lenient_json_object::<CreatePlanArgs>(&call.arguments)
@@ -131,7 +131,7 @@ pub(super) fn validate_ask_user_args(args: AskUserArgs) -> Result<AskUserArgs, S
             return Err(format!("questions[{i}].prompt must be non-empty"));
         }
         let opt_n = q.options.len();
-        if opt_n < ASK_USER_MIN_OPTIONS || opt_n > ASK_USER_MAX_OPTIONS {
+        if !(ASK_USER_MIN_OPTIONS..=ASK_USER_MAX_OPTIONS).contains(&opt_n) {
             return Err(format!(
                 "questions[{i}].options must have between {ASK_USER_MIN_OPTIONS} and {ASK_USER_MAX_OPTIONS} items, got {opt_n}"
             ));

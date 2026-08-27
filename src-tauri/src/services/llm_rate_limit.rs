@@ -186,8 +186,10 @@ mod tests {
     fn disabled_in_settings_is_noop_even_for_alfagen() {
         with_temp_home(|| {
             *STORE.lock().unwrap() = None;
-            let mut settings = crate::domain::llm::LlmSettings::default();
-            settings.rate_limit_enabled = false;
+            let settings = crate::domain::llm::LlmSettings {
+                rate_limit_enabled: false,
+                ..Default::default()
+            };
             llm_config::save_llm_settings(settings).unwrap();
             record("alfagen", 12_000);
             let snap = snapshot("alfagen");

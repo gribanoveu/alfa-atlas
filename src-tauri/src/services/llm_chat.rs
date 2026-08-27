@@ -423,9 +423,6 @@ fn run_tool_loop(
                 Ok(ToolResult::FileList(entries)) => {
                     ai_tools::render_file_tree(entries)
                 }
-                // OptMem already formats wake/note/nap as agent-facing prose —
-                // wrapping it in JSON would only add noise and burn tokens.
-                Ok(ToolResult::Memory { text }) => text.clone(),
                 // Skip path for askUser — Russian, matching the deny message
                 // for mutating tools so the model continues in-language.
                 Err(e) if e == "denied by user" && call.name == "askUser" => {

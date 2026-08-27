@@ -2232,7 +2232,7 @@ pub fn list_stash_shelf(repo_root: &Path) -> Result<Vec<GitStashEntry>, GitError
         .into_iter()
         .map(|(branch, oid)| stash_entry_metadata(&repo, branch, oid))
         .collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.created_at));
     Ok(entries)
 }
 
@@ -3031,7 +3031,7 @@ mod tests {
         commit_file(&repo, "a.txt", "line1\nline2\nline3\n", "append");
 
         let hunks = blame(&dir, "a.txt", None, None).unwrap();
-        assert!(hunks.len() >= 1);
+        assert!(!hunks.is_empty());
         assert_eq!(hunks[0].start_line, 1);
         assert!(!hunks[0].commit.is_empty());
         assert_eq!(hunks[0].author, "Alice");

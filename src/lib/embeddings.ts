@@ -114,6 +114,12 @@ export function hasEmbeddingRemoteApiKey(): Promise<boolean> {
   return invoke<boolean>("embedding_has_remote_api_key");
 }
 
+/** Drops the stored key but keeps the rest of the remote config (base URL,
+ * model, cert). Idempotent — deleting when none is set resolves fine. */
+export function deleteEmbeddingRemoteApiKey(): Promise<void> {
+  return invoke("embedding_delete_remote_api_key");
+}
+
 export function getEmbeddingModelStatus(): Promise<ModelStatus> {
   return invoke<ModelStatus>("embedding_model_status");
 }

@@ -12,8 +12,8 @@ use fs2::FileExt;
 use thiserror::Error;
 
 use crate::domain::optmem::{
-    check_entry, pad_record, parse_log_line, BlockRange, MemoryEntry, OptMemError, OptMemKnobs,
-    LOG_REC, TREE_REC,
+    check_entry, pad_record, parse_log_line, MemoryEntry, OptMemError, OptMemKnobs, LOG_REC,
+    TREE_REC,
 };
 
 #[derive(Debug, Error)]
@@ -92,20 +92,16 @@ impl OptMemStore {
         }
     }
 
-    pub fn dir(&self) -> &Path {
-        &self.dir
-    }
-
     pub fn knobs(&self) -> OptMemKnobs {
         self.knobs
     }
 
     pub fn log_len(&self) -> Result<usize, OptMemStoreError> {
-        Ok(count_records(&self.log_path(), LOG_REC)?)
+        count_records(&self.log_path(), LOG_REC)
     }
 
     pub fn level_len(&self, size: usize) -> Result<usize, OptMemStoreError> {
-        Ok(count_records(&self.tree_path(size), TREE_REC)?)
+        count_records(&self.tree_path(size), TREE_REC)
     }
 
     pub fn log_get(&self, i: usize) -> Result<MemoryEntry, OptMemStoreError> {
@@ -204,42 +200,6 @@ impl OptMemStore {
         f.flush()?;
         f.sync_all()?;
         Ok(true)
-    }
-
-    /// Drop block `[lo, hi)` and every block built from it.
-    pub fn tree_drop(&self, lo: usize, hi: usize) -> Result<Vec<BlockRange>, OptMemStoreError> {
-        let _lock = self.lock()?;
-        let mut gone = Vec::new();
-        let mut size = hi - lo;
-        let t = count_records(&self.log_path(), LOG_REC)?;
-        while size <= t {
-            let path = self.tree_path(size);
-            let k = lo / size;
-            let n = count_records(&path, TREE_REC)?;
-            if n > k {
-                for i in k..n {
-                    gone.push(BlockRange {
-                        lo: i * size,
-                        hi: (i + 1) * size,
-                    });
-                }
-                let f = OpenOptions::new().write(true).open(&path)?;
-                f.set_len((k * TREE_REC) as u64)?;
-            }
-            size *= 2;
-        }
-        Ok(gone)
-    }
-
-    pub fn overrides(&self) -> Result<BTreeMap<String, usize>, OptMemStoreError> {
-        read_overrides(&self.dir)
-    }
-
-    pub fn set_overrides(&mut self, over: &BTreeMap<String, usize>) -> Result<(), OptMemStoreError> {
-        let _lock = self.lock()?;
-        write_config(&self.dir, over)?;
-        self.knobs = OptMemKnobs::with_overrides(over)?;
-        Ok(())
     }
 
     /// Remove one raw log entry by index and rebuild LOG.txt. OptMem ids are
@@ -360,7 +320,7 @@ fn repair(path: &Path, rec: usize) -> Result<(), OptMemStoreError> {
         Err(e) => return Err(e.into()),
     };
     let n = meta.len() as usize;
-    if n % rec != 0 {
+    if !n.is_multiple_of(rec) {
         let f = OpenOptions::new().write(true).open(path)?;
         f.set_len((n - n % rec) as u64)?;
     }
@@ -501,18 +461,14 @@ mod tests {
             .collect();
         assert_eq!(hits.len(), 1);
 
-        let gone = store.tree_drop(0, 2).unwrap();
-        assert!(!gone.is_empty());
-        assert!(store.tree_get(0, 2).unwrap().is_none());
-
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn open_or_init_creates_missing_dir() {
         let dir = temp_dir().join("nested");
-        let store = OptMemStore::open_or_init(&dir).unwrap();
-        assert!(store.dir().join("LOG.txt").exists());
+        OptMemStore::open_or_init(&dir).unwrap();
+        assert!(dir.join("LOG.txt").exists());
         fs::remove_dir_all(dir.parent().unwrap()).ok();
     }
 

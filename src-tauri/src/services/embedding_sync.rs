@@ -171,7 +171,7 @@ fn run_incremental_sync(
         FileChangeKind::Removed => {
             repo_index.remove_file(&file_id);
             chunk_index.replace_for_file(&file_id, Vec::new());
-            store.delete_files(&[file_id.clone()]).map_err(|e| e.to_string())?;
+            store.delete_files(std::slice::from_ref(&file_id)).map_err(|e| e.to_string())?;
         }
         FileChangeKind::Upserted => match repo_index.update_file(&file_id) {
             Ok(()) => {
@@ -179,7 +179,7 @@ fn run_incremental_sync(
                     return Ok(());
                 };
                 store
-                    .upsert_files(&[indexed.metadata.clone()])
+                    .upsert_files(std::slice::from_ref(&indexed.metadata))
                     .map_err(|e| e.to_string())?;
 
                 let unchanged = chunk_index
@@ -207,7 +207,7 @@ fn run_incremental_sync(
             Err(RepoIndexError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
                 repo_index.remove_file(&file_id);
                 chunk_index.replace_for_file(&file_id, Vec::new());
-                store.delete_files(&[file_id.clone()]).map_err(|e| e.to_string())?;
+                store.delete_files(std::slice::from_ref(&file_id)).map_err(|e| e.to_string())?;
             }
             Err(e) => return Err(e.to_string()),
         },
@@ -296,7 +296,7 @@ fn sync_backlog_batch(
         // `chunks` can reference it — `chunks.file_id` is a foreign key
         // (`ON DELETE CASCADE`) onto `files.file_id`.
         store
-            .upsert_files(&[indexed.metadata.clone()])
+            .upsert_files(std::slice::from_ref(&indexed.metadata))
             .map_err(|e| e.to_string())?;
         match chunk_builder.build_file(repo_index, file_id, &options) {
             Ok(chunks) => {
@@ -1060,10 +1060,8 @@ mod tests {
 
     // --- `sync_backlog_batch` ---
 
-    use crate::domain::embeddings::{Embedding, EmbeddingError};
     use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::SystemTime;
 
     #[test]
     fn sync_backlog_batch_only_touches_the_given_file_ids() {

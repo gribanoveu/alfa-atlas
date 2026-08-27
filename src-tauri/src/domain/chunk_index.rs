@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn qualified_name_is_none_without_an_enclosing_type() {
         let method = sym("run", SymbolKind::Method, 15, 20);
-        assert_eq!(qualified_name_for(&method, &[method.clone()]), None);
+        assert_eq!(qualified_name_for(&method, std::slice::from_ref(&method)), None);
     }
 
     #[test]

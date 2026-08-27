@@ -126,21 +126,16 @@ fn default_autosave_delay_ms() -> u64 {
     DEFAULT_AUTOSAVE_DELAY_MS
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorLanguage {
     /// Сообщения диагностик на русском.
     #[serde(rename = "ru")]
+    #[default]
     Ru,
     /// Сообщения диагностик на английском.
     #[serde(rename = "en")]
     En,
-}
-
-impl Default for ErrorLanguage {
-    fn default() -> Self {
-        Self::Ru
-    }
 }
 
 fn default_error_language() -> ErrorLanguage {

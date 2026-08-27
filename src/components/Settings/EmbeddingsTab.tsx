@@ -53,6 +53,7 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
     providerConfigured,
     updateConfig,
     saveApiKey,
+    deleteApiKey,
     downloadModel,
     cancelDownload,
     sync,
@@ -86,6 +87,15 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
     setApiKeyInput("");
     setApiKeySaved(true);
     setTimeout(() => setApiKeySaved(false), 2000);
+  };
+
+  // Also clears whatever was typed but not saved: leaving a half-entered
+  // key in the field right after "ключ удалён" reads as if something is
+  // still stored.
+  const handleDeleteApiKey = async () => {
+    await deleteApiKey();
+    setApiKeyInput("");
+    setApiKeySaved(false);
   };
 
   const handleSync = async () => {
@@ -247,6 +257,16 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
             >
               {apiKeySaved ? "Сохранено!" : "Сохранить ключ"}
             </button>
+            {hasApiKey && (
+              <button
+                type="button"
+                className="settings-btn"
+                disabled={busy}
+                onClick={() => void handleDeleteApiKey()}
+              >
+                Удалить ключ
+              </button>
+            )}
             {hasApiKey ? (
               <span className="embeddings-status-badge ok">Ключ задан</span>
             ) : (

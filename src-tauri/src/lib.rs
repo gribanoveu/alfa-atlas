@@ -84,6 +84,10 @@ fn persist_window_state(window: &Window) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Only the `debug_assertions` block below reassigns this, so a release
+    // build sees a `mut` nothing ever uses — scope the allow to that build
+    // rather than blanket-allowing `unused_mut` in both.
+    #[cfg_attr(not(debug_assertions), allow(unused_mut))]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -283,6 +287,7 @@ pub fn run() {
             commands::embeddings::embedding_set_config,
             commands::embeddings::embedding_set_remote_api_key,
             commands::embeddings::embedding_has_remote_api_key,
+            commands::embeddings::embedding_delete_remote_api_key,
             commands::embeddings::embedding_model_status,
             commands::embeddings::embedding_download_model,
             commands::embeddings::embedding_cancel_model_download,

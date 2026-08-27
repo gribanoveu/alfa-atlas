@@ -136,10 +136,16 @@ impl VectorStore {
         Ok(matches.keys.into_iter().zip(matches.distances).collect())
     }
 
+    /// Test-only, along with `is_empty`/`clear` below: production code
+    /// reads the vector count through `services::embedding_index`, which
+    /// tracks it alongside the record metadata. These exist so this
+    /// module's own tests can assert against the store directly.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.index.size()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -149,6 +155,7 @@ impl VectorStore {
     /// (e.g. from a since-changed embedding dimension) would sit on disk
     /// and a later blind `load()` would either fail or silently load
     /// mismatched data.
+    #[cfg(test)]
     pub fn clear(&self) -> Result<(), EmbeddingError> {
         self.index.reset().map_err(vector_store_err)?;
         if let Some(path) = &self.path {
