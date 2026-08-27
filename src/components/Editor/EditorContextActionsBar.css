@@ -1,0 +1,79 @@
+.editor-context-actions-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-height: 32px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-1, var(--bg));
+  overflow: hidden;
+}
+
+.editor-context-actions-icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.editor-context-actions-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.editor-context-action-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-ui-sm, 12px);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.editor-context-action-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.editor-context-action-modal {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.editor-context-action-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.editor-context-action-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--font-ui-sm, 12px);
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.editor-context-action-input-single {
+  resize: none;
+}
+
+.editor-context-action-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}

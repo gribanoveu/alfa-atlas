@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, ChevronUp, FileText, FolderGit2, Send, Sparkles, Square, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
@@ -35,17 +35,17 @@ const CHAT_MODE_OPTIONS: { value: ConversationMode; label: string; title: string
   {
     value: "agent",
     label: "Агент",
-    title: "исследует репозиторий и вносит изменения",
+    title: "смогу исследовать репозиторий и вносить изменения в документацию",
   },
   {
     value: "plan",
     label: "План",
-    title: "составляет план без правок в файлах",
+    title: "смогу составлять план будущих работ без правок в документацию",
   },
   {
     value: "question",
     label: "Вопрос",
-    title: "отвечает на точечные вопросы без изменений",
+    title: "смогу отвечать на точечные вопросы не внося изменений в документацию",
   },
 ];
 
@@ -353,6 +353,14 @@ type AssistantConversationProps = {
    * remount-able компонент (он монтируется заново при смене чата) и был бы
    * вставлен повторно в свежий черновик следующего чата. */
   onChatInsertHandled?: () => void;
+  /** Editor context action — canned prompt to send immediately (not a draft). */
+  assistantSendRequest?: {
+    id: number;
+    text: string;
+    conversationMode?: ConversationMode;
+  } | null;
+  /** Cleared in App after this component consumes `assistantSendRequest`. */
+  onAssistantSendHandled?: () => void;
 };
 
 /** The actual per-conversation surface: message transcript, model picker,
@@ -393,6 +401,8 @@ export function AssistantConversation({
   needAnswerSoundEnabled,
   chatInsertRequest,
   onChatInsertHandled,
+  assistantSendRequest,
+  onAssistantSendHandled,
 }: AssistantConversationProps) {
   const contextLimit = activeProvider?.limit?.context ?? null;
 
@@ -429,6 +439,30 @@ export function AssistantConversation({
   );
 
   const pendingStartPlanRef = useRef(false);
+  const pendingAssistantSendRef = useRef<{
+    text: string;
+    conversationMode: ConversationMode;
+  } | null>(null);
+
+  const runAssistantSend = useCallback(
+    (text: string, targetMode: ConversationMode = "agent") => {
+      if (sending || !text.trim()) return;
+      if (conversationMode === targetMode) {
+        void sendMessage(text);
+        return;
+      }
+      pendingAssistantSendRef.current = { text, conversationMode: targetMode };
+      onConversationModeChange(targetMode);
+    },
+    [conversationMode, sending, sendMessage, onConversationModeChange],
+  );
+
+  useEffect(() => {
+    const pending = pendingAssistantSendRef.current;
+    if (!pending || conversationMode !== pending.conversationMode || sending) return;
+    pendingAssistantSendRef.current = null;
+    void sendMessage(pending.text);
+  }, [conversationMode, sending, sendMessage]);
 
   const startPlan = (planId: string) => {
     setActivePlanId(planId);
@@ -664,6 +698,19 @@ export function AssistantConversation({
     }
     onChatInsertHandled?.();
   }, [chatInsertRequest, onChatInsertHandled]);
+
+  const lastHandledAssistantSendIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!assistantSendRequest || assistantSendRequest.id === lastHandledAssistantSendIdRef.current) {
+      return;
+    }
+    lastHandledAssistantSendIdRef.current = assistantSendRequest.id;
+    runAssistantSend(
+      assistantSendRequest.text,
+      assistantSendRequest.conversationMode ?? "agent",
+    );
+    onAssistantSendHandled?.();
+  }, [assistantSendRequest, runAssistantSend, onAssistantSendHandled]);
 
   // Reset the fetched model list (and close the menu) whenever the active
   // provider itself changes, so a stale list from a different provider

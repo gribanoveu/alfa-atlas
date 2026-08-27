@@ -241,7 +241,7 @@ function App() {
     openApiBundle,
     applyRenameReport,
   });
-  const { insertRequest, chatInsertRequest } = assistant;
+  const { insertRequest, chatInsertRequest, assistantSendRequest } = assistant;
 
   const [docsSearchOpen, setDocsSearchOpen] = useState(false);
 
@@ -742,6 +742,7 @@ function App() {
               providerId={selectionAiProviderId}
               llmReady={selectionAiLlmReady}
               onAddToChat={assistant.addSelectionToChat}
+              onRunContextAction={assistant.sendAssistantPrompt}
               onEditorInstanceChange={tabs.onEditorInstanceChange}
               onMonacoInstanceChange={setMonacoInstance}
             />
@@ -836,6 +837,8 @@ function App() {
             }}
             chatInsertRequest={chatInsertRequest}
             onChatInsertHandled={assistant.onChatInsertHandled}
+            assistantSendRequest={assistantSendRequest}
+            onAssistantSendHandled={assistant.onAssistantSendHandled}
             gitActionLog={
               hasProject
                 ? {

@@ -1,7 +1,7 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import type { editor as MonacoEditor } from "monaco-editor";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGitGutter } from "../../hooks/useGitGutter";
 import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
 import { useMonacoDefinitions } from "../../hooks/useMonacoDefinitions";
@@ -12,6 +12,12 @@ import { useMonacoMacroBrackets } from "../../hooks/useMonacoMacroBrackets";
 import { useMonacoOutline } from "../../hooks/useMonacoOutline";
 import { useMonacoSelectionAi } from "../../hooks/useMonacoSelectionAi";
 import { useMonacoSpellcheck } from "../../hooks/useMonacoSpellcheck";
+import type { ConversationMode } from "../../lib/aiTools";
+import {
+  editorActionContextFromTab,
+  resolveEditorContextActions,
+  type EditorContextAction,
+} from "../../lib/editorContextActions";
 import type { GitFileDiff } from "../../lib/git";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
 import type { Diagnostic } from "../../lib/workspaceIndex";
@@ -23,6 +29,7 @@ import { DocumentPreview } from "../DocumentPreview/DocumentPreview";
 import { MarkdownPreview } from "../MarkdownPreview/MarkdownPreview";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { EditorTabs, type DisplayTab } from "./EditorTabs";
+import { EditorContextActionsBar } from "./EditorContextActionsBar";
 import { SelectionAiPreview } from "./SelectionAiPreview";
 import { SelectionAiToolbar } from "./SelectionAiToolbar";
 import "./Editor.css";
@@ -95,6 +102,11 @@ type EditorPaneProps = {
   /** «Добавить в чат» из панели выделения — передаёт выделенный текст и путь
    * файла (docs-root-relative) наверх, в App, для вставки в чат ассистента. */
   onAddToChat?: (text: string, filePath: string | null) => void;
+  /** Editor context action — send a canned prompt to the assistant. */
+  onRunContextAction?: (
+    prompt: string,
+    opts?: { conversationMode?: ConversationMode },
+  ) => void;
   /** Уведомляет о смене текущего экземпляра редактора (для команд Undo/Redo из меню). */
   onEditorInstanceChange?: (
     editor: MonacoEditor.IStandaloneCodeEditor | null,
@@ -135,6 +147,7 @@ export function EditorPane({
   providerId,
   llmReady,
   onAddToChat,
+  onRunContextAction,
   onEditorInstanceChange,
   onMonacoInstanceChange,
 }: EditorPaneProps) {
@@ -151,6 +164,25 @@ export function EditorPane({
   // Plan tabs are virtual markdown: Monaco yes, but no git/spell/AI overlays.
   const textEditor = isImageTab ? null : editor;
   const projectTextTab = !isImageTab && !isPlanTab ? activeTab : null;
+
+  const contextActions = useMemo(() => {
+    if (activeKind !== "file" || !projectTextTab) return [];
+    return resolveEditorContextActions(
+      editorActionContextFromTab(projectTextTab, llmReady),
+    );
+  }, [activeKind, projectTextTab, llmReady]);
+
+  const handleRunContextAction = useCallback(
+    (action: EditorContextAction, inputValue?: string) => {
+      if (!onRunContextAction) return;
+      const prompt = action.buildPrompt(
+        editorActionContextFromTab(projectTextTab!, llmReady),
+        inputValue,
+      );
+      onRunContextAction(prompt, { conversationMode: action.conversationMode });
+    },
+    [onRunContextAction, projectTextTab, llmReady],
+  );
 
   // Plan tabs keep their own view mode (default render) so opening a plan
   // doesn't fight the user's source/split preference for real files.
@@ -526,6 +558,12 @@ export function EditorPane({
           <div className="editor-empty">Откройте файл в дереве документации</div>
         )}
       </div>
+      {activeKind === "file" && contextActions.length > 0 ? (
+        <EditorContextActionsBar
+          actions={contextActions}
+          onRunAction={handleRunContextAction}
+        />
+      ) : null}
     </section>
   );
 }

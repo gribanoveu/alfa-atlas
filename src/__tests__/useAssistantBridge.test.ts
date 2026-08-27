@@ -167,4 +167,32 @@ describe("useAssistantBridge — text into the editor and chat", () => {
     act(() => result.current.onChatInsertHandled());
     expect(result.current.chatInsertRequest).toBeNull();
   });
+
+  test("sendAssistantPrompt opens the assistant dock and queues a send request", () => {
+    const deps = makeDeps();
+    const { result } = render(deps);
+
+    act(() => result.current.sendAssistantPrompt("заполни request.adoc", { conversationMode: "agent" }));
+
+    expect(deps.layout.setRightTool).toHaveBeenCalledWith("assistant");
+    expect(result.current.assistantSendRequest).toMatchObject({
+      text: "заполни request.adoc",
+      conversationMode: "agent",
+    });
+  });
+
+  test("the assistant send request is cleared once the panel consumes it", () => {
+    const { result } = render(makeDeps());
+    act(() => result.current.sendAssistantPrompt("промпт"));
+    act(() => result.current.onAssistantSendHandled());
+    expect(result.current.assistantSendRequest).toBeNull();
+  });
+
+  test("the same prompt twice produces two distinct send requests", () => {
+    const { result } = render(makeDeps());
+    act(() => result.current.sendAssistantPrompt("промпт"));
+    const first = result.current.assistantSendRequest?.id;
+    act(() => result.current.sendAssistantPrompt("промпт"));
+    expect(result.current.assistantSendRequest?.id).not.toBe(first);
+  });
 });

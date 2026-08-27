@@ -67,6 +67,12 @@ type AssistantPanelProps = {
    * чистит его в App, чтобы перемонтирование `AssistantConversation` (смена
    * чата, переключение инструментов дока) не вставило его повторно. */
   onChatInsertHandled?: () => void;
+  assistantSendRequest?: {
+    id: number;
+    text: string;
+    conversationMode?: ConversationMode;
+  } | null;
+  onAssistantSendHandled?: () => void;
 };
 
 /** This panel is the assistant's actual interaction surface. It owns
@@ -102,6 +108,8 @@ export function AssistantPanel({
   activeFilePath,
   chatInsertRequest,
   onChatInsertHandled,
+  assistantSendRequest,
+  onAssistantSendHandled,
 }: AssistantPanelProps) {
   const {
     config: embeddingConfig,
@@ -348,6 +356,8 @@ export function AssistantPanel({
                 needAnswerSoundEnabled={settings?.needAnswerSoundEnabled ?? true}
                 chatInsertRequest={chatInsertRequest ?? null}
                 onChatInsertHandled={onChatInsertHandled}
+                assistantSendRequest={assistantSendRequest ?? null}
+                onAssistantSendHandled={onAssistantSendHandled}
               />
             )}
           </>

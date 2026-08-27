@@ -17,6 +17,7 @@ import type {
 import type { GitActionLogEntry } from "../../lib/gitActionLog";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
+import type { ConversationMode } from "../../lib/aiTools";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { HideIcon } from "../icons/HideIcon";
 import { AssistantPanel } from "./AssistantPanel";
@@ -145,6 +146,13 @@ type RightDockProps = {
    * чистит его в App, чтобы перемонтирование AssistantConversation (смена
    * чата, переключение инструментов дока) не вставило его повторно. */
   onChatInsertHandled?: () => void;
+  /** Editor context action — canned prompt to send immediately. */
+  assistantSendRequest?: {
+    id: number;
+    text: string;
+    conversationMode?: ConversationMode;
+  } | null;
+  onAssistantSendHandled?: () => void;
 };
 
 function ToolWindowHeader({ label, onHide }: { label: string; onHide: () => void }) {
@@ -177,6 +185,8 @@ export function RightDock({
   gitActionLog,
   chatInsertRequest,
   onChatInsertHandled,
+  assistantSendRequest,
+  onAssistantSendHandled,
 }: RightDockProps) {
   const open = Boolean(activeTool);
   const active = activeTool ? TOOL_DEFS[activeTool] : undefined;
@@ -287,6 +297,8 @@ export function RightDock({
               activeFilePath={assistant.activeFilePath}
               chatInsertRequest={chatInsertRequest ?? null}
               onChatInsertHandled={onChatInsertHandled}
+              assistantSendRequest={assistantSendRequest ?? null}
+              onAssistantSendHandled={onAssistantSendHandled}
             />
           </div>
         </div>

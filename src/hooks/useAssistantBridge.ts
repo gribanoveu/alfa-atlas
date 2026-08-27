@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import type { ConversationMode } from "../lib/aiTools";
 import { dirnameOf, toDocsRelativePath } from "../lib/paths";
 import type { UpdatedReference } from "../lib/project";
 import type { useDocsTree } from "./useDocsTree";
@@ -54,8 +55,14 @@ export function useAssistantBridge({
     text: string;
     filePath: string | null;
   } | null>(null);
+  const [assistantSendRequest, setAssistantSendRequest] = useState<{
+    id: number;
+    text: string;
+    conversationMode?: ConversationMode;
+  } | null>(null);
   const insertCounter = useRef(0);
   const chatInsertCounter = useRef(0);
+  const assistantSendCounter = useRef(0);
 
   /** Tool results use access-mode-relative paths; editor tabs are
    * docs-relative. */
@@ -142,13 +149,35 @@ export function useAssistantBridge({
     setChatInsertRequest(null);
   }, []);
 
+  /** Opens the assistant dock and sends a canned prompt immediately (not a
+   * draft). Used by editor context actions. */
+  const sendAssistantPrompt = useCallback(
+    (text: string, opts?: { conversationMode?: ConversationMode }) => {
+      assistantSendCounter.current += 1;
+      layout.setRightTool("assistant");
+      setAssistantSendRequest({
+        id: assistantSendCounter.current,
+        text,
+        conversationMode: opts?.conversationMode,
+      });
+    },
+    [layout],
+  );
+
+  const onAssistantSendHandled = useCallback(() => {
+    setAssistantSendRequest(null);
+  }, []);
+
   return {
     insertRequest,
     chatInsertRequest,
+    assistantSendRequest,
     onFileWritten,
     onFileMoved,
     insertSnippet,
     addSelectionToChat,
     onChatInsertHandled,
+    sendAssistantPrompt,
+    onAssistantSendHandled,
   };
 }
