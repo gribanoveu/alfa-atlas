@@ -6,7 +6,7 @@ import {
   type JsonFormatMode,
   type JsonIndent,
 } from "../../lib/jsonFormat";
-import { UtilityInputHead } from "./UtilityClearButton";
+import { UtilityLabeledField } from "./UtilityClearButton";
 import "./JsonFormatter.css";
 
 const SAMPLE = '{"id":1,"name":"Alpha","tags":["docs","api"],"meta":{"version":2}}';
@@ -130,17 +130,21 @@ export function JsonFormatter() {
         </div>
       </div>
 
-      <div className="jsonfmt-input-wrap">
-        <UtilityInputHead label="JSON" onClear={() => setRaw("")} clearDisabled={!raw} />
+      <UtilityLabeledField
+        label="JSON"
+        onClear={() => setRaw("")}
+        clearDisabled={!raw}
+        clearLabel="Очистить JSON"
+      >
         <textarea
-          className="jsonfmt-input"
+          className="jsonfmt-input utility-field-control"
           value={raw}
           onChange={(event) => setRaw(event.target.value)}
           placeholder={SAMPLE}
           spellCheck={false}
           aria-label="JSON"
         />
-      </div>
+      </UtilityLabeledField>
 
       {showError ? (
         <p className="jsonfmt-error" role="status">

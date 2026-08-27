@@ -1,13 +1,34 @@
-.utility-input-head {
+.utility-field {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
 }
 
-.utility-input-head-label {
+.utility-field-label {
   font-size: calc(var(--font-preview) * 0.75);
   color: var(--text-2);
+}
+
+.utility-field-shell {
+  position: relative;
+  min-width: 0;
+}
+
+.utility-field-shell.is-inline {
+  flex: 1;
+}
+
+.utility-field-shell .utility-field-control {
+  width: 100%;
+}
+
+.utility-field-shell:not(.is-inline) .utility-field-control {
+  padding-right: 36px;
+}
+
+.utility-field-shell.is-inline .utility-field-control {
+  padding-right: 34px;
 }
 
 .utility-clear-btn {
@@ -33,4 +54,30 @@
 .utility-clear-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+}
+
+.utility-field-shell .utility-clear-btn {
+  position: absolute;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+  border: none;
+  border-radius: 4px;
+}
+
+.utility-field-shell:not(.is-inline) .utility-clear-btn {
+  top: 8px;
+  right: 8px;
+}
+
+.utility-field-shell.is-inline .utility-clear-btn {
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+}
+
+.utility-field-shell .utility-clear-btn:disabled {
+  opacity: 0;
+  pointer-events: none;
 }

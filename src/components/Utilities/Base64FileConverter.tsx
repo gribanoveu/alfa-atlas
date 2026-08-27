@@ -14,7 +14,7 @@ import {
 } from "../../lib/base64Codec";
 import { copyToClipboard } from "../../lib/clipboard";
 import { saveDecodedBinaryFile } from "../../lib/fileSave";
-import { UtilityClearButton, UtilityInputHead } from "./UtilityClearButton";
+import { UtilityClearButton, UtilityLabeledField } from "./UtilityClearButton";
 import "./Base64FileConverter.css";
 
 type FileTab = "decode" | "encode";
@@ -239,21 +239,21 @@ export function Base64FileConverter() {
         </div>
 
         {tab === "decode" ? (
-          <div className="b64file-input-wrap">
-            <UtilityInputHead
-              label="Base64 или data URI"
-              onClear={() => setRaw("")}
-              clearDisabled={!raw}
-            />
+          <UtilityLabeledField
+            label="Base64 или data URI"
+            onClear={() => setRaw("")}
+            clearDisabled={!raw}
+            clearLabel="Очистить Base64"
+          >
             <textarea
-              className="b64file-input"
+              className="b64file-input utility-field-control"
               value={raw}
               onChange={(event) => setRaw(event.target.value)}
               placeholder={TINY_PNG_BASE64}
               spellCheck={false}
               aria-label="Base64 или data URI"
             />
-          </div>
+          </UtilityLabeledField>
         ) : (
           <>
             <input

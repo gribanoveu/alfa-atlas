@@ -10,7 +10,7 @@ import {
   summarizeJsonDiff,
   type JsonDiffChange,
 } from "../../lib/jsonDiff";
-import { UtilityInputHead } from "./UtilityClearButton";
+import { UtilityLabeledField } from "./UtilityClearButton";
 import "./JsonDiff.css";
 
 const SAMPLE_LEFT = `{
@@ -110,37 +110,37 @@ export function JsonDiff() {
       </p>
 
       <div className="json-diff-inputs">
-        <div className="json-diff-input-wrap">
-          <UtilityInputHead
-            label="Исходный JSON"
-            onClear={() => setLeftRaw("")}
-            clearDisabled={!leftRaw}
-          />
+        <UtilityLabeledField
+          label="Исходный JSON"
+          onClear={() => setLeftRaw("")}
+          clearDisabled={!leftRaw}
+          clearLabel="Очистить исходный JSON"
+        >
           <textarea
-            className="json-diff-input"
+            className="json-diff-input utility-field-control"
             value={leftRaw}
             onChange={(event) => setLeftRaw(event.target.value)}
             placeholder={SAMPLE_LEFT}
             spellCheck={false}
             aria-label="Исходный JSON"
           />
-        </div>
+        </UtilityLabeledField>
 
-        <div className="json-diff-input-wrap">
-          <UtilityInputHead
-            label="Новый JSON"
-            onClear={() => setRightRaw("")}
-            clearDisabled={!rightRaw}
-          />
+        <UtilityLabeledField
+          label="Новый JSON"
+          onClear={() => setRightRaw("")}
+          clearDisabled={!rightRaw}
+          clearLabel="Очистить новый JSON"
+        >
           <textarea
-            className="json-diff-input"
+            className="json-diff-input utility-field-control"
             value={rightRaw}
             onChange={(event) => setRightRaw(event.target.value)}
             placeholder={SAMPLE_RIGHT}
             spellCheck={false}
             aria-label="Новый JSON"
           />
-        </div>
+        </UtilityLabeledField>
       </div>
 
       {leftError ? (

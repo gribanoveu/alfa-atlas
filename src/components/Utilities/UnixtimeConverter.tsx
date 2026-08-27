@@ -15,7 +15,7 @@ import {
   type DateZone,
   type UnixUnitMode,
 } from "../../lib/unixtime";
-import { UtilityClearButton } from "./UtilityClearButton";
+import { UtilityClearButton, UtilityFieldShell } from "./UtilityClearButton";
 import "./UnixtimeConverter.css";
 
 type ConverterTab = "decode" | "encode";
@@ -275,20 +275,22 @@ export function UnixtimeConverter() {
                   Timestamp
                 </label>
                 <div className="unix-input-row">
-                  <input
-                    id="unix-timestamp-input"
-                    className="unix-input"
-                    value={raw}
-                    onChange={(event) => setRaw(event.target.value)}
-                    placeholder="1700000000 или 1700000000000"
-                    spellCheck={false}
-                    aria-label="Unix-время"
-                  />
-                  <UtilityClearButton
+                  <UtilityFieldShell
+                    variant="inline"
                     onClear={() => setRaw("")}
-                    disabled={!raw}
-                    label="Очистить timestamp"
-                  />
+                    clearDisabled={!raw}
+                    clearLabel="Очистить timestamp"
+                  >
+                    <input
+                      id="unix-timestamp-input"
+                      className="unix-input utility-field-control"
+                      value={raw}
+                      onChange={(event) => setRaw(event.target.value)}
+                      placeholder="1700000000 или 1700000000000"
+                      spellCheck={false}
+                      aria-label="Unix-время"
+                    />
+                  </UtilityFieldShell>
                   <button
                     type="button"
                     className="unix-btn"

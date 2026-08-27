@@ -8,7 +8,7 @@ import {
   HTTP_STATUS_FILTERS,
   type HttpStatusFilter,
 } from "../../lib/httpStatusCodes";
-import { UtilityClearButton } from "./UtilityClearButton";
+import { UtilityFieldShell } from "./UtilityClearButton";
 import "./HttpStatusReference.css";
 
 function StatusItem({
@@ -75,21 +75,21 @@ export function HttpStatusReference() {
   return (
     <div className="http-status">
       <div className="http-status-toolbar">
-        <div className="http-status-search-wrap">
+        <UtilityFieldShell
+          variant="inline"
+          onClear={() => setQuery("")}
+          clearDisabled={!query}
+          clearLabel="Очистить поиск"
+        >
           <input
-            className="http-status-search"
+            className="http-status-search utility-field-control"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Поиск по коду, названию, описанию или совету"
             spellCheck={false}
             aria-label="Поиск HTTP-кода"
           />
-          <UtilityClearButton
-            onClear={() => setQuery("")}
-            disabled={!query}
-            label="Очистить поиск"
-          />
-        </div>
+        </UtilityFieldShell>
 
         <div className="http-status-filters" role="group" aria-label="Класс HTTP-кода">
           {HTTP_STATUS_FILTERS.map((filter) => (

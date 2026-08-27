@@ -7,7 +7,7 @@ import {
   type Base64Alphabet,
 } from "../../lib/base64Codec";
 import { TEXT_ENCODING_OPTIONS, type TextEncodingId } from "../../lib/textEncoding";
-import { UtilityInputHead } from "./UtilityClearButton";
+import { UtilityLabeledField } from "./UtilityClearButton";
 import "./Base64Codec.css";
 
 type CodecTab = "encode" | "decode";
@@ -160,21 +160,21 @@ export function Base64Codec() {
           )}
         </div>
 
-        <div className="b64-input-wrap">
-          <UtilityInputHead
-            label={inputLabel}
-            onClear={() => setRaw("")}
-            clearDisabled={!raw}
-          />
+        <UtilityLabeledField
+          label={inputLabel}
+          onClear={() => setRaw("")}
+          clearDisabled={!raw}
+          clearLabel={`Очистить: ${inputLabel}`}
+        >
           <textarea
-            className="b64-input"
+            className="b64-input utility-field-control"
             value={raw}
             onChange={(event) => setRaw(event.target.value)}
             placeholder={tab === "encode" ? SAMPLE_ENCODE : SAMPLE_DECODE}
             spellCheck={false}
             aria-label={inputLabel}
           />
-        </div>
+        </UtilityLabeledField>
 
         {showError ? (
           <p className="b64-error" role="status">

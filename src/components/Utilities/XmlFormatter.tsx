@@ -6,7 +6,7 @@ import {
   type XmlFormatMode,
   type XmlIndent,
 } from "../../lib/xmlFormat";
-import { UtilityInputHead } from "./UtilityClearButton";
+import { UtilityLabeledField } from "./UtilityClearButton";
 import "./XmlFormatter.css";
 
 const SAMPLE = `<root><item id="1"><name>Alpha</name><tags><tag>docs</tag><tag>api</tag></tags></item></root>`;
@@ -105,17 +105,21 @@ export function XmlFormatter() {
         </div>
       </div>
 
-      <div className="xmfmt-input-wrap">
-        <UtilityInputHead label="XML" onClear={() => setRaw("")} clearDisabled={!raw} />
+      <UtilityLabeledField
+        label="XML"
+        onClear={() => setRaw("")}
+        clearDisabled={!raw}
+        clearLabel="Очистить XML"
+      >
         <textarea
-          className="xmfmt-input"
+          className="xmfmt-input utility-field-control"
           value={raw}
           onChange={(event) => setRaw(event.target.value)}
           placeholder={SAMPLE}
           spellCheck={false}
           aria-label="XML"
         />
-      </div>
+      </UtilityLabeledField>
 
       {showError ? (
         <p className="xmfmt-error" role="status">
