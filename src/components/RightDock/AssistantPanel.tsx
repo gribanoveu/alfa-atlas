@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
-import { FileText, FolderGit2, RefreshCw, Settings2 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
+import { RefreshCw, Settings2 } from "lucide-react";
 import { toMessage } from "../../lib/errors";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useChatHistory } from "../../hooks/useChatHistory";
@@ -20,11 +19,6 @@ import { AssistantConversation } from "./AssistantConversation";
 import { ChatHistoryMenu } from "./ChatHistoryMenu";
 import "../Welcome/CloneRepoModal.css";
 import "./AssistantPanel.css";
-
-const ACCESS_MODE_OPTIONS: { value: AiAccessMode; label: string; Icon: LucideIcon }[] = [
-  { value: "docsOnly", label: "Документация", Icon: FileText },
-  { value: "fullRepo", label: "Весь репозиторий", Icon: FolderGit2 },
-];
 
 type AssistantPanelProps = {
   onOpenSettings: () => void;
@@ -273,25 +267,6 @@ export function AssistantPanel({
       ) : null}
       {exportError ? <div className="assistant-export-error">Не удалось сохранить чат: {exportError}</div> : null}
 
-      <section className="assistant-panel-access">
-        <div className="assistant-access-toggle" role="radiogroup" aria-label="Область доступа AI">
-          {ACCESS_MODE_OPTIONS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="radio"
-              aria-checked={accessMode === option.value}
-              className={`assistant-access-btn ${accessMode === option.value ? "active" : ""}`}
-              disabled={accessModeBusy || accessMode === null}
-              onClick={() => handleAccessModeChange(option.value)}
-            >
-              <option.Icon size={13} strokeWidth={1.75} aria-hidden />
-              {option.label}
-            </button>
-          ))}
-        </div>
-      </section>
-
       <div className="assistant-chat">
         {archiveOpen ? (
           <ArchivedChatsPanel
@@ -352,6 +327,8 @@ export function AssistantPanel({
                 onSendingChange={setConversationSending}
                 providerId={activeProviderId}
                 accessMode={accessMode ?? "docsOnly"}
+                accessModeBusy={accessModeBusy || accessMode === null}
+                onAccessModeChange={handleAccessModeChange}
                 conversationMode={conversationMode}
                 onConversationModeChange={setConversationMode}
                 specsRepoInfo={specsRepoInfo}

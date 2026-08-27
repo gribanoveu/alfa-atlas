@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, ChevronUp, FileText, Send, Sparkles, Square, X } from "lucide-react";
+import { AlertCircle, ArrowDown, ChevronUp, FileText, FolderGit2, Send, Sparkles, Square, X } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import { formatElapsedDuration } from "../../hooks/useElapsedSeconds";
 import {
@@ -25,10 +26,27 @@ import { AssistantPlanCard, isPlanToolBlock } from "./AssistantPlanCard";
 import { TodoProgressWidget } from "./TodoProgressWidget";
 import { PlanProgressWidget } from "./PlanProgressWidget";
 
+const ACCESS_MODE_OPTIONS: { value: AiAccessMode; label: string; Icon: LucideIcon }[] = [
+  { value: "docsOnly", label: "Документация", Icon: FileText },
+  { value: "fullRepo", label: "Весь репозиторий", Icon: FolderGit2 },
+];
+
 const CHAT_MODE_OPTIONS: { value: ConversationMode; label: string; title: string }[] = [
-  { value: "agent", label: "Агент", title: "Полный набор инструментов — исследует и вносит изменения." },
-  { value: "plan", label: "План", title: "Только чтение — исследует и предлагает план, без изменений." },
-  { value: "question", label: "Вопрос", title: "Лёгкий режим для точечных вопросов, без изменений." },
+  {
+    value: "agent",
+    label: "Агент",
+    title: "исследует репозиторий и вносит изменения",
+  },
+  {
+    value: "plan",
+    label: "План",
+    title: "составляет план без правок в файлах",
+  },
+  {
+    value: "question",
+    label: "Вопрос",
+    title: "отвечает на точечные вопросы без изменений",
+  },
 ];
 
 /** Ids of already-settled `requestModeSwitch` tool calls in a transcript —
@@ -45,6 +63,37 @@ function collectSettledModeSwitchIds(messages: ChatMessage[]): Set<string> {
     }
   }
   return ids;
+}
+
+/** Docs-only vs full-repo — compact icon toggle in the model bar. */
+function AccessModeToggle({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: AiAccessMode;
+  onChange: (mode: AiAccessMode) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="assistant-access-toggle" role="radiogroup" aria-label="Область доступа AI">
+      {ACCESS_MODE_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={mode === option.value}
+          aria-label={option.label}
+          title={option.label}
+          className={`assistant-access-btn${mode === option.value ? " active" : ""}`}
+          disabled={disabled}
+          onClick={() => onChange(option.value)}
+        >
+          <option.Icon size={12} strokeWidth={1.75} aria-hidden />
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /** Chat-composer mode picker — controlled by the parent (`conversationMode`/
@@ -240,6 +289,8 @@ type AssistantConversationProps = {
   onSendingChange: (sending: boolean) => void;
   providerId: string | null;
   accessMode: AiAccessMode;
+  accessModeBusy: boolean;
+  onAccessModeChange: (mode: AiAccessMode) => void;
   /** The chat composer's Агент/План/Вопрос mode — a session-scoped setting
    * owned by `AssistantPanel` (not reset on chat switch, not persisted per
    * chat, mirroring `accessMode`'s own lifetime), lifted here so both a
@@ -321,6 +372,8 @@ export function AssistantConversation({
   onSendingChange,
   providerId,
   accessMode,
+  accessModeBusy,
+  onAccessModeChange,
   conversationMode,
   onConversationModeChange,
   specsRepoInfo,
@@ -685,6 +738,8 @@ export function AssistantConversation({
     void sendMessage(combined);
   };
 
+  const activeMode = CHAT_MODE_OPTIONS.find((o) => o.value === conversationMode);
+
   return (
     <>
       <TodoProgressWidget tasks={todos} onClearAll={sending ? undefined : clearTodos} />
@@ -692,20 +747,45 @@ export function AssistantConversation({
       <div className="assistant-chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
         {messages.length === 0 ? (
           <div className="assistant-chat-placeholder">
-            <Sparkles size={22} strokeWidth={1.5} aria-hidden />
-            <p className="assistant-chat-placeholder-title">Ассистент готов</p>
-            <p className="assistant-chat-placeholder-desc">Задайте вопрос о документации проекта.</p>
-            <div className="assistant-chat-suggestions">
-              {ASSISTANT_SUGGESTIONS.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  className="assistant-suggestion-chip"
-                  onClick={() => handleSuggestionClick(s)}
-                >
-                  {s.label}
-                </button>
-              ))}
+            <Sparkles className="assistant-chat-placeholder-icon" size={20} strokeWidth={1.5} aria-hidden />
+            <p className="assistant-chat-placeholder-title">Привет! Я Атлас</p>
+            <p className="assistant-chat-placeholder-desc">
+              Расскажите, что нужно — разберусь в проекте и помогу с документацией.
+            </p>
+
+            <div className="assistant-chat-placeholder-modes">
+              <div className="assistant-chat-mode-chips" role="group" aria-label="Режим ассистента">
+                {CHAT_MODE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`assistant-chat-mode-chip${conversationMode === option.value ? " is-active" : ""}`}
+                    title={option.title}
+                    aria-pressed={conversationMode === option.value}
+                    disabled={sending}
+                    onClick={() => onConversationModeChange(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="assistant-chat-mode-desc">{activeMode?.title}</p>
+            </div>
+
+            <div className="assistant-chat-placeholder-suggestions">
+              <p className="assistant-chat-placeholder-suggestions-label">Шаблоны задач</p>
+              <div className="assistant-chat-suggestions">
+                {ASSISTANT_SUGGESTIONS.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="assistant-suggestion-chip"
+                    onClick={() => handleSuggestionClick(s)}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         ) : (
@@ -820,6 +900,11 @@ export function AssistantConversation({
       </div>
       <div className="assistant-model-bar">
         <ChatModeSelect mode={conversationMode} onChange={onConversationModeChange} disabled={sending} />
+        <AccessModeToggle
+          mode={accessMode}
+          onChange={onAccessModeChange}
+          disabled={sending || accessModeBusy}
+        />
         <div className="clone-select assistant-model-select" ref={modelSelectRef}>
           <button
             type="button"
