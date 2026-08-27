@@ -5,6 +5,7 @@ import * as actualProject from "../lib/project";
 
 let listResult: RecentProject[] | string = [];
 let removed: string[] = [];
+let removeRejectsWith: string | null = null;
 
 mock.module("../lib/project", () => ({
   ...actualProject,
@@ -14,11 +15,14 @@ mock.module("../lib/project", () => ({
   },
   removeRecentProject: async (root: string) => {
     removed.push(root);
+    if (removeRejectsWith) throw removeRejectsWith;
     listResult = (listResult as RecentProject[]).filter((p) => p.root !== root);
   },
 }));
 
-const { useRecentProjects } = await import("../hooks/useRecentProjects");
+const { useRecentProjects, useRecentProjectsList } = await import(
+  "../hooks/useRecentProjects",
+);
 
 function project(root: string) {
   return { root, name: root } as RecentProject;
@@ -29,6 +33,7 @@ const noop = async () => {};
 beforeEach(() => {
   listResult = [];
   removed = [];
+  removeRejectsWith = null;
 });
 
 describe("useRecentProjects", () => {
@@ -122,5 +127,65 @@ describe("useRecentProjects", () => {
 
     expect(removed).toEqual(["/a"]);
     expect(result.current.recent.map((p) => p.root)).toEqual(["/b"]);
+  });
+});
+
+describe("useRecentProjectsList", () => {
+  test("loads the list on mount", async () => {
+    listResult = [project("/a"), project("/b")];
+    const { result } = renderHook(() => useRecentProjectsList());
+
+    await waitFor(() => expect(result.current.recent).toHaveLength(2));
+    expect(result.current.listError).toBeNull();
+  });
+
+  test("a failing list degrades to empty without an error", async () => {
+    // Both surfaces — the welcome screen and the TopBar dropdown — still
+    // work without history, so a banner in front of them would be noise.
+    listResult = "history file corrupt";
+    const { result } = renderHook(() => useRecentProjectsList());
+
+    await waitFor(() => expect(result.current.recent).toEqual([]));
+    expect(result.current.listError).toBeNull();
+  });
+
+  test("removing an entry drops it from the list", async () => {
+    listResult = [project("/a"), project("/b")];
+    const { result } = renderHook(() => useRecentProjectsList());
+    await waitFor(() => expect(result.current.recent).toHaveLength(2));
+
+    await act(async () => {
+      await result.current.removeRecent("/a");
+    });
+
+    expect(removed).toEqual(["/a"]);
+    await waitFor(() => expect(result.current.recent.map((p) => p.root)).toEqual(["/b"]));
+  });
+
+  test("a failing removal is surfaced, unlike a failing list", async () => {
+    listResult = [project("/a")];
+    removeRejectsWith = "history file read-only";
+    const { result } = renderHook(() => useRecentProjectsList());
+    await waitFor(() => expect(result.current.recent).toHaveLength(1));
+
+    await act(async () => {
+      await result.current.removeRecent("/a");
+    });
+
+    expect(result.current.listError).toBe("history file read-only");
+    expect(result.current.recent).toHaveLength(1);
+  });
+
+  test("reload picks up entries added elsewhere", async () => {
+    listResult = [project("/a")];
+    const { result } = renderHook(() => useRecentProjectsList());
+    await waitFor(() => expect(result.current.recent).toHaveLength(1));
+
+    listResult = [project("/a"), project("/b")];
+    await act(async () => {
+      await result.current.reload();
+    });
+
+    expect(result.current.recent).toHaveLength(2);
   });
 });
