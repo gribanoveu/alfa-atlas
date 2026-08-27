@@ -84,11 +84,15 @@ jobs:
           if-no-files-found: error
 
   build-linux:
-    # Pinned to 22.04 rather than ubuntu-latest on purpose: the bundle links
-    # against the builder's glibc, so building on a newer image would produce
-    # binaries that refuse to start on older distros. This is also what
-    # Tauri's own release pipeline docs pin to.
-    runs-on: ubuntu-22.04
+    # 24.04, not 22.04. Normally you would build on the oldest image you can,
+    # since the bundle links against the builder's glibc. That is moot here:
+    # fastembed pulls a *prebuilt* ONNX Runtime (the
+    # `ort-download-binaries-rustls-tls` feature), and that binary already
+    # needs glibc 2.38+ / libstdc++ from GCC 13+. On 22.04 (glibc 2.35) it
+    # fails to link with undefined `__isoc23_strtoull` and `_M_replace_cold`.
+    # So the floor is set by ORT, not by our choice of runner - building on an
+    # older image buys no extra reach, it only breaks the build.
+    runs-on: ubuntu-24.04
     env:
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
@@ -111,17 +115,13 @@ jobs:
       # WebKitGTK is the webview Tauri renders into on Linux; the rest are
       # what the bundler itself needs (patchelf to rewrite rpaths, librsvg
       # to rasterize icons, libxdo for the tray/input plumbing).
-      # gcc-12 is not optional: `numkong` (a C SIMD kernel pulled in by
-      # usearch) uses the `avx512fp16` target attribute, which GCC only
-      # learned in 12. The stock compiler on 22.04 is GCC 11 and fails with
-      # "attribute 'avx512fp16' argument 'target' is unknown". Installing a
-      # newer compiler keeps the older glibc this image is pinned for.
+      # No explicit gcc pin needed on 24.04: its stock GCC is new enough for
+      # the `avx512fp16` attribute that `numkong` (a C SIMD kernel from
+      # usearch) uses, which GCC 11 on 22.04 did not understand.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            gcc-12 \
-            g++-12 \
             libwebkit2gtk-4.1-dev \
             build-essential \
             curl \
@@ -137,9 +137,6 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build Tauri app
-        env:
-          CC: gcc-12
-          CXX: g++-12
         run: bun run tauri build
 
       - name: Upload Linux bundles
