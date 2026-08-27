@@ -1,0 +1,212 @@
+.asciidoc-table-editor-modal {
+  width: min(960px, 100%);
+  max-height: min(85vh, 900px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.asciidoc-table-editor-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.asciidoc-table-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.asciidoc-table-editor-modal .clone-modal-title {
+  flex: 0 0 auto;
+}
+
+.asciidoc-table-editor-toolbar-hint {
+  flex: 1 1 100%;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.asciidoc-table-editor-control-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  opacity: 0.55;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease,
+    background 0.12s ease;
+}
+
+.asciidoc-table-editor-control-btn:hover:not(:disabled) {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-0);
+}
+
+.asciidoc-table-editor-control-btn:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+
+.asciidoc-table-editor-grid {
+  --table-col-control-height: 20px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-size: 13px;
+}
+
+.asciidoc-table-editor-control-row th {
+  box-sizing: border-box;
+  height: var(--table-col-control-height);
+  padding: 0;
+  vertical-align: middle;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-1) 55%, var(--bg-0));
+}
+
+.asciidoc-table-editor-corner {
+  background: color-mix(in srgb, var(--bg-1) 55%, var(--bg-0));
+}
+
+.asciidoc-table-editor-col-control-inner {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 1px;
+  height: 100%;
+  min-width: 0;
+  padding: 0 4px;
+}
+
+.asciidoc-table-editor-col-control:hover .asciidoc-table-editor-control-btn,
+.asciidoc-table-editor-col-control:focus-within .asciidoc-table-editor-control-btn,
+.asciidoc-table-editor-row-control:hover .asciidoc-table-editor-control-btn,
+.asciidoc-table-editor-row-control:focus-within .asciidoc-table-editor-control-btn {
+  opacity: 0.85;
+}
+
+.asciidoc-table-editor-row-control-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 4px 1px;
+}
+
+.asciidoc-table-editor-row-control {
+  box-sizing: border-box;
+  width: 26px;
+  padding: 0;
+  vertical-align: middle;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-1) 55%, var(--bg-0));
+}
+
+.asciidoc-table-editor-grid-wrap {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+}
+
+.asciidoc-table-editor-modal .clone-modal-actions {
+  flex: 0 0 auto;
+}
+
+.asciidoc-table-editor-table-host {
+  position: relative;
+  width: fit-content;
+  max-width: none;
+}
+
+.asciidoc-table-editor-col-resizers {
+  position: absolute;
+  top: var(--table-col-control-height, 20px);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.asciidoc-table-editor-col-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+  touch-action: none;
+  pointer-events: auto;
+}
+
+.asciidoc-table-editor-col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  transform: translateX(-50%);
+  background: transparent;
+}
+
+.asciidoc-table-editor-col-resizer:hover::after,
+.asciidoc-table-editor-col-resizer.is-active::after {
+  background: var(--accent);
+}
+
+.asciidoc-table-editor-grid th,
+.asciidoc-table-editor-grid td {
+  box-sizing: border-box;
+  border: 2px solid var(--border);
+  padding: 0;
+  vertical-align: top;
+  overflow: hidden;
+}
+
+.asciidoc-table-editor-cell.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.asciidoc-table-editor-cell-input {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-0);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.4;
+  resize: none;
+  overflow: hidden;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.asciidoc-table-editor-cell-input:focus {
+  outline: none;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}

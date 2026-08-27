@@ -265,6 +265,19 @@
   color: var(--accent);
 }
 
+/* ── AsciiDoc table gutter edit icon ─────────────────────────────── */
+
+.asciidoc-table-gutter-icon {
+  color: var(--text-2);
+  opacity: 0.55;
+  cursor: pointer;
+}
+
+.asciidoc-table-gutter-icon:hover {
+  opacity: 1;
+  color: var(--accent);
+}
+
 /* ── Errors indicator overlay widget ─────────────────────────────── */
 
 /* Рендерится Monaco overlay widget'ом в правом верхнем углу редактора.

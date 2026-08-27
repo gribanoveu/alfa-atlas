@@ -12,7 +12,7 @@ export const REQUEST_FROM_CURL_PROMPT_PREFIX =
 
 /** Prompt for checking a REST method description against corporate API standards. */
 export const METHOD_STANDARDS_CHECK_PROMPT_PREFIX =
-  "Проверь описание REST-метода на соответствие корпоративному стандарту документации API.";
+  "Проверь описание метода на соответствие корпоративному стандарту документации API.";
 
 export type EditorActionContext = {
   path: string;
@@ -112,7 +112,7 @@ function buildMethodStandardsCheckPrompt(ctx: EditorActionContext): string {
     "",
     `Вызови check с kind: "standards" для папки \`${methodFolder}\`. Прочитай \`${ctx.path}\` и при необходимости соседние request.adoc и response.adoc.`,
     "",
-    "В ответе перечисли каждое нарушение: код критерия (К.x.x), что не так и как должно быть. Если нарушения есть — исправь их в файлах папки метода, сохраняя структуру шаблона. После правок снова вызови check с kind: \"standards\" для папки метода.",
+    "В ответе перечисли каждое нарушение: код критерия (К.x.x), что не так и как должно быть. Если нарушения есть — определи это Thrift (в url есть /tapi или в теле запроса есть userData) или REST метод и исправь их в файлах папки метода, используя структуру шаблона, вызови скилл method-spec если нужно уточнить формат документа и правила написания документации. После правок снова вызови check с kind: \"standards\" для папки метода.",
   ].join("\n");
 }
 

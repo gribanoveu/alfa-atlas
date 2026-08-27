@@ -12,6 +12,7 @@ import { useMonacoMacroBrackets } from "../../hooks/useMonacoMacroBrackets";
 import { useMonacoOutline } from "../../hooks/useMonacoOutline";
 import { useMonacoSelectionAi } from "../../hooks/useMonacoSelectionAi";
 import { useMonacoSpellcheck } from "../../hooks/useMonacoSpellcheck";
+import { useMonacoTableGutter } from "../../hooks/useMonacoTableGutter";
 import type { ConversationMode } from "../../lib/aiTools";
 import {
   editorActionContextFromTab,
@@ -19,6 +20,13 @@ import {
   type EditorContextAction,
   type EditorContextActionDelivery,
 } from "../../lib/editorContextActions";
+import {
+  parseAsciidocTable,
+  sliceTableSource,
+  type EditableTable,
+  type TableBlockRange,
+} from "../../lib/asciidocTableModel";
+import { isAsciiDocPath } from "../../lib/supportedFiles";
 import type { GitFileDiff } from "../../lib/git";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
 import type { Diagnostic } from "../../lib/workspaceIndex";
@@ -31,6 +39,7 @@ import { MarkdownPreview } from "../MarkdownPreview/MarkdownPreview";
 import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { EditorTabs, type DisplayTab } from "./EditorTabs";
 import { EditorContextActionsBar } from "./EditorContextActionsBar";
+import { AsciidocTableEditorModal } from "./AsciidocTableEditorModal";
 import { SelectionAiPreview } from "./SelectionAiPreview";
 import { SelectionAiToolbar } from "./SelectionAiToolbar";
 import "./Editor.css";
@@ -116,6 +125,11 @@ type EditorPaneProps = {
   onMonacoInstanceChange?: (monaco: typeof Monaco | null) => void;
 };
 
+type TableEditorState = {
+  range: TableBlockRange;
+  table: EditableTable;
+};
+
 const SPLIT_INITIAL_RATIO = 0.5;
 const SPLIT_MIN_RATIO = 0.15;
 const SPLIT_MAX_RATIO = 0.85;
@@ -155,6 +169,7 @@ export function EditorPane({
   const [monaco, setMonaco] = useState<typeof Monaco | null>(null);
   const [editor, setEditor] =
     useState<MonacoEditor.IStandaloneCodeEditor | null>(null);
+  const [tableEditorState, setTableEditorState] = useState<TableEditorState | null>(null);
   const highlightRef = useRef<string[]>([]);
   const lastHandledInsertIdRef = useRef(0);
   const knownTabIdsRef = useRef<Set<string>>(new Set());
@@ -165,6 +180,8 @@ export function EditorPane({
   // Plan tabs are virtual markdown: Monaco yes, but no git/spell/AI overlays.
   const textEditor = isImageTab ? null : editor;
   const projectTextTab = !isImageTab && !isPlanTab ? activeTab : null;
+  const isAsciiDocTab =
+    projectTextTab !== null && isAsciiDocPath(projectTextTab.path);
 
   const contextActions = useMemo(() => {
     if (activeKind !== "file" || !projectTextTab) return [];
@@ -305,6 +322,57 @@ export function EditorPane({
     isPlanTab ? null : (gitGutter?.repoRoot ?? null),
     onOpenDocumentReference,
   );
+
+  const handleEditTable = useCallback(
+    async (range: TableBlockRange) => {
+      if (!projectTextTab) return;
+      const source = sliceTableSource(projectTextTab.content, range);
+      const result = await parseAsciidocTable(source);
+      if (!result.ok) {
+        window.alert(result.reason);
+        return;
+      }
+      setTableEditorState({ range, table: result.table });
+    },
+    [projectTextTab],
+  );
+
+  useMonacoTableGutter(
+    monaco,
+    textEditor,
+    isAsciiDocTab && !isPlanTab,
+    handleEditTable,
+  );
+
+  const handleTableEditorSave = useCallback(
+    (newSource: string) => {
+      if (!editor || !monaco || !tableEditorState) return;
+      const model = editor.getModel();
+      if (!model) return;
+
+      const { range } = tableEditorState;
+      const startLine = range.attrStartLine ?? range.openLine;
+      const endLine = range.closeLine;
+      const endColumn = model.getLineMaxColumn(endLine);
+
+      editor.executeEdits("asciidoc-table-editor", [
+        {
+          range: new monaco.Range(startLine, 1, endLine, endColumn),
+          text: newSource,
+          forceMoveMarkers: true,
+        },
+      ]);
+      editor.pushUndoStop();
+      onChangeContent(model.getValue());
+      setTableEditorState(null);
+      editor.focus();
+    },
+    [editor, monaco, tableEditorState, onChangeContent],
+  );
+
+  useEffect(() => {
+    setTableEditorState(null);
+  }, [activeTabId]);
 
   const selectionAi = useMonacoSelectionAi({
     monaco,
@@ -566,6 +634,13 @@ export function EditorPane({
         <EditorContextActionsBar
           actions={contextActions}
           onRunAction={handleRunContextAction}
+        />
+      ) : null}
+      {tableEditorState ? (
+        <AsciidocTableEditorModal
+          initialTable={tableEditorState.table}
+          onSave={handleTableEditorSave}
+          onCancel={() => setTableEditorState(null)}
         />
       ) : null}
     </section>
