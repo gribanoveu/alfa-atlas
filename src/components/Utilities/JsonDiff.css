@@ -1,0 +1,259 @@
+.json-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+
+.json-diff-desc {
+  font-size: calc(var(--font-preview) * 0.78);
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.json-diff-inputs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.json-diff-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.json-diff-input-label {
+  font-size: calc(var(--font-preview) * 0.75);
+  color: var(--text-2);
+}
+
+.json-diff-input {
+  width: 100%;
+  min-height: 140px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.82);
+  line-height: 1.45;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  resize: vertical;
+}
+
+.json-diff-input:focus {
+  border-color: var(--accent);
+}
+
+.json-diff-input::placeholder {
+  color: var(--text-2);
+}
+
+.json-diff-error {
+  padding: 8px 10px;
+  font-size: calc(var(--font-preview) * 0.8);
+  color: var(--orange);
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--orange) 30%, transparent);
+  border-radius: 5px;
+}
+
+.json-diff-equal {
+  padding: 8px 10px;
+  font-size: calc(var(--font-preview) * 0.8);
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--green) 30%, transparent);
+  border-radius: 5px;
+}
+
+.json-diff-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  font-size: calc(var(--font-preview) * 0.78);
+  color: var(--text-2);
+}
+
+.json-diff-summary strong {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.json-diff-summary .is-add {
+  color: var(--green);
+}
+
+.json-diff-summary .is-remove {
+  color: var(--red-tag);
+}
+
+.json-diff-summary .is-change {
+  color: var(--orange);
+}
+
+.json-diff-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.json-diff-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.json-diff-section-title {
+  font-size: calc(var(--font-preview) * 0.72);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.json-diff-copy-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.json-diff-copy-btn:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.json-diff-copy-btn.is-copied,
+.json-diff-copy-btn.is-copied:hover {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+  background: transparent;
+}
+
+.json-diff-changes {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.json-diff-change {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: start;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.json-diff-change-kind {
+  flex: none;
+  min-width: 5.5rem;
+  font-size: calc(var(--font-preview) * 0.72);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+.json-diff-change-kind.kind-add {
+  color: var(--green);
+}
+
+.json-diff-change-kind.kind-remove {
+  color: var(--red-tag);
+}
+
+.json-diff-change-kind.kind-change {
+  color: var(--orange);
+}
+
+.json-diff-change-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.json-diff-change-path {
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.8);
+  color: var(--text-0);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.json-diff-change-value {
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.78);
+  color: var(--text-2);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.json-diff-change-value.is-from {
+  color: var(--red-tag);
+}
+
+.json-diff-change-value.is-to {
+  color: var(--green);
+}
+
+.json-diff-lines {
+  margin: 0;
+  padding: 10px 0;
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.8);
+  line-height: 1.45;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: auto;
+  user-select: text;
+}
+
+.json-diff-line {
+  display: block;
+  padding: 0 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.json-diff-line.kind-context {
+  color: var(--text-2);
+}
+
+.json-diff-line.kind-add {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 8%, transparent);
+}
+
+.json-diff-line.kind-remove {
+  color: var(--red-tag);
+  background: color-mix(in srgb, var(--red-tag) 8%, transparent);
+}
+
+@media (max-width: 760px) {
+  .json-diff-inputs {
+    grid-template-columns: 1fr;
+  }
+
+  .json-diff-change {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}

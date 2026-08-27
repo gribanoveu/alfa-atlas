@@ -1,6 +1,6 @@
-import { Clock, Globe, Hash, KeyRound, type LucideIcon } from "lucide-react";
+import { Braces, Clock, Globe, Hash, KeyRound, type LucideIcon } from "lucide-react";
 
-export type UtilityId = "unixtime" | "ids" | "jwt" | "http-status";
+export type UtilityId = "unixtime" | "ids" | "jwt" | "http-status" | "json-diff";
 
 export type UtilityDef = {
   id: UtilityId;
@@ -43,6 +43,13 @@ export const UTILITIES: UtilityDef[] = [
     title: "Справочник HTTP-кодов",
     description: "Коды ответа, описания и советы по использованию",
     icon: Globe,
+    stub: false,
+  },
+  {
+    id: "json-diff",
+    title: "JSON Diff",
+    description: "Сравнение двух JSON-документов",
+    icon: Braces,
     stub: false,
   },
 ];
