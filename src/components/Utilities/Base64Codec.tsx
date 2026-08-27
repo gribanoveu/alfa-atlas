@@ -6,20 +6,21 @@ import {
   encodeBase64String,
   type Base64Alphabet,
 } from "../../lib/base64Codec";
+import { TEXT_ENCODING_OPTIONS, type TextEncodingId } from "../../lib/textEncoding";
 import "./Base64Codec.css";
 
 type CodecTab = "encode" | "decode";
 
 const TABS: { id: CodecTab; label: string; desc: string }[] = [
   {
+    id: "decode",
+    label: "Base64 → текст",
+    desc: "Декодирует Base64 в текст с автоопределением кодировки (UTF-8, Windows-1251 из XML и др.)",
+  },
+  {
     id: "encode",
     label: "Текст → Base64",
     desc: "Кодирует UTF-8 строку в Base64",
-  },
-  {
-    id: "decode",
-    label: "Base64 → текст",
-    desc: "Декодирует Base64 обратно в UTF-8 строку",
   },
 ];
 
@@ -34,10 +35,11 @@ function formatBytes(size: number): string {
 }
 
 export function Base64Codec() {
-  const [tab, setTab] = useState<CodecTab>("encode");
+  const [tab, setTab] = useState<CodecTab>("decode");
   const [raw, setRaw] = useState("");
   const [alphabet, setAlphabet] = useState<Base64Alphabet>("standard");
   const [padding, setPadding] = useState(true);
+  const [encoding, setEncoding] = useState<TextEncodingId>("auto");
   const [copied, setCopied] = useState(false);
 
   const activeTab = TABS.find((item) => item.id === tab) ?? TABS[0];
@@ -46,8 +48,8 @@ export function Base64Codec() {
     if (tab === "encode") {
       return encodeBase64String(raw, { alphabet, padding });
     }
-    return decodeBase64String(raw, alphabet);
-  }, [raw, tab, alphabet, padding]);
+    return decodeBase64String(raw, { alphabet, encoding });
+  }, [raw, tab, alphabet, padding, encoding]);
 
   const handleCopy = async () => {
     if (!result.ok) {
@@ -136,7 +138,25 @@ export function Base64Codec() {
                 </button>
               </div>
             </div>
-          ) : null}
+          ) : (
+            <div className="b64-group">
+              <span className="b64-group-label">Кодировка</span>
+              <div className="b64-segmented" role="tablist" aria-label="Кодировка текста">
+                {TEXT_ENCODING_OPTIONS.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={encoding === item.id}
+                    className={`b64-segment${encoding === item.id ? " is-active" : ""}`}
+                    onClick={() => setEncoding(item.id)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <label className="b64-input-wrap">
@@ -166,6 +186,11 @@ export function Base64Codec() {
               <span>
                 Выход: <strong>{formatBytes(result.bytesOut)}</strong>
               </span>
+              {tab === "decode" && result.encodingLabel ? (
+                <span>
+                  Кодировка: <strong>{result.encodingLabel}</strong>
+                </span>
+              ) : null}
             </div>
 
             <div className="b64-output-block">

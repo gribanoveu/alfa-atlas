@@ -1,8 +1,19 @@
+import {
+  decodeBytesAsText,
+  formatDetectedEncoding,
+  type TextEncodingId,
+} from "./textEncoding";
+
 export type Base64Alphabet = "standard" | "url";
 
 export type Base64EncodeOptions = {
   alphabet: Base64Alphabet;
   padding: boolean;
+};
+
+export type Base64DecodeOptions = {
+  alphabet: Base64Alphabet;
+  encoding: TextEncodingId;
 };
 
 export type Base64CodecResult =
@@ -11,6 +22,7 @@ export type Base64CodecResult =
       output: string;
       bytesIn: number;
       bytesOut: number;
+      encodingLabel?: string;
     }
   | { ok: false; reason: string };
 
@@ -57,6 +69,12 @@ function bytesToBase64(bytes: Uint8Array, alphabet: Base64Alphabet, padding: boo
   return encoded;
 }
 
+function decodeBase64ToBytes(input: string, alphabet: Base64Alphabet): Uint8Array {
+  const normalized = normalizeBase64Input(input, alphabet);
+  const binary = atob(normalized);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
 export function encodeBase64String(
   text: string,
   options: Base64EncodeOptions,
@@ -82,31 +100,31 @@ export function encodeBase64String(
 
 export function decodeBase64String(
   input: string,
-  alphabet: Base64Alphabet,
+  options: Base64DecodeOptions,
 ): Base64CodecResult {
   const trimmed = input.trim();
   if (!trimmed) {
     return { ok: false, reason: "Введите Base64" };
   }
 
-  if (!isValidBase64Input(trimmed, alphabet)) {
+  if (!isValidBase64Input(trimmed, options.alphabet)) {
     return { ok: false, reason: "Некорректная Base64-строка" };
   }
 
   try {
-    const normalized = normalizeBase64Input(trimmed, alphabet);
-    const binary = atob(normalized);
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    const output = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const bytes = decodeBase64ToBytes(trimmed, options.alphabet);
+    const decoded = decodeBytesAsText(bytes, options.encoding);
     const bytesIn = stripWhitespace(trimmed).length;
 
     return {
       ok: true,
-      output,
+      output: decoded.text,
       bytesIn,
       bytesOut: bytes.length,
+      encodingLabel: formatDetectedEncoding(decoded.detected),
     };
-  } catch {
-    return { ok: false, reason: "Некорректная Base64-строка или невалидный UTF-8" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Не удалось декодировать текст";
+    return { ok: false, reason: message };
   }
 }

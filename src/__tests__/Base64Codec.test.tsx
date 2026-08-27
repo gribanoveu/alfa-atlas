@@ -15,6 +15,7 @@ const { Base64Codec } = await import("../components/Utilities/Base64Codec");
 describe("Base64Codec", () => {
   test("encode показывает Base64 для текста", () => {
     render(<Base64Codec />);
+    fireEvent.click(screen.getByRole("tab", { name: "Текст → Base64" }));
     fireEvent.change(screen.getByLabelText("Текст"), {
       target: { value: "docflow" },
     });
@@ -24,7 +25,6 @@ describe("Base64Codec", () => {
 
   test("decode показывает текст для Base64", () => {
     render(<Base64Codec />);
-    fireEvent.click(screen.getByRole("tab", { name: "Base64 → текст" }));
     fireEvent.change(screen.getByLabelText("Base64"), {
       target: { value: "ZG9jZmxvdw==" },
     });
@@ -34,7 +34,6 @@ describe("Base64Codec", () => {
 
   test("некорректный Base64 показывает ошибку", () => {
     render(<Base64Codec />);
-    fireEvent.click(screen.getByRole("tab", { name: "Base64 → текст" }));
     fireEvent.change(screen.getByLabelText("Base64"), {
       target: { value: "***" },
     });
@@ -45,6 +44,7 @@ describe("Base64Codec", () => {
   test("копирование результата работает", async () => {
     copied.length = 0;
     render(<Base64Codec />);
+    fireEvent.click(screen.getByRole("tab", { name: "Текст → Base64" }));
     fireEvent.change(screen.getByLabelText("Текст"), {
       target: { value: "docflow" },
     });
