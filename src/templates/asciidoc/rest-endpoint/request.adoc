@@ -36,7 +36,7 @@
 
 [source,bash,options="nowrap"]
 ----
-curl -X POST "https://corp-gateway-test/api" \
+curl -X POST "https://corp-gateway-test/api?organizationId=UBBWQQ" \
   -H "Content-Type: application/json" \
   -d '{
     "type": "INVOICE"

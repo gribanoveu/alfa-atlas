@@ -35,7 +35,8 @@ const GUTTER_TARGET_TYPES = new Set<number>();
 
 function ensureGutterTargets(monaco: typeof Monaco) {
   if (GUTTER_TARGET_TYPES.size > 0) return;
-  GUTTER_TARGET_TYPES.add(monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN);
+  // Glyph margin is shared with table/include/diagnostic icons — git stripes live
+  // on line numbers and the lines-decorations column only.
   GUTTER_TARGET_TYPES.add(monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS);
   GUTTER_TARGET_TYPES.add(monaco.editor.MouseTargetType.GUTTER_LINE_DECORATIONS);
 }
