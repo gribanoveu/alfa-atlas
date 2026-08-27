@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { toMessage } from "../../lib/errors";
-import { planDelete, planGet, planList, type PlanRecord, type PlanSummary } from "../../lib/plans";
+import { useEffect, useState } from "react";
+import { usePlans } from "../../hooks/usePlans";
 import { PlanDetailView } from "./PlanDetailView";
 import "../ToolLog/ToolCallLogModal.css";
 import "./PlansModal.css";
@@ -42,39 +41,24 @@ export function PlansModal({
   onOpenInEditor,
   startDisabled,
 }: PlansModalProps) {
-  const [summaries, setSummaries] = useState<PlanSummary[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(initialPlanId ?? null);
-  const [detail, setDetail] = useState<PlanRecord | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const {
+    summaries,
+    selectedId,
+    setSelectedId,
+    detail,
+    error,
+    loading,
+    deleting,
+    deletePlan,
+  } = usePlans(initialPlanId ?? null);
+
+  // Purely presentational: whether the delete button is showing its
+  // confirmation. Reset whenever the selection moves, so a confirmation
+  // armed on one plan cannot carry over to another.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-
-  const refreshList = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await planList();
-      setSummaries(list);
-      setSelectedId((prev) => {
-        if (prev && list.some((p) => p.id === prev)) return prev;
-        return list[0]?.id ?? null;
-      });
-    } catch (e) {
-      setError(toMessage(e));
-      setSummaries([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    void refreshList();
-  }, [refreshList]);
-
-  useEffect(() => {
-    if (initialPlanId) setSelectedId(initialPlanId);
-  }, [initialPlanId]);
+    setConfirmingDelete(false);
+  }, [selectedId]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -84,40 +68,8 @@ export function PlansModal({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  useEffect(() => {
-    if (!selectedId) {
-      setDetail(null);
-      setConfirmingDelete(false);
-      return;
-    }
-    let cancelled = false;
-    setConfirmingDelete(false);
-    void planGet(selectedId)
-      .then((record) => {
-        if (!cancelled) setDetail(record);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) {
-          setDetail(null);
-          setError(toMessage(e));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedId]);
-
   const handleDelete = async (planId: string) => {
-    setDeleting(true);
-    try {
-      await planDelete(planId);
-      setConfirmingDelete(false);
-      await refreshList();
-    } catch (e) {
-      setError(toMessage(e));
-    } finally {
-      setDeleting(false);
-    }
+    if (await deletePlan(planId)) setConfirmingDelete(false);
   };
 
   const handleStart = (planId: string) => {

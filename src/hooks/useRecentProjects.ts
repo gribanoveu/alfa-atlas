@@ -8,15 +8,14 @@ type Actions = {
   onOpenRecent: (root: string) => Promise<unknown>;
 };
 
-/** The recent-projects list on the welcome screen, and opening one.
+/** Just the recent-projects list and removing an entry — what both the
+ * welcome screen and the TopBar dropdown need.
  *
- * A failing *list* is swallowed to an empty list rather than surfaced: the
- * welcome screen still works without history, and an error banner there
- * would be noise in front of the two buttons that matter. A failing *open*
- * is surfaced, since the user asked for it explicitly. */
-export function useRecentProjects({ onOpenFolder, onOpenRecent }: Actions) {
+ * A failing *list* is swallowed to an empty list rather than surfaced: both
+ * surfaces still work without history, and an error banner in front of them
+ * would be noise. */
+export function useRecentProjectsList() {
   const [recent, setRecent] = useState<RecentProject[]>([]);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
 
@@ -40,6 +39,30 @@ export function useRecentProjects({ onOpenFolder, onOpenRecent }: Actions) {
     void reload();
   }, [reload]);
 
+  const removeRecent = useCallback(
+    async (root: string) => {
+      try {
+        await removeRecentProject(root);
+        await reload();
+      } catch (e) {
+        if (mounted.current) setError(toMessage(e));
+      }
+    },
+    [reload],
+  );
+
+  return { recent, reload, removeRecent, listError: error, mounted };
+}
+
+/** `useRecentProjectsList` plus opening a project, for the welcome screen.
+ *
+ * A failing *open* is surfaced, unlike a failing list — the user asked for
+ * that one explicitly. */
+export function useRecentProjects({ onOpenFolder, onOpenRecent }: Actions) {
+  const { recent, reload, removeRecent, mounted } = useRecentProjectsList();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const openFolder = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -50,7 +73,7 @@ export function useRecentProjects({ onOpenFolder, onOpenRecent }: Actions) {
     } finally {
       if (mounted.current) setBusy(false);
     }
-  }, [onOpenFolder]);
+  }, [onOpenFolder, mounted]);
 
   const openRecent = useCallback(
     async (root: string) => {
@@ -68,19 +91,7 @@ export function useRecentProjects({ onOpenFolder, onOpenRecent }: Actions) {
         if (mounted.current) setBusy(false);
       }
     },
-    [onOpenRecent, reload],
-  );
-
-  const removeRecent = useCallback(
-    async (root: string) => {
-      try {
-        await removeRecentProject(root);
-        await reload();
-      } catch (e) {
-        if (mounted.current) setError(toMessage(e));
-      }
-    },
-    [reload],
+    [onOpenRecent, reload, mounted],
   );
 
   return { recent, busy, error, openFolder, openRecent, removeRecent };

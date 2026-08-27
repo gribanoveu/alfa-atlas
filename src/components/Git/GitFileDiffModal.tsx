@@ -1,5 +1,6 @@
 import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useGitFileDiff } from "../../hooks/useGitFileDiff";
 import type { GitDiffScope, GitFileDiff, GitFileStatus } from "../../lib/git";
 import { monacoLanguageFor } from "../../lib/supportedFiles";
 import { ATLAS_DARK_THEME_ID } from "../../monaco/asciidocLanguage";
@@ -30,35 +31,15 @@ export function GitFileDiffModal({
   onDiscard,
   onSaveContent,
 }: GitFileDiffModalProps) {
-  const [diff, setDiff] = useState<GitFileDiff | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [discarding, setDiscarding] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const { diff, loading, error, discarding, saving, discard, save } = useGitFileDiff({
+    target,
+    onLoadDiff,
+    onDiscard,
+    onSaveContent,
+  });
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   const editorWrapRef = useRef<HTMLDivElement>(null);
   const diffEditorRef = useRef<Parameters<DiffOnMount>[0] | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setDiff(null);
-
-    void onLoadDiff(target.file.path, target.scope).then((result) => {
-      if (cancelled) return;
-      if (!result) {
-        setError("Не удалось загрузить diff");
-      } else {
-        setDiff(result);
-      }
-      setLoading(false);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [onLoadDiff, target.file.path, target.scope]);
 
   useEffect(() => {
     const el = editorWrapRef.current;
@@ -86,39 +67,13 @@ export function GitFileDiffModal({
 
   const handleDiscard = async () => {
     setConfirmingDiscard(false);
-    setDiscarding(true);
-    setError(null);
-    try {
-      const ok = await onDiscard(target.file.path);
-      if (ok) onClose();
-      else setError("Не удалось отменить изменения");
-    } finally {
-      setDiscarding(false);
-    }
+    if (await discard()) onClose();
   };
 
   const handleSave = async () => {
     const editor = diffEditorRef.current;
     if (!editor) return;
-    const content = editor.getModifiedEditor().getValue();
-
-    setSaving(true);
-    setError(null);
-    try {
-      const ok = await onSaveContent(target.file.path, target.scope, content);
-      if (!ok) {
-        setError("Не удалось сохранить изменения");
-        return;
-      }
-      // Reload the diff so the view reflects the new saved state (reverted
-      // hunks now show as unchanged) instead of leaving the stale original
-      // diff on screen.
-      const result = await onLoadDiff(target.file.path, target.scope);
-      if (result) setDiff(result);
-      else onClose();
-    } finally {
-      setSaving(false);
-    }
+    if ((await save(editor.getModifiedEditor().getValue())) === "gone") onClose();
   };
 
   const language = monacoLanguageFor(target.file.path);

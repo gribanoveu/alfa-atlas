@@ -1,10 +1,6 @@
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  listRecentProjects,
-  removeRecentProject,
-  type RecentProject,
-} from "../../lib/project";
+import { useEffect, useRef } from "react";
+import { useRecentProjectsList } from "../../hooks/useRecentProjects";
 import "./RecentProjectsDropdown.css";
 
 type RecentProjectsDropdownProps = {
@@ -18,21 +14,8 @@ export function RecentProjectsDropdown({
   onSelect,
   onClose,
 }: RecentProjectsDropdownProps) {
-  const [recent, setRecent] = useState<RecentProject[]>([]);
+  const { recent, removeRecent } = useRecentProjectsList();
   const menuRef = useRef<HTMLDivElement>(null);
-
-  const reload = useCallback(async () => {
-    try {
-      const items = await listRecentProjects();
-      setRecent(items);
-    } catch {
-      setRecent([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    void reload();
-  }, [reload]);
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -53,14 +36,9 @@ export function RecentProjectsDropdown({
     };
   }, [anchorRef, onClose]);
 
-  const handleRemove = async (root: string, event: React.MouseEvent) => {
+  const handleRemove = (root: string, event: React.MouseEvent) => {
     event.stopPropagation();
-    try {
-      await removeRecentProject(root);
-      await reload();
-    } catch {
-      // silently ignore
-    }
+    void removeRecent(root);
   };
 
   return (

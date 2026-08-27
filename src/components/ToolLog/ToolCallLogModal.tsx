@@ -1,6 +1,9 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toMessage } from "../../lib/errors";
-import { clearToolCallLog, queryToolCallLog, type ToolCallLogRow } from "../../lib/toolCallLog";
+import { Fragment, useEffect, useRef, useState } from "react";
+import {
+  DATE_RANGE_OPTIONS,
+  useToolCallLog,
+  type DateRangeOption,
+} from "../../hooks/useToolCallLog";
 import "../Welcome/CloneRepoModal.css";
 import "./ToolCallLogModal.css";
 
@@ -91,7 +94,6 @@ type ToolCallLogModalProps = {
   onClose: () => void;
 };
 
-const PAGE_SIZE = 50;
 
 // Every `ToolName` variant (`domain::ai_access::ToolName`), in the same
 // camelCase spelling the wire protocol/log rows already use — a fixed list
@@ -134,29 +136,6 @@ const STATUS_OPTIONS: LogSelectOption[] = [
   { value: "error", label: "Ошибка" },
 ];
 
-type DateRangeOption = "all" | "hour" | "day" | "week";
-
-const DATE_RANGE_OPTIONS: { value: DateRangeOption; label: string }[] = [
-  { value: "all", label: "За всё время" },
-  { value: "hour", label: "Последний час" },
-  { value: "day", label: "Последние сутки" },
-  { value: "week", label: "Последняя неделя" },
-];
-
-function sinceMsFor(range: DateRangeOption): number | undefined {
-  const now = Date.now();
-  switch (range) {
-    case "hour":
-      return now - 60 * 60 * 1000;
-    case "day":
-      return now - 24 * 60 * 60 * 1000;
-    case "week":
-      return now - 7 * 24 * 60 * 60 * 1000;
-    case "all":
-      return undefined;
-  }
-}
-
 function formatTs(tsMs: number): string {
   return new Date(tsMs).toLocaleString("ru-RU", {
     day: "numeric",
@@ -176,58 +155,33 @@ function formatJson(value: unknown): string {
 }
 
 export function ToolCallLogModal({ projectRoot, onClose }: ToolCallLogModalProps) {
-  const [rows, setRows] = useState<ToolCallLogRow[]>([]);
-  const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    rows,
+    loading,
+    error,
+    clearing,
+    search,
+    setSearch,
+    tool,
+    setTool,
+    status,
+    setStatus,
+    dateRange,
+    setDateRange,
+    onlyCurrentRepo,
+    setOnlyCurrentRepo,
+    canPrev,
+    canNext,
+    rangeLabel,
+    prevPage,
+    nextPage,
+    clearLog,
+  } = useToolCallLog(projectRoot);
 
-  const [search, setSearch] = useState("");
-  const [tool, setTool] = useState("");
-  const [status, setStatus] = useState("");
-  const [dateRange, setDateRange] = useState<DateRangeOption>("all");
-  const [onlyCurrentRepo, setOnlyCurrentRepo] = useState(true);
-
+  // Purely presentational: which row is unfolded, and whether the clear
+  // button is showing its confirmation.
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [confirmingClear, setConfirmingClear] = useState(false);
-  const [clearing, setClearing] = useState(false);
-
-  const filter = useMemo(
-    () => ({
-      repoRoot: onlyCurrentRepo && projectRoot ? projectRoot : undefined,
-      tool: tool || undefined,
-      status: status || undefined,
-      search: search.trim() || undefined,
-      sinceMs: sinceMsFor(dateRange),
-      limit: PAGE_SIZE,
-      offset,
-    }),
-    [onlyCurrentRepo, projectRoot, tool, status, search, dateRange, offset],
-  );
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const page = await queryToolCallLog(filter);
-      setRows(page.rows);
-      setTotal(page.total);
-      setError(null);
-    } catch (e) {
-      setError(toMessage(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [filter]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  // Any filter change but pagination itself resets to the first page —
-  // otherwise narrowing a filter could leave `offset` past the new total.
-  useEffect(() => {
-    setOffset(0);
-  }, [onlyCurrentRepo, projectRoot, tool, status, search, dateRange]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -238,22 +192,11 @@ export function ToolCallLogModal({ projectRoot, onClose }: ToolCallLogModalProps
   }, [onClose]);
 
   const handleClear = async () => {
-    setClearing(true);
-    try {
-      await clearToolCallLog();
+    if (await clearLog()) {
       setConfirmingClear(false);
       setExpandedId(null);
-      await load();
-    } catch (e) {
-      setError(toMessage(e));
-    } finally {
-      setClearing(false);
     }
   };
-
-  const canPrev = offset > 0;
-  const canNext = offset + rows.length < total;
-  const rangeLabel = total === 0 ? "0 из 0" : `${offset + 1}–${offset + rows.length} из ${total}`;
 
   return (
     <div className="tool-log-backdrop" role="presentation" onClick={onClose}>
@@ -410,7 +353,7 @@ export function ToolCallLogModal({ projectRoot, onClose }: ToolCallLogModalProps
               type="button"
               className="tool-log-btn"
               disabled={!canPrev || loading}
-              onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
+              onClick={prevPage}
             >
               Назад
             </button>
@@ -418,7 +361,7 @@ export function ToolCallLogModal({ projectRoot, onClose }: ToolCallLogModalProps
               type="button"
               className="tool-log-btn"
               disabled={!canNext || loading}
-              onClick={() => setOffset((o) => o + PAGE_SIZE)}
+              onClick={nextPage}
             >
               Вперёд
             </button>

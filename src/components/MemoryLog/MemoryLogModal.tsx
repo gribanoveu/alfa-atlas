@@ -1,6 +1,6 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { toMessage } from "../../lib/errors";
-import { deleteMemoryLogEntry, queryMemoryLog, type MemoryLogRow } from "../../lib/memoryLog";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { memoryRowKey, useMemoryLog } from "../../hooks/useMemoryLog";
+import type { MemoryLogRow } from "../../lib/memoryLog";
 import "../Welcome/CloneRepoModal.css";
 import "../ToolLog/ToolCallLogModal.css";
 import "./MemoryLogModal.css";
@@ -87,7 +87,6 @@ type MemoryLogModalProps = {
   onClose: () => void;
 };
 
-const PAGE_SIZE = 50;
 
 const SCOPE_OPTIONS: LogSelectOption[] = [
   { value: "", label: "Все области" },
@@ -106,79 +105,27 @@ function previewText(text: string, max = 120): string {
 }
 
 export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
-  const [rows, setRows] = useState<MemoryLogRow[]>([]);
-  const [total, setTotal] = useState(0);
-  const [projectStorePath, setProjectStorePath] = useState<string | null>(null);
-  const [globalStorePath, setGlobalStorePath] = useState("");
-  const [offset, setOffset] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    rows,
+    projectStorePath,
+    globalStorePath,
+    loading,
+    error,
+    deletingKey,
+    search,
+    setSearch,
+    scope,
+    setScope,
+    canPrev,
+    canNext,
+    rangeLabel,
+    prevPage,
+    nextPage,
+    deleteEntry,
+  } = useMemoryLog(projectRoot);
 
-  const [search, setSearch] = useState("");
-  const [scope, setScope] = useState("");
+  // Which row is unfolded — presentation only.
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  const [deletingKey, setDeletingKey] = useState<string | null>(null);
-
-  const filter = useMemo(
-    () => ({
-      scope: scope || undefined,
-      search: search.trim() || undefined,
-      repoRoot: projectRoot ?? undefined,
-      limit: PAGE_SIZE,
-      offset,
-    }),
-    [scope, search, projectRoot, offset],
-  );
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const page = await queryMemoryLog(filter);
-      setRows(page.rows);
-      setTotal(page.total);
-      setProjectStorePath(page.projectStorePath);
-      setGlobalStorePath(page.globalStorePath);
-      setError(null);
-    } catch (e) {
-      setError(toMessage(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [filter]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const handleDelete = useCallback(
-    async (row: MemoryLogRow) => {
-      const rowKey = `${row.scope}-${row.id}`;
-      if (deletingKey === rowKey) return;
-      const label = previewText(row.text, 80);
-      const ok = window.confirm(`Удалить запись #${row.id} (${scopeLabel(row.scope)})?\n\n${label}`);
-      if (!ok) return;
-      setDeletingKey(rowKey);
-      try {
-        await deleteMemoryLogEntry({
-          scope: row.scope,
-          id: row.id,
-          repoRoot: row.scope === "project" ? (projectRoot ?? undefined) : undefined,
-        });
-        if (expandedKey === rowKey) setExpandedKey(null);
-        await load();
-        setError(null);
-      } catch (e) {
-        setError(toMessage(e));
-      } finally {
-        setDeletingKey(null);
-      }
-    },
-    [deletingKey, expandedKey, load, projectRoot],
-  );
-
-  useEffect(() => {
-    setOffset(0);
-  }, [scope, search, projectRoot]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -188,9 +135,20 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const canPrev = offset > 0;
-  const canNext = offset + rows.length < total;
-  const rangeLabel = total === 0 ? "0 из 0" : `${offset + 1}–${offset + rows.length} из ${total}`;
+  const handleDelete = useCallback(
+    async (row: MemoryLogRow) => {
+      const label = previewText(row.text, 80);
+      const ok = window.confirm(
+        `Удалить запись #${row.id} (${scopeLabel(row.scope)})?\n\n${label}`,
+      );
+      if (!ok) return;
+      if (await deleteEntry(row)) {
+        if (expandedKey === memoryRowKey(row)) setExpandedKey(null);
+      }
+    },
+    [deleteEntry, expandedKey],
+  );
+
 
   return (
     <div className="tool-log-backdrop" role="presentation" onClick={onClose}>
@@ -314,7 +272,7 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
               type="button"
               className="tool-log-btn"
               disabled={!canPrev || loading}
-              onClick={() => setOffset((o) => Math.max(0, o - PAGE_SIZE))}
+              onClick={prevPage}
             >
               Назад
             </button>
@@ -322,7 +280,7 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
               type="button"
               className="tool-log-btn"
               disabled={!canNext || loading}
-              onClick={() => setOffset((o) => o + PAGE_SIZE)}
+              onClick={nextPage}
             >
               Вперёд
             </button>
