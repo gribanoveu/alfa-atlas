@@ -5,6 +5,7 @@ import { JsonDiff } from "./JsonDiff";
 import { JsonFormatter } from "./JsonFormatter";
 import { JwtParser } from "./JwtParser";
 import { UnixtimeConverter } from "./UnixtimeConverter";
+import { XmlFormatter } from "./XmlFormatter";
 import "./UtilityView.css";
 
 type UtilityViewProps = {
@@ -37,6 +38,7 @@ export function UtilityView({ utilityId }: UtilityViewProps) {
       {utilityId === "http-status" ? <HttpStatusReference /> : null}
       {utilityId === "json-diff" ? <JsonDiff /> : null}
       {utilityId === "json-format" ? <JsonFormatter /> : null}
+      {utilityId === "xml-format" ? <XmlFormatter /> : null}
       {utility.stub ? (
         <div className="utility-view-stub" role="status">
           Утилита ещё не реализована

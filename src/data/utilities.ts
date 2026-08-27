@@ -1,6 +1,13 @@
-import { Braces, Clock, FileJson2, Globe, Hash, KeyRound, type LucideIcon } from "lucide-react";
+import { Braces, Clock, CodeXml, FileJson2, Globe, Hash, KeyRound, type LucideIcon } from "lucide-react";
 
-export type UtilityId = "unixtime" | "ids" | "jwt" | "http-status" | "json-diff" | "json-format";
+export type UtilityId =
+  | "unixtime"
+  | "ids"
+  | "jwt"
+  | "http-status"
+  | "json-diff"
+  | "json-format"
+  | "xml-format";
 
 export type UtilityDef = {
   id: UtilityId;
@@ -57,6 +64,13 @@ export const UTILITIES: UtilityDef[] = [
     title: "Форматирование JSON",
     description: "Prettify, minify и сортировка ключей",
     icon: FileJson2,
+    stub: false,
+  },
+  {
+    id: "xml-format",
+    title: "Форматирование XML",
+    description: "Prettify и minify XML-документов",
+    icon: CodeXml,
     stub: false,
   },
 ];
