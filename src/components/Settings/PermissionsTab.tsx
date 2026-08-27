@@ -67,86 +67,86 @@ export function PermissionsTab() {
   } = allowed;
 
   return (
-    <div className="permissions-tab">
-      <div className="settings-section-title">Разрешённые инструменты</div>
-      <p className="settings-lead">
-        Для текущего открытого проекта. Какие действия ассистент вообще может предлагать —
-        независимо от того, требуют ли они подтверждения. Отключённый инструмент модель не
-        сможет вызвать вовсе.
-      </p>
-
-      {allowedLoading ? (
-        <p className="settings-hint" style={{ paddingLeft: 0 }}>
-          Загрузка…
+    <div className="settings-sections permissions-tab">
+      <div className="settings-card">
+        <div className="settings-section-title">Разрешённые инструменты</div>
+        <p className="settings-hint settings-hint-compact">
+          Что ассистент вообще может предлагать — независимо от того, требуют ли эти
+          действия подтверждения. Отключённый инструмент модель не сможет вызвать вовсе.
         </p>
-      ) : allowedNoProject ? (
-        <p className="settings-hint" style={{ paddingLeft: 0 }}>
-          Откройте проект, чтобы посмотреть и изменить список разрешённых инструментов.
+
+        {allowedLoading ? (
+          <p className="settings-hint settings-hint-compact">
+            Загрузка…
+          </p>
+        ) : allowedNoProject ? (
+          <p className="settings-hint settings-hint-compact">
+            Откройте проект, чтобы посмотреть и изменить список разрешённых инструментов.
+          </p>
+        ) : (
+          <ul className="permissions-list">
+            {ALLOWED_TOOL_ORDER.map((tool) => (
+              <li key={tool} className="permissions-item">
+                <label className="permissions-item-label permissions-item-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={allowedTools.includes(tool)}
+                    disabled={togglingTool === tool}
+                    onChange={(e) => void toggleAllowed(tool, e.target.checked)}
+                  />
+                  {ALLOWED_TOOL_LABELS[tool] ?? tool}
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {allowedError ? <div className="settings-error">{allowedError}</div> : null}
+      </div>
+
+      <div className="settings-card">
+        <div className="settings-section-title">Автоматически одобренные действия</div>
+        <p className="settings-hint settings-hint-compact">
+          Разрешены ранее кнопкой «Разрешать всегда» на карточке запроса и теперь
+          выполняются сразу. Отзовите здесь то, что больше не должно выполняться
+          автоматически.
         </p>
-      ) : (
-        <ul className="permissions-list">
-          {ALLOWED_TOOL_ORDER.map((tool) => (
-            <li key={tool} className="permissions-item">
-              <label className="permissions-item-label permissions-item-checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={allowedTools.includes(tool)}
-                  disabled={togglingTool === tool}
-                  onChange={(e) => void toggleAllowed(tool, e.target.checked)}
-                />
-                {ALLOWED_TOOL_LABELS[tool] ?? tool}
-              </label>
-            </li>
-          ))}
-        </ul>
-      )}
 
-      {allowedError ? <div className="settings-error">{allowedError}</div> : null}
+        {loading ? (
+          <p className="settings-hint settings-hint-compact">
+            Загрузка…
+          </p>
+        ) : noProject ? (
+          <p className="settings-hint settings-hint-compact">
+            Откройте проект, чтобы посмотреть и изменить его список автоматически одобренных
+            действий.
+          </p>
+        ) : tools.length === 0 ? (
+          <p className="settings-hint settings-hint-compact">
+            Для этого проекта ничего не одобрено автоматически — каждое изменяющее действие
+            по-прежнему требует подтверждения.
+          </p>
+        ) : (
+          <ul className="permissions-list">
+            {tools.map((tool) => (
+              <li key={tool} className="permissions-item">
+                <span className="permissions-item-label">{AUTO_APPROVABLE_TOOL_LABELS[tool] ?? tool}</span>
+                <button
+                  type="button"
+                  className="settings-link-btn danger permissions-item-revoke"
+                  disabled={revoking === tool}
+                  onClick={() => void revokeAutoApproval(tool)}
+                >
+                  <ShieldOff size={14} aria-hidden />
+                  {revoking === tool ? "Отзывается…" : "Отозвать"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
 
-      <hr className="permissions-divider" />
-
-      <div className="settings-section-title">Автоматически одобренные действия</div>
-      <p className="settings-lead">
-        Для текущего открытого проекта. Когда ассистент выполняет эти
-        действия, они выполняются сразу. Они разрешены ранее кнопкой
-        «Разрешать всегда» на карточке запроса. Отзовите здесь то, что больше не должно
-        выполняться автоматически.
-      </p>
-
-      {loading ? (
-        <p className="settings-hint" style={{ paddingLeft: 0 }}>
-          Загрузка…
-        </p>
-      ) : noProject ? (
-        <p className="settings-hint" style={{ paddingLeft: 0 }}>
-          Откройте проект, чтобы посмотреть и изменить его список автоматически одобренных
-          действий.
-        </p>
-      ) : tools.length === 0 ? (
-        <p className="settings-hint" style={{ paddingLeft: 0 }}>
-          Для этого проекта ничего не одобрено автоматически — каждое изменяющее действие
-          по-прежнему требует подтверждения.
-        </p>
-      ) : (
-        <ul className="permissions-list">
-          {tools.map((tool) => (
-            <li key={tool} className="permissions-item">
-              <span className="permissions-item-label">{AUTO_APPROVABLE_TOOL_LABELS[tool] ?? tool}</span>
-              <button
-                type="button"
-                className="settings-link-btn danger permissions-item-revoke"
-                disabled={revoking === tool}
-                onClick={() => void revokeAutoApproval(tool)}
-              >
-                <ShieldOff size={14} aria-hidden />
-                {revoking === tool ? "Отзывается…" : "Отозвать"}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {error ? <div className="settings-error">{error}</div> : null}
+        {error ? <div className="settings-error">{error}</div> : null}
+      </div>
     </div>
   );
 }

@@ -58,10 +58,11 @@ export function CredentialsTab() {
     editIndex !== null ? credentials.sshKeys[editIndex] ?? null : null;
 
   return (
-    <div className="credentials-tab">
+    <div className="settings-sections credentials-tab">
+      <div className="settings-card">
       {/* Section 1: App Key */}
-      <div className="credentials-section-title">Ключ приложения</div>
-      <p className="credentials-lead">
+      <div className="settings-section-title">Ключ приложения</div>
+      <p className="settings-hint settings-hint-compact">
         Atlas использует Ed25519 SSH ключ для авторизации в Git. 
         Закрытый ключ хранится зашифрованным. Для авторизации приложения в Git, 
         необходимо добавить его в раздел SSH и GPG ключей в вашем аккаунте Bitbucket, GitHub, GitLab и т.д.
@@ -69,11 +70,11 @@ export function CredentialsTab() {
 
       {!keyStatus.exists ? (
         <div className="credentials-app-key-none">
-          <p className="credentials-empty">
+          <p className="settings-hint settings-hint-compact">
             SSH ключ не настроен. Сгенерируйте новый ключ или импортируйте
             существующий.
           </p>
-          <div className="credentials-actions">
+          <div className="settings-actions">
             <button
               type="button"
               className="settings-btn primary"
@@ -117,7 +118,7 @@ export function CredentialsTab() {
               rows={3}
             />
           </label>
-          <div className="credentials-actions">
+          <div className="settings-actions">
             <button
               type="button"
               className="settings-btn primary"
@@ -145,38 +146,40 @@ export function CredentialsTab() {
         </div>
       )}
 
-      <hr className="credentials-divider" />
+      </div>
 
+      <div className="settings-card">
       {/* Section: SSH host key verification */}
-      <div className="credentials-section-title">Проверка SSH хостов</div>
-      <label className="credentials-checkbox-label">
+      <div className="settings-section-title">Проверка SSH хостов</div>
+      <label className="settings-check">
         <input
           type="checkbox"
           checked={credentials.trustAllSshHostKeys}
           onChange={toggleTrustAll}
           disabled={busy}
-          className="credentials-checkbox"
         />
         <span>Принимать все SSH сертификаты (Trust-On-First-Use)</span>
       </label>
-      <p className="credentials-lead">
+      <p className="settings-hint">
         Когда включено, приложение принимает любой SSH ключ хоста при первом
         подключении. Когда выключено, используется стандартная проверка через{" "}
         <code>~/.ssh/known_hosts</code>. Отключите для максимальной
         безопасности, если у вас настроен файл known_hosts.
       </p>
 
-      <hr className="credentials-divider" />
-      <div className="credentials-section-title">
+      </div>
+
+      <div className="settings-card">
+      <div className="settings-section-title">
         Дополнительные SSH ключи
       </div>
-      <p className="credentials-lead">
+      <p className="settings-hint settings-hint-compact">
         Дополнительные SSH ключи для специфичных хостов. Приоритет: ключ приложения,
         затем SSH-агент, затем ключи из этого списка.
       </p>
 
       {credentials.sshKeys.length === 0 ? (
-        <p className="credentials-empty">Нет сохранённых SSH ключей.</p>
+        <p className="settings-hint settings-hint-compact">Нет сохранённых SSH ключей.</p>
       ) : (
         <div className="credentials-list">
           {credentials.sshKeys.map((key, index) => (
@@ -215,7 +218,7 @@ export function CredentialsTab() {
         </div>
       )}
 
-      <div className="credentials-actions">
+      <div className="settings-actions">
         <button
           type="button"
           className="settings-btn primary"
@@ -224,6 +227,8 @@ export function CredentialsTab() {
         >
           Добавить SSH ключ
         </button>
+      </div>
+
       </div>
 
       {showAddModal ? (

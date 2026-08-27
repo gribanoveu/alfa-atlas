@@ -13,14 +13,9 @@ export function NotificationsTab() {
   } = useLlmSetup();
 
   return (
-    <>
-      <div className="settings-section-title">Уведомления ассистента</div>
-      <p className="settings-lead">
-        Звук и системные уведомления о ходе работы ассистента. Системный баннер
-        показывается только когда окно приложения не в фокусе.
-      </p>
-
-      <div className="settings-row">
+    <div className="settings-sections">
+      <div className="settings-card">
+        <div className="settings-section-title">Завершение работы</div>
         <label className="settings-check">
           <input
             type="checkbox"
@@ -36,7 +31,8 @@ export function NotificationsTab() {
         </p>
       </div>
 
-      <div className="settings-row">
+      <div className="settings-card">
+        <div className="settings-section-title">Вопрос агента</div>
         <label className="settings-check">
           <input
             type="checkbox"
@@ -53,6 +49,6 @@ export function NotificationsTab() {
       </div>
 
       {error ? <div className="settings-error">{error}</div> : null}
-    </>
+    </div>
   );
 }

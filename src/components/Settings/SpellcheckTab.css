@@ -7,3 +7,13 @@
   flex: 1;
   min-width: 0;
 }
+
+/* The личный словарь rows reuse `.standards-rule-row`, whose left cell is
+ * normally a `.settings-check` with `flex: 1` — a bare word needs the same
+ * growth so every «Удалить» lines up on the right edge. */
+.spellcheck-word {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-ui);
+  word-break: break-word;
+}

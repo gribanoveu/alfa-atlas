@@ -1,26 +1,14 @@
 import { useLlmSetup } from "../../hooks/useLlmSetup";
 
-/** LLM request/tool logging and follow-up suggestion toggles — kept out of
- * the Провайдеры tab so that one stays about credentials and models. */
+/** LLM request and tool-call logging — kept out of the Провайдеры tab so that
+ * one stays about credentials and models. */
 export function LoggingTab() {
-  const {
-    settings,
-    busy,
-    error,
-    setDebugLogging,
-    setFollowUpSuggestionsDisabled,
-    setToolCallLogging,
-  } = useLlmSetup();
+  const { settings, busy, error, setDebugLogging, setToolCallLogging } = useLlmSetup();
 
   return (
-    <>
-      <div className="settings-section-title">Логирование</div>
-      <p className="settings-lead">
-        Журналы запросов к модели и вызовов инструментов ассистента. Полезны для
-        диагностики, но могут содержать чувствительные данные.
-      </p>
-
-      <div className="settings-row">
+    <div className="settings-sections">
+      <div className="settings-card">
+        <div className="settings-section-title">Запросы и ответы</div>
         <label className="settings-check">
           <input
             type="checkbox"
@@ -40,7 +28,8 @@ export function LoggingTab() {
         </p>
       </div>
 
-      <div className="settings-row">
+      <div className="settings-card">
+        <div className="settings-section-title">Инструменты</div>
         <label className="settings-check">
           <input
             type="checkbox"
@@ -58,26 +47,7 @@ export function LoggingTab() {
         </p>
       </div>
 
-      <div className="settings-section-title">Подсказки</div>
-      <p className="settings-lead">Подсказки над перепиской в чате ассистента.</p>
-
-      <div className="settings-row">
-        <label className="settings-check">
-          <input
-            type="checkbox"
-            checked={settings?.followUpSuggestionsDisabled ?? false}
-            disabled={busy || !settings}
-            onChange={(event) => void setFollowUpSuggestionsDisabled(event.target.checked)}
-          />
-          <span>Отключить подсказки после выбора сценария</span>
-        </label>
-        <p className="settings-hint">
-          Скрывает подсказки над перепиской, которые появляются после выбора одного из стартовых
-          предложений в новом чате. Стартовые предложения в пустом чате остаются в любом случае.
-        </p>
-      </div>
-
       {error ? <div className="settings-error">{error}</div> : null}
-    </>
+    </div>
   );
 }

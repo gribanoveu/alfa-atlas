@@ -7,11 +7,6 @@ export function StandardsRulesTab() {
 
   return (
     <>
-      <div className="settings-section-title">Стандарты API-документации</div>
-      <p className="settings-lead">
-        Правила проверки соответствия документации методов API корпоративному
-        стандарту. Выключенное правило не участвует в подсчёте баллов.
-      </p>
       <div className="standards-rules-list">
         {rules === null ? (
           <p className="settings-hint">Загрузка…</p>

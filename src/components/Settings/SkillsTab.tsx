@@ -1,18 +1,29 @@
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { useState } from "react";
 import { useSkills } from "../../hooks/useSkills";
+import type { SkillListItem } from "../../lib/skills";
 import "../Welcome/CloneRepoModal.css";
 import "./SkillsTab.css";
 
+function skillKey(item: SkillListItem): string {
+  return `${item.source}:${item.name}`;
+}
+
 export function SkillsTab() {
   const { items, error, busy, toggle, addSkill, removeSkill, openFolder } = useSkills();
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+
+  const toggleExpanded = (key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   return (
     <>
-      <div className="settings-section-title">Скилы ассистента</div>
-      <p className="settings-lead">
-        Специализированные инструкции в формате Agent Skills. Ассистент ищет и
-        загружает их через тул skill, полный список в промпт не попадает.
-        Выключенный скил не находится поиском.
-      </p>
       <div className="skills-toolbar">
         <button type="button" className="settings-btn" disabled={busy} onClick={() => void addSkill()}>
           Добавить скил
@@ -29,39 +40,56 @@ export function SkillsTab() {
         ) : (
           items.map((item) => {
             const invalid = item.error != null;
+            const key = skillKey(item);
+            const isOpen = expanded.has(key);
+            const detail = (invalid ? item.error : item.description) ?? "";
+            const hasDetail = detail.trim().length > 0;
+            const Chevron = isOpen ? ChevronDown : ChevronRight;
+
             return (
               <div
-                key={`${item.source}:${item.name}`}
-                className={`skills-row${invalid ? " is-invalid" : ""}`}
+                key={key}
+                className={`skills-row${invalid ? " is-invalid" : ""}${isOpen ? " is-open" : ""}`}
               >
-                <label className="settings-check">
-                  <input
-                    type="checkbox"
-                    checked={item.enabled && !invalid}
-                    disabled={busy || invalid}
-                    onChange={(event) => void toggle(item, event.target.checked)}
-                  />
-                  <span className="skills-row-body">
+                <div className="skills-row-main">
+                  <label className="settings-check">
+                    <input
+                      type="checkbox"
+                      checked={item.enabled && !invalid}
+                      disabled={busy || invalid}
+                      onChange={(event) => void toggle(item, event.target.checked)}
+                    />
                     <span className="skills-row-title">
                       <span className="skills-name">{item.name}</span>
                       <span className="skills-source">
                         {item.source === "bundled" ? "встроенный" : "пользовательский"}
                       </span>
                     </span>
-                    <span className="skills-description">
-                      {invalid ? item.error : item.description}
-                    </span>
-                  </span>
-                </label>
-                {item.source === "user" ? (
-                  <button
-                    type="button"
-                    className="settings-link-btn danger"
-                    disabled={busy}
-                    onClick={() => void removeSkill(item)}
-                  >
-                    Удалить
-                  </button>
+                  </label>
+                  {hasDetail ? (
+                    <button
+                      type="button"
+                      className="skills-expand-btn"
+                      aria-expanded={isOpen}
+                      aria-label={isOpen ? "Скрыть описание" : "Показать описание"}
+                      onClick={() => toggleExpanded(key)}
+                    >
+                      <Chevron size={14} aria-hidden />
+                    </button>
+                  ) : null}
+                  {item.source === "user" ? (
+                    <button
+                      type="button"
+                      className="settings-link-btn danger"
+                      disabled={busy}
+                      onClick={() => void removeSkill(item)}
+                    >
+                      Удалить
+                    </button>
+                  ) : null}
+                </div>
+                {hasDetail && isOpen ? (
+                  <p className={`skills-description${invalid ? " is-error" : ""}`}>{detail}</p>
                 ) : null}
               </div>
             );

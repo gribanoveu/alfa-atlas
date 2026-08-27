@@ -98,12 +98,12 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
   };
 
   return (
-    <div className="embeddings-tab">
-      <div className="settings-section-title">Провайдер эмбеддингов</div>
-      <p className="settings-lead">
-        Используется для семантического индекса чанков документации (поиск,
-        будущие AI-функции). Смена провайдера действует на всё приложение, а
-        не только на текущий проект.
+    <div className="settings-sections embeddings-tab">
+      <div className="settings-card">
+      <div className="settings-section-title">Провайдер</div>
+      <p className="settings-hint settings-hint-compact">
+        Смена провайдера действует на всё приложение, а не только на текущий
+        проект.
       </p>
       <div className="embeddings-provider-options">
         {PROVIDER_OPTIONS.map((option) => (
@@ -124,11 +124,12 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
       </div>
 
       {config.kind === "local" ? (
-        <div className="settings-row">
+        <>
+          <hr className="settings-card-divider" />
           <div className="settings-section-title">Модель</div>
           {modelStatus.status === "notDownloaded" ? (
             <>
-              <p className="settings-hint" style={{ paddingLeft: 0 }}>
+              <p className="settings-hint settings-hint-compact">
                 Модель ещё не загружена.
               </p>
               <div className="settings-actions">
@@ -185,9 +186,10 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
               </div>
             </>
           ) : null}
-        </div>
+        </>
       ) : (
-        <div className="settings-row">
+        <>
+          <hr className="settings-card-divider" />
           <div className="settings-section-title">Параметры эндпоинта</div>
           <label className="clone-modal-field">
             <span className="clone-modal-label">Base URL</span>
@@ -251,14 +253,14 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
               <span className="embeddings-status-badge">Ключ не задан</span>
             )}
           </div>
-        </div>
+        </>
       )}
 
-      <hr className="credentials-divider" />
+      </div>
 
-      <div className="settings-row">
+      <div className="settings-card">
         <div className="settings-section-title">Индекс эмбеддингов</div>
-        <p className="settings-hint" style={{ paddingLeft: 0 }}>
+        <p className="settings-hint settings-hint-compact">
           Пересчитывает Chunk Index для текущего проекта и обновляет векторы:
           новые чанки — добавляются, изменённые — пересчитываются, удалённые —
           убираются из индекса.
@@ -278,14 +280,14 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
           </button>
         </div>
         {!providerConfigured ? (
-          <p className="settings-hint" style={{ paddingLeft: 0 }}>
+          <p className="settings-hint settings-hint-compact">
             Провайдер ещё не готов — {config.kind === "local"
               ? "загрузите модель"
               : "укажите base URL, модель и API ключ"}.
           </p>
         ) : null}
         {lastSync ? (
-          <p className="settings-hint" style={{ paddingLeft: 0 }}>
+          <p className="settings-hint settings-hint-compact">
             Готово: добавлено {lastSync.embedded}, без изменений{" "}
             {lastSync.skippedUnchanged}, удалено {lastSync.removed}.
             {indexStatus && indexStatus.backgroundPending > 0
@@ -293,14 +295,13 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
               : null}
           </p>
         ) : indexStatus?.stale ? (
-          <p className="settings-hint" style={{ paddingLeft: 0 }}>
+          <p className="settings-hint settings-hint-compact">
             Индекс устарел (обновилось приложение) — требуется повторная синхронизация.
           </p>
         ) : indexStatus?.synced ? (
           <button
             type="button"
-            className="settings-hint settings-hint-button"
-            style={{ paddingLeft: 0 }}
+            className="settings-hint settings-hint-button settings-hint-compact"
             disabled={busy || syncing || !providerConfigured}
             title="Нажмите, чтобы синхронизировать снова"
             onClick={() => void handleSync()}

@@ -85,10 +85,6 @@
   color: var(--text-2);
 }
 
-.embeddings-tab .settings-link-btn.danger {
-  color: var(--red-tag);
-}
-
 .embeddings-status-badge {
   display: inline-flex;
   align-items: center;

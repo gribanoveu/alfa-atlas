@@ -1,8 +1,16 @@
+/* Settings dialog shell.
+ *
+ * Layout is a fixed three-part frame: header, body (sidebar + scrolling
+ * content), footer. Everything a tab component renders lands inside
+ * `.settings-page`, so the shared primitives below (`.settings-row`,
+ * `.settings-check`, `.settings-hint`, …) are what every tab styles with —
+ * per-tab CSS files only add what is genuinely specific to that tab. */
+
 .settings-backdrop {
   position: fixed;
   inset: 0;
   z-index: 1000;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -10,17 +18,22 @@
 }
 
 .settings-dialog {
-  width: min(850px, 100%);
-  height: min(650px, 100%);
+  width: min(1000px, 100%);
+  height: min(720px, 100%);
   background: var(--bg-1);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  border-radius: 10px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  /* One declaration themes every checkbox, radio and number spinner in
+   * Settings, in every tab. */
+  accent-color: var(--accent);
 }
+
+/* ── header ─────────────────────────────────────────────────────────── */
 
 .settings-header {
   flex: none;
@@ -36,6 +49,7 @@
 .settings-title {
   font-size: var(--font-ui);
   font-weight: 600;
+  letter-spacing: 0.02em;
   color: var(--text-0);
 }
 
@@ -45,10 +59,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px;
+  border-radius: 5px;
   color: var(--text-2);
-  font-size: calc(var(--font-ui) * 1.28);
-  line-height: 1;
 }
 
 .settings-close:hover {
@@ -61,24 +73,117 @@
   min-height: 0;
   min-width: 0;
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr);
+  grid-template-columns: 212px minmax(0, 1fr);
 }
+
+/* ── sidebar ────────────────────────────────────────────────────────── */
 
 .settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 6px;
+  min-height: 0;
   border-right: 1px solid var(--border);
   background: var(--bg-0);
 }
 
-.settings-nav-btn {
-  text-align: left;
-  padding: 7px 10px;
+.settings-search {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 10px 10px 8px;
+}
+
+.settings-search-icon {
+  position: absolute;
+  left: 19px;
+  color: var(--text-2);
+  pointer-events: none;
+}
+
+.settings-search-input {
+  width: 100%;
+  padding: 5px 24px 5px 27px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+  outline: none;
+}
+
+.settings-search-input::placeholder {
+  color: var(--text-2);
+}
+
+.settings-search-input:focus {
+  border-color: var(--accent);
+}
+
+.settings-search-clear {
+  position: absolute;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   border-radius: 4px;
+  color: var(--text-2);
+}
+
+.settings-search-clear:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.settings-nav-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 10px;
+}
+
+.settings-nav-group + .settings-nav-group {
+  margin-top: 12px;
+}
+
+.settings-nav-group-label {
+  font-size: var(--font-ui-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  padding: 6px 8px 4px;
+}
+
+.settings-nav-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 5px;
   color: var(--text-1);
   font-size: var(--font-ui);
+  line-height: 1.3;
+}
+
+.settings-nav-btn + .settings-nav-btn {
+  margin-top: 1px;
+}
+
+.settings-nav-icon {
+  flex: none;
+  color: var(--text-2);
+}
+
+.settings-nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-nav-btn:hover {
@@ -86,27 +191,158 @@
   color: var(--text-0);
 }
 
+.settings-nav-btn:hover .settings-nav-icon {
+  color: var(--text-1);
+}
+
 .settings-nav-btn.active {
   background: var(--accent-dim);
   color: var(--text-0);
+  font-weight: 500;
 }
+
+.settings-nav-btn.active .settings-nav-icon {
+  color: var(--accent);
+}
+
+.settings-nav-empty {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  padding: 10px 8px;
+}
+
+.settings-content-empty {
+  margin: 0;
+  padding: 24px 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+/* ── content ────────────────────────────────────────────────────────── */
 
 .settings-content {
   min-height: 0;
   min-width: 0;
   overflow: auto;
-  padding: 14px 16px;
+}
+
+.settings-page {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 20px 24px 28px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
+}
+
+.settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-0);
+}
+
+.settings-card > .settings-section-title:first-child {
+  margin-top: 0;
+}
+
+.settings-card .settings-path {
+  background: var(--bg-1);
+}
+
+.settings-card-divider {
+  height: 1px;
+  margin: 2px 0;
+  border: none;
+  background: var(--border);
+}
+
+.settings-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.settings-page-head {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-page-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-page-icon {
+  flex: none;
+  color: var(--accent);
+}
+
+.settings-page-title h3 {
+  font-size: calc(var(--font-ui) * 1.15);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.settings-page-desc {
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  line-height: 1.5;
+}
+
+/* ── shared primitives ──────────────────────────────────────────────── */
+
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
 }
 
 .settings-section-title {
-  font-size: var(--font-ui-sm);
+  font-size: var(--font-ui-xs);
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-2);
+}
+
+/* A subsection heading that follows other controls needs air above it; the
+ * first one in a page sits right under the page header instead. */
+.settings-page > .settings-section-title,
+.settings-row > .settings-section-title {
+  margin-top: 6px;
+}
+
+.settings-page > .settings-section-title:first-of-type,
+.settings-row > .settings-section-title:first-child {
+  margin-top: 0;
 }
 
 .settings-section-head {
@@ -116,28 +352,90 @@
   gap: 12px;
 }
 
-.settings-link-btn {
+.settings-lead {
   font-size: var(--font-ui-sm);
   color: var(--text-1);
-  padding: 2px 6px;
-  border-radius: 4px;
+  line-height: 1.5;
 }
 
-.settings-link-btn:hover:not(:disabled) {
-  color: var(--accent);
-  background: var(--bg-2);
+.settings-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-ui);
+  color: var(--text-0);
+  line-height: 1.45;
+  cursor: pointer;
 }
 
-.settings-link-btn:disabled {
+.settings-check input {
+  margin-top: 2px;
+  flex: none;
+}
+
+.settings-check:has(input:disabled) {
+  cursor: default;
+  color: var(--text-1);
+}
+
+.settings-hint {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  line-height: 1.5;
+  padding-left: 22px;
+}
+
+/* Hints that document a field rather than a checkbox line up with the
+ * field itself, not with a checkbox label. */
+.settings-hint-compact {
+  padding-left: 0;
+}
+
+.settings-hint code {
+  font-size: 0.95em;
+  color: var(--text-1);
+  background: var(--bg-0);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.settings-field-label {
+  font-size: var(--font-ui);
+  color: var(--text-0);
+}
+
+.settings-lang-select {
+  max-width: 220px;
+}
+
+.settings-lang-select .clone-select-trigger:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.settings-lead {
-  font-size: var(--font-ui-sm);
-  color: var(--text-1);
-  line-height: 1.45;
+.settings-number {
+  width: 120px;
+  max-width: 100%;
+  font-size: var(--font-ui);
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--text-0);
+  outline: none;
+  box-sizing: border-box;
 }
+
+.settings-number:focus {
+  border-color: var(--accent);
+}
+
+.settings-number:disabled {
+  opacity: 0.45;
+}
+
+/* ── font size grid (Внешний вид) ───────────────────────────────────── */
 
 .settings-font-grid {
   display: grid;
@@ -145,9 +443,9 @@
   gap: 6px 12px;
   align-items: center;
   width: 100%;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 7px;
   background: var(--bg-0);
   box-sizing: border-box;
 }
@@ -185,7 +483,8 @@
   line-height: 1.25;
 }
 
-.settings-font-input {
+.settings-font-input,
+.settings-number.settings-font-input {
   width: 100%;
   min-width: 0;
   padding: 4px 6px;
@@ -193,81 +492,33 @@
   box-sizing: border-box;
 }
 
-.settings-hint-compact {
-  padding-left: 0;
-}
+/* ── paths (Файлы и папки) ──────────────────────────────────────────── */
 
-.settings-row {
+.settings-path-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  width: 100%;
-}
-
-.settings-check {
-  display: flex;
-  align-items: flex-start;
   gap: 8px;
-  font-size: var(--font-ui);
-  color: var(--text-0);
-  cursor: pointer;
 }
 
-.settings-check input {
-  margin-top: 2px;
-}
-
-.settings-hint {
-  font-size: var(--font-ui-sm);
-  color: var(--text-2);
-  line-height: 1.4;
-  padding-left: 22px;
-}
-
-.settings-field-label {
-  font-size: var(--font-ui);
-  color: var(--text-0);
-}
-
-.settings-lang-select {
-  max-width: 220px;
-}
-
-.settings-lang-select .clone-select-trigger:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.settings-number {
-  width: 120px;
-  max-width: 100%;
-  font-size: var(--font-ui);
-  padding: 6px 8px;
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  background: var(--bg-0);
-  color: var(--text-0);
-  box-sizing: border-box;
-}
-
-.settings-number.settings-font-input {
-  width: 100%;
+.settings-path-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
   min-width: 0;
-  padding: 4px 6px;
 }
 
-.settings-number:disabled {
-  opacity: 0.45;
+.settings-path-label {
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
 }
 
 .settings-path {
   font-size: var(--font-ui-sm);
-  color: var(--text-1);
+  color: var(--text-0);
   background: var(--bg-0);
   border: 1px solid var(--border);
   border-radius: 5px;
-  padding: 8px 10px;
+  padding: 7px 10px;
   word-break: break-all;
   line-height: 1.4;
 }
@@ -292,11 +543,14 @@
   padding: 3px 8px;
 }
 
+/* ── buttons ────────────────────────────────────────────────────────── */
+
 .settings-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .settings-btn {
@@ -330,17 +584,56 @@
   color: #fff;
 }
 
+.settings-link-btn {
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.settings-link-btn:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--bg-2);
+}
+
+.settings-link-btn.danger {
+  color: var(--red-tag);
+}
+
+.settings-link-btn.danger:hover:not(:disabled) {
+  color: var(--red-tag);
+  background: color-mix(in srgb, var(--red-tag) 16%, transparent);
+}
+
+.settings-link-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ── footer ─────────────────────────────────────────────────────────── */
+
 .settings-footer {
   flex: none;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
   background: var(--bg-0);
 }
 
+.settings-footer-note {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
 .settings-error {
-  font-size: var(--font-ui);
+  font-size: var(--font-ui-sm);
   color: var(--red-tag);
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--red-tag) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red-tag) 35%, transparent);
+  border-radius: 5px;
+  padding: 8px 10px;
 }

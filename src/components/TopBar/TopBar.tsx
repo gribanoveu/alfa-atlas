@@ -329,7 +329,6 @@ export function TopBar({
             setSettingsOpen(false);
             setSettingsInitialSection(undefined);
           }}
-          onCloseProject={onCloseProject}
           onPrefsChange={onPrefsChange}
           onSpellcheckConfigChange={onSpellcheckConfigChange}
           initialSection={settingsInitialSection}

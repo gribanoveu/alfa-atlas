@@ -1,106 +1,247 @@
-import { Fragment, useEffect, useRef, useState } from "react";
-import { useGeneralPrefsEditor } from "../../hooks/useGeneralPrefsEditor";
+import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import {
-  AUTOSAVE_DELAY_LIMITS,
-  clampAutosaveDelayMs,
-  clampFontSizePx,
-  DEFAULT_GENERAL_PREFS,
-  FONT_SIZE_LIMITS,
-  type ErrorLanguage,
-  type GeneralPrefs,
-} from "../../lib/prefs";
-import { SUPPORTED_FORMAT_LABELS } from "../../lib/supportedFiles";
+  Bell,
+  ClipboardCheck,
+  Cpu,
+  Database,
+  FileCode,
+  FolderTree,
+  KeyRound,
+  Palette,
+  Puzzle,
+  ScrollText,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Sparkles,
+  SpellCheck,
+  X,
+} from "lucide-react";
+import type { GeneralPrefs } from "../../lib/prefs";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
+import { useGeneralPrefsEditor } from "../../hooks/useGeneralPrefsEditor";
 import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
+import { AppearanceTab } from "./AppearanceTab";
+import { AssistantBehaviorTab } from "./AssistantBehaviorTab";
 import { CredentialsTab } from "./CredentialsTab";
+import { EditorTab } from "./EditorTab";
 import { EmbeddingsTab } from "./EmbeddingsTab";
+import { GeneralTab } from "./GeneralTab";
 import { LlmTab } from "./LlmTab";
 import { LoggingTab } from "./LoggingTab";
 import { NotificationsTab } from "./NotificationsTab";
 import { PermissionsTab } from "./PermissionsTab";
-import { SpellcheckTab } from "./SpellcheckTab";
 import { SkillsTab } from "./SkillsTab";
+import { SpellcheckTab } from "./SpellcheckTab";
 import { StandardsRulesTab } from "./StandardsRulesTab";
+import { WorkspaceTab } from "./WorkspaceTab";
 
 export type SectionId =
   | "general"
+  | "appearance"
+  | "workspace"
   | "editor"
-  | "formats"
-  | "paths"
-  | "credentials"
-  | "standards"
   | "spellcheck"
-  | "embeddings"
+  | "standards"
   | "llm"
+  | "assistant"
   | "skills"
-  | "logging"
+  | "permissions"
   | "notifications"
-  | "permissions";
+  | "credentials"
+  | "embeddings"
+  | "logging";
 
-const SECTIONS: { id: SectionId; label: string }[] = [
-  { id: "general", label: "Общие" },
-  { id: "editor", label: "Редактор" },
-  { id: "formats", label: "Файлы" },
-  { id: "paths", label: "Пути" },
-  { id: "credentials", label: "Git" },
-  { id: "standards", label: "Стандарты" },
-  { id: "spellcheck", label: "Орфография" },
-  { id: "embeddings", label: "Эмбеддинги" },
-  { id: "llm", label: "Провайдеры" },
-  { id: "skills", label: "Скилы" },
-  { id: "logging", label: "Логирование" },
-  { id: "notifications", label: "Уведомления" },
-  { id: "permissions", label: "Разрешения" },
-];
-
-type FontSizePrefKey =
-  | "uiFontSizePx"
-  | "sidebarFontSizePx"
-  | "editorFontSizePx"
-  | "previewFontSizePx";
-
-const FONT_SIZE_FIELDS: {
-  key: FontSizePrefKey;
-  id: string;
+type Section = {
+  id: SectionId;
+  /** Short label in the sidebar. */
   label: string;
-  hint: string;
-}[] = [
+  /** Heading above the section's content — may be longer than `label`. */
+  title: string;
+  /** One line under the heading; every section carries its own, so the tab
+   * components no longer repeat a lead paragraph of their own. */
+  description: string;
+  icon: ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean }>;
+  /** Extra terms the sidebar filter matches on, beyond label and title. */
+  keywords: string;
+};
+
+type SectionGroup = { label: string; sections: Section[] };
+
+/** Sections grouped by what the user is actually configuring: the app
+ * itself, the editing surface, the assistant, and the outside world it
+ * talks to. The order inside each group runs from the most commonly
+ * changed setting to the most niche. */
+const GROUPS: SectionGroup[] = [
   {
-    key: "uiFontSizePx",
-    id: "font-ui-size",
-    label: "Интерфейс",
-    hint: "Панели, меню, статус",
+    label: "Приложение",
+    sections: [
+      {
+        id: "general",
+        label: "Общие",
+        title: "Общие",
+        description:
+          "Поведение при запуске и общие настройки приложения",
+        icon: Settings2,
+        keywords: "запуск проект welcome язык ошибки диагностики",
+      },
+      {
+        id: "appearance",
+        label: "Внешний вид",
+        title: "Внешний вид",
+        description:
+          "Размер шрифта по зонам интерфейса и прочие настройки внешнего вида",
+        icon: Palette,
+        keywords: "шрифт размер интерфейс редактор превью сайдбар external дерево",
+      },
+      {
+        id: "workspace",
+        label: "Файлы и папки",
+        title: "Файлы и папки",
+        description:
+          "Расположение файлов и папок, а также подерживаемые форматы файлов",
+        icon: FolderTree,
+        keywords: "пути папка настроек atlas планы форматы расширения",
+      },
+    ],
   },
   {
-    key: "sidebarFontSizePx",
-    id: "font-sidebar-size",
-    label: "Боковая панель",
-    hint: "Дерево файлов",
-  },
-  {
-    key: "editorFontSizePx",
-    id: "font-editor-size",
     label: "Редактор",
-    hint: "Monaco, diff",
+    sections: [
+      {
+        id: "editor",
+        label: "Редактирование",
+        title: "Редактирование",
+        description:
+          "Когда изменения попадают на диск и как разрешаются ссылки в OpenAPI-спеках",
+        icon: FileCode,
+        keywords: "автосохранение задержка вкладки openapi ref common спек",
+      },
+      {
+        id: "spellcheck",
+        label: "Орфография",
+        title: "Проверка орфографии",
+        description:
+          "Подсвечивает слова с ошибкой прямо в редакторе. Слово считается ошибкой, только если его нет ни в одном включённом словаре",
+        icon: SpellCheck,
+        keywords: "словарь camelCase txt личный словарь опечатки",
+      },
+      {
+        id: "standards",
+        label: "Стандарты",
+        title: "Стандарты API-документации",
+        description:
+          "Правила проверки документации методов API на соответствие корпоративному стандарту. Выключенное правило не участвует в подсчёте баллов",
+        icon: ClipboardCheck,
+        keywords: "правила проверка баллы вес api документация",
+      },
+    ],
   },
   {
-    key: "previewFontSizePx",
-    id: "font-preview-size",
-    label: "Превью",
-    hint: "AsciiDoc, Markdown, JSON/YAML",
+    label: "Ассистент",
+    sections: [
+      {
+        id: "llm",
+        label: "Провайдеры",
+        title: "Провайдеры LLM",
+        description:
+          "Языковая модель для чата с ассистентом. Встроенные провайдеры уже настроены — нужен только API-ключ; можно дополнительно добавить свой провайдер LLM",
+        icon: Cpu,
+        keywords: "llm api ключ base url модель сертификат лимиты токены",
+      },
+      {
+        id: "assistant",
+        label: "Поведение",
+        title: "Поведение ассистента",
+        description:
+          "Долгосрочная память и подсказки",
+        icon: Sparkles,
+        keywords: "память факты подсказки follow-up предложения чат",
+      },
+      {
+        id: "skills",
+        label: "Скилы",
+        title: "Скилы ассистента",
+        description:
+          "Специализированные инструкции в формате Agent Skills. Ассистент ищет их через тул skill — полный список в промпт не попадает, а выключенный скил не находится поиском",
+        icon: Puzzle,
+        keywords: "agent skills инструкции встроенные пользовательские",
+      },
+      {
+        id: "permissions",
+        label: "Разрешения",
+        title: "Разрешения инструментов",
+        description:
+          "Что ассистент может делать в текущем проекте и какие действия выполняются без подтверждения",
+        icon: ShieldCheck,
+        keywords: "инструменты доступ автоодобрение разрешать всегда отозвать",
+      },
+      {
+        id: "notifications",
+        label: "Уведомления",
+        title: "Уведомления ассистента",
+        description:
+          "Звук и системные уведомления о ходе работы",
+        icon: Bell,
+        keywords: "звук баннер завершение вопрос",
+      },
+    ],
+  },
+  {
+    label: "Данные и доступ",
+    sections: [
+      {
+        id: "credentials",
+        label: "Git",
+        title: "Доступ к Git",
+        description:
+          "SSH-ключ, которым приложение авторизуется в репозиториях",
+        icon: KeyRound,
+        keywords: "ssh ключ ed25519 known_hosts репозиторий авторизация",
+      },
+      {
+        id: "embeddings",
+        label: "Поиск и индекс",
+        title: "Эмбеддинги и индекс",
+        description:
+          "Семантический индекс чанков документации: где считаются векторы и в каком состоянии индекс текущего проекта",
+        icon: Database,
+        keywords: "эмбеддинги вектор bge локально api индекс синхронизация поиск",
+      },
+      {
+        id: "logging",
+        label: "Диагностика",
+        title: "Журналы",
+        description:
+          "Журналы запросов к модели и вызовов инструментов. Полезны при разборе ошибок, но могут содержать чувствительные данные. Включенное логгирование запросов и ответов модели на постоянной основе может занимать много места на диске, используйте его только при необходимости",
+        icon: ScrollText,
+        keywords: "логи logging jsonl tool calls отладка",
+      },
+    ],
   },
 ];
 
-const ERROR_LANGUAGE_OPTIONS: { value: ErrorLanguage; label: string }[] = [
-  { value: "ru", label: "Русский" },
-  { value: "en", label: "English" },
-];
+const ALL_SECTIONS: Section[] = GROUPS.flatMap((group) => group.sections);
+
+function tokenize(text: string): string[] {
+  return text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/** Word-prefix match rather than a raw substring: Russian settings copy is
+ * full of words like «выключено», which a substring search would hand back
+ * for the query «ключ». Every query word has to prefix some word of the
+ * section, so «шриф» still finds «Размер шрифта». */
+function matches(section: Section, queryWords: string[]): boolean {
+  const words = tokenize(
+    `${section.label} ${section.title} ${section.description} ${section.keywords}`,
+  );
+  return queryWords.every((needle) => words.some((word) => word.startsWith(needle)));
+}
 
 type SettingsDialogProps = {
   projectRoot: string | null;
   onClose: () => void;
-  onCloseProject?: () => Promise<void>;
   onPrefsChange?: (prefs: GeneralPrefs) => void;
   onSpellcheckConfigChange?: (config: SpellcheckConfig) => void;
   initialSection?: SectionId;
@@ -113,59 +254,64 @@ export function SettingsDialog({
   onSpellcheckConfigChange,
   initialSection,
 }: SettingsDialogProps) {
+  const prefsEditor = useGeneralPrefsEditor(onPrefsChange);
   const [section, setSection] = useState<SectionId>(initialSection ?? "general");
-  const {
-    prefs,
-    paths,
-    error,
-    busy,
-    patchPrefs,
-    stagePref,
-    persistPref,
-    resetFontPrefs,
-    openUserSettingsDir,
-  } = useGeneralPrefsEditor(onPrefsChange);
-  const [langOpen, setLangOpen] = useState(false);
-  const langRef = useRef<HTMLDivElement>(null);
+  const [query, setQuery] = useState("");
+  const contentRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    if (initialSection) setSection(initialSection);
+  }, [initialSection]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (langOpen) {
-        setLangOpen(false);
-        return;
-      }
-      onClose();
+      if (event.key === "Escape") onClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [langOpen, onClose]);
+  }, [onClose]);
 
+  // Each section starts at the top rather than inheriting the previous
+  // section's scroll offset.
   useEffect(() => {
-    if (!langOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!langRef.current?.contains(event.target as Node)) {
-        setLangOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [langOpen]);
-
-  useEffect(() => {
-    setLangOpen(false);
+    contentRef.current?.scrollTo({ top: 0 });
   }, [section]);
 
+  const filteredGroups = useMemo(() => {
+    const queryWords = tokenize(query);
+    if (queryWords.length === 0) return GROUPS;
+    return GROUPS.map((group) => ({
+      ...group,
+      sections: group.sections.filter((item) => matches(item, queryWords)),
+    })).filter((group) => group.sections.length > 0);
+  }, [query]);
+
+  const visibleSections = useMemo(
+    () => filteredGroups.flatMap((group) => group.sections),
+    [filteredGroups],
+  );
+
+  const firstMatch = visibleSections[0] ?? null;
+  const searchActive = tokenize(query).length > 0;
+  const noSearchResults = searchActive && visibleSections.length === 0;
+
+  useEffect(() => {
+    if (!searchActive) return;
+    if (visibleSections.length === 0) return;
+    if (visibleSections.some((item) => item.id === section)) return;
+    setSection(visibleSections[0]!.id);
+  }, [searchActive, visibleSections, section]);
+
+  const active =
+    ALL_SECTIONS.find((item) => item.id === section) ?? ALL_SECTIONS[0]!;
+  const ActiveIcon = active.icon;
+
   return (
-    <div
-      className="settings-backdrop"
-      role="presentation"
-      onClick={onClose}
-    >
+    <div className="settings-backdrop" role="presentation" onClick={onClose}>
       <div
         className="settings-dialog"
         role="dialog"
+        aria-modal="true"
         aria-labelledby="settings-dialog-title"
         onClick={(event) => event.stopPropagation()}
       >
@@ -179,373 +325,115 @@ export function SettingsDialog({
             onClick={onClose}
             aria-label="Закрыть"
           >
-            ×
+            <X size={15} aria-hidden />
           </button>
         </header>
 
         <div className="settings-body">
           <nav className="settings-nav" aria-label="Разделы настроек">
-            {SECTIONS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`settings-nav-btn${section === item.id ? " active" : ""}`}
-                onClick={() => setSection(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
+            <div className="settings-search">
+              <Search size={13} className="settings-search-icon" aria-hidden />
+              <input
+                type="text"
+                className="settings-search-input"
+                placeholder="Поиск настроек"
+                aria-label="Поиск по разделам настроек"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && firstMatch) {
+                    setSection(firstMatch.id);
+                  }
+                  if (event.key === "Escape" && query) {
+                    event.stopPropagation();
+                    setQuery("");
+                  }
+                }}
+              />
+              {query ? (
+                <button
+                  type="button"
+                  className="settings-search-clear"
+                  aria-label="Очистить поиск"
+                  onClick={() => setQuery("")}
+                >
+                  <X size={12} aria-hidden />
+                </button>
+              ) : null}
+            </div>
+
+            <div className="settings-nav-list">
+              {filteredGroups.map((group) => (
+                <div key={group.label} className="settings-nav-group">
+                  <div className="settings-nav-group-label">{group.label}</div>
+                  {group.sections.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = section === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`settings-nav-btn${isActive ? " active" : ""}`}
+                        aria-current={isActive ? "page" : undefined}
+                        onClick={() => setSection(item.id)}
+                      >
+                        <Icon size={14} className="settings-nav-icon" aria-hidden />
+                        <span className="settings-nav-label">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+              {filteredGroups.length === 0 ? (
+                <p className="settings-nav-empty">Ничего не найдено</p>
+              ) : null}
+            </div>
           </nav>
 
-          <div className="settings-content">
-            {section === "general" ? (
-              <>
-                <div className="settings-section-title">Общие</div>
-                <div className="settings-row">
-                  <label className="settings-check">
-                    <input
-                      type="checkbox"
-                      checked={prefs?.restoreLastProject ?? true}
-                      disabled={!prefs || busy}
-                      onChange={(event) =>
-                        patchPrefs({ restoreLastProject: event.target.checked })
-                      }
-                    />
-                    <span>Открывать последний проект при запуске</span>
-                  </label>
-                  <p className="settings-hint">
-                    Если выключено, приложение стартует с экрана Welcome, даже
-                    если путь к проекту сохранён.
-                  </p>
-                </div>
-                <div className="settings-row">
-                  <span
-                    className="settings-field-label"
-                    id="error-language-label"
-                  >
-                    Язык сообщений об ошибках
-                  </span>
-                  <div className="clone-select settings-lang-select" ref={langRef}>
-                    <button
-                      type="button"
-                      id="error-language"
-                      className={`clone-select-trigger${langOpen ? " is-open" : ""}`}
-                      aria-haspopup="listbox"
-                      aria-expanded={langOpen}
-                      aria-labelledby="error-language-label"
-                      disabled={!prefs || busy}
-                      onClick={() => setLangOpen((open) => !open)}
-                    >
-                      <span className="clone-select-value">
-                        <span className="clone-select-path">
-                          {ERROR_LANGUAGE_OPTIONS.find(
-                            (o) => o.value === (prefs?.errorLanguage ?? "ru"),
-                          )?.label ?? "Русский"}
-                        </span>
-                      </span>
-                      <span className="clone-select-chevron" aria-hidden>
-                        ▾
-                      </span>
-                    </button>
-                    {langOpen ? (
-                      <div className="clone-select-menu" role="listbox">
-                        {ERROR_LANGUAGE_OPTIONS.map((option) => {
-                          const active =
-                            option.value === (prefs?.errorLanguage ?? "ru");
-                          return (
-                            <button
-                              key={option.value}
-                              type="button"
-                              role="option"
-                              aria-selected={active}
-                              className={`clone-select-option${active ? " is-active" : ""}`}
-                              onClick={() => {
-                                patchPrefs({ errorLanguage: option.value });
-                                setLangOpen(false);
-                              }}
-                            >
-                              <span className="clone-select-path">
-                                {option.label}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                  <p className="settings-hint">
-                    Язык текста диагностик в панели «Проблемы» (битые include,
-                    xref, изображения, циклы и т.п.). Применяется при следующей
-                    переиндексации.
-                  </p>
-                </div>
-                <div className="settings-row">
-                  <div className="settings-section-head">
-                    <div className="settings-section-title">Шрифты</div>
-                    <button
-                      type="button"
-                      className="settings-link-btn"
-                      disabled={!prefs || busy}
-                      onClick={resetFontPrefs}
-                    >
-                      Сбросить
-                    </button>
-                  </div>
-                  <div
-                    className="settings-font-grid"
-                    role="group"
-                    aria-label="Размер шрифта по зонам"
-                  >
-                    <span className="settings-font-grid-head">Зона</span>
-                    <span className="settings-font-grid-head">px</span>
-                    {FONT_SIZE_FIELDS.map(({ key, id, label, hint }) => (
-                      <Fragment key={key}>
-                        <label className="settings-font-label" htmlFor={id}>
-                          <span className="settings-font-name">{label}</span>
-                          <span className="settings-font-desc">{hint}</span>
-                        </label>
-                        <input
-                          id={id}
-                          className="settings-number settings-font-input"
-                          type="number"
-                          min={FONT_SIZE_LIMITS.min}
-                          max={FONT_SIZE_LIMITS.max}
-                          step={FONT_SIZE_LIMITS.step}
-                          value={prefs?.[key] ?? DEFAULT_GENERAL_PREFS[key]}
-                          disabled={!prefs || busy}
-                          onChange={(event) => {
-                            if (!prefs) return;
-                            const raw = Number(event.target.value);
-                            if (!Number.isFinite(raw)) return;
-                            stagePref({
-                              [key]: clampFontSizePx(raw),
-                            } as Pick<GeneralPrefs, FontSizePrefKey>);
-                          }}
-                          onBlur={() => {
-                            if (!prefs) return;
-                            void persistPref({
-                              [key]: clampFontSizePx(prefs[key]),
-                            } as Pick<GeneralPrefs, FontSizePrefKey>);
-                          }}
-                        />
-                      </Fragment>
-                    ))}
-                  </div>
-                  <p className="settings-hint settings-hint-compact">
-                    {FONT_SIZE_LIMITS.min}–{FONT_SIZE_LIMITS.max} px, шаг{" "}
-                    {FONT_SIZE_LIMITS.step}. Изменения видны сразу, сохранение —
-                    при потере фокуса.
-                  </p>
-                </div>
-              </>
-            ) : null}
-
-            {section === "editor" ? (
-              <>
-                <div className="settings-section-title">Автосохранение</div>
-                <div className="settings-row">
-                  <label className="settings-check">
-                    <input
-                      type="checkbox"
-                      checked={prefs?.autosaveEnabled ?? true}
-                      disabled={!prefs || busy}
-                      onChange={(event) =>
-                        patchPrefs({ autosaveEnabled: event.target.checked })
-                      }
-                    />
-                    <span>Автосохранение при редактировании</span>
-                  </label>
-                  <p className="settings-hint">
-                    Периодически записывает файл на диск после паузы ввода.
-                  </p>
-                </div>
-                <div className="settings-row">
-                  <label className="settings-check">
-                    <input
-                      type="checkbox"
-                      checked={prefs?.saveOnTabSwitch ?? true}
-                      disabled={!prefs || busy}
-                      onChange={(event) =>
-                        patchPrefs({ saveOnTabSwitch: event.target.checked })
-                      }
-                    />
-                    <span>Сохранять при переключении вкладки</span>
-                  </label>
-                </div>
-                <div className="settings-row">
-                  <label className="settings-field-label" htmlFor="autosave-delay">
-                    Задержка автосохранения (мс)
-                  </label>
-                  <input
-                    id="autosave-delay"
-                    className="settings-number"
-                    type="number"
-                    min={AUTOSAVE_DELAY_LIMITS.min}
-                    max={AUTOSAVE_DELAY_LIMITS.max}
-                    step={100}
-                    value={prefs?.autosaveDelayMs ?? 1000}
-                    disabled={!prefs || busy || !(prefs?.autosaveEnabled ?? true)}
-                    onChange={(event) => {
-                      if (!prefs) return;
-                      const raw = Number(event.target.value);
-                      if (!Number.isFinite(raw)) return;
-                      stagePref({ autosaveDelayMs: clampAutosaveDelayMs(raw) });
-                    }}
-                    onBlur={() => {
-                      if (!prefs) return;
-                      persistPref({
-                        autosaveDelayMs: clampAutosaveDelayMs(prefs.autosaveDelayMs),
-                      });
-                    }}
-                  />
-                  <p className="settings-hint">
-                    От {AUTOSAVE_DELAY_LIMITS.min} до{" "}
-                    {AUTOSAVE_DELAY_LIMITS.max} мс.
-                  </p>
-                </div>
-                <div className="settings-row">
-                  <div className="settings-section-title">Проводник</div>
-                  <label className="settings-check">
-                    <input
-                      type="checkbox"
-                      checked={prefs?.separateExternalFolder ?? true}
-                      disabled={!prefs || busy}
-                      onChange={(event) =>
-                        patchPrefs({
-                          separateExternalFolder: event.target.checked,
-                        })
-                      }
-                    />
-                    <span>Отдельно показывать папку _external</span>
-                  </label>
-                  <p className="settings-hint">
-                    Если в корне документации есть папка _external, она
-                    отображается отдельным блоком под основным деревом.
-                  </p>
-                </div>
-                <div className="settings-row">
-                  <div className="settings-section-title">OpenAPI</div>
-                  <label className="settings-check">
-                    <input
-                      type="checkbox"
-                      checked={prefs?.openApiRefFallbackEnabled ?? true}
-                      disabled={!prefs || busy}
-                      onChange={(event) =>
-                        patchPrefs({
-                          openApiRefFallbackEnabled: event.target.checked,
-                        })
-                      }
-                    />
-                    <span>
-                      Подставлять встроенный common-спек OpenAPI, если файл не
-                      найден
-                    </span>
-                  </label>
-                  <p className="settings-hint">
-                    Если $ref ссылается на build/common/META-INF/specs/api.yaml
-                    (build-артефакт Java/Gradle-проекта, появляющийся только
-                    после сборки) и этого файла нет на диске, редактор
-                    подставляет встроенную копию этого common-спека вместо
-                    диагностики «file not found».
-                  </p>
-                </div>
-              </>
-            ) : null}
-
-            {section === "formats" ? (
-              <>
-                <div className="settings-section-title">Поддерживаемые форматы</div>
-                <p className="settings-lead">
-                  Alfa Atlas открывает и редактирует файлы со следующими
-                  расширениями.
+          <div className="settings-content" ref={contentRef}>
+            <div className="settings-page">
+              {noSearchResults ? (
+                <p className="settings-content-empty">
+                  Ничего не найдено по запросу «{query}»
                 </p>
-                <div className="settings-formats">
-                  {SUPPORTED_FORMAT_LABELS.map((label) => (
-                    <span key={label} className="settings-format-chip">
-                      {label}
-                    </span>
-                  ))}
-                </div>
-              </>
-            ) : null}
+              ) : (
+                <>
+                  <header className="settings-page-head">
+                    <div className="settings-page-title">
+                      <ActiveIcon size={16} className="settings-page-icon" aria-hidden />
+                      <h3>{active.title}</h3>
+                    </div>
+                    <p className="settings-page-desc">{active.description}</p>
+                  </header>
 
-            {section === "paths" ? (
-              <>
-                <div className="settings-section-title">Пути</div>
-                <div className="settings-row">
-                  <span className="settings-hint" style={{ paddingLeft: 0 }}>
-                    Папка настроек пользователя (~/.atlas)
-                  </span>
-                  <div className="settings-path">
-                    {paths?.userSettingsDir ?? "…"}
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-hint" style={{ paddingLeft: 0 }}>
-                    Планы (~/.atlas/plans)
-                  </span>
-                  <div className="settings-path">{paths?.plansDir ?? "…"}</div>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-hint" style={{ paddingLeft: 0 }}>
-                    Текущий / сохранённый проект
-                  </span>
-                  <div
-                    className={`settings-path${!paths?.projectRoot && !projectRoot ? " empty" : ""}`}
-                  >
-                    {projectRoot ?? paths?.projectRoot ?? "Проект не открыт"}
-                  </div>
-                </div>
-                <div className="settings-row">
-                  <span className="settings-hint" style={{ paddingLeft: 0 }}>
-                    Настройки проекта (.atlas)
-                  </span>
-                  <div
-                    className={`settings-path${!paths?.projectConfigDir && !projectRoot ? " empty" : ""}`}
-                  >
-                    {projectRoot
-                      ? `${projectRoot.replace(/[/\\]+$/, "")}/.atlas`
-                      : (paths?.projectConfigDir ?? "—")}
-                  </div>
-                </div>
-                <div className="settings-actions">
-                  <button
-                    type="button"
-                    className="settings-btn primary"
-                    disabled={!paths?.userSettingsDir}
-                    onClick={() => void openUserSettingsDir()}
-                  >
-                    Открыть папку настроек
-                  </button>
-                </div>
-              </>
-            ) : null}
-
-            {section === "credentials" ? <CredentialsTab /> : null}
-
-            {section === "standards" ? <StandardsRulesTab /> : null}
-
-            {section === "spellcheck" ? (
-              <SpellcheckTab onConfigChange={onSpellcheckConfigChange} />
-            ) : null}
-
-            {section === "embeddings" ? <EmbeddingsTab repoRoot={projectRoot} /> : null}
-
-            {section === "llm" ? <LlmTab /> : null}
-
-            {section === "skills" ? <SkillsTab /> : null}
-
-            {section === "logging" ? <LoggingTab /> : null}
-
-            {section === "notifications" ? <NotificationsTab /> : null}
-
-            {section === "permissions" ? <PermissionsTab /> : null}
-
-            {error ? <div className="settings-error">{error}</div> : null}
+                  {section === "general" ? <GeneralTab editor={prefsEditor} /> : null}
+                  {section === "appearance" ? <AppearanceTab editor={prefsEditor} /> : null}
+                  {section === "workspace" ? (
+                    <WorkspaceTab projectRoot={projectRoot} editor={prefsEditor} />
+                  ) : null}
+                  {section === "editor" ? <EditorTab editor={prefsEditor} /> : null}
+                  {section === "spellcheck" ? (
+                    <SpellcheckTab onConfigChange={onSpellcheckConfigChange} />
+                  ) : null}
+                  {section === "standards" ? <StandardsRulesTab /> : null}
+                  {section === "llm" ? <LlmTab /> : null}
+                  {section === "assistant" ? <AssistantBehaviorTab /> : null}
+                  {section === "skills" ? <SkillsTab /> : null}
+                  {section === "permissions" ? <PermissionsTab /> : null}
+                  {section === "notifications" ? <NotificationsTab /> : null}
+                  {section === "credentials" ? <CredentialsTab /> : null}
+                  {section === "embeddings" ? <EmbeddingsTab repoRoot={projectRoot} /> : null}
+                  {section === "logging" ? <LoggingTab /> : null}
+                </>
+              )}
+            </div>
           </div>
         </div>
 
         <footer className="settings-footer">
+          <span className="settings-footer-note">
+            Изменения сохраняются сразу
+          </span>
           <button type="button" className="settings-btn" onClick={onClose}>
             Закрыть
           </button>

@@ -27,15 +27,9 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
   } = useSpellcheckSettings(onConfigChange);
 
   return (
-    <>
-      <div className="settings-section-title">Проверка орфографии</div>
-      <p className="settings-lead">
-        Подсвечивает слова, написанные с ошибкой, прямо в редакторе, и
-        предлагает исправление. Слово считается ошибкой, только если оно не
-        найдено ни в одном из включённых словарей.
-      </p>
-
-      <div className="settings-row">
+    <div className="settings-sections">
+      <div className="settings-card">
+        <div className="settings-section-title">Проверка орфографии</div>
         <label className="settings-check">
           <input
             type="checkbox"
@@ -45,9 +39,9 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
           />
           <span>Включить проверку орфографии</span>
         </label>
-      </div>
 
-      <div className="settings-row">
+        <hr className="settings-card-divider" />
+
         <label className="settings-check">
           <input
             type="checkbox"
@@ -57,9 +51,9 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
           />
           <span>Не проверять слова в camelCase (getUserInfo, isEnabled)</span>
         </label>
-      </div>
 
-      <div className="settings-row">
+        <hr className="settings-card-divider" />
+
         <label className="settings-check">
           <input
             type="checkbox"
@@ -67,40 +61,43 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
             disabled={!config || busy || !(config?.enabled ?? true)}
             onChange={(event) => toggleCheckTxt(event.target.checked)}
           />
-          <span>Проверять файлы .txt</span>
+          <span>Проверять файлы .txt (может замедлять отклик редактора при открытии файлов без связанного текста, таких фалов как конфигурационные файлы и подобное)</span>
         </label>
       </div>
 
-      <div className="standards-rules-list">
-        {dictionaries === null ? (
-          <p className="settings-hint">Загрузка…</p>
-        ) : (
-          dictionaries.map((dict) => (
-            <div key={dict.id} className="standards-rule-row">
-              <label className="settings-check">
-                <input
-                  type="checkbox"
-                  checked={isDictionaryEnabled(dict)}
-                  disabled={!config || busy || !(config?.enabled ?? true)}
-                  onChange={(event) =>
-                    toggleDictionary(dict, event.target.checked)
-                  }
-                />
-                <span>{dict.title}</span>
-              </label>
-            </div>
-          ))
-        )}
+      <div className="settings-card">
+        <div className="settings-section-title">Словари</div>
+        <div className="standards-rules-list">
+          {dictionaries === null ? (
+            <p className="settings-hint">Загрузка…</p>
+          ) : (
+            dictionaries.map((dict) => (
+              <div key={dict.id} className="standards-rule-row">
+                <label className="settings-check">
+                  <input
+                    type="checkbox"
+                    checked={isDictionaryEnabled(dict)}
+                    disabled={!config || busy || !(config?.enabled ?? true)}
+                    onChange={(event) =>
+                      toggleDictionary(dict, event.target.checked)
+                    }
+                  />
+                  <span>{dict.title}</span>
+                </label>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
-      <div className="settings-section-title">Личный словарь</div>
-      <p className="settings-lead">
-        Слова, которые вы добавили как правильные (через быстрое исправление
-        в редакторе или здесь). Хранится в{" "}
-        <code>~/.atlas/dictionaries/custom.txt</code>.
-      </p>
+      <div className="settings-card">
+        <div className="settings-section-title">Личный словарь</div>
+        <p className="settings-hint settings-hint-compact">
+          Слова, которые вы добавили как правильные (через быстрое исправление
+          в редакторе или здесь). Хранится в{" "}
+          <code>~/.atlas/dictionaries/custom.txt</code>.
+        </p>
 
-      <div className="settings-row">
         <div className="spellcheck-add-word">
           <input
             type="text"
@@ -122,31 +119,31 @@ export function SpellcheckTab({ onConfigChange }: SpellcheckTabProps) {
             Добавить
           </button>
         </div>
-      </div>
 
-      <div className="standards-rules-list">
-        {words === null ? (
-          <p className="settings-hint">Загрузка…</p>
-        ) : words.length === 0 ? (
-          <p className="settings-hint">Словарь пуст.</p>
-        ) : (
-          words.map((word) => (
-            <div key={word} className="standards-rule-row">
-              <span>{word}</span>
-              <button
-                type="button"
-                className="settings-btn"
-                disabled={busy}
-                onClick={() => void removeWord(word)}
-              >
-                Удалить
-              </button>
-            </div>
-          ))
-        )}
+        <div className="standards-rules-list">
+          {words === null ? (
+            <p className="settings-hint">Загрузка…</p>
+          ) : words.length === 0 ? (
+            <p className="settings-hint">Словарь пуст.</p>
+          ) : (
+            words.map((word) => (
+              <div key={word} className="standards-rule-row">
+                <span className="spellcheck-word">{word}</span>
+                <button
+                  type="button"
+                  className="settings-link-btn danger"
+                  disabled={busy}
+                  onClick={() => void removeWord(word)}
+                >
+                  Удалить
+                </button>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       {error ? <div className="settings-error">{error}</div> : null}
-    </>
+    </div>
   );
 }

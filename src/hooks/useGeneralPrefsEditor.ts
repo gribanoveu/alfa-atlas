@@ -127,3 +127,5 @@ export function useGeneralPrefsEditor(
     openUserSettingsDir,
   };
 }
+
+export type GeneralPrefsEditor = ReturnType<typeof useGeneralPrefsEditor>;

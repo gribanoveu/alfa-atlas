@@ -43,7 +43,6 @@ export function LlmTab() {
     loadModels,
     testConnection,
     setRateLimitEnabled,
-    setMemoryExtractionEnabled,
   } = useLlmSetup();
 
   const activeId = settings?.activeProviderId ?? providers[0]?.id ?? null;
@@ -110,14 +109,18 @@ export function LlmTab() {
     const onPointerDown = (event: PointerEvent) => {
       if (!modelSelectRef.current?.contains(event.target as Node)) setModelSelectOpen(false);
     };
+    // Capture phase + `stopPropagation`, so Escape closes the dropdown without
+    // also reaching the Settings dialog's own bubble-phase Escape handler.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setModelSelectOpen(false);
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setModelSelectOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keydown", onKeyDown, true);
     };
   }, [modelSelectOpen]);
 
@@ -179,14 +182,7 @@ export function LlmTab() {
   const isConfigured = (providerId: string) => hasApiKeyMap[providerId] === true;
 
   return (
-    <div className="llm-tab">
-      <div className="settings-section-title">Провайдеры LLM</div>
-      <p className="settings-lead">
-        Провайдер языковой модели для будущего чата с ассистентом (отдельно от
-        провайдера эмбеддингов). Встроенные провайдеры уже настроены — нужно
-        только вставить API-ключ; можно также добавить свой.
-      </p>
-
+    <div className="settings-sections llm-tab">
       <div className="llm-provider-list">
         {providers.map((provider) => {
           const isOpen = provider.id === expandedId;
@@ -217,7 +213,7 @@ export function LlmTab() {
               {isOpen ? (
                 <div className="settings-row llm-provider-detail">
                   {isActive ? (
-                    <p className="settings-hint llm-inline-success" style={{ paddingLeft: 0 }}>
+                    <p className="settings-hint llm-inline-success settings-hint-compact">
                       Этот провайдер используется для чата.
                     </p>
                   ) : (
@@ -248,7 +244,7 @@ export function LlmTab() {
                     />
                   </label>
                   {provider.isSystem ? (
-                    <p className="settings-hint" style={{ paddingLeft: 0 }}>
+                    <p className="settings-hint settings-hint-compact">
                       Встроенный провайдер — base URL задаётся сборкой приложения.
                     </p>
                   ) : null}
@@ -445,17 +441,15 @@ export function LlmTab() {
           );
         })}
         {providers.length === 0 ? (
-          <p className="settings-hint" style={{ paddingLeft: 0 }}>
+          <p className="settings-hint settings-hint-compact">
             Провайдеры не настроены.
           </p>
         ) : null}
       </div>
 
-      <hr className="credentials-divider" />
-
-      <div className="settings-row llm-add-provider">
+      <div className="settings-card llm-add-provider">
         <div className="settings-section-title">Добавить провайдера</div>
-        <p className="settings-hint" style={{ paddingLeft: 0 }}>
+        <p className="settings-hint settings-hint-compact">
           Укажите название и адрес OpenAI-совместимого API — модель, сертификат и ключ
           настраиваются после добавления, в развёрнутой карточке провайдера.
         </p>
@@ -491,15 +485,8 @@ export function LlmTab() {
         </div>
       </div>
 
-      <hr className="credentials-divider" />
-
-      <div className="settings-section-title">Лимиты API</div>
-      <p className="settings-lead">
-        Чип в статус-баре считает completion-токены по правилу, зашитому в
-        приложение для выбранного провайдера — так же, как список системных
-        провайдеров. Пороги и окно здесь не редактируются.
-      </p>
-      <div className="settings-row">
+      <div className="settings-card">
+        <div className="settings-section-title">Лимиты API</div>
         <label className="settings-check">
           <input
             type="checkbox"
@@ -512,30 +499,6 @@ export function LlmTab() {
         <p className="settings-hint">
           Для AlfaGen — скользящее окно EVC. Выключите, чтобы скрыть чип и не
           записывать расход токенов.
-        </p>
-      </div>
-
-      <hr className="credentials-divider" />
-
-      <div className="settings-section-title">Память ассистента</div>
-      <p className="settings-lead">
-        После каждого ответа отдельный вызов модели извлекает долговечные факты
-        и записывает их в память. Основной агент об этом не знает — задержка
-        ответа не зависит от записи.
-      </p>
-      <div className="settings-row">
-        <label className="settings-check">
-          <input
-            type="checkbox"
-            checked={settings?.memoryExtractionEnabled ?? true}
-            disabled={busy || !settings}
-            onChange={(event) => void setMemoryExtractionEnabled(event.target.checked)}
-          />
-          <span>Извлекать факты в память после ответа</span>
-        </label>
-        <p className="settings-hint">
-          Выключите, если не хотите, чтобы диалоги пополняли долгосрочную память.
-          Уже сохранённые факты по-прежнему подмешиваются в контекст.
         </p>
       </div>
 
