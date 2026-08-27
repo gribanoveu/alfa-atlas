@@ -1,3 +1,4 @@
+import { Trash2 } from "lucide-react";
 import type { GitCommitSummary } from "../../lib/git";
 import "../RightDock/GitPanel.css";
 import "./GitCommitList.css";
@@ -22,6 +23,10 @@ type GitCommitListProps = {
   overflowCount?: number;
   selectedHash?: string | null;
   onSelect?: (hash: string) => void;
+  onOpenCommit?: (hash: string) => void;
+  unpushedHashes?: ReadonlySet<string>;
+  onDropCommit?: (hash: string) => void;
+  dropBusy?: boolean;
 };
 
 export function GitCommitList({
@@ -31,6 +36,10 @@ export function GitCommitList({
   overflowCount = 0,
   selectedHash = null,
   onSelect,
+  onOpenCommit,
+  unpushedHashes,
+  onDropCommit,
+  dropBusy = false,
 }: GitCommitListProps) {
   if (loading) {
     return <div className="git-commit-list-modal-status">Загрузка списка…</div>;
@@ -45,9 +54,12 @@ export function GitCommitList({
       <ul className="git-commit-list">
         {commits.map((item) => {
           const selected = selectedHash === item.hash;
+          const canDrop = Boolean(
+            onDropCommit && unpushedHashes?.has(item.hash),
+          );
           const rowClass = `git-commit-row git-commit-row-flat${
             selected ? " git-commit-row-selected" : ""
-          }`;
+          }${canDrop ? " git-commit-row-with-action" : ""}`;
 
           if (onSelect) {
             return (
@@ -60,15 +72,57 @@ export function GitCommitList({
                 >
                   <CommitRowContent item={item} />
                 </button>
+                {canDrop ? (
+                  <DropCommitButton
+                    hash={item.hash}
+                    message={item.message}
+                    busy={dropBusy}
+                    onDrop={onDropCommit!}
+                  />
+                ) : null}
+              </li>
+            );
+          }
+
+          if (onOpenCommit) {
+            return (
+              <li key={item.hash + String(item.time)} className={rowClass}>
+                <button
+                  type="button"
+                  className="git-commit-row-btn git-commit-row-open-btn"
+                  onClick={() => onOpenCommit(item.hash)}
+                  title="Показать изменения в коммите"
+                >
+                  <CommitRowContent item={item} />
+                </button>
+                {canDrop ? (
+                  <DropCommitButton
+                    hash={item.hash}
+                    message={item.message}
+                    busy={dropBusy}
+                    onDrop={onDropCommit!}
+                  />
+                ) : null}
               </li>
             );
           }
 
           return (
-            <li key={item.hash + String(item.time)} className={rowClass}>
+            <li
+              key={item.hash + String(item.time)}
+              className={rowClass}
+            >
               <div className="git-commit-row-static">
                 <CommitRowContent item={item} />
               </div>
+              {canDrop ? (
+                <DropCommitButton
+                  hash={item.hash}
+                  message={item.message}
+                  busy={dropBusy}
+                  onDrop={onDropCommit!}
+                />
+              ) : null}
             </li>
           );
         })}
@@ -79,6 +133,31 @@ export function GitCommitList({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function DropCommitButton({
+  hash,
+  message,
+  busy,
+  onDrop,
+}: {
+  hash: string;
+  message: string;
+  busy: boolean;
+  onDrop: (hash: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="git-commit-drop-btn"
+      disabled={busy}
+      aria-label={`Удалить коммит ${hash}: ${message}`}
+      title="Удалить неотправленный коммит"
+      onClick={() => onDrop(hash)}
+    >
+      <Trash2 size={14} aria-hidden />
+    </button>
   );
 }
 

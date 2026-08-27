@@ -7,6 +7,7 @@ export type GitActionKind =
   | "mergeCommit"
   | "deleteBranch"
   | "resetToRemote"
+  | "dropUnpushed"
   | "discardFileChanges"
   | "push"
   | "stashDrop"
@@ -16,7 +17,7 @@ export type GitActionPayload =
   | { kind: "stage" | "unstage"; paths: string[] }
   | { kind: "commit" | "mergeCommit"; oid: string }
   | { kind: "deleteBranch"; name: string; tipOid: string }
-  | { kind: "resetToRemote"; preResetOid: string }
+  | { kind: "resetToRemote" | "dropUnpushed"; preResetOid: string }
   | { kind: "discardFileChanges"; path: string; backupStashId: string | null }
   | { kind: "push" }
   | { kind: "stashDrop"; branch: string }

@@ -24,7 +24,10 @@ mock.module("../lib/git", () => ({
   gitResetToOid: async () => {},
   gitRestoreDiscardBackup: async () => {},
   gitUndoCommit: async () => {},
-  hasTrackedGitChanges: () => false,
+  gitDropUnpushedFrom: async () => {},
+  gitDropAllUnpushed: async () => {},
+  gitMoveUnpushedToNewBranch: async () => {},
+  gitMoveUnpushedToBranch: async () => {},
   deriveSyncPillState: () => "synced",
 }));
 
@@ -40,7 +43,15 @@ function makeDeps() {
     hasProject: true,
     project: { repoRoot: "/repo", docsRoot: "/repo/docs", refreshBranch: mock(async () => {}) },
     git: {
-      status: { conflicted: [], mergeInProgress: false, staged: [], unstaged: [] },
+      status: {
+        conflicted: [],
+        mergeInProgress: false,
+        staged: [],
+        unstaged: [],
+        hasUpstream: false,
+        ahead: 0,
+      },
+      unpushedCommits: [],
       push: mock(async () => pushResult),
       pull: mock(async () => pullResult),
       refresh: mock(async () => {}),
@@ -78,6 +89,9 @@ describe("useGitWorkflow — modals", () => {
     expect(result.current.resetRemoteConfirmOpen).toBe(false);
     expect(result.current.gitAlert).toBeNull();
     expect(result.current.deleteBranchTarget).toBeNull();
+    expect(result.current.dropUnpushedTarget).toBeNull();
+    expect(result.current.dropAllUnpushedOpen).toBe(false);
+    expect(result.current.moveUnpushedOpen).toBe(false);
   });
 
   test("the pull dialog does not open without a project", () => {
@@ -277,6 +291,42 @@ describe("useGitWorkflow — pull", () => {
 
     expect(result.current.gitAlert).toBeNull();
     expect(successes).toEqual([]);
+  });
+});
+
+describe("useGitWorkflow — create branch", () => {
+  test("creates a branch even with uncommitted changes", async () => {
+    const createBranch = mock(async () => true);
+    const setBranchFromGit = mock(() => {});
+    const { deps, result } = render({
+      git: {
+        ...makeDeps().git,
+        status: {
+          conflicted: [],
+          mergeInProgress: false,
+          staged: [{ path: "a.txt", status: "M" }],
+          unstaged: [],
+          hasUpstream: true,
+          ahead: 0,
+        },
+        unpushedCommits: [],
+      },
+      branches: {
+        ...makeDeps().branches,
+        createBranch,
+      },
+      project: {
+        ...makeDeps().project,
+        setBranchFromGit,
+      },
+    });
+
+    await act(async () => {
+      await result.current.handleCreateBranch("feature/x");
+    });
+
+    expect(createBranch).toHaveBeenCalledWith("feature/x", false);
+    expect(setBranchFromGit).toHaveBeenCalledWith("feature/x");
   });
 });
 

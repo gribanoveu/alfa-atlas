@@ -18,6 +18,7 @@ import {
   gitStage,
   gitStatus,
   gitUnstage,
+  gitUnpushedCommits,
   type GitCommitSummary,
   type GitConflictFile,
   type GitDiffScope,
@@ -67,6 +68,7 @@ export function useGitPanel(
   const { active = true, onBranchChange } = options;
   const [status, setStatus] = useState<GitStatusSnapshot>(EMPTY_STATUS);
   const [commits, setCommits] = useState<GitCommitSummary[]>([]);
+  const [unpushedCommits, setUnpushedCommits] = useState<GitCommitSummary[]>([]);
   const [jiraKey, setJiraKey] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export function useGitPanel(
     if (!repoRoot) {
       setStatus(EMPTY_STATUS);
       setCommits([]);
+      setUnpushedCommits([]);
       onBranchChangeRef.current?.(null);
       return;
     }
@@ -87,8 +90,12 @@ export function useGitPanel(
       setStatus(nextStatus);
       onBranchChangeRef.current?.(nextStatus.branch);
       try {
-        const nextCommits = await gitLog(repoRoot, 20);
+        const [nextCommits, nextUnpushed] = await Promise.all([
+          gitLog(repoRoot, 20),
+          gitUnpushedCommits(repoRoot),
+        ]);
         setCommits(nextCommits);
+        setUnpushedCommits(nextUnpushed);
         setError(null);
       } catch (e) {
         setError(toMessage(e));
@@ -402,6 +409,7 @@ export function useGitPanel(
   return {
     status,
     commits,
+    unpushedCommits,
     jiraKey,
     setJiraKey,
     description,

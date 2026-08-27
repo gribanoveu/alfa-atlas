@@ -9,9 +9,16 @@ type CommitHistoryPanelProps = {
   commits: GitCommitSummary[];
   busy: boolean;
   error: string | null;
+  unpushedHashes: ReadonlySet<string>;
+  unpushedCount: number;
   onRefresh: () => void;
   onLoadCommitFiles: (commitHash: string) => Promise<GitFileStatus[] | null>;
   onOpenCommitFileDiff: (commitHash: string, file: GitFileStatus) => void;
+  onDropCommit: (hash: string) => void;
+  onMoveToBranch: () => void;
+  onDropAllUnpushed: () => void;
+  dropBusy: boolean;
+  hasUpstream: boolean;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -159,9 +166,16 @@ export function CommitHistoryPanel({
   commits,
   busy,
   error,
+  unpushedHashes,
+  unpushedCount,
   onRefresh,
   onLoadCommitFiles,
   onOpenCommitFileDiff,
+  onDropCommit,
+  onMoveToBranch,
+  onDropAllUnpushed,
+  dropBusy,
+  hasUpstream,
 }: CommitHistoryPanelProps) {
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
   const [files, setFiles] = useState<GitFileStatus[]>([]);
@@ -213,11 +227,33 @@ export function CommitHistoryPanel({
             className="git-icon-btn"
             title="Обновить список"
             aria-label="Обновить список"
-            disabled={busy}
+            disabled={busy || dropBusy}
             onClick={onRefresh}
           >
             <RefreshCw size={14} aria-hidden />
           </button>
+          {unpushedCount > 0 ? (
+            <div className="commit-history-unpushed-actions">
+              <button
+                type="button"
+                className="commit-history-action-btn"
+                disabled={busy || dropBusy}
+                onClick={onMoveToBranch}
+              >
+                Перенести…
+              </button>
+              {hasUpstream ? (
+                <button
+                  type="button"
+                  className="commit-history-action-btn"
+                  disabled={busy || dropBusy}
+                  onClick={onDropAllUnpushed}
+                >
+                  Удалить все…
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="git-panel-scroll">
@@ -230,6 +266,9 @@ export function CommitHistoryPanel({
               commits={commits}
               selectedHash={selectedHash}
               onSelect={setSelectedHash}
+              unpushedHashes={unpushedHashes}
+              onDropCommit={onDropCommit}
+              dropBusy={dropBusy}
             />
           )}
         </div>

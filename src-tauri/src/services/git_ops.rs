@@ -2,8 +2,8 @@ use std::path::Path;
 
 use crate::domain::git::{
     CheckoutOutcome, GitBlameHunk, GitBranchInfo, GitCommitSummary, GitConflictFile, GitDiffScope,
-    GitError, GitFileDiff, GitFileStatus, GitProgressEvent, GitStashEntry, GitStashRestoreOutcome,
-    GitStatusSnapshot, GitSyncStatus, PullMode,
+    GitError, GitFileDiff, GitFileStatus, GitProgressEvent, GitResetMode, GitStashEntry,
+    GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::infra::{git_credentials_store, git_repo, key_management};
 
@@ -50,6 +50,26 @@ pub fn incoming_commits(repo_root: &str, limit: usize) -> Result<Vec<GitCommitSu
         app_private_key.as_deref(),
         limit,
     )
+}
+
+pub fn drop_unpushed_from(
+    repo_root: &str,
+    commit_hash: &str,
+    mode: GitResetMode,
+) -> Result<(), GitError> {
+    git_repo::drop_unpushed_from(Path::new(repo_root), commit_hash, mode)
+}
+
+pub fn drop_all_unpushed(repo_root: &str, mode: GitResetMode) -> Result<(), GitError> {
+    git_repo::drop_all_unpushed(Path::new(repo_root), mode)
+}
+
+pub fn move_unpushed_to_new_branch(repo_root: &str, new_name: &str) -> Result<(), GitError> {
+    git_repo::move_unpushed_to_new_branch(Path::new(repo_root), new_name)
+}
+
+pub fn move_unpushed_to_branch(repo_root: &str, target_branch: &str) -> Result<(), GitError> {
+    git_repo::move_unpushed_to_branch(Path::new(repo_root), target_branch)
 }
 
 pub fn pull(

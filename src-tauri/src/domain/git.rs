@@ -59,6 +59,14 @@ pub enum PullMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum GitResetMode {
+    Soft,
+    Mixed,
+    Hard,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum GitDiffScope {
     Staged,
     Unstaged,

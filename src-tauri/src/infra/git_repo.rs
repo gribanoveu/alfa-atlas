@@ -1,17 +1,17 @@
 use std::path::{Path, PathBuf};
 
 use git2::{
-    build::CheckoutBuilder, AnnotatedCommit, BlameOptions, Branch, BranchType, Cred, CredentialType,
-    Delta, DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions, PushOptions,
-    RemoteCallbacks, Repository, RepositoryState, ResetType, Signature, StashApplyOptions,
-    StashSaveOptions, Status, StatusOptions, StatusShow,
+    build::CheckoutBuilder, AnnotatedCommit, BlameOptions, Branch, BranchType, Cred,
+    CredentialType, Delta, DiffOptions, FetchOptions, IndexEntry, IndexTime, MergeOptions,
+    PushOptions, RemoteCallbacks, Repository, RepositoryState, ResetType, Signature,
+    StashApplyOptions, StashSaveOptions, Status, StatusOptions, StatusShow,
 };
 
 use crate::domain::git::{
     CheckoutOutcome, GitBlameHunk, GitBranchInfo, GitCommitSummary, GitConflictFile,
     GitCredentials, GitDiffScope, GitError, GitFileDiff, GitFileStatus, GitProgressEvent,
-    GitStashEntry, GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
-    SshKeySource,
+    GitResetMode, GitStashEntry, GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus,
+    PullMode, SshKeySource,
 };
 
 /// `git2::Error` -> `GitError`, in one place rather than at each of the ~140
@@ -519,6 +519,180 @@ pub fn incoming_commits(
     walk.hide(local_oid).map_err(op_err)?;
 
     collect_commits_from_walk(&repo, &mut walk, limit)
+}
+
+fn reset_type(mode: GitResetMode) -> ResetType {
+    match mode {
+        GitResetMode::Soft => ResetType::Soft,
+        GitResetMode::Mixed => ResetType::Mixed,
+        GitResetMode::Hard => ResetType::Hard,
+    }
+}
+
+fn local_upstream_oid(repo: &Repository) -> Result<git2::Oid, GitError> {
+    let upstream = upstream_of_head(repo)?;
+    let reference = repo.find_reference(&upstream.tracking_ref).map_err(op_err)?;
+    Ok(reference.peel_to_commit().map_err(op_err)?.id())
+}
+
+fn unpushed_oid_walk(repo: &Repository, limit: usize) -> Result<Vec<git2::Oid>, GitError> {
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(e) if e.code() == git2::ErrorCode::UnbornBranch => return Ok(vec![]),
+        Err(e) => return Err(op_err(e)),
+    };
+    if !head.is_branch() {
+        return Ok(vec![]);
+    }
+    let local_oid = match head.target() {
+        Some(oid) => oid,
+        None => return Ok(vec![]),
+    };
+
+    let mut walk = repo.revwalk().map_err(op_err)?;
+    walk.push(local_oid).map_err(op_err)?;
+
+    if let Ok(branch_name) = head.shorthand() {
+        if let Ok(branch) = repo.find_branch(branch_name, BranchType::Local) {
+            if let Ok(upstream) = branch.upstream() {
+                if let Some(upstream_oid) = upstream.get().target() {
+                    walk.hide(upstream_oid).map_err(op_err)?;
+                }
+            }
+        }
+    }
+
+    let mut oids = Vec::new();
+    for oid_result in walk.take(limit) {
+        oids.push(oid_result.map_err(op_err)?);
+    }
+    oids.reverse();
+    Ok(oids)
+}
+
+fn is_commit_unpushed(repo: &Repository, oid: git2::Oid) -> Result<bool, GitError> {
+    Ok(unpushed_oid_walk(repo, 100)?.contains(&oid))
+}
+
+fn cherry_pick_commit(repo: &Repository, commit: &git2::Commit<'_>) -> Result<(), GitError> {
+    repo.cherrypick(commit, None).map_err(op_err)?;
+    let mut index = repo.index().map_err(op_err)?;
+    if index.has_conflicts() {
+        let _ = repo.cleanup_state();
+        return Err(GitError::MergeConflict);
+    }
+    index.write().map_err(op_err)?;
+    let tree_oid = index.write_tree().map_err(op_err)?;
+    let tree = repo.find_tree(tree_oid).map_err(op_err)?;
+    let sig = commit_signature(repo)?;
+    let head = repo.head().map_err(op_err)?.peel_to_commit().map_err(op_err)?;
+    let message = commit
+        .summary()
+        .ok()
+        .flatten()
+        .or_else(|| commit.message().ok())
+        .unwrap_or("cherry pick");
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head])
+        .map_err(op_err)?;
+    Ok(())
+}
+
+/// Removes `commit_hash` and all newer unpushed commits by resetting to the
+/// parent of `commit_hash`.
+pub fn drop_unpushed_from(
+    repo_root: &Path,
+    commit_hash: &str,
+    mode: GitResetMode,
+) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let commit = resolve_commit(&repo, commit_hash)?;
+    if !is_commit_unpushed(&repo, commit.id())? {
+        return Err(GitError::Message(
+            "можно удалять только неотправленные коммиты".into(),
+        ));
+    }
+    let parent = commit.parent(0).map_err(|_| {
+        GitError::Message("нельзя удалить единственный коммит в репозитории".into())
+    })?;
+    repo.reset(parent.as_object(), reset_type(mode), None)
+        .map_err(op_err)
+}
+
+/// Resets the current branch to its upstream tracking ref, dropping all unpushed commits.
+pub fn drop_all_unpushed(repo_root: &Path, mode: GitResetMode) -> Result<(), GitError> {
+    let repo = open_repo(repo_root)?;
+    let upstream_oid = local_upstream_oid(&repo).map_err(|e| match e {
+        GitError::NoUpstream => GitError::Message(
+            "у ветки нет upstream — удаляйте коммиты по одному".into(),
+        ),
+        other => other,
+    })?;
+    let upstream = repo.find_commit(upstream_oid).map_err(op_err)?;
+    repo.reset(
+        upstream.as_object(),
+        reset_type(mode),
+        Some(&mut CheckoutBuilder::new().force()),
+    )
+    .map_err(op_err)
+}
+
+/// Creates `new_name` at HEAD, removes unpushed commits from the current branch
+/// (when upstream exists), and checks out `new_name`.
+pub fn move_unpushed_to_new_branch(repo_root: &Path, new_name: &str) -> Result<(), GitError> {
+    let new_name = validate_branch_name(new_name)?;
+    let repo = open_repo(repo_root)?;
+    if repo.find_branch(new_name, BranchType::Local).is_ok() {
+        return Err(GitError::BranchAlreadyExists(new_name.to_string()));
+    }
+    let current = branch_name(&repo)
+        .ok_or_else(|| GitError::Message("detached HEAD".into()))?;
+    if current == new_name {
+        return Err(GitError::Message("уже на этой ветке".into()));
+    }
+    if unpushed_oid_walk(&repo, 1)?.is_empty() {
+        return Err(GitError::Message("нет неотправленных коммитов".into()));
+    }
+    let head = repo.head().map_err(op_err)?.peel_to_commit().map_err(op_err)?;
+    repo.branch(new_name, &head, false).map_err(op_err)?;
+
+    if local_upstream_oid(&repo).is_ok() {
+        drop_all_unpushed(repo_root, GitResetMode::Hard)?;
+    }
+
+    switch_to_branch(&open_repo(repo_root)?, new_name)
+}
+
+/// Cherry-picks all unpushed commits onto `target_branch`, then removes them from the source branch.
+pub fn move_unpushed_to_branch(repo_root: &Path, target_branch: &str) -> Result<(), GitError> {
+    let target_branch = validate_branch_name(target_branch)?;
+    let repo = open_repo(repo_root)?;
+    let source = branch_name(&repo)
+        .ok_or_else(|| GitError::Message("detached HEAD".into()))?;
+    if source == target_branch {
+        return Err(GitError::Message("нельзя перенести на текущую ветку".into()));
+    }
+    if repo.find_branch(target_branch, BranchType::Local).is_err() {
+        return Err(GitError::BranchNotFound(target_branch.to_string()));
+    }
+    let oids = unpushed_oid_walk(&repo, 100)?;
+    if oids.is_empty() {
+        return Err(GitError::Message("нет неотправленных коммитов".into()));
+    }
+    drop(repo);
+
+    checkout_branch(repo_root, target_branch, false)?;
+    {
+        let repo = open_repo(repo_root)?;
+        for oid in oids {
+            let commit = repo.find_commit(oid).map_err(op_err)?;
+            cherry_pick_commit(&repo, &commit)?;
+        }
+    }
+
+    checkout_branch(repo_root, &source, false)?;
+    drop_all_unpushed(repo_root, GitResetMode::Hard)?;
+    checkout_branch(repo_root, target_branch, false)?;
+    Ok(())
 }
 
 fn short_oid(oid: git2::Oid) -> String {
@@ -2210,12 +2384,18 @@ pub fn create_branch(repo_root: &Path, name: &str, discard_changes: bool) -> Res
     if repo.find_branch(name, BranchType::Local).is_ok() {
         return Err(GitError::BranchAlreadyExists(name.to_string()));
     }
-    ensure_clean_or_discard(&repo, discard_changes)?;
+    if discard_changes {
+        ensure_clean_or_discard(&repo, true)?;
+    }
     let head = repo.head().map_err(op_err)?;
     let commit = head.peel_to_commit().map_err(op_err)?;
     repo.branch(name, &commit, false)
         .map_err(op_err)?;
-    switch_to_branch(&repo, name)
+    // Same commit as HEAD — repoint HEAD only; a tree checkout would wipe staged
+    // but uncommitted changes the user is carrying onto the new branch.
+    repo.set_head(&format!("refs/heads/{name}"))
+        .map_err(op_err)?;
+    Ok(())
 }
 
 pub fn delete_branch(repo_root: &Path, name: &str) -> Result<(), GitError> {
@@ -3041,6 +3221,93 @@ mod tests {
         .unwrap();
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].message, "remote-only");
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn create_branch_preserves_staged_changes() {
+        let dir = temp_dir("create-branch-dirty");
+        let repo = Repository::init(&dir).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "init");
+        fs::write(dir.join("b.txt"), "draft").unwrap();
+        stage_paths(&dir, &["b.txt".to_string()]).unwrap();
+
+        create_branch(&dir, "feature", false).unwrap();
+
+        let snapshot = status(&dir).unwrap();
+        assert_eq!(snapshot.branch.as_deref(), Some("feature"));
+        assert_eq!(snapshot.staged.len(), 1);
+        assert_eq!(snapshot.staged[0].path, "b.txt");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn move_unpushed_to_new_branch_leaves_source_at_upstream() {
+        let base = temp_dir("move-unpushed-new");
+        let remote = base.join("remote");
+        let local = base.join("local");
+
+        Repository::init_bare(&remote).unwrap();
+        let repo = Repository::init(&local).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "first");
+        repo.remote("origin", remote.to_str().unwrap()).unwrap();
+        push(&local, &GitCredentials::default(), None, None).unwrap();
+        commit_file(&repo, "b.txt", "two", "wrong-branch");
+
+        move_unpushed_to_new_branch(&local, "feature").unwrap();
+
+        let snapshot = status(&local).unwrap();
+        assert_eq!(snapshot.branch.as_deref(), Some("feature"));
+        assert_eq!(log(&local, 5).unwrap()[0].message, "wrong-branch");
+
+        repo.set_head("refs/heads/master").unwrap();
+        repo.checkout_head(Some(CheckoutBuilder::default().force()))
+            .unwrap();
+        let on_master = log(&local, 5).unwrap();
+        assert_eq!(on_master.len(), 1);
+        assert_eq!(on_master[0].message, "first");
+        assert_eq!(status(&local).unwrap().ahead, 0);
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn drop_unpushed_from_removes_selected_and_newer() {
+        let base = temp_dir("drop-unpushed-from");
+        let remote = base.join("remote");
+        let local = base.join("local");
+
+        Repository::init_bare(&remote).unwrap();
+        let repo = Repository::init(&local).unwrap();
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        commit_file(&repo, "a.txt", "one", "first");
+        repo.remote("origin", remote.to_str().unwrap()).unwrap();
+        push(&local, &GitCredentials::default(), None, None).unwrap();
+        commit_file(&repo, "b.txt", "two", "second");
+        commit_file(&repo, "c.txt", "three", "third");
+        let third = log(&local, 10).unwrap()[0].hash.clone();
+
+        drop_unpushed_from(&local, &third, GitResetMode::Hard).unwrap();
+
+        let commits = unpushed_commits(&local, 10).unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].message, "second");
 
         fs::remove_dir_all(&base).ok();
     }

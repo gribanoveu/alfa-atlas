@@ -10,9 +10,14 @@ type PushConfirmModalProps = {
   ahead: number;
   commits: GitCommitSummary[];
   commitsLoading: boolean;
+  unpushedHashes: ReadonlySet<string>;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  onDropCommit: (hash: string) => void;
+  onMoveToBranch: () => void;
+  onDropAllUnpushed: () => void;
+  onOpenCommit: (hash: string) => void;
 };
 
 export function PushConfirmModal({
@@ -21,9 +26,14 @@ export function PushConfirmModal({
   ahead,
   commits,
   commitsLoading,
+  unpushedHashes,
   busy,
   onCancel,
   onConfirm,
+  onDropCommit,
+  onMoveToBranch,
+  onDropAllUnpushed,
+  onOpenCommit,
 }: PushConfirmModalProps) {
   const gitProgress = useGitProgress();
   const progressLabel = busy ? formatGitProgress(gitProgress.event) : null;
@@ -32,6 +42,7 @@ export function PushConfirmModal({
     : `Ветка «${branchName}» ещё не отправлялась на сервер. Она будет создана в удалённом репозитории и привязана как upstream.`;
   const overflowCount = hasUpstream && ahead > commits.length ? ahead - commits.length : 0;
   const showCommitList = hasUpstream ? ahead > 0 : commits.length > 0;
+  const hasUnpushed = commits.length > 0 || ahead > 0;
 
   return (
     <div
@@ -58,7 +69,33 @@ export function PushConfirmModal({
             loading={commitsLoading}
             emptyMessage="Коммиты не найдены"
             overflowCount={overflowCount}
+            unpushedHashes={unpushedHashes}
+            onDropCommit={onDropCommit}
+            onOpenCommit={onOpenCommit}
+            dropBusy={busy}
           />
+        ) : null}
+        {hasUnpushed ? (
+          <div className="push-confirm-extra-actions">
+            <button
+              type="button"
+              className="push-confirm-extra-btn"
+              disabled={busy}
+              onClick={onMoveToBranch}
+            >
+              Перенести на другую ветку…
+            </button>
+            {hasUpstream ? (
+              <button
+                type="button"
+                className="push-confirm-extra-btn"
+                disabled={busy}
+                onClick={onDropAllUnpushed}
+              >
+                Удалить все неотправленные…
+              </button>
+            ) : null}
+          </div>
         ) : null}
         <div className="clone-modal-actions">
           <button

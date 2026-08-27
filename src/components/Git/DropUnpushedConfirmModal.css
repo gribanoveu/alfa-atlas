@@ -1,0 +1,27 @@
+.drop-unpushed-modal {
+  width: min(520px, 100%);
+}
+
+.drop-unpushed-options {
+  margin: 12px 0 0;
+  padding: 0;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.drop-unpushed-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-ui);
+  color: var(--text-0);
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.drop-unpushed-option input {
+  margin-top: 2px;
+  flex: none;
+}

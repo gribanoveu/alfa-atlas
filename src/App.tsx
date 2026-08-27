@@ -7,7 +7,9 @@ import { AlertOkModal } from "./components/Git/AlertOkModal";
 import { GitConflictModal } from "./components/Git/GitConflictModal";
 import { GitFileDiffModal } from "./components/Git/GitFileDiffModal";
 import { GitCommitFileDiffModal } from "./components/Git/GitCommitFileDiffModal";
-import { CheckoutBlockedModal } from "./components/Git/CheckoutBlockedModal";
+import { DropUnpushedConfirmModal } from "./components/Git/DropUnpushedConfirmModal";
+import { MoveUnpushedModal } from "./components/Git/MoveUnpushedModal";
+import { GitCommitPreviewModal } from "./components/Git/GitCommitPreviewModal";
 import { PullUpdateModal } from "./components/Git/PullUpdateModal";
 import { PushConfirmModal } from "./components/Git/PushConfirmModal";
 import { ResetRemoteConfirmModal } from "./components/Git/ResetRemoteConfirmModal";
@@ -267,18 +269,22 @@ function App() {
 
 
   const {
-    branchSwitchBlocked,
     commitFileDiffTarget,
+    commitPreviewTarget,
     conflictTarget,
     deleteBranchTarget,
+    dropAllUnpushedOpen,
+    dropUnpushedTarget,
     gitAlert,
     gitDiffTarget,
     handleCheckoutBranch,
     handleCommit,
     handleCreateBranch,
-    handleDiscardAndSwitchBranch,
+    handleDropAllUnpushedConfirm,
+    handleDropUnpushedConfirm,
     handleGitDiscard,
     handleGitSaveContent,
+    handleMoveUnpushedConfirm,
     handleStage,
     handleSyncPillClick,
     handleUndoAction,
@@ -286,6 +292,8 @@ function App() {
     loadCommitFileDiff,
     loadCommitFiles,
     loadStashFiles,
+    moveUnpushedCommits,
+    moveUnpushedOpen,
     onAbortMerge,
     onConfirmDiscardShelfEntry,
     onDeleteBranchConfirm,
@@ -298,8 +306,10 @@ function App() {
     onResolveConflict,
     onRestoreShelfEntry,
     openCommitFileDiff,
+    openCommitPreview,
     openConflict,
     openGitFileDiff,
+    openMoveUnpushedModal,
     openPullModal,
     openPushModal,
     pendingStashConflict,
@@ -310,13 +320,17 @@ function App() {
     pushCommitsLoading,
     pushConfirmOpen,
     currentBranchBehind,
+    requestDropUnpushed,
     resetRemoteConfirmOpen,
-    setBranchSwitchBlocked,
     setCommitFileDiffTarget,
+    setCommitPreviewTarget,
     setConflictTarget,
     setDeleteBranchTarget,
+    setDropAllUnpushedOpen,
+    setDropUnpushedTarget,
     setGitAlert,
     setGitDiffTarget,
+    setMoveUnpushedOpen,
     setPullModalOpen,
     setPushConfirmOpen,
     setResetRemoteConfirmOpen,
@@ -325,6 +339,8 @@ function App() {
     stashDiscardTarget,
     stashPreviewTarget,
     syncPillState,
+    unpushedBusy,
+    unpushedHashSet,
   } = useGitWorkflow({
     hasProject,
     project,
@@ -880,9 +896,18 @@ function App() {
                   commits: git.commits,
                   busy: git.busy,
                   error: git.error,
+                  unpushedHashes: unpushedHashSet,
+                  unpushedCount: git.unpushedCommits.length,
+                  hasUpstream: git.status.hasUpstream,
+                  dropBusy: unpushedBusy,
                   onRefresh: () => void git.refresh(),
                   onLoadCommitFiles: loadCommitFiles,
                   onOpenCommitFileDiff: openCommitFileDiff,
+                  onDropCommit: (hash) =>
+                    requestDropUnpushed(hash, git.unpushedCommits),
+                  onMoveToBranch: () =>
+                    openMoveUnpushedModal(git.unpushedCommits),
+                  onDropAllUnpushed: () => setDropAllUnpushedOpen(true),
                 }
               : null
           }
@@ -1017,6 +1042,7 @@ function App() {
           onCancel={() => setPullModalOpen(false)}
           onConfirm={(mode) => void onPullConfirm(mode)}
           onRequestResetToRemote={() => setResetRemoteConfirmOpen(true)}
+          onOpenCommit={(hash) => openCommitPreview(hash, pullCommits)}
         />
       ) : null}
 
@@ -1044,23 +1070,47 @@ function App() {
           ahead={git.status.ahead}
           commits={pushCommits}
           commitsLoading={pushCommitsLoading}
-          busy={git.busy}
+          unpushedHashes={unpushedHashSet}
+          busy={git.busy || unpushedBusy}
           onCancel={() => setPushConfirmOpen(false)}
           onConfirm={() => void onPushConfirm()}
+          onDropCommit={(hash) => requestDropUnpushed(hash, pushCommits)}
+          onMoveToBranch={() => openMoveUnpushedModal(pushCommits)}
+          onDropAllUnpushed={() => setDropAllUnpushedOpen(true)}
+          onOpenCommit={(hash) => openCommitPreview(hash, pushCommits)}
         />
       ) : null}
 
-      {branchSwitchBlocked ? (
-        <CheckoutBlockedModal
-          branchName={branchSwitchBlocked.branchName}
-          mode="create"
-          busy={branches.busy || git.busy}
-          onCancel={() => setBranchSwitchBlocked(null)}
-          onOpenCommit={() => {
-            layout.setRightTool("git");
-            setBranchSwitchBlocked(null);
-          }}
-          onDiscardAndContinue={() => void handleDiscardAndSwitchBranch()}
+      {dropUnpushedTarget ? (
+        <DropUnpushedConfirmModal
+          commit={dropUnpushedTarget.commit}
+          newerCount={dropUnpushedTarget.newerCount}
+          unpushedCount={git.unpushedCommits.length}
+          busy={unpushedBusy}
+          onCancel={() => setDropUnpushedTarget(null)}
+          onConfirm={(mode) => void handleDropUnpushedConfirm(mode)}
+        />
+      ) : null}
+
+      {dropAllUnpushedOpen ? (
+        <DropUnpushedConfirmModal
+          commit={null}
+          newerCount={0}
+          unpushedCount={git.unpushedCommits.length || git.status.ahead}
+          busy={unpushedBusy}
+          onCancel={() => setDropAllUnpushedOpen(false)}
+          onConfirm={(mode) => void handleDropAllUnpushedConfirm(mode)}
+        />
+      ) : null}
+
+      {moveUnpushedOpen ? (
+        <MoveUnpushedModal
+          currentBranch={project.branchName}
+          branches={branches.branches}
+          commits={moveUnpushedCommits}
+          busy={unpushedBusy}
+          onCancel={() => setMoveUnpushedOpen(false)}
+          onConfirm={(target) => void handleMoveUnpushedConfirm(target)}
         />
       ) : null}
 
@@ -1084,6 +1134,15 @@ function App() {
           onClose={() => setConflictTarget(null)}
           onLoadContent={git.loadConflictFile}
           onResolve={onResolveConflict}
+        />
+      ) : null}
+
+      {commitPreviewTarget ? (
+        <GitCommitPreviewModal
+          commit={commitPreviewTarget}
+          onClose={() => setCommitPreviewTarget(null)}
+          onLoadFiles={loadCommitFiles}
+          onOpenFile={openCommitFileDiff}
         />
       ) : null}
 

@@ -93,3 +93,38 @@
 .commit-tree-status {
   flex: none;
 }
+
+.commit-history-unpushed-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.commit-history-action-btn {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-size: var(--font-ui-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.commit-history-action-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.commit-history-action-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.commit-history-list .git-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

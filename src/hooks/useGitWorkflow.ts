@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toMessage } from "../lib/errors";
 import type { GitActionLogEntry } from "../lib/gitActionLog";
 import {
@@ -7,19 +7,23 @@ import {
   gitSyncStatus,
   gitCommitFiles,
   gitCreateBranchAtOid,
+  gitDropAllUnpushed,
+  gitDropUnpushedFrom,
   gitHeadOid,
   gitIncomingCommits,
+  gitMoveUnpushedToBranch,
+  gitMoveUnpushedToNewBranch,
   gitResetToOid,
   gitRestoreDiscardBackup,
   gitUndoCommit,
   gitUnpushedCommits,
-  hasTrackedGitChanges,
   type CheckoutOutcome,
   type GitBranchInfo,
   type GitCommitSummary,
   type GitDiffScope,
   type GitFileDiff,
   type GitFileStatus,
+  type GitResetMode,
   type GitStashEntry,
   type GitStashRestoreOutcome,
   type PullMode,
@@ -104,13 +108,14 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
   const [pushCommitsLoading, setPushCommitsLoading] = useState(false);
   const [pullCommits, setPullCommits] = useState<GitCommitSummary[]>([]);
   const [pullCommitsLoading, setPullCommitsLoading] = useState(false);
-  // Checking out an existing branch no longer blocks on uncommitted changes
-  // (see performCheckout/handleCheckoutOutcome — those changes get
-  // auto-stashed instead), so this only ever fires for "create branch",
-  // where there's no destination tree to stash-restore into.
-  const [branchSwitchBlocked, setBranchSwitchBlocked] = useState<{
-    branchName: string;
+  const [dropUnpushedTarget, setDropUnpushedTarget] = useState<{
+    commit: GitCommitSummary;
+    newerCount: number;
   } | null>(null);
+  const [dropAllUnpushedOpen, setDropAllUnpushedOpen] = useState(false);
+  const [moveUnpushedOpen, setMoveUnpushedOpen] = useState(false);
+  const [moveUnpushedCommits, setMoveUnpushedCommits] = useState<GitCommitSummary[]>([]);
+  const [unpushedBusy, setUnpushedBusy] = useState(false);
   const [gitAlert, setGitAlert] = useState<{
     message: string;
     title?: string;
@@ -129,6 +134,7 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     commitHash: string;
     file: GitFileStatus;
   } | null>(null);
+  const [commitPreviewTarget, setCommitPreviewTarget] = useState<GitCommitSummary | null>(null);
   const [stashPreviewTarget, setStashPreviewTarget] = useState<GitStashEntry | null>(null);
   const [stashDiscardTarget, setStashDiscardTarget] = useState<GitStashEntry | null>(null);
   useEffect(() => {
@@ -223,6 +229,37 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     currentBranchBehind: branches.branches.find((b) => b.isCurrent)?.behind ?? null,
     hasPendingStashConflict: pendingStashConflict !== null,
   });
+  const unpushedHashSet = useMemo(
+    () => new Set(git.unpushedCommits.map((commit) => commit.hash)),
+    [git.unpushedCommits],
+  );
+  const refreshUnpushedLists = useCallback(async () => {
+    if (!project.repoRoot) return;
+    await git.refresh();
+    if (pushConfirmOpen) {
+      try {
+        const commits = await gitUnpushedCommits(project.repoRoot);
+        setPushCommits(commits);
+      } catch {
+        setPushCommits([]);
+      }
+    }
+  }, [git, project.repoRoot, pushConfirmOpen]);
+  const requestDropUnpushed = useCallback(
+    (hash: string, sourceCommits: GitCommitSummary[]) => {
+      const index = sourceCommits.findIndex((commit) => commit.hash === hash);
+      if (index < 0) return;
+      setDropUnpushedTarget({
+        commit: sourceCommits[index],
+        newerCount: index,
+      });
+    },
+    [],
+  );
+  const openMoveUnpushedModal = useCallback((commits: GitCommitSummary[]) => {
+    setMoveUnpushedCommits(commits);
+    setMoveUnpushedOpen(true);
+  }, []);
   const handleSyncPillClick = useCallback(() => {
     if (syncPillState === "unpushed") {
       setPushConfirmOpen(true);
@@ -325,6 +362,96 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
       project.refreshBranch(),
     ]);
   }, [editor.reloadAllOpenTabs, git, project.refreshBranch, tree]);
+  const handleDropUnpushedConfirm = useCallback(
+    async (mode: GitResetMode) => {
+      if (!dropUnpushedTarget || !project.repoRoot) return;
+      const { commit } = dropUnpushedTarget;
+      setUnpushedBusy(true);
+      try {
+        const preResetOid = await gitHeadOid(project.repoRoot);
+        await gitDropUnpushedFrom(project.repoRoot, commit.hash, mode);
+        setDropUnpushedTarget(null);
+        await refreshAfterBranchChange();
+        actionLog.record({
+          kind: "dropUnpushed",
+          summary: `Удалён неотправленный коммит ${commit.hash}`,
+          undoable: true,
+          payload: { kind: "dropUnpushed", preResetOid },
+        });
+        await refreshUnpushedLists();
+      } catch (e) {
+        setGitAlert({ message: toMessage(e) });
+      } finally {
+        setUnpushedBusy(false);
+      }
+    },
+    [
+      dropUnpushedTarget,
+      project.repoRoot,
+      refreshAfterBranchChange,
+      actionLog,
+      refreshUnpushedLists,
+    ],
+  );
+  const handleDropAllUnpushedConfirm = useCallback(
+    async (mode: GitResetMode) => {
+      if (!project.repoRoot) return;
+      setUnpushedBusy(true);
+      try {
+        const preResetOid = await gitHeadOid(project.repoRoot);
+        await gitDropAllUnpushed(project.repoRoot, mode);
+        setDropAllUnpushedOpen(false);
+        await refreshAfterBranchChange();
+        actionLog.record({
+          kind: "dropUnpushed",
+          summary: "Удалены все неотправленные коммиты",
+          undoable: true,
+          payload: { kind: "dropUnpushed", preResetOid },
+        });
+        await refreshUnpushedLists();
+      } catch (e) {
+        setGitAlert({ message: toMessage(e) });
+      } finally {
+        setUnpushedBusy(false);
+      }
+    },
+    [project.repoRoot, refreshAfterBranchChange, actionLog, refreshUnpushedLists],
+  );
+  const handleMoveUnpushedConfirm = useCallback(
+    async (
+      target:
+        | { kind: "new"; name: string }
+        | { kind: "existing"; branch: string },
+    ) => {
+      if (!project.repoRoot) return;
+      setUnpushedBusy(true);
+      try {
+        if (target.kind === "new") {
+          await gitMoveUnpushedToNewBranch(project.repoRoot, target.name);
+          project.setBranchFromGit(target.name);
+          showSuccess(`Коммиты перенесены на ветку «${target.name}»`);
+        } else {
+          await gitMoveUnpushedToBranch(project.repoRoot, target.branch);
+          showSuccess(`Коммиты перенесены на ветку «${target.branch}»`);
+        }
+        setMoveUnpushedOpen(false);
+        setPushConfirmOpen(false);
+        await refreshAfterBranchChange();
+        await branches.refresh();
+      } catch (e) {
+        setGitAlert({ message: toMessage(e) });
+      } finally {
+        setUnpushedBusy(false);
+      }
+    },
+    [
+      project.repoRoot,
+      project.setBranchFromGit,
+      showSuccess,
+      refreshAfterBranchChange,
+      branches,
+    ],
+  );
   // Shared by the auto-restore-on-checkout path and the shelf's manual
   // "Восстановить" button. `conflict`/`blocked`/`skipped` are all
   // guaranteed by the backend to leave the shelf entry intact — never
@@ -456,6 +583,7 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
             await gitCreateBranchAtOid(repoRoot, entry.payload.name, entry.payload.tipOid);
             break;
           case "resetToRemote":
+          case "dropUnpushed":
             await gitResetToOid(repoRoot, entry.payload.preResetOid);
             break;
           case "discardFileChanges":
@@ -509,20 +637,10 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
         });
         return;
       }
-      if (hasTrackedGitChanges(git.status)) {
-        setBranchSwitchBlocked({ branchName: name });
-        return;
-      }
       await performCreateBranch(name, false);
     },
-    [editor.saveAllDirtyTabs, git.status, performCreateBranch],
+    [editor.saveAllDirtyTabs, performCreateBranch],
   );
-  const handleDiscardAndSwitchBranch = useCallback(async () => {
-    if (!branchSwitchBlocked) return;
-    const { branchName } = branchSwitchBlocked;
-    setBranchSwitchBlocked(null);
-    await performCreateBranch(branchName, true);
-  }, [branchSwitchBlocked, performCreateBranch]);
   const openGitFileDiff = useCallback(
     (path: string, scope: GitDiffScope) => {
       const file =
@@ -623,6 +741,13 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     },
     [],
   );
+  const openCommitPreview = useCallback(
+    (hash: string, sourceCommits: GitCommitSummary[]) => {
+      const commit = sourceCommits.find((item) => item.hash === hash);
+      if (commit) setCommitPreviewTarget(commit);
+    },
+    [],
+  );
   const loadCommitFiles = useCallback(
     async (commitHash: string): Promise<GitFileStatus[] | null> => {
       if (!project.repoRoot) return null;
@@ -705,18 +830,22 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
   );
 
   return {
-    branchSwitchBlocked,
     commitFileDiffTarget,
+    commitPreviewTarget,
     conflictTarget,
     deleteBranchTarget,
+    dropAllUnpushedOpen,
+    dropUnpushedTarget,
     gitAlert,
     gitDiffTarget,
     handleCheckoutBranch,
     handleCommit,
     handleCreateBranch,
-    handleDiscardAndSwitchBranch,
+    handleDropAllUnpushedConfirm,
+    handleDropUnpushedConfirm,
     handleGitDiscard,
     handleGitSaveContent,
+    handleMoveUnpushedConfirm,
     handleStage,
     handleSyncPillClick,
     handleUndoAction,
@@ -724,6 +853,8 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     loadCommitFileDiff,
     loadCommitFiles,
     loadStashFiles,
+    moveUnpushedCommits,
+    moveUnpushedOpen,
     onAbortMerge,
     onConfirmDiscardShelfEntry,
     onDeleteBranchConfirm,
@@ -736,8 +867,10 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     onResolveConflict,
     onRestoreShelfEntry,
     openCommitFileDiff,
+    openCommitPreview,
     openConflict,
     openGitFileDiff,
+    openMoveUnpushedModal,
     openPullModal,
     openPushModal,
     pendingStashConflict,
@@ -748,14 +881,18 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     pushCommitsLoading,
     pushConfirmOpen,
     currentBranchBehind,
+    requestDropUnpushed,
     resetRemoteConfirmOpen,
     runPush,
-    setBranchSwitchBlocked,
     setCommitFileDiffTarget,
+    setCommitPreviewTarget,
     setConflictTarget,
     setDeleteBranchTarget,
+    setDropAllUnpushedOpen,
+    setDropUnpushedTarget,
     setGitAlert,
     setGitDiffTarget,
+    setMoveUnpushedOpen,
     setPullModalOpen,
     setPushConfirmOpen,
     setResetRemoteConfirmOpen,
@@ -764,5 +901,7 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     stashDiscardTarget,
     stashPreviewTarget,
     syncPillState,
+    unpushedBusy,
+    unpushedHashSet,
   };
 }

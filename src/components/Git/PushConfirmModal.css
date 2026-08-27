@@ -1,3 +1,30 @@
 .push-confirm-modal {
   width: min(520px, 100%);
 }
+
+.push-confirm-extra-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.push-confirm-extra-btn {
+  font-size: var(--font-ui-sm);
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-1);
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.push-confirm-extra-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.push-confirm-extra-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

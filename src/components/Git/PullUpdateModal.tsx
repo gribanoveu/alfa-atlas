@@ -13,6 +13,7 @@ type PullUpdateModalProps = {
   onCancel: () => void;
   onConfirm: (mode: PullMode) => void;
   onRequestResetToRemote: () => void;
+  onOpenCommit: (hash: string) => void;
 };
 
 export function PullUpdateModal({
@@ -23,6 +24,7 @@ export function PullUpdateModal({
   onCancel,
   onConfirm,
   onRequestResetToRemote,
+  onOpenCommit,
 }: PullUpdateModalProps) {
   const [mode, setMode] = useState<PullMode>("merge");
   const gitProgress = useGitProgress();
@@ -64,6 +66,7 @@ export function PullUpdateModal({
             commitsLoading ? "Загрузка списка…" : "Нет новых коммитов"
           }
           overflowCount={overflowCount}
+          onOpenCommit={onOpenCommit}
         />
 
         <div className="clone-modal-message pull-update-merge-prompt">

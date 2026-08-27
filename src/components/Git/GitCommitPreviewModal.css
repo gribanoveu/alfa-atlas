@@ -1,0 +1,112 @@
+.git-commit-preview-backdrop {
+  padding: 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.git-commit-preview-modal {
+  width: min(1200px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  min-width: 0;
+  height: min(800px, calc(100vh - 32px));
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  overflow: hidden;
+}
+
+.git-commit-preview-modal .clone-modal-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.git-commit-preview-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.git-commit-preview-files {
+  list-style: none;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.git-commit-preview-files li {
+  min-width: 0;
+}
+
+.git-commit-preview-file-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-0);
+  font-size: var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.git-commit-preview-file-btn:last-child {
+  border-bottom: none;
+}
+
+.git-commit-preview-file-btn:hover {
+  background: var(--bg-2);
+}
+
+.git-commit-preview-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-commit-preview-file-status {
+  flex: none;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.git-commit-preview-status-M {
+  color: var(--accent);
+}
+
+.git-commit-preview-status-A {
+  color: var(--green);
+}
+
+.git-commit-preview-status-D {
+  color: var(--red-tag);
+}
+
+.git-commit-preview-status-R {
+  color: var(--orange);
+}
+
+.git-commit-preview-actions {
+  flex: none;
+  margin-top: 0;
+}

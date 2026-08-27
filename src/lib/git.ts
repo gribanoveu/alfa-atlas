@@ -40,6 +40,8 @@ export type GitCommitSummary = {
 
 export type PullMode = "merge" | "rebase";
 
+export type GitResetMode = "soft" | "mixed" | "hard";
+
 export type GitDiffScope = "staged" | "unstaged";
 
 export type GitFileDiff = {
@@ -239,6 +241,35 @@ export function gitIncomingCommits(
   limit = 50,
 ): Promise<GitCommitSummary[]> {
   return invoke<GitCommitSummary[]>("git_incoming_commits", { repoRoot, limit });
+}
+
+export function gitDropUnpushedFrom(
+  repoRoot: string,
+  commitHash: string,
+  mode: GitResetMode,
+): Promise<void> {
+  return invoke<void>("git_drop_unpushed_from", { repoRoot, commitHash, mode });
+}
+
+export function gitDropAllUnpushed(
+  repoRoot: string,
+  mode: GitResetMode,
+): Promise<void> {
+  return invoke<void>("git_drop_all_unpushed", { repoRoot, mode });
+}
+
+export function gitMoveUnpushedToNewBranch(
+  repoRoot: string,
+  newName: string,
+): Promise<void> {
+  return invoke<void>("git_move_unpushed_to_new_branch", { repoRoot, newName });
+}
+
+export function gitMoveUnpushedToBranch(
+  repoRoot: string,
+  targetBranch: string,
+): Promise<void> {
+  return invoke<void>("git_move_unpushed_to_branch", { repoRoot, targetBranch });
 }
 
 export function gitPull(repoRoot: string, mode: PullMode): Promise<void> {

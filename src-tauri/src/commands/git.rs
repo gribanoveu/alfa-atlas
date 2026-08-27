@@ -7,8 +7,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::services::embedding_state::FullSyncActiveSlot;
 use crate::domain::git::{
     AppKeyStatus, CheckoutOutcome, GitBranchInfo, GitCommitSummary, GitConflictFile,
-    GitCredentials, GitDiffScope, GitFileDiff, GitFileStatus, GitProgressEvent, GitStashEntry,
-    GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
+    GitCredentials, GitDiffScope, GitFileDiff, GitFileStatus, GitProgressEvent, GitResetMode,
+    GitStashEntry, GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::domain::project_config::ProbeResult;
 use crate::services::{git_clone, git_credentials, git_ops};
@@ -94,6 +94,33 @@ pub async fn git_incoming_commits(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn git_drop_unpushed_from(
+    repo_root: String,
+    commit_hash: String,
+    mode: GitResetMode,
+) -> Result<(), String> {
+    git_ops::drop_unpushed_from(&repo_root, &commit_hash, mode).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_drop_all_unpushed(repo_root: String, mode: GitResetMode) -> Result<(), String> {
+    git_ops::drop_all_unpushed(&repo_root, mode).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_move_unpushed_to_new_branch(repo_root: String, new_name: String) -> Result<(), String> {
+    git_ops::move_unpushed_to_new_branch(&repo_root, &new_name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn git_move_unpushed_to_branch(
+    repo_root: String,
+    target_branch: String,
+) -> Result<(), String> {
+    git_ops::move_unpushed_to_branch(&repo_root, &target_branch).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

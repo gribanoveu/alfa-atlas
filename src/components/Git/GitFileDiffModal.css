@@ -1,5 +1,6 @@
 .git-diff-backdrop {
   padding: 16px;
+  z-index: 1001;
 }
 
 .git-diff-modal {

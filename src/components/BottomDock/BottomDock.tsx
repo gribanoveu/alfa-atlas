@@ -47,9 +47,16 @@ type BottomDockProps = {
     commits: GitCommitSummary[];
     busy: boolean;
     error: string | null;
+    unpushedHashes: ReadonlySet<string>;
+    unpushedCount: number;
+    hasUpstream: boolean;
+    dropBusy: boolean;
     onRefresh: () => void;
     onLoadCommitFiles: (commitHash: string) => Promise<GitFileStatus[] | null>;
     onOpenCommitFileDiff: (commitHash: string, file: GitFileStatus) => void;
+    onDropCommit: (hash: string) => void;
+    onMoveToBranch: () => void;
+    onDropAllUnpushed: () => void;
   } | null;
   standardsReport: StandardsReport | null;
   standardsStatus: StandardsCheckStatus;
@@ -132,9 +139,16 @@ export function BottomDock({
                 commits={gitHistory.commits}
                 busy={gitHistory.busy}
                 error={gitHistory.error}
+                unpushedHashes={gitHistory.unpushedHashes}
+                unpushedCount={gitHistory.unpushedCount}
+                hasUpstream={gitHistory.hasUpstream}
+                dropBusy={gitHistory.dropBusy}
                 onRefresh={gitHistory.onRefresh}
                 onLoadCommitFiles={gitHistory.onLoadCommitFiles}
                 onOpenCommitFileDiff={gitHistory.onOpenCommitFileDiff}
+                onDropCommit={gitHistory.onDropCommit}
+                onMoveToBranch={gitHistory.onMoveToBranch}
+                onDropAllUnpushed={gitHistory.onDropAllUnpushed}
               />
             ) : (
               <div className="panel-empty">{active.empty}</div>
