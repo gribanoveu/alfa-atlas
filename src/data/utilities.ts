@@ -1,6 +1,6 @@
-import { Clock, Hash, KeyRound, type LucideIcon } from "lucide-react";
+import { Clock, Globe, Hash, KeyRound, type LucideIcon } from "lucide-react";
 
-export type UtilityId = "unixtime" | "ids" | "jwt";
+export type UtilityId = "unixtime" | "ids" | "jwt" | "http-status";
 
 export type UtilityDef = {
   id: UtilityId;
@@ -36,6 +36,13 @@ export const UTILITIES: UtilityDef[] = [
     title: "Парсер JWT",
     description: "Разбор заголовка и payload токена",
     icon: KeyRound,
+    stub: false,
+  },
+  {
+    id: "http-status",
+    title: "Справочник HTTP-кодов",
+    description: "Коды ответа, описания и советы по использованию",
+    icon: Globe,
     stub: false,
   },
 ];

@@ -1,4 +1,5 @@
 import { findUtility, type UtilityId } from "../../data/utilities";
+import { HttpStatusReference } from "./HttpStatusReference";
 import { IdGenerator } from "./IdGenerator";
 import { JwtParser } from "./JwtParser";
 import { UnixtimeConverter } from "./UnixtimeConverter";
@@ -31,6 +32,7 @@ export function UtilityView({ utilityId }: UtilityViewProps) {
       {utilityId === "unixtime" ? <UnixtimeConverter /> : null}
       {utilityId === "ids" ? <IdGenerator /> : null}
       {utilityId === "jwt" ? <JwtParser /> : null}
+      {utilityId === "http-status" ? <HttpStatusReference /> : null}
       {utility.stub ? (
         <div className="utility-view-stub" role="status">
           Утилита ещё не реализована

@@ -1,0 +1,211 @@
+.http-status {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+}
+
+.http-status-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.http-status-search {
+  width: 100%;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: calc(var(--font-preview) * 0.82);
+  color: var(--text-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+
+.http-status-search:focus {
+  border-color: var(--accent);
+}
+
+.http-status-search::placeholder {
+  color: var(--text-2);
+}
+
+.http-status-filters {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.http-status-filter {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: calc(var(--font-preview) * 0.72);
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.http-status-filter:hover {
+  color: var(--text-1);
+  background: var(--bg-1);
+}
+
+.http-status-filter.is-active {
+  color: var(--text-0);
+  background: var(--bg-1);
+  border-color: var(--border);
+}
+
+.http-status-meta {
+  font-size: calc(var(--font-preview) * 0.75);
+  color: var(--text-2);
+}
+
+.http-status-empty {
+  padding: 12px 0;
+  font-size: calc(var(--font-preview) * 0.82);
+  color: var(--text-2);
+}
+
+.http-status-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.http-status-group-title {
+  margin-bottom: 8px;
+  font-size: calc(var(--font-preview) * 0.72);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.http-status-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.http-status-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px 12px;
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.http-status-code {
+  flex: none;
+  min-width: 2.8rem;
+  font-size: calc(var(--font-preview) * 0.88);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.http-status-code.cat-1xx {
+  color: var(--cyan);
+}
+
+.http-status-code.cat-2xx {
+  color: var(--green);
+}
+
+.http-status-code.cat-3xx {
+  color: var(--accent);
+}
+
+.http-status-code.cat-4xx {
+  color: var(--orange);
+}
+
+.http-status-code.cat-5xx {
+  color: var(--red-tag);
+}
+
+.http-status-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.http-status-name {
+  font-size: calc(var(--font-preview) * 0.88);
+  font-weight: 600;
+  color: var(--text-0);
+  line-height: 1.35;
+}
+
+.http-status-desc {
+  font-size: calc(var(--font-preview) * 0.78);
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.http-status-usage {
+  font-size: calc(var(--font-preview) * 0.75);
+  color: var(--text-1);
+  line-height: 1.5;
+}
+
+.http-status-usage::before {
+  content: "Когда использовать: ";
+  color: var(--text-2);
+}
+
+.http-status-copy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.http-status-copy:hover {
+  color: var(--text-0);
+  border-color: var(--border);
+  background: var(--bg-2);
+}
+
+.http-status-copy.is-copied,
+.http-status-copy.is-copied:hover {
+  color: var(--green);
+  border-color: transparent;
+  background: transparent;
+}
+
+@media (max-width: 640px) {
+  .http-status-item {
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+  }
+
+  .http-status-copy {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .http-status-body {
+    grid-column: 1 / -1;
+  }
+}
