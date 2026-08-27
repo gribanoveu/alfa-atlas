@@ -108,7 +108,7 @@ describe("method standards check action", () => {
     const methodCtx = ctx({ path: "api/getUser/getUser.adoc", basename: "getUser.adoc" });
     const actions = resolveEditorContextActions(methodCtx);
     expect(actions.map((a) => a.id)).toEqual(["method-standards-check"]);
-    expect(actions[0]?.label).toBe("Проверить по стандарту");
+    expect(actions[0]?.label).toBe("Исправить нарушения техстандарта");
     expect(actions[0]?.delivery).toBe("draft");
     expect(actions[0]?.input).toEqual({ kind: "none" });
   });

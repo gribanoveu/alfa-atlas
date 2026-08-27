@@ -41,6 +41,8 @@ import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useSpecsRepo } from "./hooks/useSpecsRepo";
 import { useOpenApiBundle } from "./hooks/useOpenApiBundle";
 import { OpenApiExplorer } from "./components/OpenApiExplorer/OpenApiExplorer";
+import { UtilityView } from "./components/Utilities/UtilityView";
+import { utilityTabId } from "./data/utilities";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
 import { useSpellcheckConfig } from "./hooks/useSpellcheckConfig";
 import { useGitPanel } from "./hooks/useGitPanel";
@@ -155,10 +157,12 @@ function App() {
   const {
     openApiTabOpen,
     setOpenApiTabOpen,
+    activeUtility,
     activeKind,
     setActiveKind,
     displayTabs,
     openApiExplorerTab,
+    openUtilityTab,
   } = tabs;
 
   const openApiBundle = useOpenApiBundle(
@@ -721,7 +725,13 @@ function App() {
           {hasProject ? (
             <EditorPane
               tabs={displayTabs}
-              activeTabId={activeKind === "openapi" ? "openapi" : editor.activeTabId}
+              activeTabId={
+                activeKind === "openapi"
+                  ? "openapi"
+                  : activeKind === "utility" && activeUtility
+                    ? utilityTabId(activeUtility)
+                    : editor.activeTabId
+              }
               activeTab={editor.activeTab}
               activeKind={activeKind}
               openApiExplorer={
@@ -732,6 +742,9 @@ function App() {
                     error={openApiBundle.error}
                   />
                 ) : undefined
+              }
+              utilityView={
+                activeUtility ? <UtilityView utilityId={activeUtility} /> : undefined
               }
               onSelectTab={tabs.selectTab}
               onCloseTab={tabs.closeTab}
@@ -835,6 +848,16 @@ function App() {
                 ? {
                     canInsert: canInsertAsciiDoc,
                     onInsert: assistant.insertSnippet,
+                  }
+                : null
+            }
+            utilities={
+              // Вкладки живут только внутри EditorPane, а он монтируется
+              // вместе с проектом — без проекта карточке некуда открываться.
+              hasProject
+                ? {
+                    onOpen: openUtilityTab,
+                    activeId: activeKind === "utility" ? activeUtility : null,
                   }
                 : null
             }

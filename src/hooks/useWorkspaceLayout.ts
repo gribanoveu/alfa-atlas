@@ -3,6 +3,7 @@ import { useCallback, useState } from "react";
 export type RightTool =
   | "assistant"
   | "asciidoc"
+  | "utilities"
   | "git"
   | "suggestions"
   | "branches";
@@ -22,6 +23,7 @@ const RIGHT_TOOLS: readonly RightTool[] = [
   "git",
   "suggestions",
   "asciidoc",
+  "utilities",
 ];
 const BOTTOM_TOOLS: readonly BottomTool[] = [
   "gitHistory",

@@ -33,6 +33,7 @@ import type { Diagnostic } from "../../lib/workspaceIndex";
 import { ATLAS_DARK_THEME_ID } from "../../monaco/asciidocLanguage";
 import type { CursorPosition, EditorTab } from "../../hooks/useEditorTabs";
 import { planIdFromTabId } from "../../hooks/useEditorTabs";
+import type { EditorPaneKind } from "../../hooks/useEditorTabActions";
 import type { EditorViewMode } from "../../types/viewMode";
 import { DocumentPreview } from "../DocumentPreview/DocumentPreview";
 import { MarkdownPreview } from "../MarkdownPreview/MarkdownPreview";
@@ -75,10 +76,12 @@ type EditorPaneProps = {
   tabs: DisplayTab[];
   activeTabId: string | null;
   activeTab: EditorTab | null;
-  /** "file" shows the active file tab (Monaco/preview); "openapi" shows
-   * `openApiExplorer` instead, regardless of `activeTab`/`activeTabId`. */
-  activeKind: "file" | "openapi";
+  /** "file" shows the active file tab (Monaco/preview); "openapi" and
+   * "utility" show `openApiExplorer` / `utilityView` instead, regardless of
+   * `activeTab`/`activeTabId`. */
+  activeKind: EditorPaneKind;
   openApiExplorer?: React.ReactNode;
+  utilityView?: React.ReactNode;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onCloseAllTabs: () => void;
@@ -139,6 +142,7 @@ export function EditorPane({
   activeTabId,
   activeTab,
   activeKind,
+  utilityView,
   openApiExplorer,
   onSelectTab,
   onCloseTab,
@@ -567,7 +571,12 @@ export function EditorPane({
     )
   ) : null;
 
-  const planId = isPlanTab && activeTab ? planIdFromTabId(activeTab.id) : null;
+  // Псевдо-вкладки (API Explorer, утилиты) не меняют `activeTab`, поэтому
+  // кнопку плана прячем по активному виду, а не только по типу вкладки.
+  const planId =
+    activeKind === "file" && isPlanTab && activeTab
+      ? planIdFromTabId(activeTab.id)
+      : null;
   const planActions = planId ? (
     <button
       type="button"
@@ -593,13 +602,15 @@ export function EditorPane({
         onCloseOthers={onCloseOtherTabs}
         viewMode={effectiveViewMode}
         onViewModeChange={isPlanTab ? setPlanViewMode : onViewModeChange}
-        hideViewMode={isImageTab}
+        hideViewMode={isImageTab || activeKind === "utility"}
         allowedViewModes={isPlanTab ? (["source", "render"] as const) : undefined}
         actions={planActions}
       />
       <div className={`editor-body editor-body-${isImageTab ? "render" : effectiveViewMode}`}>
         {activeKind === "openapi" ? (
           openApiExplorer
+        ) : activeKind === "utility" ? (
+          utilityView
         ) : activeTab ? (
           isImageTab || effectiveViewMode === "render" ? (
             <>

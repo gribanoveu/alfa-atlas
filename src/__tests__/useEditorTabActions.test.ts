@@ -112,6 +112,89 @@ describe("useEditorTabActions", () => {
     expect(editor.closeOtherTabs).toHaveBeenCalledWith("a.adoc");
   });
 
+  test("opening a utility appends its tab and makes it active", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual(["a.adoc"]);
+
+    act(() => result.current.openUtilityTab("unixtime"));
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual([
+      "a.adoc",
+      "utility:unixtime",
+    ]);
+    expect(result.current.displayTabs[1]?.title).toBe("Конвертер Unixtime");
+    expect(result.current.activeKind).toBe("utility");
+    expect(result.current.activeUtility).toBe("unixtime");
+  });
+
+  test("reopening an already-open utility focuses it instead of duplicating", () => {
+    const { result } = render(makeEditor());
+    act(() => result.current.openUtilityTab("unixtime"));
+    act(() => result.current.selectTab("openapi"));
+    act(() => result.current.openUtilityTab("unixtime"));
+
+    expect(result.current.displayTabs.filter((t) => t.id === "utility:unixtime")).toHaveLength(1);
+    expect(result.current.activeKind).toBe("utility");
+  });
+
+  test("selecting a utility tab does not touch the file editor", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    act(() => result.current.openUtilityTab("unixtime"));
+    act(() => result.current.selectTab("utility:unixtime"));
+
+    expect(result.current.activeKind).toBe("utility");
+    expect(editor.selectTab).not.toHaveBeenCalled();
+  });
+
+  test("closing the active utility removes it and hands focus back to files", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    act(() => result.current.openUtilityTab("unixtime"));
+
+    act(() => result.current.closeTab("utility:unixtime"));
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual(["a.adoc"]);
+    expect(result.current.activeKind).toBe("file");
+    expect(result.current.activeUtility).toBeNull();
+    expect(editor.closeTab).not.toHaveBeenCalled();
+  });
+
+  test("close-all clears utility tabs along with the files", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    act(() => result.current.openUtilityTab("unixtime"));
+
+    act(() => result.current.closeAllTabs());
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual(["a.adoc"]);
+    expect(result.current.activeKind).toBe("file");
+    expect(editor.closeAllTabs).toHaveBeenCalled();
+  });
+
+  test("close-others from a utility keeps it and drops every file", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    act(() => result.current.openApiExplorerTab());
+    act(() => result.current.openUtilityTab("unixtime"));
+
+    act(() => result.current.closeOtherTabs("utility:unixtime"));
+    expect(editor.closeAllTabs).toHaveBeenCalled();
+    expect(editor.closeOtherTabs).not.toHaveBeenCalled();
+    expect(result.current.openApiTabOpen).toBe(false);
+    expect(result.current.activeKind).toBe("utility");
+    expect(result.current.activeUtility).toBe("unixtime");
+  });
+
+  test("close-others from a file tab drops the utility tabs too", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    act(() => result.current.openUtilityTab("unixtime"));
+
+    act(() => result.current.closeOtherTabs("a.adoc"));
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual(["a.adoc"]);
+    expect(result.current.activeUtility).toBeNull();
+    expect(editor.closeOtherTabs).toHaveBeenCalledWith("a.adoc");
+  });
+
   test("undo and redo are inert until an editor instance is attached", () => {
     const { result } = render(makeEditor());
     // No instance yet — must not throw, which is the whole point of the ref

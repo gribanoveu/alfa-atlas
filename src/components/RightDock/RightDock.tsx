@@ -5,9 +5,11 @@ import {
   GitFork,
   Lightbulb,
   Sparkles,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import type { RightTool } from "../../hooks/useWorkspaceLayout";
+import type { UtilityId } from "../../data/utilities";
 import type {
   GitBranchInfo,
   GitDiffScope,
@@ -24,6 +26,7 @@ import { AssistantPanel } from "./AssistantPanel";
 import { BranchesPanel } from "./BranchesPanel";
 import { GitPanel } from "./GitPanel";
 import { AsciiDocPanel } from "./AsciiDocPanel";
+import { UtilitiesPanel } from "./UtilitiesPanel";
 import { NotificationsPanel } from "./NotificationsPanel";
 import "./RightDock.css";
 
@@ -56,13 +59,18 @@ const TOOL_DEFS: Record<
     empty: "Библиотека блоков пуста",
     Icon: FileText,
   },
+  utilities: {
+    label: "Утилиты",
+    empty: "Нет открытого репозитория",
+    Icon: Wrench,
+  },
 };
 
 /** Stripe order: notifications + assistant grouped on top, then git tools, then editor tools. */
 const TOOL_STRIPE_GROUPS: RightTool[][] = [
   ["suggestions", "assistant"],
   ["branches", "git"],
-  ["asciidoc"],
+  ["asciidoc", "utilities"],
 ];
 
 export type GitPanelViewProps = {
@@ -120,6 +128,10 @@ type RightDockProps = {
   asciidoc?: {
     canInsert: boolean;
     onInsert: (text: string) => void;
+  } | null;
+  utilities?: {
+    onOpen: (id: UtilityId) => void;
+    activeId: UtilityId | null;
   } | null;
   assistant?: {
     onOpenSettings: () => void;
@@ -187,6 +199,7 @@ export function RightDock({
   git,
   branches,
   asciidoc,
+  utilities,
   assistant,
   gitActionLog,
   chatInsertRequest,
@@ -269,6 +282,11 @@ export function RightDock({
               <AsciiDocPanel
                 canInsert={asciidoc.canInsert}
                 onInsert={asciidoc.onInsert}
+              />
+            ) : activeTool === "utilities" && utilities ? (
+              <UtilitiesPanel
+                onOpen={utilities.onOpen}
+                activeId={utilities.activeId}
               />
             ) : activeTool === "branches" && branches ? (
               <BranchesPanel
