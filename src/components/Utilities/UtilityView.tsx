@@ -1,4 +1,5 @@
 import { findUtility, type UtilityId } from "../../data/utilities";
+import { Base64Codec } from "./Base64Codec";
 import { HttpStatusReference } from "./HttpStatusReference";
 import { IdGenerator } from "./IdGenerator";
 import { JsonDiff } from "./JsonDiff";
@@ -39,6 +40,7 @@ export function UtilityView({ utilityId }: UtilityViewProps) {
       {utilityId === "json-diff" ? <JsonDiff /> : null}
       {utilityId === "json-format" ? <JsonFormatter /> : null}
       {utilityId === "xml-format" ? <XmlFormatter /> : null}
+      {utilityId === "base64" ? <Base64Codec /> : null}
       {utility.stub ? (
         <div className="utility-view-stub" role="status">
           Утилита ещё не реализована

@@ -1,4 +1,4 @@
-import { Braces, Clock, CodeXml, FileJson2, Globe, Hash, KeyRound, type LucideIcon } from "lucide-react";
+import { Binary, Braces, Clock, CodeXml, FileJson2, Globe, Hash, KeyRound, type LucideIcon } from "lucide-react";
 
 export type UtilityId =
   | "unixtime"
@@ -7,7 +7,8 @@ export type UtilityId =
   | "http-status"
   | "json-diff"
   | "json-format"
-  | "xml-format";
+  | "xml-format"
+  | "base64";
 
 export type UtilityDef = {
   id: UtilityId;
@@ -71,6 +72,13 @@ export const UTILITIES: UtilityDef[] = [
     title: "Форматирование XML",
     description: "Prettify и minify XML-документов",
     icon: CodeXml,
+    stub: false,
+  },
+  {
+    id: "base64",
+    title: "Base64-кодек",
+    description: "Кодирование и декодирование строк",
+    icon: Binary,
     stub: false,
   },
 ];
