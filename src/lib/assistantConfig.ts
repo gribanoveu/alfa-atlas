@@ -1406,9 +1406,9 @@ export interface AssistantSuggestion {
   followUps?: AssistantSuggestion[];
 }
 
-/** Shared prefix for «fill request.adoc from curl» prompts — used by assistant
- * suggestion chips and editor context actions so the wording cannot drift. */
-export const REQUEST_FROM_CURL_PROMPT_PREFIX =
+/** Shared prefix for «fill request.adoc from curl» draft chips in the assistant
+ * suggestion tree — mirrors the editor context action wording. */
+const REQUEST_FROM_CURL_CHIP_PREFIX =
   "Сформируй описание входящего запроса в request.adoc на основе следующего curl-запроса:";
 
 export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
@@ -1420,7 +1420,7 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
       {
         id: "new-method-doc.from-curl",
         label: "Описание запроса из curl",
-        text: `${REQUEST_FROM_CURL_PROMPT_PREFIX} `,
+        text: `${REQUEST_FROM_CURL_CHIP_PREFIX} `,
       },
       {
         id: "new-method-doc.response-example",

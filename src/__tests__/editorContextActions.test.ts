@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { REQUEST_FROM_CURL_PROMPT_PREFIX } from "../lib/assistantConfig";
 import {
   editorActionContextFromTab,
+  isMethodDescriptionFile,
   matchesBasename,
+  METHOD_STANDARDS_CHECK_PROMPT_PREFIX,
+  parentFolderName,
+  REQUEST_FROM_CURL_PROMPT_PREFIX,
   resolveEditorContextActions,
 } from "../lib/editorContextActions";
 
@@ -67,6 +70,65 @@ describe("resolveEditorContextActions", () => {
     expect(prompt).toContain('curl -X GET "https://example"');
     expect(prompt).toContain("`api/getUser/request.adoc`");
     expect(prompt).toContain("method.adoc");
+  });
+});
+
+describe("isMethodDescriptionFile", () => {
+  test("matches when basename equals parent folder name", () => {
+    expect(
+      isMethodDescriptionFile(ctx({ path: "api/getUser/getUser.adoc", basename: "getUser.adoc" })),
+    ).toBe(true);
+  });
+
+  test("is case-insensitive for stem and folder", () => {
+    expect(
+      isMethodDescriptionFile(ctx({ path: "api/GetUser/GetUser.adoc", basename: "GetUser.adoc" })),
+    ).toBe(true);
+  });
+
+  test("rejects request.adoc and response.adoc", () => {
+    expect(
+      isMethodDescriptionFile(ctx({ path: "api/getUser/request.adoc", basename: "request.adoc" })),
+    ).toBe(false);
+    expect(
+      isMethodDescriptionFile(ctx({ path: "api/getUser/response.adoc", basename: "response.adoc" })),
+    ).toBe(false);
+  });
+
+  test("rejects files at docs root and unrelated names", () => {
+    expect(isMethodDescriptionFile(ctx({ path: "intro.adoc", basename: "intro.adoc" }))).toBe(false);
+    expect(
+      isMethodDescriptionFile(ctx({ path: "api/getUser/overview.adoc", basename: "overview.adoc" })),
+    ).toBe(false);
+  });
+});
+
+describe("method standards check action", () => {
+  test("offers draft action for method description files", () => {
+    const methodCtx = ctx({ path: "api/getUser/getUser.adoc", basename: "getUser.adoc" });
+    const actions = resolveEditorContextActions(methodCtx);
+    expect(actions.map((a) => a.id)).toEqual(["method-standards-check"]);
+    expect(actions[0]?.label).toBe("Проверить по стандарту");
+    expect(actions[0]?.delivery).toBe("draft");
+    expect(actions[0]?.input).toEqual({ kind: "none" });
+  });
+
+  test("buildPrompt references standards check and method folder", () => {
+    const methodCtx = ctx({ path: "api/getUser/getUser.adoc", basename: "getUser.adoc" });
+    const action = resolveEditorContextActions(methodCtx)[0];
+    const prompt = action?.buildPrompt(methodCtx);
+    expect(prompt).toContain(METHOD_STANDARDS_CHECK_PROMPT_PREFIX);
+    expect(prompt).toContain('kind: "standards"');
+    expect(prompt).toContain("исправь");
+    expect(prompt).toContain("`api/getUser/getUser.adoc`");
+    expect(prompt).toContain("`api/getUser`");
+  });
+});
+
+describe("parentFolderName", () => {
+  test("returns the last path segment", () => {
+    expect(parentFolderName("api/getUser/getUser.adoc")).toBe("getUser");
+    expect(parentFolderName("getUser.adoc")).toBe(null);
   });
 });
 

@@ -73,6 +73,12 @@ type AssistantPanelProps = {
     conversationMode?: ConversationMode;
   } | null;
   onAssistantSendHandled?: () => void;
+  assistantDraftRequest?: {
+    id: number;
+    text: string;
+    conversationMode?: ConversationMode;
+  } | null;
+  onAssistantDraftHandled?: () => void;
 };
 
 /** This panel is the assistant's actual interaction surface. It owns
@@ -110,6 +116,8 @@ export function AssistantPanel({
   onChatInsertHandled,
   assistantSendRequest,
   onAssistantSendHandled,
+  assistantDraftRequest,
+  onAssistantDraftHandled,
 }: AssistantPanelProps) {
   const {
     config: embeddingConfig,
@@ -217,8 +225,8 @@ export function AssistantPanel({
   // it first — the conversation (and its draft) isn't mounted behind the
   // archive, so the insert would otherwise be silently lost.
   useEffect(() => {
-    if (chatInsertRequest) setArchiveOpen(false);
-  }, [chatInsertRequest]);
+    if (chatInsertRequest || assistantDraftRequest) setArchiveOpen(false);
+  }, [chatInsertRequest, assistantDraftRequest]);
 
   // Format is chosen up front (via `ChatHistoryMenu`'s popover) so the save
   // dialog's `filters`/`defaultPath` extension are unambiguous — Tauri's
@@ -358,6 +366,8 @@ export function AssistantPanel({
                 onChatInsertHandled={onChatInsertHandled}
                 assistantSendRequest={assistantSendRequest ?? null}
                 onAssistantSendHandled={onAssistantSendHandled}
+                assistantDraftRequest={assistantDraftRequest ?? null}
+                onAssistantDraftHandled={onAssistantDraftHandled}
               />
             )}
           </>

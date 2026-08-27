@@ -361,6 +361,13 @@ type AssistantConversationProps = {
   } | null;
   /** Cleared in App after this component consumes `assistantSendRequest`. */
   onAssistantSendHandled?: () => void;
+  /** Editor context action — canned prompt inserted into the composer. */
+  assistantDraftRequest?: {
+    id: number;
+    text: string;
+    conversationMode?: ConversationMode;
+  } | null;
+  onAssistantDraftHandled?: () => void;
 };
 
 /** The actual per-conversation surface: message transcript, model picker,
@@ -403,6 +410,8 @@ export function AssistantConversation({
   onChatInsertHandled,
   assistantSendRequest,
   onAssistantSendHandled,
+  assistantDraftRequest,
+  onAssistantDraftHandled,
 }: AssistantConversationProps) {
   const contextLimit = activeProvider?.limit?.context ?? null;
 
@@ -711,6 +720,31 @@ export function AssistantConversation({
     );
     onAssistantSendHandled?.();
   }, [assistantSendRequest, runAssistantSend, onAssistantSendHandled]);
+
+  const lastHandledAssistantDraftIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!assistantDraftRequest || assistantDraftRequest.id === lastHandledAssistantDraftIdRef.current) {
+      return;
+    }
+    lastHandledAssistantDraftIdRef.current = assistantDraftRequest.id;
+    const targetMode = assistantDraftRequest.conversationMode;
+    if (targetMode && targetMode !== conversationMode) {
+      onConversationModeChange(targetMode);
+    }
+    setDraft(assistantDraftRequest.text);
+    requestAnimationFrame(() => {
+      const el = chatInputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+    onAssistantDraftHandled?.();
+  }, [
+    assistantDraftRequest,
+    conversationMode,
+    onConversationModeChange,
+    onAssistantDraftHandled,
+  ]);
 
   // Reset the fetched model list (and close the menu) whenever the active
   // provider itself changes, so a stale list from a different provider

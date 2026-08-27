@@ -60,9 +60,15 @@ export function useAssistantBridge({
     text: string;
     conversationMode?: ConversationMode;
   } | null>(null);
+  const [assistantDraftRequest, setAssistantDraftRequest] = useState<{
+    id: number;
+    text: string;
+    conversationMode?: ConversationMode;
+  } | null>(null);
   const insertCounter = useRef(0);
   const chatInsertCounter = useRef(0);
   const assistantSendCounter = useRef(0);
+  const assistantDraftCounter = useRef(0);
 
   /** Tool results use access-mode-relative paths; editor tabs are
    * docs-relative. */
@@ -168,10 +174,29 @@ export function useAssistantBridge({
     setAssistantSendRequest(null);
   }, []);
 
+  /** Opens the assistant dock and fills the composer with a canned prompt. */
+  const insertAssistantDraft = useCallback(
+    (text: string, opts?: { conversationMode?: ConversationMode }) => {
+      assistantDraftCounter.current += 1;
+      layout.setRightTool("assistant");
+      setAssistantDraftRequest({
+        id: assistantDraftCounter.current,
+        text,
+        conversationMode: opts?.conversationMode,
+      });
+    },
+    [layout],
+  );
+
+  const onAssistantDraftHandled = useCallback(() => {
+    setAssistantDraftRequest(null);
+  }, []);
+
   return {
     insertRequest,
     chatInsertRequest,
     assistantSendRequest,
+    assistantDraftRequest,
     onFileWritten,
     onFileMoved,
     insertSnippet,
@@ -179,5 +204,7 @@ export function useAssistantBridge({
     onChatInsertHandled,
     sendAssistantPrompt,
     onAssistantSendHandled,
+    insertAssistantDraft,
+    onAssistantDraftHandled,
   };
 }

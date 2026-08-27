@@ -153,6 +153,12 @@ type RightDockProps = {
     conversationMode?: ConversationMode;
   } | null;
   onAssistantSendHandled?: () => void;
+  assistantDraftRequest?: {
+    id: number;
+    text: string;
+    conversationMode?: ConversationMode;
+  } | null;
+  onAssistantDraftHandled?: () => void;
 };
 
 function ToolWindowHeader({ label, onHide }: { label: string; onHide: () => void }) {
@@ -187,6 +193,8 @@ export function RightDock({
   onChatInsertHandled,
   assistantSendRequest,
   onAssistantSendHandled,
+  assistantDraftRequest,
+  onAssistantDraftHandled,
 }: RightDockProps) {
   const open = Boolean(activeTool);
   const active = activeTool ? TOOL_DEFS[activeTool] : undefined;
@@ -299,6 +307,8 @@ export function RightDock({
               onChatInsertHandled={onChatInsertHandled}
               assistantSendRequest={assistantSendRequest ?? null}
               onAssistantSendHandled={onAssistantSendHandled}
+              assistantDraftRequest={assistantDraftRequest ?? null}
+              onAssistantDraftHandled={onAssistantDraftHandled}
             />
           </div>
         </div>

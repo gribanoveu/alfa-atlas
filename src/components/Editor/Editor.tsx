@@ -17,6 +17,7 @@ import {
   editorActionContextFromTab,
   resolveEditorContextActions,
   type EditorContextAction,
+  type EditorContextActionDelivery,
 } from "../../lib/editorContextActions";
 import type { GitFileDiff } from "../../lib/git";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
@@ -102,10 +103,10 @@ type EditorPaneProps = {
   /** «Добавить в чат» из панели выделения — передаёт выделенный текст и путь
    * файла (docs-root-relative) наверх, в App, для вставки в чат ассистента. */
   onAddToChat?: (text: string, filePath: string | null) => void;
-  /** Editor context action — send a canned prompt to the assistant. */
+  /** Editor context action — deliver a canned prompt to the assistant. */
   onRunContextAction?: (
     prompt: string,
-    opts?: { conversationMode?: ConversationMode },
+    opts?: { conversationMode?: ConversationMode; delivery?: EditorContextActionDelivery },
   ) => void;
   /** Уведомляет о смене текущего экземпляра редактора (для команд Undo/Redo из меню). */
   onEditorInstanceChange?: (
@@ -179,7 +180,10 @@ export function EditorPane({
         editorActionContextFromTab(projectTextTab!, llmReady),
         inputValue,
       );
-      onRunContextAction(prompt, { conversationMode: action.conversationMode });
+      onRunContextAction(prompt, {
+        conversationMode: action.conversationMode,
+        delivery: action.delivery ?? "send",
+      });
     },
     [onRunContextAction, projectTextTab, llmReady],
   );

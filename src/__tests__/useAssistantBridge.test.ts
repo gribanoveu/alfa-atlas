@@ -195,4 +195,24 @@ describe("useAssistantBridge — text into the editor and chat", () => {
     act(() => result.current.sendAssistantPrompt("промпт"));
     expect(result.current.assistantSendRequest?.id).not.toBe(first);
   });
+
+  test("insertAssistantDraft opens the assistant dock and queues a draft request", () => {
+    const deps = makeDeps();
+    const { result } = render(deps);
+
+    act(() => result.current.insertAssistantDraft("проверь стандарт", { conversationMode: "agent" }));
+
+    expect(deps.layout.setRightTool).toHaveBeenCalledWith("assistant");
+    expect(result.current.assistantDraftRequest).toMatchObject({
+      text: "проверь стандарт",
+      conversationMode: "agent",
+    });
+  });
+
+  test("the assistant draft request is cleared once the panel consumes it", () => {
+    const { result } = render(makeDeps());
+    act(() => result.current.insertAssistantDraft("промпт"));
+    act(() => result.current.onAssistantDraftHandled());
+    expect(result.current.assistantDraftRequest).toBeNull();
+  });
 });
