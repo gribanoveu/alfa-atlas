@@ -51,6 +51,21 @@ fn apply_window_state(window: &tauri::WebviewWindow, state: WindowState) {
     let _ = window.show();
 }
 
+/// Brings the running instance forward when a second launch is turned away
+/// by the single-instance plugin. `set_focus()` alone isn't enough here: the
+/// window is configured `visible: false` and only revealed by
+/// `apply_window_state`, and it may also be minimized by the time the second
+/// launch arrives.
+#[cfg(desktop)]
+fn focus_main_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
 fn persist_window_state(window: &Window) {
     let Ok(maximized) = window.is_maximized() else {
         return;
@@ -84,11 +99,19 @@ fn persist_window_state(window: &Window) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Only the `debug_assertions` block below reassigns this, so a release
-    // build sees a `mut` nothing ever uses — scope the allow to that build
-    // rather than blanket-allowing `unused_mut` in both.
-    #[cfg_attr(not(debug_assertions), allow(unused_mut))]
-    let mut builder = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Registered ahead of every other plugin, as the plugin's own docs
+    // require: plugins run in the order they were added, so the second
+    // launch has to be turned away before anything else starts coming up.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            focus_main_window(app);
+        }));
+    }
+
+    builder = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
