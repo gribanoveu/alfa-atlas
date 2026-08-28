@@ -43,6 +43,9 @@ import { useOpenApiBundle } from "./hooks/useOpenApiBundle";
 import { OpenApiExplorer } from "./components/OpenApiExplorer/OpenApiExplorer";
 import { UtilityView } from "./components/Utilities/UtilityView";
 import { utilityTabId } from "./data/utilities";
+import { artifactTabId, createAndOpenArtifact } from "./lib/artifactTabs";
+import { ARTIFACT_KINDS } from "./data/artifactKinds";
+import { ArtifactView } from "./components/Artifacts/ArtifactView";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
 import { useSpellcheckConfig } from "./hooks/useSpellcheckConfig";
 import { useGitPanel } from "./hooks/useGitPanel";
@@ -163,6 +166,10 @@ function App() {
     displayTabs,
     openApiExplorerTab,
     openUtilityTab,
+    activeArtifact,
+    openArtifactTab,
+    setArtifactTitle,
+    setArtifactDirtyFlag,
   } = tabs;
 
   const openApiBundle = useOpenApiBundle(
@@ -181,6 +188,18 @@ function App() {
     window.addEventListener("atlas-open-plan", onOpenPlan);
     return () => window.removeEventListener("atlas-open-plan", onOpenPlan);
   }, [editor.openPlan]);
+
+  // Dispatched by the assistant's artifact card and by the artifacts list —
+  // the same cross-component escape hatch `atlas-open-plan` already uses.
+  useEffect(() => {
+    const onOpenArtifact = (event: Event) => {
+      const artifactId = (event as CustomEvent<{ artifactId?: string }>).detail?.artifactId;
+      if (!artifactId) return;
+      openArtifactTab(artifactId);
+    };
+    window.addEventListener("atlas-open-artifact", onOpenArtifact);
+    return () => window.removeEventListener("atlas-open-artifact", onOpenArtifact);
+  }, [openArtifactTab]);
 
 
 
@@ -730,7 +749,9 @@ function App() {
                   ? "openapi"
                   : activeKind === "utility" && activeUtility
                     ? utilityTabId(activeUtility)
-                    : editor.activeTabId
+                    : activeKind === "artifact" && activeArtifact
+                      ? artifactTabId(activeArtifact)
+                      : editor.activeTabId
               }
               activeTab={editor.activeTab}
               activeKind={activeKind}
@@ -745,6 +766,25 @@ function App() {
               }
               utilityView={
                 activeUtility ? <UtilityView utilityId={activeUtility} /> : undefined
+              }
+              artifactView={
+                activeArtifact ? (
+                  <ArtifactView
+                    key={activeArtifact}
+                    artifactId={activeArtifact}
+                    onDirtyChange={setArtifactDirtyFlag}
+                    onTitleChange={setArtifactTitle}
+                    onSendToAssistant={(record) => {
+                      // Nothing was paused on this artifact (it was opened
+                      // from the utilities panel, or its turn ended long
+                      // ago) — announce it instead, and the assistant picks
+                      // it up with the `artifact` tool.
+                      assistant.sendAssistantPrompt(
+                        `Я заполнил артефакт \`${record.id}\` — «${record.title}». Прочитай его тулом artifact (op: "read") и используй в документации.`,
+                      );
+                    }}
+                  />
+                ) : undefined
               }
               onSelectTab={tabs.selectTab}
               onCloseTab={tabs.closeTab}
@@ -858,6 +898,15 @@ function App() {
                 ? {
                     onOpen: openUtilityTab,
                     activeId: activeKind === "utility" ? activeUtility : null,
+                    onNewArtifact: (kind) => {
+                      const label = ARTIFACT_KINDS.find((k) => k.id === kind)?.newLabel ?? "Новый артефакт";
+                      void createAndOpenArtifact(kind, label).catch((e) =>
+                        setFolderError(toMessage(e)),
+                      );
+                    },
+                    onOpenArtifacts: () => {
+                      window.dispatchEvent(new CustomEvent("atlas-open-artifacts"));
+                    },
                   }
                 : null
             }

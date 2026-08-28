@@ -7,6 +7,7 @@ import {
   utilityTabId,
   type UtilityId,
 } from "../data/utilities";
+import { artifactIdFromTabId, artifactTabId } from "../lib/artifactTabs";
 import type { SpecsRepoInfo } from "../lib/openapi";
 import type { useEditorTabs } from "./useEditorTabs";
 
@@ -17,7 +18,7 @@ type Deps = {
 
 /** Which pane the editor column shows: a real file tab, or one of the
  * pseudo-tabs that have no file behind them. */
-export type EditorPaneKind = "file" | "openapi" | "utility";
+export type EditorPaneKind = "file" | "openapi" | "utility" | "artifact";
 
 /** The tab strip, which shows two things `useEditorTabs` knows nothing about:
  * the API Explorer and the utilities (Unixtime converter and friends).
@@ -35,6 +36,16 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
   const [openApiTabOpen, setOpenApiTabOpen] = useState(false);
   const [openUtilities, setOpenUtilities] = useState<UtilityId[]>([]);
   const [activeUtility, setActiveUtility] = useState<UtilityId | null>(null);
+  // Artifacts are pseudo-tabs like the utilities rather than virtual file
+  // tabs like plans: a plan is markdown and belongs among the Monaco tabs,
+  // but an artifact is a form, and none of `useEditorTabs`' machinery
+  // (autosave to disk, language detection, git gutter, session restore)
+  // applies to it. Unlike a utility, though, each one has an identity and
+  // unsaved state, so the strip needs a title and a dirty flag per open id.
+  const [openArtifacts, setOpenArtifacts] = useState<string[]>([]);
+  const [activeArtifact, setActiveArtifact] = useState<string | null>(null);
+  const [artifactTitles, setArtifactTitles] = useState<Record<string, string>>({});
+  const [artifactDirty, setArtifactDirty] = useState<Record<string, boolean>>({});
   const [activeKind, setActiveKind] = useState<EditorPaneKind>("file");
 
   // Any real file tab becoming active (open/select/restore-on-load) hands
@@ -55,13 +66,42 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
       title: findUtility(id)?.title ?? id,
       dirty: false,
     }));
-    if (!openApiTabOpen) return [...fileTabs, ...utilityTabs];
+    const artifactTabs: DisplayTab[] = openArtifacts.map((id) => ({
+      id: artifactTabId(id),
+      title: artifactTitles[id] ?? "Артефакт",
+      dirty: artifactDirty[id] ?? false,
+    }));
+    if (!openApiTabOpen) return [...fileTabs, ...utilityTabs, ...artifactTabs];
     return [
       ...fileTabs,
       { id: "openapi", title: specsRepo.info?.title ?? "API Explorer", dirty: false },
       ...utilityTabs,
+      ...artifactTabs,
     ];
-  }, [editor.tabs, openApiTabOpen, openUtilities, specsRepo.info]);
+  }, [
+    editor.tabs,
+    openApiTabOpen,
+    openUtilities,
+    openArtifacts,
+    artifactTitles,
+    artifactDirty,
+    specsRepo.info,
+  ]);
+
+  /** Drops a closed artifact's strip metadata so a reopened one starts from
+   * the record on disk rather than a stale title/dirty flag. */
+  const forgetArtifact = useCallback((artifactId: string) => {
+    setArtifactTitles((prev) => {
+      if (!(artifactId in prev)) return prev;
+      const { [artifactId]: _dropped, ...rest } = prev;
+      return rest;
+    });
+    setArtifactDirty((prev) => {
+      if (!(artifactId in prev)) return prev;
+      const { [artifactId]: _dropped, ...rest } = prev;
+      return rest;
+    });
+  }, []);
 
   const selectTab = useCallback(
     (id: string) => {
@@ -73,6 +113,12 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
       if (utilityId) {
         setActiveUtility(utilityId);
         setActiveKind("utility");
+        return;
+      }
+      const artifactId = artifactIdFromTabId(id);
+      if (artifactId) {
+        setActiveArtifact(artifactId);
+        setActiveKind("artifact");
         return;
       }
       editor.selectTab(id);
@@ -97,9 +143,19 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
         }
         return;
       }
+      const artifactId = artifactIdFromTabId(id);
+      if (artifactId) {
+        setOpenArtifacts((prev) => prev.filter((open) => open !== artifactId));
+        forgetArtifact(artifactId);
+        if (activeArtifact === artifactId) {
+          setActiveArtifact(null);
+          setActiveKind("file");
+        }
+        return;
+      }
       void editor.closeTab(id);
     },
-    [editor.closeTab, activeUtility],
+    [editor.closeTab, activeUtility, activeArtifact, forgetArtifact],
   );
 
   /** Открывает утилиту вкладкой (или переключается на уже открытую). */
@@ -107,6 +163,23 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
     setOpenUtilities((prev) => (prev.includes(id) ? prev : [...prev, id]));
     setActiveUtility(id);
     setActiveKind("utility");
+  }, []);
+
+  /** Opens an artifact's builder tab (or switches to the already-open one). */
+  const openArtifactTab = useCallback((artifactId: string) => {
+    setOpenArtifacts((prev) => (prev.includes(artifactId) ? prev : [...prev, artifactId]));
+    setActiveArtifact(artifactId);
+    setActiveKind("artifact");
+  }, []);
+
+  const setArtifactTitle = useCallback((artifactId: string, title: string) => {
+    setArtifactTitles((prev) =>
+      prev[artifactId] === title ? prev : { ...prev, [artifactId]: title },
+    );
+  }, []);
+
+  const setArtifactDirtyFlag = useCallback((artifactId: string, dirty: boolean) => {
+    setArtifactDirty((prev) => (prev[artifactId] === dirty ? prev : { ...prev, [artifactId]: dirty }));
   }, []);
 
   const openApiExplorerTab = useCallback(() => {
@@ -118,6 +191,10 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
     setOpenApiTabOpen(false);
     setOpenUtilities([]);
     setActiveUtility(null);
+    setOpenArtifacts([]);
+    setActiveArtifact(null);
+    setArtifactTitles({});
+    setArtifactDirty({});
     setActiveKind("file");
     void editor.closeAllTabs();
   }, [editor.closeAllTabs]);
@@ -130,6 +207,8 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
       if (id === "openapi") {
         setOpenUtilities([]);
         setActiveUtility(null);
+        setOpenArtifacts([]);
+        setActiveArtifact(null);
         setActiveKind("openapi");
         void editor.closeAllTabs();
         return;
@@ -139,13 +218,28 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
         setOpenApiTabOpen(false);
         setOpenUtilities([utilityId]);
         setActiveUtility(utilityId);
+        setOpenArtifacts([]);
+        setActiveArtifact(null);
         setActiveKind("utility");
+        void editor.closeAllTabs();
+        return;
+      }
+      const artifactId = artifactIdFromTabId(id);
+      if (artifactId) {
+        setOpenApiTabOpen(false);
+        setOpenUtilities([]);
+        setActiveUtility(null);
+        setOpenArtifacts([artifactId]);
+        setActiveArtifact(artifactId);
+        setActiveKind("artifact");
         void editor.closeAllTabs();
         return;
       }
       setOpenApiTabOpen(false);
       setOpenUtilities([]);
       setActiveUtility(null);
+      setOpenArtifacts([]);
+      setActiveArtifact(null);
       void editor.closeOtherTabs(id);
     },
     [editor.closeAllTabs, editor.closeOtherTabs],
@@ -182,6 +276,10 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
     closeOtherTabs,
     openApiExplorerTab,
     openUtilityTab,
+    activeArtifact,
+    openArtifactTab,
+    setArtifactTitle,
+    setArtifactDirtyFlag,
     onEditorInstanceChange,
     undo,
     redo,

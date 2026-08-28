@@ -256,9 +256,10 @@ fn redacted() -> serde_json::Value {
 /// (`{"tool": "...", "args": {...}}`) is preserved so a logged entry looks
 /// exactly like the wire shape everywhere else in this codebase, only the
 /// fields that carry raw document text are replaced with a placeholder:
-/// `writeFile.content` and `editFile.edits[].old`/`.new`. Every other
-/// tool's args are already path/query/pattern-shaped, not document content,
-/// so they pass through unchanged.
+/// `writeFile.content`, `editFile.edits[].old`/`.new`, and
+/// `requestArtifact.prefill` (which can carry an example request body).
+/// Every other tool's args are already path/query/pattern-shaped, not
+/// document content, so they pass through unchanged.
 pub fn redact_args(call: &ToolCall) -> serde_json::Value {
     let mut value = serde_json::to_value(call).unwrap_or(serde_json::Value::Null);
     let Some(args) = value.get_mut("args").and_then(|v| v.as_object_mut()) else {
@@ -284,6 +285,12 @@ pub fn redact_args(call: &ToolCall) -> serde_json::Value {
         ToolCall::CreatePlan(_) | ToolCall::UpdatePlan(_) if args.contains_key("plan") => {
             args.insert("plan".to_string(), redacted());
         }
+        // `kind`/`title`/`purpose` are the identifying fields worth
+        // auditing; `prefill` is a partial spec that can carry an example
+        // payload, so it goes the way of `writeFile.content`.
+        ToolCall::RequestArtifact(_) if args.contains_key("prefill") => {
+            args.insert("prefill".to_string(), redacted());
+        }
         _ => {}
     }
     value
@@ -294,7 +301,8 @@ pub fn redact_args(call: &ToolCall) -> serde_json::Value {
 /// `grepResults.matches[].text` (the matched source line), and
 /// `diff.unifiedDiff` wherever a `FileDiffStats` appears (`gitDiff`,
 /// `fileWritten`/`fileEdited`/`fileDeleted` — `linesAdded`/`linesRemoved`
-/// are kept, since those are counts, not content).
+/// are kept, since those are counts, not content), the `plan` body, and an
+/// artifact's `content`/`rendered` (parameter tables and example payloads).
 pub fn redact_result(result: &ToolResult) -> serde_json::Value {
     let mut value = serde_json::to_value(result).unwrap_or(serde_json::Value::Null);
     let Some(inner) = value.get_mut("result") else {
@@ -326,6 +334,18 @@ pub fn redact_result(result: &ToolResult) -> serde_json::Value {
         ToolResult::PlanRead { .. } => {
             if let Some(obj) = inner.as_object_mut() {
                 obj.insert("plan".to_string(), redacted());
+            }
+        }
+        // The whole point of an artifact is the request/response detail it
+        // carries — descriptions, example bodies — plus the AsciiDoc built
+        // from it. Neither belongs in an always-on log; the id, kind, title
+        // and status left behind are enough to audit that it was read.
+        ToolResult::Artifact { .. } => {
+            if let Some(artifact) = inner.get_mut("artifact").and_then(|v| v.as_object_mut()) {
+                artifact.insert("content".to_string(), redacted());
+            }
+            if let Some(obj) = inner.as_object_mut() {
+                obj.insert("rendered".to_string(), redacted());
             }
         }
         _ => {}
@@ -507,6 +527,52 @@ mod tests {
         let redacted = redact_args(&call);
         assert_eq!(redacted["args"]["text"], "<redacted>");
         assert_eq!(redacted["args"]["scope"], "project");
+    }
+
+    #[test]
+    fn redact_args_strips_a_request_artifact_prefill_but_keeps_its_identity() {
+        let call = ToolCall::RequestArtifact(crate::domain::ai_tools::RequestArtifactArgs {
+            kind: crate::domain::artifact::ArtifactKind::HttpRequest,
+            title: "Создание документа".to_string(),
+            purpose: "Нужны входные параметры".to_string(),
+            prefill: Some(crate::domain::artifact::ArtifactContent::HttpRequest(
+                crate::domain::artifact::HttpRequestSpec {
+                    method: "POST".to_string(),
+                    ..Default::default()
+                },
+            )),
+        });
+        let redacted = redact_args(&call);
+        assert_eq!(redacted["args"]["title"], "Создание документа");
+        assert_eq!(redacted["args"]["kind"], "httpRequest");
+        assert_eq!(redacted["args"]["prefill"], "<redacted>");
+    }
+
+    #[test]
+    fn redact_result_strips_artifact_content_and_rendering() {
+        let record = crate::domain::artifact::ArtifactRecord {
+            id: "a1".to_string(),
+            kind: crate::domain::artifact::ArtifactKind::HttpRequest,
+            title: "T".to_string(),
+            purpose: None,
+            status: crate::domain::artifact::ArtifactStatus::Ready,
+            content: crate::domain::artifact::ArtifactContent::HttpRequest(
+                crate::domain::artifact::HttpRequestSpec {
+                    method: "POST".to_string(),
+                    ..Default::default()
+                },
+            ),
+            created_at_ms: 1,
+            updated_at_ms: 2,
+            chat_id: None,
+            repo_root: None,
+        };
+        let result = crate::services::ai_tools::artifact_result(record);
+        let redacted = redact_result(&result);
+        assert_eq!(redacted["result"]["artifact"]["id"], "a1");
+        assert_eq!(redacted["result"]["artifact"]["status"], "ready");
+        assert_eq!(redacted["result"]["artifact"]["content"], "<redacted>");
+        assert_eq!(redacted["result"]["rendered"], "<redacted>");
     }
 
     #[test]

@@ -77,11 +77,13 @@ type EditorPaneProps = {
   activeTabId: string | null;
   activeTab: EditorTab | null;
   /** "file" shows the active file tab (Monaco/preview); "openapi" and
-   * "utility" show `openApiExplorer` / `utilityView` instead, regardless of
+   * "utility"/"artifact" show `openApiExplorer` / `utilityView` /
+   * `artifactView` instead, regardless of
    * `activeTab`/`activeTabId`. */
   activeKind: EditorPaneKind;
   openApiExplorer?: React.ReactNode;
   utilityView?: React.ReactNode;
+  artifactView?: React.ReactNode;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onCloseAllTabs: () => void;
@@ -143,6 +145,7 @@ export function EditorPane({
   activeTab,
   activeKind,
   utilityView,
+  artifactView,
   openApiExplorer,
   onSelectTab,
   onCloseTab,
@@ -602,7 +605,7 @@ export function EditorPane({
         onCloseOthers={onCloseOtherTabs}
         viewMode={effectiveViewMode}
         onViewModeChange={isPlanTab ? setPlanViewMode : onViewModeChange}
-        hideViewMode={isImageTab || activeKind === "utility"}
+        hideViewMode={isImageTab || activeKind === "utility" || activeKind === "artifact"}
         allowedViewModes={isPlanTab ? (["source", "render"] as const) : undefined}
         actions={planActions}
       />
@@ -611,6 +614,8 @@ export function EditorPane({
           openApiExplorer
         ) : activeKind === "utility" ? (
           utilityView
+        ) : activeKind === "artifact" ? (
+          artifactView
         ) : activeTab ? (
           isImageTab || effectiveViewMode === "render" ? (
             <>

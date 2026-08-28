@@ -1,4 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import type {
+  ArtifactContent,
+  ArtifactKind,
+  ArtifactRecord,
+  ArtifactSummary,
+  RenderedArtifact,
+} from "./artifacts";
 import type { UpdatedReference } from "./project";
 import type { PlanTodo } from "./plans";
 import type { StandardsReport } from "./standards";
@@ -153,6 +160,12 @@ export type ToolCall =
         }>;
       };
     }
+  | {
+      tool: "requestArtifact";
+      args: { kind: ArtifactKind; title: string; purpose: string; prefill: ArtifactContent | null };
+    }
+  | { tool: "artifactList"; args: Record<string, never> }
+  | { tool: "artifactRead"; args: { id: string } }
   | { tool: "todoWrite"; args: { titles: string[] } }
   | { tool: "todoUpdate"; args: { id: string; status: "completed" | "cancelled"; note: string | null } }
   | {
@@ -289,6 +302,11 @@ export type ToolResult =
         }>;
       };
     }
+  // Settled `requestArtifact` (resolved from the user's decision on resume)
+  // and settled `artifact` op "read" share this shape — which of the two it
+  // was is already on the tool-call block's `name`.
+  | { tool: "artifact"; result: { artifact: ArtifactRecord; rendered: RenderedArtifact } }
+  | { tool: "artifactList"; result: { artifacts: ArtifactSummary[] } }
   | {
       tool: "planCreated";
       result: {

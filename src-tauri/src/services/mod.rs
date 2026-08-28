@@ -1,6 +1,7 @@
 pub mod agent_memory;
 pub mod agent_skills;
 pub mod ai_tools;
+pub mod artifacts;
 pub mod chunk_builder;
 pub mod chunk_text;
 pub mod diagnostics;
@@ -32,6 +33,7 @@ pub mod project_layout;
 pub mod project_open;
 pub mod reference_rewrite;
 pub mod repo_index;
+pub mod repository_scope;
 pub mod spellcheck;
 pub mod spellcheck_prefs;
 pub mod standards;

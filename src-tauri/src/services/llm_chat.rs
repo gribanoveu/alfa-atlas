@@ -335,13 +335,31 @@ fn run_tool_loop(
             // whole turn — same for a user-denied call, which is just
             // another kind of "this didn't happen, react accordingly."
             //
-            // `askUser` is special: answers come from `ToolCallDecision::
-            // answer`, not from `execute_tool` (which would reject a bare
-            // call). Skip → same denial path as Approve/Deny tools.
+            // `askUser` and `requestArtifact` are special: their results
+            // come from the user's `ToolCallDecision`, not from
+            // `execute_tool` (which rejects a bare call for either). Skip →
+            // same denial path as Approve/Deny tools.
             let decision = decisions.iter().find(|d| d.id == call.id);
             let denied = decision.map(|d| !d.approved).unwrap_or(false);
             let outcome: Result<ToolResult, String> = if denied {
                 Err("denied by user".to_string())
+            } else if call.name == "requestArtifact" {
+                if !mode_tools(ctx.conversation_mode).contains(&ToolName::RequestArtifact) {
+                    Err(format!(
+                        "tool '{}' is not available in the current conversation mode",
+                        call.name
+                    ))
+                } else {
+                    // The decision carries only an id — the record itself is
+                    // read from the store here, so the model cannot be handed
+                    // an artifact that differs from the saved one.
+                    match decision.and_then(|d| d.artifact_id.as_deref()) {
+                        Some(artifact_id) => crate::services::artifacts::get(artifact_id)
+                            .map(ai_tools::artifact_result)
+                            .map_err(|e| e.to_string()),
+                        None => Err("denied by user".to_string()),
+                    }
+                }
             } else if call.name == "askUser" {
                 if !mode_tools(ctx.conversation_mode).contains(&ToolName::AskUser) {
                     Err(format!(
@@ -423,9 +441,15 @@ fn run_tool_loop(
                 Ok(ToolResult::FileList(entries)) => {
                     ai_tools::render_file_tree(entries)
                 }
-                // Skip path for askUser — Russian, matching the deny message
-                // for mutating tools so the model continues in-language.
-                Err(e) if e == "denied by user" && call.name == "askUser" => {
+                // Skip path for the two pause-only tools — Russian, matching
+                // the deny message for mutating tools so the model continues
+                // in-language. For `requestArtifact` this is «Заполню позже»:
+                // the user did not refuse the work, only deferred it, so the
+                // model should carry on and say what is still missing.
+                Err(e)
+                    if e == "denied by user"
+                        && (call.name == "askUser" || call.name == "requestArtifact") =>
+                {
                     "Пропущено пользователем".to_string()
                 }
                 Ok(tool_result) => serde_json::to_string(tool_result)
@@ -632,11 +656,20 @@ mod tests {
         rounds: Mutex<VecDeque<ChatStreamResult>>,
         fallback: Option<ChatStreamResult>,
         calls: AtomicUsize,
+        /// Every request the loop sent, in order — the only way to observe
+        /// what a settled tool call actually handed back to the model, since
+        /// `ChatDone` carries the answer but not the history behind it.
+        requests: Mutex<Vec<ChatRequest>>,
     }
 
     impl ScriptedProvider {
         fn new(rounds: Vec<ChatStreamResult>) -> Self {
-            Self { rounds: Mutex::new(rounds.into()), fallback: None, calls: AtomicUsize::new(0) }
+            Self {
+                rounds: Mutex::new(rounds.into()),
+                fallback: None,
+                calls: AtomicUsize::new(0),
+                requests: Mutex::new(Vec::new()),
+            }
         }
 
         fn repeating(round: ChatStreamResult) -> Self {
@@ -644,7 +677,20 @@ mod tests {
                 rounds: Mutex::new(VecDeque::new()),
                 fallback: Some(round),
                 calls: AtomicUsize::new(0),
+                requests: Mutex::new(Vec::new()),
             }
+        }
+
+        /// The `Tool`-role content the model read back for `call_id`.
+        fn tool_reply(&self, call_id: &str) -> String {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .flat_map(|r| r.messages.iter())
+                .find(|m| m.role == LlmRole::Tool && m.tool_call_id.as_deref() == Some(call_id))
+                .and_then(|m| m.content.clone())
+                .unwrap_or_default()
         }
     }
 
@@ -661,6 +707,7 @@ mod tests {
             _cancelled: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.requests.lock().unwrap().push(_request);
             let next = self.rounds.lock().unwrap().pop_front();
             let round = match (next, &self.fallback) {
                 (Some(r), _) => r,
@@ -730,6 +777,54 @@ mod tests {
         };
         run_tool_loop(&ctx, scope, Vec::new(), Vec::new(), 0, 0, None, Vec::new())
     }
+
+    /// `run`, re-entered on a paused round — the shape
+    /// `llm_chat_stream_resume` produces. `history` must end with the
+    /// assistant's tool-call turn, same as the real resume path checks.
+    fn run_resumed(
+        provider: &dyn LlmProvider,
+        root: &std::path::Path,
+        events: &ChatEventSink,
+        cancel_flag: &ChatCancelFlag,
+        calls: Vec<LlmToolCall>,
+        decisions: Vec<ToolCallDecision>,
+    ) -> Result<ChatStreamOutcome, String> {
+        let scope = ToolScope::new(
+            root,
+            root,
+            AiAccessMode::FullRepo,
+            default_allowed_tools(AiAccessMode::FullRepo),
+        );
+        let settings = LlmSettings::default();
+        let deps = EmbeddingDeps::empty();
+        let ctx = LoopCtx {
+            events,
+            provider,
+            provider_id: "test-provider",
+            model: "test-model",
+            settings: &settings,
+            deps: &deps,
+            cancel_flag,
+            conversation_mode: ConversationMode::Agent,
+        };
+        let history = vec![LlmMessage {
+            role: LlmRole::Assistant,
+            content: None,
+            tool_call_id: None,
+            tool_calls: calls.clone(),
+        }];
+        run_tool_loop(
+            &ctx,
+            scope,
+            Vec::new(),
+            history,
+            1,
+            0,
+            Some((calls, decisions)),
+            Vec::new(),
+        )
+    }
+
 
     fn tool_events(seen: &Arc<Mutex<Vec<ChatEvent>>>) -> Vec<(String, String)> {
         seen.lock()
@@ -880,6 +975,103 @@ mod tests {
         let events = seen.lock().unwrap();
         let errored = events.iter().any(|e| matches!(e, ChatEvent::ToolResult(r) if r.error.is_some()));
         assert!(errored, "the rejected call should have reported a tool error");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // --- `requestArtifact` ---
+
+    fn artifact_call() -> LlmToolCall {
+        tool_call(
+            "a1",
+            "requestArtifact",
+            r#"{"kind":"httpRequest","title":"Создание документа","purpose":"Нужны входные параметры"}"#,
+        )
+    }
+
+    #[test]
+    fn a_request_artifact_round_pauses_without_executing_it() {
+        let root = fixture_repo("artifact-pause");
+        let provider = ScriptedProvider::new(vec![round("", vec![artifact_call()])]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome = run(&provider, &root, &events, &cancel).unwrap();
+
+        let ChatStreamOutcome::PendingApproval(pending) = outcome else {
+            panic!("expected PendingApproval");
+        };
+        assert_eq!(pending.calls.len(), 1);
+        assert_eq!(pending.calls[0].name, "requestArtifact");
+        assert!(pending.calls[0].requires_confirmation);
+        assert!(tool_events(&seen).is_empty(), "nothing ran before the user decided");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn deferring_an_artifact_lets_the_turn_continue_without_it() {
+        // «Заполню позже» is not a refusal: the model is told the artifact
+        // was skipped, in Russian, and carries on — same wording `askUser`
+        // uses, and deliberately not the harsher "Отклонено пользователем".
+        let root = fixture_repo("artifact-defer");
+        let provider = ScriptedProvider::new(vec![round("Хорошо, продолжу без него.", vec![])]);
+        let (events, _seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome = run_resumed(
+            &provider,
+            &root,
+            &events,
+            &cancel,
+            vec![artifact_call()],
+            vec![ToolCallDecision {
+                id: "a1".to_string(),
+                approved: false,
+                answer: None,
+                artifact_id: None,
+            }],
+        )
+        .unwrap();
+
+        let ChatStreamOutcome::Done(done) = outcome else {
+            panic!("expected Done");
+        };
+        assert_eq!(done.result.text, "Хорошо, продолжу без него.");
+        assert_eq!(provider.tool_reply("a1"), "Пропущено пользователем");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn an_unreadable_artifact_is_a_tool_error_the_model_can_react_to() {
+        // The decision carries only an id, so the record is loaded here and
+        // can fail (deleted between filling it in and resuming). That must
+        // reach the model as a recoverable tool error, never hard-fail the
+        // turn.
+        let root = fixture_repo("artifact-missing");
+        let provider = ScriptedProvider::new(vec![round("Не смог прочитать артефакт.", vec![])]);
+        let (events, _seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome = run_resumed(
+            &provider,
+            &root,
+            &events,
+            &cancel,
+            vec![artifact_call()],
+            vec![ToolCallDecision {
+                id: "a1".to_string(),
+                approved: true,
+                answer: None,
+                artifact_id: Some("does-not-exist".to_string()),
+            }],
+        )
+        .unwrap();
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)), "not a hard failure");
+        let reply = provider.tool_reply("a1");
+        assert!(reply.starts_with("Ошибка: "), "unexpected tool reply: {reply}");
 
         std::fs::remove_dir_all(&root).ok();
     }

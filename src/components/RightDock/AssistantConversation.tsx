@@ -18,6 +18,7 @@ import type { LlmModelInfo, LlmProviderConfig, PendingApproval, ResolvedLlmProvi
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
+import { AssistantArtifactCard } from "./AssistantArtifactCard";
 import { AssistantAskUserCard } from "./AssistantAskUserCard";
 import { AssistantReasoningBlock } from "./AssistantReasoningBlock";
 import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
@@ -266,6 +267,7 @@ type AssistantConversationProps = {
    * state below (including `useLlmChat`'s own internal refs — trust set,
    * in-flight approval timers) cleanly, without a manual reset effect that
    * could race an in-flight turn. */
+  chatId: string | null;
   initialMessages: ChatMessage[];
   /** The chat's persisted todo checklist, seeding `useLlmChat`'s
    * `todoListRef` — same remount-driven reset as `initialMessages`. */
@@ -378,6 +380,7 @@ type AssistantConversationProps = {
  * — the parent gates that, so unlike the old single-file component this
  * one doesn't need its own `llmReady` checks. */
 export function AssistantConversation({
+  chatId,
   initialMessages,
   initialTodos,
   initialActivePlanId,
@@ -424,6 +427,7 @@ export function AssistantConversation({
     contextTokens,
     decideToolCall,
     answerAskUser,
+    answerArtifact,
     todos,
     clearTodos,
     activePlanId,
@@ -501,6 +505,7 @@ export function AssistantConversation({
     window.addEventListener("atlas-start-plan", onStart);
     return () => window.removeEventListener("atlas-start-plan", onStart);
   }, [sending, setActivePlanId, onConversationModeChange]);
+
 
   useEffect(() => {
     onSendingChange(sending);
@@ -895,7 +900,15 @@ export function AssistantConversation({
                   ) : (
                     <div className="assistant-chat-blocks">
                       {groupBlocksForRender(m.blocks).map((item, i, arr) =>
-                        item.kind === "askGroup" ? (
+                        item.kind === "artifactGroup" ? (
+                          <AssistantArtifactCard
+                            key={item.blocks[0]!.id}
+                            blocks={item.blocks}
+                            chatId={chatId}
+                            onAnswer={answerArtifact}
+                            onDefer={(id) => decideToolCall(id, false, false)}
+                          />
+                        ) : item.kind === "askGroup" ? (
                           <AssistantAskUserCard
                             key={item.blocks[0]!.id}
                             blocks={item.blocks}

@@ -7,6 +7,7 @@
 //! This module is the only place either half fans out: `DEFINITIONS` for
 //! what the model is told exists, `execute_tool` for what actually runs.
 
+mod artifact;
 mod asciidoc_templates;
 mod check;
 mod conversation;
@@ -30,6 +31,7 @@ use crate::domain::ai_tools::{Task, ToolCall, ToolError, ToolResult, ToolScope};
 use crate::domain::conversation_mode::{ConversationMode, mode_tools};
 use crate::domain::llm::LlmToolDefinition;
 
+pub use artifact::artifact_result;
 pub use list_files::render_file_tree;
 
 use super::scope::set_access_mode;
@@ -62,6 +64,8 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::GetAsciidocTemplates, asciidoc_templates::definition),
     (ToolName::Skill, skill::definition),
     (ToolName::AskUser, conversation::ask_user_definition),
+    (ToolName::RequestArtifact, artifact::request_definition),
+    (ToolName::Artifact, artifact::definition),
     (ToolName::CreatePlan, plans::create_definition),
     (ToolName::UpdatePlan, plans::update_definition),
     (ToolName::ReadPlan, plans::read_definition),
@@ -169,6 +173,16 @@ pub fn execute_tool(
             tool: "askUser".to_string(),
             reason: "askUser must be answered via resume, not execute_tool".to_string(),
         }),
+        // Same story as `AskUser` above: a well-formed pause is resolved
+        // from `ToolCallDecision::artifact_id` on resume, so this arm is
+        // only reachable through a caller that has no user decision to
+        // supply (a bare `ai_execute_tool`).
+        ToolCall::RequestArtifact(_) => Err(ToolError::InvalidArguments {
+            tool: "requestArtifact".to_string(),
+            reason: "requestArtifact must be answered via resume, not execute_tool".to_string(),
+        }),
+        ToolCall::ArtifactList(_) => artifact::artifact_list(),
+        ToolCall::ArtifactRead(args) => artifact::artifact_read(args),
         ToolCall::CreatePlan(args) => plans::create_plan(args),
         ToolCall::UpdatePlan(args) => plans::update_plan(args),
         ToolCall::ReadPlan(args) => plans::read_plan(args),
@@ -323,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_twenty_one_in_agent_mode_by_default() {
+    fn llm_tool_definitions_includes_all_twenty_three_in_agent_mode_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -351,6 +365,8 @@ mod tests {
                 "getAsciidocTemplates",
                 "skill",
                 "askUser",
+                "requestArtifact",
+                "artifact",
                 "readPlan",
                 "updatePlanTodo",
             ]

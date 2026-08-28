@@ -323,28 +323,38 @@ export function updateLastAssistantBlocks(
 
 /** What `AssistantConversation` actually renders per entry: either one
  * ordinary block, a run of `"pendingApproval"` mutating/mode-switch calls
- * collapsed into one approval card, or a run of pending `askUser` calls
- * collapsed into one ask card. */
+ * collapsed into one approval card, a run of pending `askUser` calls
+ * collapsed into one ask card, or a run of pending `requestArtifact` calls
+ * collapsed into one artifact card. */
 export type RenderBlock =
   | { kind: "single"; block: MessageBlock }
   | { kind: "approvalGroup"; blocks: ToolCallBlock[] }
-  | { kind: "askGroup"; blocks: ToolCallBlock[] };
+  | { kind: "askGroup"; blocks: ToolCallBlock[] }
+  | { kind: "artifactGroup"; blocks: ToolCallBlock[] };
 
 /** Walks a message's flat `blocks`, merging any run of adjacent
  * `"pendingApproval"` `toolCall` blocks that share one `approvalGroupId`
  * into a single group entry — `askGroup` when every block is `askUser`,
- * otherwise `approvalGroup` (including a run of length one). Every other
- * block passes through as `"single"` unchanged. */
+ * `artifactGroup` when every block is `requestArtifact`, otherwise
+ * `approvalGroup` (including a run of length one). Every other block passes
+ * through as `"single"` unchanged. */
 export function groupBlocksForRender(blocks: MessageBlock[]): RenderBlock[] {
   const result: RenderBlock[] = [];
   for (const block of blocks) {
     const groupId =
       block.type === "toolCall" && block.status === "pendingApproval" ? block.approvalGroupId : undefined;
     const last = result[result.length - 1];
-    if (groupId !== undefined && last && (last.kind === "approvalGroup" || last.kind === "askGroup") && last.blocks[0]?.approvalGroupId === groupId) {
+    if (
+      groupId !== undefined &&
+      last &&
+      (last.kind === "approvalGroup" || last.kind === "askGroup" || last.kind === "artifactGroup") &&
+      last.blocks[0]?.approvalGroupId === groupId
+    ) {
       last.blocks.push(block as ToolCallBlock);
     } else if (groupId !== undefined) {
-      const kind = block.type === "toolCall" && block.name === "askUser" ? "askGroup" : "approvalGroup";
+      const name = block.type === "toolCall" ? block.name : "";
+      const kind =
+        name === "askUser" ? "askGroup" : name === "requestArtifact" ? "artifactGroup" : "approvalGroup";
       result.push({ kind, blocks: [block as ToolCallBlock] });
     } else {
       result.push({ kind: "single", block });

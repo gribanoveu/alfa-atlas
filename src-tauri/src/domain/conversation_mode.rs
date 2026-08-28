@@ -46,6 +46,12 @@ pub fn base_tools() -> HashSet<ToolName> {
         // format X" without needing write access.
         ToolName::GetAsciidocTemplates,
         ToolName::AskUser,
+        // Reading an artifact the user filled in earlier is an ordinary
+        // read — useful in Agent to write from it, Plan to ground a plan in
+        // it, Question to answer "what does this endpoint take" from it.
+        // *Requesting* a new one is not in this set: see
+        // `extra_tools_for_mode`.
+        ToolName::Artifact,
         ToolName::Skill,
     ]
     .into_iter()
@@ -72,6 +78,7 @@ pub fn extra_tools_for_mode(mode: ConversationMode) -> HashSet<ToolName> {
             ToolName::Todo,
             ToolName::ReadPlan,
             ToolName::UpdatePlanTodo,
+            ToolName::RequestArtifact,
         ]
         .into_iter()
         .collect(),
@@ -80,9 +87,17 @@ pub fn extra_tools_for_mode(mode: ConversationMode) -> HashSet<ToolName> {
             ToolName::CreatePlan,
             ToolName::UpdatePlan,
             ToolName::ReadPlan,
+            // Plan mode drafts the document's shape, so it is a legitimate
+            // place to discover that the request/response facts are missing
+            // and ask for them before planning around a guess.
+            ToolName::RequestArtifact,
         ]
         .into_iter()
         .collect(),
+        // Deliberately no `RequestArtifact`: Question mode answers from
+        // what exists. Popping a form builder in front of someone who asked
+        // a quick question is the opposite of this mode's point — the model
+        // should say what it doesn't know and let the user switch modes.
         ConversationMode::Question => HashSet::new(),
     }
 }
@@ -103,7 +118,7 @@ mod tests {
 
     #[test]
     fn agent_mode_has_every_tool() {
-        assert_eq!(mode_tools(ConversationMode::Agent).len(), 21);
+        assert_eq!(mode_tools(ConversationMode::Agent).len(), 23);
     }
 
     #[test]
@@ -128,6 +143,15 @@ mod tests {
         assert!(tools.contains(&ToolName::CreatePlan));
         assert!(tools.contains(&ToolName::UpdatePlan));
         assert!(tools.contains(&ToolName::ReadPlan));
+        assert!(tools.contains(&ToolName::RequestArtifact));
+        assert!(tools.contains(&ToolName::Artifact));
+    }
+
+    #[test]
+    fn question_mode_can_read_an_artifact_but_not_request_one() {
+        let tools = mode_tools(ConversationMode::Question);
+        assert!(tools.contains(&ToolName::Artifact));
+        assert!(!tools.contains(&ToolName::RequestArtifact));
     }
 
     #[test]

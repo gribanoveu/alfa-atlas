@@ -1,6 +1,8 @@
 pub mod agent_skills;
 pub mod ai_access;
 pub mod ai_tools;
+pub mod artifact;
+pub mod artifact_render;
 pub mod asciidoc_element_templates;
 pub mod asciidoc_facts;
 pub mod asciidoc_macro_brackets;

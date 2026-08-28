@@ -91,6 +91,7 @@ mock.module("../lib/assistantSounds", () => ({
   playTaskDoneSound: () => {},
 }));
 mock.module("../lib/plans", () => ({ planGet: async () => null }));
+mock.module("../lib/artifacts", () => ({ artifactList: async () => [] }));
 
 const { useLlmChat } = await import("../hooks/useLlmChat");
 
@@ -602,6 +603,122 @@ describe("useLlmChat — resuming after a restart", () => {
     });
     expect(result.current.sending).toBe(false);
     expect(resumeCalls).toHaveLength(0);
+  });
+});
+
+describe("useLlmChat — requestArtifact pauses", () => {
+  const pause = (name: string) =>
+    ({
+      status: "pendingApproval",
+      value: { history: [], round: 1, budgetUsed: 1, calls: [call("a1", name)], todos: [] },
+    }) as ChatStreamOutcome;
+
+  test("answering carries the artifact id into the resume decision", async () => {
+    outcomes = [pause("requestArtifact"), done("готово")];
+    const { result } = render();
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("документация на метод");
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      result.current.answerArtifact("a1", "artifact-42");
+      await sent;
+    });
+
+    // The backend loads the record from the store by this id — the decision
+    // deliberately does not carry the artifact's contents.
+    const decisions = resumeCalls[0]![4] as Array<Record<string, unknown>>;
+    expect(decisions).toEqual([{ id: "a1", approved: true, artifactId: "artifact-42" }]);
+  });
+
+  test("«заполню позже» resolves the pause without an artifact", async () => {
+    outcomes = [pause("requestArtifact"), done("продолжаю без него")];
+    const { result } = render();
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("документация на метод");
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      result.current.decideToolCall("a1", false, false);
+      await sent;
+    });
+
+    const decisions = resumeCalls[0]![4] as Array<Record<string, unknown>>;
+    expect(decisions).toEqual([{ id: "a1", approved: false }]);
+  });
+
+  test("the card has no countdown — the user is filling a form in another tab", async () => {
+    // An approval card auto-denies after TOOL_APPROVAL_TIMEOUT_MS. Doing
+    // that to an artifact request would cancel work already in progress.
+    outcomes = [pause("requestArtifact"), done("готово")];
+    const { result } = render();
+
+    await act(async () => {
+      void result.current.sendMessage("документация на метод");
+      await Promise.resolve();
+    });
+
+    const block = result.current.messages
+      .flatMap((m) => (m.role === "assistant" ? m.blocks : []))
+      .find((b) => b.type === "toolCall" && b.id === "a1");
+    expect(block).toBeDefined();
+    expect(block!.type === "toolCall" && block!.deadlineAt).toBeUndefined();
+  });
+
+  test("«разрешать всегда» never applies to it", async () => {
+    // Trusting it would skip the very card that is the point of the tool.
+    outcomes = [pause("requestArtifact"), done("готово")];
+    const { result } = render();
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("документация на метод");
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      result.current.decideToolCall("a1", true, true);
+      await sent;
+    });
+
+    expect(setAutoApprovedCalls).toEqual([]);
+  });
+
+  test("an already-trusted tool name cannot skip the artifact card", async () => {
+    // Even if `requestArtifact` somehow ended up in the persisted trust set,
+    // the pause must still surface rather than silently auto-approving with
+    // no artifact attached.
+    autoApprovedTools = ["requestArtifact"];
+    outcomes = [pause("requestArtifact"), done("готово")];
+    const { result } = render();
+    // The trust set loads asynchronously; without this the card could
+    // surface simply because the list had not arrived yet.
+    await waitFor(() => expect(deltaListeners.length).toBeGreaterThan(0));
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("документация на метод");
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(
+        result.current.messages
+          .flatMap((m) => (m.role === "assistant" ? m.blocks : []))
+          .some((b) => b.type === "toolCall" && b.status === "pendingApproval"),
+      ).toBe(true),
+    );
+
+    await act(async () => {
+      result.current.answerArtifact("a1", "artifact-7");
+      await sent;
+    });
   });
 });
 

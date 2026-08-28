@@ -17,6 +17,8 @@ const ALLOWED_TOOL_LABELS: Record<string, string> = {
   getAsciidocTemplates: "Шаблоны элементов AsciiDoc (getAsciidocTemplates)",
   skill: "Скилы ассистента (skill)",
   askUser: "Уточняющие вопросы (askUser)",
+  requestArtifact: "Запрос артефакта у пользователя (requestArtifact)",
+  artifact: "Чтение артефактов (artifact)",
   ...AUTO_APPROVABLE_TOOL_LABELS,
   todo: "Список задач (todo)",
   createPlan: "Создание плана (createPlan)",

@@ -2,6 +2,8 @@ import type { AiAccessMode, ConversationMode, LlmToolDefinition, MatchSource, Ta
 import { normalizeSemanticSearchResult } from "./aiTools";
 import type { ChatMessage, ToolCallBlock } from "./chatBlocks";
 import type { SpecsRepoInfo } from "./openapi";
+import type { ArtifactSummary } from "./artifacts";
+import { describeHttpRequest } from "./httpRequestSpec";
 import type { PlanRecord, PlanTodo, PlanTodoStatus } from "./plans";
 
 /** Central place for the assistant chat panel's tunable constants — system
@@ -147,6 +149,7 @@ Prefer resolving a request in a single pass. Each unnecessary question costs the
 - If a reasonable choice can be inferred (filename, heading, wording, structure), make it yourself, act immediately, and mention it in one short clause: *"Created \`testMethod/draft\` (no name given, I picked one)."*
 - If you genuinely cannot proceed without a user choice (blocking fork, conflicting requirements, equally valid alternatives), call \`askUser\` with 1–4 structured questions and wait for the tool result. Do **not** write the same question as plain chat text in that turn. Prefer calling \`askUser\` alone in its own tool round, without write/edit/delete bundled with it.
 - Never mix: a turn is either a silent decision + completed action, or a real \`askUser\` + wait.
+- Missing **facts** are a different problem from a missing **choice**. When a document needs concrete request/response detail that is nowhere in the repository — parameter names, formats, obligation, example payloads, error codes — do not invent a plausible table and do not try to extract dozens of fields through \`askUser\`. Call \`requestArtifact\`: the user fills it in visually and you get back both the data and ready-made AsciiDoc. Check the \`[Artifacts]\` context block first — if one already covers it, read it with \`artifact\` instead of asking for another.
 - Never narrate a multi-step confirmation for one action. For file creation/editing, decide the filename, draft full content, and call \`writeFile\` directly. The tool's own approval UI is the confirmation — do not additionally ask in chat.
 
 ### Documentation editing
@@ -468,7 +471,7 @@ Think first, plan second, never act. Every plan must be grounded in real reposit
 
 For every planning request, follow this sequence:
 
-1. **Clarify the goal.** If the goal or scope is genuinely ambiguous (blocking fork, conflicting requirements), call \`askUser\` first and wait for answers — do not draft a plan on guesses. Do not also write the same questions as plain chat text. Prefer \`askUser\` alone in its own tool round.
+1. **Clarify the goal.** If the goal or scope is genuinely ambiguous (blocking fork, conflicting requirements), call \`askUser\` first and wait for answers — do not draft a plan on guesses. Do not also write the same questions as plain chat text. Prefer \`askUser\` alone in its own tool round. If the plan hinges on request/response facts that are not in the repository, call \`requestArtifact\` rather than planning around a guess — but check the \`[Artifacts]\` context block first, and read an existing one with \`artifact\` if it already covers the method.
 2. **Research.** Use read-only tools (\`listFiles\`, \`semanticSearch\`, \`readFile\`, \`grep\`, \`gitDiff\`, \`gitBlame\`, \`check\`, etc.) to inspect relevant files, understand current structure, recent changes, terminology, and patterns. Prefer \`semanticSearch\` over \`grep\` for discovery — one query with English identifiers plus Russian context, then \`readFile\` on returned paths; avoid \`listFiles\` when search already named files. Use \`grep\` only when you need exhaustive exact matches. Do not assume — verify.
 3. **Create the plan.** Call \`createPlan\` with \`name\` (3–4 words), \`overview\` (1–2 sentences), full markdown \`plan\` (first line MUST be \`# Title\`), and \`todos\` (at least 2 concrete checklist items with stable slug ids). Do **not** paste the full plan markdown into the chat — the card and viewer show it.
 4. **Summarize briefly.** After \`createPlan\` succeeds, reply with 1–3 sentences summarizing the goal and pointing the user to the plan card («Открыть» / «Начать»). Do not call \`requestModeSwitch\` just for presenting a plan.
@@ -892,6 +895,38 @@ Plan body:
 ${record.plan}`;
 }
 
+/** How many finished artifacts the per-turn context block advertises.
+ * This is a pointer list, not the data — the model reads the one it wants
+ * with `artifact read` — so a handful of the most recent is enough to make
+ * them discoverable without spending context on a long backlog. */
+export const ARTIFACT_CONTEXT_LIMIT = 10;
+
+/** Lists the artifacts the user has already filled in for this repository,
+ * as a system-role context block.
+ *
+ * This is what makes an artifact usable from a *different* conversation
+ * than the one that requested it: the pause that resolves a
+ * `requestArtifact` call is scoped to its own chat, but the artifact itself
+ * is stored per-repository and outlives every chat, so a new conversation
+ * would otherwise have no way to learn one exists. Deliberately summaries
+ * only (id, kind, title, one-line subtitle) — the full record, with its
+ * parameter tables and example payloads, is a tool call away and does not
+ * belong in every turn's prompt.
+ *
+ * Drafts are excluded: a half-filled form is not something the model should
+ * write documentation from. */
+export function buildArtifactsContextBlock(artifacts: ArtifactSummary[]): string | null {
+  const ready = artifacts.filter((a) => a.status === "ready").slice(0, ARTIFACT_CONTEXT_LIMIT);
+  if (ready.length === 0) return null;
+  const lines = ready.map((a) => {
+    const subtitle = a.subtitle.trim();
+    return `- \`${a.id}\` (${a.kind}) «${a.title}»${subtitle ? ` — ${subtitle}` : ""}`;
+  });
+  return `[Artifacts] The user has filled in these artifacts for this repository. Each one holds facts that are not in the repo (request/response shapes, example payloads, error codes), together with ready-made AsciiDoc. Read one with \`artifact\` \`op: "read"\` when it is relevant to what you are writing — do not re-ask for information an artifact already answers, and do not invent values it could have told you. To have a new one filled in, call \`requestArtifact\`.
+
+${lines.join("\n")}`;
+}
+
 /** Drops the planning (or any pre-start) transcript from the *wire* tail
  * when executing a plan. The UI chat is untouched — only what is replayed
  * to the model changes.
@@ -1059,6 +1094,14 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       if (title) return `Спрашивает: ${title}…`;
       return count > 1 ? `Задаёт уточняющие вопросы (${count})…` : "Задаёт уточняющий вопрос…";
     }
+    case "requestArtifact": {
+      const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : null;
+      return title ? `Просит собрать артефакт: ${title}…` : "Просит собрать артефакт…";
+    }
+    case "artifact":
+      if (args.op === "list") return "Смотрит список артефактов…";
+      if (args.op === "read") return "Читает артефакт…";
+      return "Работает с артефактами…";
     case "todo":
       if (args.op === "write") return "Обновляет список задач…";
       if (args.op === "update") return "Отмечает задачу в списке…";
@@ -1118,7 +1161,11 @@ export function describeToolResult(
     // below. `askUser` skip uses the same backend marker but reads as
     // "Пропущено", not "Отклонено".
     if (block.errorMessage === "denied by user") {
-      return block.name === "askUser" ? "Пропущено пользователем" : "Отклонено пользователем";
+      if (block.name === "askUser") return "Пропущено пользователем";
+      // «Заполню позже» is a deferral, not a refusal — saying "Отклонено"
+      // would misreport what the user did.
+      if (block.name === "requestArtifact") return "Отложено пользователем";
+      return "Отклонено пользователем";
     }
     return `Ошибка: ${block.errorMessage ?? "неизвестная ошибка"}`;
   }
@@ -1236,6 +1283,18 @@ export function describeToolResult(
       if (!text) return "Пусто";
       const first = text.split("\n").find((l) => l.trim().length > 0) ?? text;
       return first.length > 120 ? `${first.slice(0, 117)}…` : first;
+    }
+    case "artifact": {
+      const { artifact } = block.result.result;
+      const subtitle = artifact.content.kind === "httpRequest"
+        ? describeHttpRequest(artifact.content)
+        : "";
+      return subtitle ? `${artifact.title} — ${subtitle}` : artifact.title;
+    }
+    case "artifactList": {
+      const { artifacts } = block.result.result;
+      if (artifacts.length === 0) return "Артефактов пока нет";
+      return `Артефактов: ${artifacts.length}`;
     }
     case "askUser": {
       const answers = block.result.result.answers;
@@ -1363,6 +1422,17 @@ export const CONTEXT_COMPACTION_MIN_MESSAGES = CONTEXT_COMPACTION_KEEP_LAST_MESS
 // duration, so what the user sees running out is exactly the deadline that
 // actually fires.
 export const TOOL_APPROVAL_TIMEOUT_MS = 30_000;
+
+/** Confirmation-gated tools that are not really *approvals* — they pause the
+ * turn to collect something from the user (a structured answer, a filled-in
+ * artifact) rather than to sanction a side effect. Two consequences in
+ * `useLlmChat`: no `TOOL_APPROVAL_TIMEOUT_MS` countdown (auto-denying a
+ * question the user is still reading, or an artifact they are still filling
+ * in, would be absurd — `requestArtifact` in particular is answered in
+ * another tab, over minutes), and never auto-approvable via "Разрешать
+ * всегда", since trusting them would skip the very interaction that is the
+ * point. */
+export const PAUSE_ONLY_TOOLS = new Set(["askUser", "requestArtifact"]);
 
 /** Static Russian labels for the tools a pending-approval card's "не
  * спрашивать больше"/"Разрешать всегда" controls can apply to

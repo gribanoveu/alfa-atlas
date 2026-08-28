@@ -8,13 +8,15 @@
 //! tool that fans out into two `ToolCall` variants.
 
 use crate::domain::ai_tools::{
-    AskUserArgs, CheckArgs, CreateDirectoryArgs, CreatePlanArgs, DeleteDirectoryArgs,
+    ArtifactListArgs, ArtifactReadArgs, AskUserArgs, CheckArgs, CreateDirectoryArgs,
+    CreatePlanArgs, DeleteDirectoryArgs,
     DeleteFileArgs, EditFileArgs, GetAsciidocTemplatesArgs, GitBlameArgs, GitDiffArgs,
     GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
-    RequestModeSwitchArgs, SemanticSearchArgs, SkillArgs, TodoUpdateArgs, TodoUpdateStatus,
-    TodoWriteArgs, ToolCall, ToolError, ToolScope, UpdatePlanArgs, UpdatePlanTodoArgs,
-    WriteFileArgs,
+    RequestArtifactArgs, RequestModeSwitchArgs, SemanticSearchArgs, SkillArgs, TodoUpdateArgs,
+    TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolScope, UpdatePlanArgs,
+    UpdatePlanTodoArgs, WriteFileArgs,
 };
+use crate::domain::artifact::ArtifactKind;
 use crate::domain::llm::LlmToolCall;
 
 use super::resolve::resolve_mutable_docs_path;
@@ -88,6 +90,10 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .and_then(validate_ask_user_args)
             .map(ToolCall::AskUser)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "requestArtifact" => parse_request_artifact_call(&call.arguments)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "artifact" => parse_artifact_call(&call.arguments)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "createPlan" => lenient_json_object::<CreatePlanArgs>(&call.arguments)
             .map(ToolCall::CreatePlan)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
@@ -101,6 +107,79 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map(ToolCall::UpdatePlanTodo)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         other => Err(ToolError::UnknownTool(other.to_string())),
+    }
+}
+
+/// `requestArtifact`, with one accommodation: `prefill` is an internally
+/// tagged `ArtifactContent`, but requiring the model to repeat `kind`
+/// inside it would be a redundant field whose omission fails the whole
+/// call. So the authoritative top-level `kind` is written into the prefill
+/// object first — overwriting any `kind` the model put there, since the
+/// two disagreeing is a model error and the top-level one is the field the
+/// schema actually requires.
+///
+/// A `prefill` that still doesn't deserialize is dropped rather than
+/// failing the call: it is an optimization (fewer fields for the user to
+/// type), never load-bearing, so losing it costs nothing and losing the
+/// whole request costs the user a turn.
+pub(super) fn parse_request_artifact_call(input: &str) -> Result<ToolCall, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RawRequestArtifactArgs {
+        kind: ArtifactKind,
+        title: String,
+        purpose: String,
+        #[serde(default)]
+        prefill: Option<serde_json::Value>,
+    }
+
+    let raw: RawRequestArtifactArgs = lenient_json_object(input)?;
+    if raw.title.trim().is_empty() {
+        return Err("`title` must be non-empty".to_string());
+    }
+    if raw.purpose.trim().is_empty() {
+        return Err(
+            "`purpose` must be non-empty — the user is shown it verbatim to decide whether to fill the artifact in"
+                .to_string(),
+        );
+    }
+
+    let prefill = raw.prefill.and_then(|mut value| {
+        let tag = serde_json::to_value(raw.kind).ok()?;
+        value.as_object_mut()?.insert("kind".to_string(), tag);
+        serde_json::from_value(value).ok()
+    });
+
+    Ok(ToolCall::RequestArtifact(RequestArtifactArgs {
+        kind: raw.kind,
+        title: raw.title,
+        purpose: raw.purpose,
+        prefill,
+    }))
+}
+
+/// One wire tool, two operations — same shape as `parse_todo_call`.
+pub(super) fn parse_artifact_call(input: &str) -> Result<ToolCall, String> {
+    #[derive(serde::Deserialize)]
+    struct RawArtifactArgs {
+        op: String,
+        #[serde(default)]
+        id: Option<String>,
+    }
+
+    let raw: RawArtifactArgs = lenient_json_object(input)?;
+    match raw.op.as_str() {
+        "list" => Ok(ToolCall::ArtifactList(ArtifactListArgs {})),
+        "read" => {
+            let id = raw
+                .id
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| "op \"read\" requires `id`".to_string())?;
+            Ok(ToolCall::ArtifactRead(ArtifactReadArgs { id }))
+        }
+        other => Err(format!(
+            "unknown artifact op: \"{other}\" (expected \"list\" or \"read\")"
+        )),
     }
 }
 
@@ -719,6 +798,97 @@ mod tests {
                 path: None,
             })
         );
+    }
+
+    #[test]
+    fn parse_tool_call_injects_the_top_level_kind_into_prefill() {
+        // The model is not asked to repeat the discriminator, so a bare
+        // partial spec must still land as typed content.
+        let call = LlmToolCall {
+            id: "1".into(),
+            name: "requestArtifact".to_string(),
+            arguments: r#"{"kind":"httpRequest","title":"Создание документа","purpose":"Нужны входные параметры","prefill":{"method":"POST","path":"/v1/documents"}}"#
+                .to_string(),
+        };
+        match parse_tool_call(&call).expect("parse") {
+            ToolCall::RequestArtifact(args) => {
+                assert_eq!(args.kind, ArtifactKind::HttpRequest);
+                assert_eq!(args.title, "Создание документа");
+                match args.prefill.expect("prefill kept") {
+                    crate::domain::artifact::ArtifactContent::HttpRequest(spec) => {
+                        assert_eq!(spec.method, "POST");
+                        assert_eq!(spec.path, "/v1/documents");
+                    }
+                }
+            }
+            other => panic!("expected RequestArtifact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_drops_an_unusable_prefill_instead_of_failing_the_request() {
+        // Losing a prefill costs the user some typing; losing the whole
+        // request costs them a turn.
+        let call = LlmToolCall {
+            id: "1".into(),
+            name: "requestArtifact".to_string(),
+            arguments: r#"{"kind":"httpRequest","title":"T","purpose":"P","prefill":{"method":42}}"#
+                .to_string(),
+        };
+        match parse_tool_call(&call).expect("parse") {
+            ToolCall::RequestArtifact(args) => assert!(args.prefill.is_none()),
+            other => panic!("expected RequestArtifact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_requires_a_purpose_on_request_artifact() {
+        let call = LlmToolCall {
+            id: "1".into(),
+            name: "requestArtifact".to_string(),
+            arguments: r#"{"kind":"httpRequest","title":"T","purpose":"  "}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).expect_err("blank purpose rejected");
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "requestArtifact"));
+    }
+
+    #[test]
+    fn parse_tool_call_routes_artifact_ops() {
+        let list = LlmToolCall {
+            id: "1".into(),
+            name: "artifact".to_string(),
+            arguments: r#"{"op":"list"}"#.to_string(),
+        };
+        assert!(matches!(
+            parse_tool_call(&list).expect("parse list"),
+            ToolCall::ArtifactList(_)
+        ));
+
+        let read = LlmToolCall {
+            id: "2".into(),
+            name: "artifact".to_string(),
+            arguments: r#"{"op":"read","id":"abc"}"#.to_string(),
+        };
+        match parse_tool_call(&read).expect("parse read") {
+            ToolCall::ArtifactRead(args) => assert_eq!(args.id, "abc"),
+            other => panic!("expected ArtifactRead, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_artifact_read_without_an_id_and_unknown_ops() {
+        for arguments in [r#"{"op":"read"}"#, r#"{"op":"read","id":" "}"#, r#"{"op":"delete"}"#] {
+            let call = LlmToolCall {
+                id: "1".into(),
+                name: "artifact".to_string(),
+                arguments: arguments.to_string(),
+            };
+            let err = parse_tool_call(&call).expect_err("should reject");
+            assert!(
+                matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "artifact"),
+                "arguments {arguments} were not rejected as invalid"
+            );
+        }
     }
 
     #[test]

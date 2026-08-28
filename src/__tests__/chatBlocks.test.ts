@@ -7,6 +7,7 @@ import {
   correctTrailingReasoning,
   correctTrailingText,
   flattenBlocksToText,
+  groupBlocksForRender,
   markRunningToolCallsAsInterrupted,
   settleToolCallBlock,
   type ChatMessage,
@@ -241,5 +242,54 @@ describe("flattenBlocksToText / chatMessageToPlainText", () => {
       blocks: [{ type: "text", id: "t1", content: "the answer" }],
     };
     expect(chatMessageToPlainText(message)).toBe("the answer");
+  });
+});
+
+describe("groupBlocksForRender", () => {
+  const pending = (id: string, name: string, groupId: string): ToolCallBlock => ({
+    type: "toolCall",
+    id,
+    name,
+    argumentsJson: "{}",
+    status: "pendingApproval",
+    approvalGroupId: groupId,
+  });
+
+  test("collapses a run of pending requestArtifact calls into one artifact card", () => {
+    const grouped = groupBlocksForRender([
+      pending("a1", "requestArtifact", "g1"),
+      pending("a2", "requestArtifact", "g1"),
+    ]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]!.kind).toBe("artifactGroup");
+  });
+
+  test("keeps artifact, ask and approval cards apart even in one round", () => {
+    // Each card kind gets its own group id in `collectDecisions`, so a
+    // mixed round renders as three cards rather than one incoherent group.
+    const grouped = groupBlocksForRender([
+      pending("q1", "askUser", "ask"),
+      pending("a1", "requestArtifact", "artifact"),
+      pending("w1", "writeFile", "approve"),
+    ]);
+    expect(grouped.map((g) => g.kind)).toEqual(["askGroup", "artifactGroup", "approvalGroup"]);
+  });
+
+  test("a settled artifact call is an ordinary block, not a card", () => {
+    const settled: ToolCallBlock = {
+      type: "toolCall",
+      id: "a1",
+      name: "requestArtifact",
+      argumentsJson: "{}",
+      status: "done",
+    };
+    const grouped = groupBlocksForRender([settled]);
+    expect(grouped).toEqual([{ kind: "single", block: settled }]);
+  });
+
+  test("text around a card passes through in order", () => {
+    const text: MessageBlock = { type: "text", id: "t1", content: "Соберём запрос." };
+    const grouped = groupBlocksForRender([text, pending("a1", "requestArtifact", "g1")]);
+    expect(grouped.map((g) => g.kind)).toEqual(["single", "artifactGroup"]);
   });
 });

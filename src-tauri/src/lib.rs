@@ -344,6 +344,12 @@ pub fn run() {
             commands::plans::plan_list,
             commands::plans::plan_get,
             commands::plans::plan_delete,
+            commands::artifacts::artifact_list,
+            commands::artifacts::artifact_get,
+            commands::artifacts::artifact_create_draft,
+            commands::artifacts::artifact_save,
+            commands::artifacts::artifact_delete,
+            commands::artifacts::artifact_render,
             commands::export::write_export_file,
         ])
         .run(tauri::generate_context!())

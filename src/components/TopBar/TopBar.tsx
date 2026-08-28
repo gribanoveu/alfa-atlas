@@ -12,6 +12,8 @@ import type { SectionId } from "../Settings/SettingsDialog";
 import { CloneRepoModal } from "../Welcome/CloneRepoModal";
 import { ToolCallLogModal } from "../ToolLog/ToolCallLogModal";
 import { MemoryLogModal } from "../MemoryLog/MemoryLogModal";
+import { ArtifactsModal } from "../Artifacts/ArtifactsModal";
+import { openArtifactTab } from "../../lib/artifactTabs";
 import { PlansModal } from "../Plans/PlansModal";
 import { AboutModal } from "./AboutModal";
 import { MenuBar } from "./MenuBar";
@@ -100,6 +102,17 @@ export function TopBar({
   const [toolLogOpen, setToolLogOpen] = useState(false);
   const [memoryLogOpen, setMemoryLogOpen] = useState(false);
   const [plansOpen, setPlansOpen] = useState(false);
+  const [artifactsOpen, setArtifactsOpen] = useState(false);
+
+  // The artifacts dialog is reachable from two unrelated subtrees — this
+  // menu, and the utilities panel in the right dock — so the panel asks for
+  // it by window event rather than by a prop chain through App, matching
+  // how `atlas-open-plan`/`atlas-open-artifact` already cross that gap.
+  useEffect(() => {
+    const onOpen = () => setArtifactsOpen(true);
+    window.addEventListener("atlas-open-artifacts", onOpen);
+    return () => window.removeEventListener("atlas-open-artifacts", onOpen);
+  }, []);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SectionId | undefined>(undefined);
   const [recentDropdownOpen, setRecentDropdownOpen] = useState(false);
   const repoChipRef = useRef<HTMLDivElement>(null);
@@ -194,6 +207,9 @@ export function TopBar({
           break;
         case "tools.plans":
           setPlansOpen(true);
+          break;
+        case "tools.artifacts":
+          setArtifactsOpen(true);
           break;
         case "help.about":
           setAboutOpen(true);
@@ -337,6 +353,12 @@ export function TopBar({
       {toolLogOpen ? <ToolCallLogModal projectRoot={projectRoot} onClose={() => setToolLogOpen(false)} /> : null}
       {memoryLogOpen ? (
         <MemoryLogModal projectRoot={projectRoot} onClose={() => setMemoryLogOpen(false)} />
+      ) : null}
+      {artifactsOpen ? (
+        <ArtifactsModal
+          onClose={() => setArtifactsOpen(false)}
+          onOpenArtifact={openArtifactTab}
+        />
       ) : null}
       {plansOpen ? (
         <PlansModal

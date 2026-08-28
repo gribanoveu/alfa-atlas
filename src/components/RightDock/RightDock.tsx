@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { RightTool } from "../../hooks/useWorkspaceLayout";
 import type { UtilityId } from "../../data/utilities";
+import type { ArtifactKind } from "../../lib/artifacts";
 import type {
   GitBranchInfo,
   GitDiffScope,
@@ -132,6 +133,8 @@ type RightDockProps = {
   utilities?: {
     onOpen: (id: UtilityId) => void;
     activeId: UtilityId | null;
+    onNewArtifact: (kind: ArtifactKind) => void;
+    onOpenArtifacts: () => void;
   } | null;
   assistant?: {
     onOpenSettings: () => void;
@@ -287,6 +290,8 @@ export function RightDock({
               <UtilitiesPanel
                 onOpen={utilities.onOpen}
                 activeId={utilities.activeId}
+                onNewArtifact={utilities.onNewArtifact}
+                onOpenArtifacts={utilities.onOpenArtifacts}
               />
             ) : activeTool === "branches" && branches ? (
               <BranchesPanel

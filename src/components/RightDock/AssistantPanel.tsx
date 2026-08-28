@@ -334,6 +334,7 @@ export function AssistantPanel({
             ) : (
               <AssistantConversation
                 key={chatHistory.currentChatId}
+                chatId={chatHistory.currentChatId}
                 initialMessages={chatHistory.currentMessages}
                 initialTodos={chatHistory.currentTodos}
                 initialActivePlanId={chatHistory.currentActivePlanId}

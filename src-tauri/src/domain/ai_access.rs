@@ -42,6 +42,8 @@ pub enum ToolName {
     RequestModeSwitch,
     GetAsciidocTemplates,
     AskUser,
+    RequestArtifact,
+    Artifact,
     Skill,
     CreatePlan,
     UpdatePlan,
@@ -75,6 +77,11 @@ impl ToolName {
     /// `AskUser` always pauses — it is not a side-effect tool, but the
     /// whole point is to collect a structured answer from the user before
     /// the turn continues (see `commands::llm`'s resume path).
+    ///
+    /// `RequestArtifact` pauses for the same reason, over a longer wait:
+    /// the user answers it by filling in a whole form in an editor tab,
+    /// not by picking an option. `Artifact` (reading one back) is an
+    /// ordinary read and never pauses.
     pub fn requires_confirmation(self) -> bool {
         matches!(
             self,
@@ -87,6 +94,7 @@ impl ToolName {
                 | ToolName::RequestFullRepoAccess
                 | ToolName::RequestModeSwitch
                 | ToolName::AskUser
+                | ToolName::RequestArtifact
         )
         // `Todo`/`Grep`/`GitDiff`/`GitBlame`/`Check` are in-memory or
         // read-only, no confirmation gate under any call. `Memory` is
@@ -120,6 +128,8 @@ impl ToolName {
             "requestModeSwitch" => Some(ToolName::RequestModeSwitch),
             "getAsciidocTemplates" => Some(ToolName::GetAsciidocTemplates),
             "askUser" => Some(ToolName::AskUser),
+            "requestArtifact" => Some(ToolName::RequestArtifact),
+            "artifact" => Some(ToolName::Artifact),
             "skill" => Some(ToolName::Skill),
             "createPlan" => Some(ToolName::CreatePlan),
             "updatePlan" => Some(ToolName::UpdatePlan),
@@ -168,6 +178,10 @@ impl ToolName {
             // even cheaper than a bare filesystem read.
             ToolName::GetAsciidocTemplates => 1,
             ToolName::AskUser => 1,
+            // Never executes (resolved from the user's decision) / one
+            // small JSON read from `~/.atlas/artifacts`.
+            ToolName::RequestArtifact => 1,
+            ToolName::Artifact => 1,
             ToolName::Skill => 1,
             ToolName::CreatePlan => 1,
             ToolName::UpdatePlan => 1,
@@ -243,6 +257,8 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::RequestModeSwitch,
         ToolName::GetAsciidocTemplates,
         ToolName::AskUser,
+        ToolName::RequestArtifact,
+        ToolName::Artifact,
         ToolName::Skill,
         ToolName::CreatePlan,
         ToolName::UpdatePlan,
@@ -278,6 +294,10 @@ mod tests {
         assert!(ToolName::RequestModeSwitch.requires_confirmation());
         assert!(!ToolName::GetAsciidocTemplates.requires_confirmation());
         assert!(ToolName::AskUser.requires_confirmation());
+        // Pauses for a form the user fills in an editor tab.
+        assert!(ToolName::RequestArtifact.requires_confirmation());
+        // Reading one back is an ordinary read.
+        assert!(!ToolName::Artifact.requires_confirmation());
         assert!(!ToolName::Skill.requires_confirmation());
         assert!(!ToolName::CreatePlan.requires_confirmation());
         assert!(!ToolName::UpdatePlan.requires_confirmation());
@@ -315,6 +335,11 @@ mod tests {
             Some(ToolName::GetAsciidocTemplates)
         );
         assert_eq!(ToolName::from_wire_name("askUser"), Some(ToolName::AskUser));
+        assert_eq!(
+            ToolName::from_wire_name("requestArtifact"),
+            Some(ToolName::RequestArtifact)
+        );
+        assert_eq!(ToolName::from_wire_name("artifact"), Some(ToolName::Artifact));
         assert_eq!(ToolName::from_wire_name("skill"), Some(ToolName::Skill));
         assert_eq!(ToolName::from_wire_name("createPlan"), Some(ToolName::CreatePlan));
         assert_eq!(ToolName::from_wire_name("updatePlan"), Some(ToolName::UpdatePlan));
@@ -355,9 +380,9 @@ mod tests {
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_twenty_three() {
+    fn default_allowed_tools_includes_all_twenty_five() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 23);
+        assert_eq!(allowed.len(), 25);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
@@ -374,6 +399,8 @@ mod tests {
         assert!(allowed.contains(&ToolName::RequestModeSwitch));
         assert!(allowed.contains(&ToolName::GetAsciidocTemplates));
         assert!(allowed.contains(&ToolName::AskUser));
+        assert!(allowed.contains(&ToolName::RequestArtifact));
+        assert!(allowed.contains(&ToolName::Artifact));
         assert!(allowed.contains(&ToolName::Skill));
         assert!(allowed.contains(&ToolName::CreatePlan));
         assert!(allowed.contains(&ToolName::UpdatePlan));
@@ -432,6 +459,8 @@ mod tests {
             ToolName::RequestModeSwitch,
             ToolName::GetAsciidocTemplates,
             ToolName::AskUser,
+            ToolName::RequestArtifact,
+            ToolName::Artifact,
             ToolName::Skill,
             ToolName::CreatePlan,
             ToolName::UpdatePlan,

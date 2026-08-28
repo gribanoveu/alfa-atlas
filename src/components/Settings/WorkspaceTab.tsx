@@ -22,6 +22,7 @@ export function WorkspaceTab({ projectRoot, editor }: WorkspaceTabProps) {
       placeholder: "…",
     },
     { label: "Планы", value: paths?.plansDir ?? null, placeholder: "…" },
+    { label: "Артефакты", value: paths?.artifactsDir ?? null, placeholder: "…" },
     {
       label: "Текущий проект",
       value: projectRoot ?? paths?.projectRoot ?? null,

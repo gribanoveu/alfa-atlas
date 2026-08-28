@@ -3202,3 +3202,95 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
     max-height: 180px;
   }
 }
+/* =========================================================
+   Artifact request card (requestArtifact) — same shell as ask-user
+   ========================================================= */
+
+.assistant-artifact-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  transition: opacity 0.15s ease;
+}
+
+.assistant-artifact-card.is-decided {
+  opacity: 0.72;
+}
+
+.assistant-artifact-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.assistant-artifact-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.assistant-artifact-card-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.assistant-artifact-card-eyebrow {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.assistant-artifact-card-title {
+  font-size: calc(var(--font-ui) * 1.08);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-0);
+  overflow-wrap: anywhere;
+}
+
+.assistant-artifact-card-purpose {
+  margin: 0;
+  font-size: var(--font-ui);
+  line-height: 1.45;
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+.assistant-artifact-card-hint {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.assistant-artifact-card-error {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--red-tag);
+}
+
+.assistant-artifact-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding-top: 2px;
+}

@@ -570,6 +570,37 @@ pub struct SemanticSearchPayload {
     pub meta: SemanticSearchMeta,
 }
 
+/// Args for `requestArtifact` — the model asking the user to fill in a
+/// structured document it cannot source from the repository.
+///
+/// `prefill` is typed, but the model is not required to repeat the `kind`
+/// discriminator inside it: `services::ai_tools::parse::parse_tool_call`
+/// injects the authoritative top-level `kind` before deserializing, so a
+/// plain `{"method": "POST"}` is accepted rather than failing the whole
+/// call over a redundant field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestArtifactArgs {
+    pub kind: crate::domain::artifact::ArtifactKind,
+    pub title: String,
+    pub purpose: String,
+    #[serde(default)]
+    pub prefill: Option<crate::domain::artifact::ArtifactContent>,
+}
+
+/// Args for `artifact` `op: "list"` — none. Present so the variant matches
+/// the adjacently-tagged `args` shape every other call uses.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactListArgs {}
+
+/// Args for `artifact` `op: "read"`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactReadArgs {
+    pub id: String,
+}
+
 /// One call into the tool executor. This — not the individual `ToolName`
 /// variants — is the harness-facing unit: `services::ai_tools::execute_tool`
 /// takes exactly one of these and returns exactly one `ToolResult`, so a
@@ -598,6 +629,9 @@ pub enum ToolCall {
     RequestModeSwitch(RequestModeSwitchArgs),
     GetAsciidocTemplates(GetAsciidocTemplatesArgs),
     AskUser(AskUserArgs),
+    RequestArtifact(RequestArtifactArgs),
+    ArtifactList(ArtifactListArgs),
+    ArtifactRead(ArtifactReadArgs),
     Skill(SkillArgs),
     CreatePlan(CreatePlanArgs),
     UpdatePlan(UpdatePlanArgs),
@@ -628,6 +662,10 @@ impl ToolCall {
             ToolCall::RequestModeSwitch(_) => ToolName::RequestModeSwitch,
             ToolCall::GetAsciidocTemplates(_) => ToolName::GetAsciidocTemplates,
             ToolCall::AskUser(_) => ToolName::AskUser,
+            ToolCall::RequestArtifact(_) => ToolName::RequestArtifact,
+            // One wire tool, two operations — same shape as `todo`.
+            ToolCall::ArtifactList(_) => ToolName::Artifact,
+            ToolCall::ArtifactRead(_) => ToolName::Artifact,
             ToolCall::Skill(_) => ToolName::Skill,
             ToolCall::CreatePlan(_) => ToolName::CreatePlan,
             ToolCall::UpdatePlan(_) => ToolName::UpdatePlan,
@@ -796,6 +834,22 @@ pub enum ToolResult {
     /// on resume (never produced by `execute_tool` itself).
     #[serde(rename_all = "camelCase")]
     AskUser { answers: Vec<AskUserAnswer> },
+    /// Settled `requestArtifact` (resolved from `ToolCallDecision::
+    /// artifact_id` on resume, never produced by `execute_tool` itself) and
+    /// settled `artifact` `op: "read"` — the same payload either way, since
+    /// both hand the model one finished artifact. Which of the two it was
+    /// is already on the tool-call block's `name`.
+    #[serde(rename_all = "camelCase")]
+    Artifact {
+        artifact: crate::domain::artifact::ArtifactRecord,
+        rendered: crate::domain::artifact_render::RenderedArtifact,
+    },
+    /// Settled `artifact` `op: "list"` — summaries only, no samples or
+    /// parameter tables.
+    #[serde(rename_all = "camelCase")]
+    ArtifactList {
+        artifacts: Vec<crate::domain::artifact::ArtifactSummary>,
+    },
     /// Settled `createPlan` — enough for the chat card without reloading
     /// the full markdown body (UI can `plan_get` for details).
     #[serde(rename_all = "camelCase")]
@@ -949,6 +1003,9 @@ pub enum ToolError {
     /// Agent Skills parse/router failure.
     #[error("skill error: {0}")]
     Skill(String),
+    /// Artifact store / validation failure.
+    #[error("artifact error: {0}")]
+    Artifact(String),
 }
 
 impl From<crate::domain::agent_skills::SkillError> for ToolError {
@@ -972,6 +1029,17 @@ impl From<crate::domain::plan::PlanError> for ToolError {
             crate::domain::plan::PlanError::NotFound(id) => ToolError::NotFound(format!("plan:{id}")),
             crate::domain::plan::PlanError::TodoNotFound(id) => ToolError::TaskNotFound(id),
             other => ToolError::Plan(other.to_string()),
+        }
+    }
+}
+
+impl From<crate::domain::artifact::ArtifactError> for ToolError {
+    fn from(err: crate::domain::artifact::ArtifactError) -> Self {
+        match err {
+            crate::domain::artifact::ArtifactError::NotFound(id) => {
+                ToolError::NotFound(format!("artifact:{id}"))
+            }
+            other => ToolError::Artifact(other.to_string()),
         }
     }
 }

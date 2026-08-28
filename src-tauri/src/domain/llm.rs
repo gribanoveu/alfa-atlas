@@ -476,6 +476,11 @@ pub struct PendingToolCall {
 /// For `askUser`, `approved: true` plus `answer` carries the structured
 /// responses; `approved: false` (or missing `answer`) means the user
 /// skipped / stopped.
+///
+/// For `requestArtifact`, `approved: true` plus `artifact_id` names the
+/// artifact the user filled in; the backend loads it from the store rather
+/// than accepting its contents here, so what the model reads is provably
+/// what was saved. `approved: false` (or a missing id) is «Заполню позже».
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallDecision {
@@ -483,6 +488,8 @@ pub struct ToolCallDecision {
     pub approved: bool,
     #[serde(default)]
     pub answer: Option<crate::domain::ai_tools::AskUserAnswerPayload>,
+    #[serde(default)]
+    pub artifact_id: Option<String>,
 }
 
 #[derive(Debug, Error)]

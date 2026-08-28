@@ -22,6 +22,7 @@ export type MenuActionId =
   | "tools.toolLog"
   | "tools.memoryLog"
   | "tools.plans"
+  | "tools.artifacts"
   | "help.about"
   | "help.docs"
   | "help.feedback"

@@ -13,6 +13,7 @@ import {
   buildAccessModeChangeNotice,
   buildActiveFileContextBlock,
   buildActivePlanContextBlock,
+  buildArtifactsContextBlock,
   buildCompactionSummaryBlock,
   buildHistoryCompactionPrompt,
   buildModeChangeNotice,
@@ -22,6 +23,7 @@ import {
   sliceMessagesForPlanExecution,
   CONTEXT_COMPACTION_KEEP_LAST_MESSAGES,
   CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES,
+  PAUSE_ONLY_TOOLS,
   TOOL_APPROVAL_TIMEOUT_MS,
 } from "../lib/assistantConfig";
 import { toMessage } from "../lib/errors";
@@ -66,6 +68,7 @@ import {
   type ToolCallDecision,
 } from "../lib/llm";
 import { playNeedAnswerSound, playTaskDoneSound } from "../lib/assistantSounds";
+import { artifactList } from "../lib/artifacts";
 import { planGet, type PlanRecord } from "../lib/plans";
 import { estimateTokenCount } from "../lib/tokens";
 
@@ -240,6 +243,7 @@ export function useLlmChat(
   const activeApprovalRef = useRef<{
     decide: (id: string, approved: boolean, trust: boolean) => void;
     answerAskUser: (id: string, answer: AskUserAnswerPayload) => void;
+    answerArtifact: (id: string, artifactId: string) => void;
     denyAll: () => void;
   } | null>(null);
 
@@ -265,15 +269,19 @@ export function useLlmChat(
   /** Shows every call in `calls` inline in the transcript as a
    * `"pendingApproval"` block. Resolves once every call has a decision —
    * Approve/Deny (with timeout) for mutating/mode tools, or Submit/Skip
-   * (no timeout) for `askUser`. */
+   * (no timeout) for the `PAUSE_ONLY_TOOLS`, which collect something from
+   * the user rather than sanctioning a side effect. */
   const collectDecisions = useCallback((calls: PendingToolCall[]): Promise<ToolCallDecision[]> => {
     return new Promise((resolve) => {
-      type Entry = { approved: boolean; answer?: AskUserAnswerPayload };
+      type Entry = { approved: boolean; answer?: AskUserAnswerPayload; artifactId?: string };
       const decided = new Map<string, Entry>();
       const timers = new Map<string, ReturnType<typeof setTimeout>>();
       const approvalDeadlineAt = Date.now() + TOOL_APPROVAL_TIMEOUT_MS;
       const approvalGroupId = crypto.randomUUID();
+      // One group id per card kind, so a round mixing them still renders as
+      // separate cards rather than one incoherent group.
       const askGroupId = crypto.randomUUID();
+      const artifactGroupId = crypto.randomUUID();
 
       const finalizeIfDone = () => {
         if (decided.size !== calls.length) return;
@@ -285,21 +293,27 @@ export function useLlmChat(
               id: c.id,
               approved: entry?.approved ?? false,
               ...(entry?.answer ? { answer: entry.answer } : {}),
+              ...(entry?.artifactId ? { artifactId: entry.artifactId } : {}),
             };
           }),
         );
       };
 
-      const decide = (id: string, approved: boolean, trust: boolean, answer?: AskUserAnswerPayload) => {
+      const decide = (
+        id: string,
+        approved: boolean,
+        trust: boolean,
+        payload?: { answer?: AskUserAnswerPayload; artifactId?: string },
+      ) => {
         if (decided.has(id) || !calls.some((c) => c.id === id)) return;
-        decided.set(id, { approved, answer });
+        decided.set(id, { approved, answer: payload?.answer, artifactId: payload?.artifactId });
         const timer = timers.get(id);
         if (timer !== undefined) clearTimeout(timer);
         if (trust && approved) {
           const call = calls.find((c) => c.id === id);
-          // `askUser` is never auto-approvable — trust would skip the whole
-          // clarifying-question card on later turns.
-          if (call && call.name !== "askUser") {
+          // Never auto-approvable — trust would skip the very card that is
+          // the point of these tools on every later turn.
+          if (call && !PAUSE_ONLY_TOOLS.has(call.name)) {
             trustedToolsRef.current.add(call.name);
             void setToolAutoApproved(call.name, true);
           }
@@ -309,11 +323,15 @@ export function useLlmChat(
 
       activeApprovalRef.current = {
         decide: (id, approved, trust) => decide(id, approved, trust),
-        answerAskUser: (id, answer) => decide(id, true, false, answer),
+        answerAskUser: (id, answer) => decide(id, true, false, { answer }),
+        answerArtifact: (id, artifactId) => decide(id, true, false, { artifactId }),
         denyAll: () => calls.forEach((c) => decide(c.id, false, false)),
       };
 
-      const approvalCalls = calls.filter((c) => c.name !== "askUser");
+      // A pause-only call has no countdown: auto-denying a question the user
+      // is still reading — or an artifact they are filling in another tab,
+      // which can take many minutes — would be absurd.
+      const approvalCalls = calls.filter((c) => !PAUSE_ONLY_TOOLS.has(c.name));
       approvalCalls.forEach((c) => {
         timers.set(
           c.id,
@@ -325,20 +343,22 @@ export function useLlmChat(
         updateLastAssistantBlocks(prev, (blocks) =>
           calls.reduce((acc, c) => {
             const isAsk = c.name === "askUser";
+            const isArtifact = c.name === "requestArtifact";
+            const groupId = isAsk ? askGroupId : isArtifact ? artifactGroupId : approvalGroupId;
             return appendPendingApprovalBlock(acc, {
               id: c.id,
               name: c.name,
               argumentsJson: c.arguments,
-              deadlineAt: isAsk ? undefined : approvalDeadlineAt,
-              approvalGroupId: isAsk ? askGroupId : approvalGroupId,
+              deadlineAt: PAUSE_ONLY_TOOLS.has(c.name) ? undefined : approvalDeadlineAt,
+              approvalGroupId: groupId,
             });
           }, blocks),
         ),
       );
 
-      // One chime per ask-user pause — even if the batch has several
-      // `askUser` calls, they share a single card group.
-      if (needAnswerSoundEnabledRef.current && calls.some((c) => c.name === "askUser")) {
+      // One chime per pause that is waiting on the user — even if the batch
+      // has several such calls, they share a single card group.
+      if (needAnswerSoundEnabledRef.current && calls.some((c) => PAUSE_ONLY_TOOLS.has(c.name))) {
         playNeedAnswerSound();
       }
     });
@@ -352,6 +372,14 @@ export function useLlmChat(
   /** Passed down to `AssistantAskUserCard`'s Submit button. */
   const answerAskUser = useCallback((id: string, answer: AskUserAnswerPayload) => {
     activeApprovalRef.current?.answerAskUser(id, answer);
+  }, []);
+
+  /** Resolves a paused `requestArtifact` call with the artifact the user
+   * just finished. A no-op when no pause is waiting on `id` — the builder
+   * can be used long after (or entirely outside) the turn that asked for
+   * it, and handles that case by sending a chat message instead. */
+  const answerArtifact = useCallback((id: string, artifactId: string) => {
+    activeApprovalRef.current?.answerArtifact(id, artifactId);
   }, []);
 
   /** Stops the in-flight turn, wherever it currently is: mid-stream,
@@ -528,9 +556,9 @@ export function useLlmChat(
         const risky = calls.filter((c) => c.requiresConfirmation);
         const autoApprovedIds = new Set<string>();
         const needsDecision = risky.filter((c) => {
-          // Clarifying questions must always surface — never skip via
-          // "always allow" / session trust.
-          if (c.name === "askUser") return true;
+          // A pause that collects something from the user must always
+          // surface — never skipped via "always allow" / session trust.
+          if (PAUSE_ONLY_TOOLS.has(c.name)) return true;
           if (trustedToolsRef.current.has(c.name)) {
             autoApprovedIds.add(c.id);
             return false;
@@ -776,6 +804,24 @@ export function useLlmChat(
       }
       const activePlanBlock = buildActivePlanContextBlock(planId, planRecord);
 
+      // Pointer list only — this is what makes an artifact filled in during
+      // one conversation discoverable from any later one, since the pause
+      // that resolves a `requestArtifact` call is scoped to its own chat but
+      // the artifact itself outlives every chat.
+      let artifactsBlock: string | null = null;
+      try {
+        artifactsBlock = buildArtifactsContextBlock(await artifactList());
+      } catch (e) {
+        // "No project open" is expected; anything else would otherwise
+        // degrade artifact discovery silently for the rest of the session —
+        // same reasoning as the memory block above.
+        const message = toMessage(e);
+        if (!message.includes("no project is open")) {
+          console.error("Не удалось прочитать список артефактов", e);
+        }
+        artifactsBlock = null;
+      }
+
       let memoryBlock: string | null = null;
       try {
         memoryBlock = buildMemoryContextBlock(await getMemoryWake());
@@ -830,6 +876,7 @@ export function useLlmChat(
         ...(activeFileBlock ? [{ role: "system" as const, content: activeFileBlock, toolCallId: null }] : []),
         ...(todoBlock ? [{ role: "system" as const, content: todoBlock, toolCallId: null }] : []),
         ...(activePlanBlock ? [{ role: "system" as const, content: activePlanBlock, toolCallId: null }] : []),
+        ...(artifactsBlock ? [{ role: "system" as const, content: artifactsBlock, toolCallId: null }] : []),
         { role: "user", content: userText, toolCallId: null },
       ];
 
@@ -1013,6 +1060,7 @@ export function useLlmChat(
     ),
     decideToolCall,
     answerAskUser,
+    answerArtifact,
     stopChat,
   };
 }

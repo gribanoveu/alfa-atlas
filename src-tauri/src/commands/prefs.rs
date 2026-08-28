@@ -8,6 +8,7 @@ use serde::Serialize;
 pub struct SettingsPaths {
     pub user_settings_dir: String,
     pub plans_dir: String,
+    pub artifacts_dir: String,
     pub project_root: Option<String>,
     pub project_config_dir: Option<String>,
 }
@@ -32,6 +33,10 @@ pub fn get_settings_paths() -> Result<SettingsPaths, String> {
         .map_err(|e| e.to_string())?
         .to_string_lossy()
         .into_owned();
+    let artifacts_dir = crate::services::artifacts::artifacts_root_path()
+        .map_err(|e| e.to_string())?
+        .to_string_lossy()
+        .into_owned();
 
     let settings = settings_store::load().map_err(|e| e.to_string())?;
     let project_root = settings.project.root.clone();
@@ -42,6 +47,7 @@ pub fn get_settings_paths() -> Result<SettingsPaths, String> {
     Ok(SettingsPaths {
         user_settings_dir,
         plans_dir,
+        artifacts_dir,
         project_root,
         project_config_dir,
     })

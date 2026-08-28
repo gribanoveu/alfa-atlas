@@ -1,0 +1,593 @@
+.artifact-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  background: var(--bg-editor);
+  color: var(--text-0);
+  font-size: var(--font-preview);
+}
+
+.artifact-view-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  background: var(--bg-editor);
+  color: var(--text-2);
+  font-size: var(--font-preview);
+}
+
+.artifact-view-spinner {
+  animation: artifact-spin 1s linear infinite;
+}
+
+@keyframes artifact-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.artifact-view-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex: none;
+}
+
+.artifact-view-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.artifact-view-eyebrow {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.artifact-view-title {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 6px;
+  margin-left: -6px;
+  background: transparent;
+  color: var(--text-0);
+  font-size: calc(var(--font-preview) * 1.25);
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.artifact-view-title:hover {
+  border-color: var(--border);
+}
+
+.artifact-view-title:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-1);
+}
+
+.artifact-view-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.artifact-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: var(--font-ui);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.artifact-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.artifact-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.artifact-btn.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.artifact-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.artifact-view-purpose {
+  flex: none;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  font-size: var(--font-ui);
+  line-height: 1.45;
+  color: var(--text-1);
+}
+
+.artifact-view-purpose-label {
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.artifact-view-error {
+  flex: none;
+  margin: 0;
+  font-size: var(--font-ui);
+  color: var(--red-tag);
+}
+
+/* ---- HTTP request builder ---- */
+
+.http-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Full-width top-level switch between the form and the rendered result —
+   same shell as `Base64Codec`'s `.b64-tabs`/`.b64-tab` (encode/decode),
+   the app's pattern for "this pane is one of two whole views", distinct
+   from the smaller `.http-builder-tabs` below it. */
+.http-builder-outer-tabs {
+  display: flex;
+  gap: 2px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.http-builder-outer-tab {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-ui);
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.http-builder-outer-tab:hover {
+  color: var(--text-1);
+}
+
+.http-builder-outer-tab.is-active {
+  color: var(--text-0);
+  border-bottom-color: var(--accent);
+}
+
+.http-builder-form,
+.http-builder-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.http-builder-line {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: none;
+}
+
+.http-builder-input {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text-0);
+  font-size: var(--font-ui);
+  font-family: inherit;
+  min-width: 0;
+}
+
+.http-builder-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Method dropdown — the trigger/menu shell mirrors `.oas-select*`
+   (OpenApiExplorer) and `.assistant-mode-*` (AssistantConversation), the
+   app's established programmatic-dropdown pattern; sizing matches the
+   other fields on this line rather than either of those. */
+.method-select {
+  position: relative;
+  flex: none;
+}
+
+.method-select-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text-0);
+  font-size: var(--font-ui);
+  font-weight: 600;
+  font-family: inherit;
+}
+
+.method-select-trigger:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.method-select-trigger.is-open {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.method-select-chevron {
+  flex: none;
+  color: var(--text-2);
+  font-size: calc(var(--font-ui) * 0.75);
+  line-height: 1;
+}
+
+.method-select-trigger.is-open .method-select-chevron {
+  color: var(--text-0);
+}
+
+.method-select-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  min-width: 100%;
+  padding: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.method-select-option {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-0);
+  font-size: var(--font-ui);
+  font-weight: 600;
+  font-family: inherit;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.method-select-option:hover {
+  background: var(--bg-2);
+}
+
+.method-select-option.is-active {
+  background: var(--accent-dim);
+}
+
+.http-builder-host {
+  flex: 1;
+}
+
+.http-builder-path {
+  flex: 2;
+  font-family: var(--font-mono, monospace);
+}
+
+.http-builder-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+}
+
+.http-builder-tabs {
+  display: flex;
+  gap: 2px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.http-builder-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-ui);
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.http-builder-tab:hover {
+  color: var(--text-0);
+}
+
+.http-builder-tab.is-active {
+  color: var(--text-0);
+  border-bottom-color: var(--accent);
+}
+
+.http-builder-tab-count {
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--bg-2);
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.http-builder-section {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.http-builder-preview-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+}
+
+.http-builder-preview-note p {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+/* Same shell as `.xmfmt-copy-btn` in the utilities (copies the active
+   preview tab's full text — curl / a parameter table / a whole
+   request.adoc — to the clipboard). */
+.http-builder-copy-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.http-builder-copy-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.http-builder-copy-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.http-builder-copy-btn.is-copied,
+.http-builder-copy-btn.is-copied:hover {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+  background: transparent;
+}
+
+.http-builder-preview-body {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-ui);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* ---- parameter tables ---- */
+
+.param-table-wrap,
+.body-editor,
+.responses-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.param-table-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.param-table-empty {
+  margin: 0;
+  font-size: var(--font-ui);
+  color: var(--text-2);
+}
+
+.param-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-ui);
+}
+
+.param-table th {
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 500;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.param-table td {
+  padding: 2px 3px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  vertical-align: top;
+}
+
+.param-table td input[type="text"],
+.param-table td input:not([type]) {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-0);
+  font-size: var(--font-ui);
+  font-family: inherit;
+}
+
+.param-table td input:hover {
+  border-color: var(--border);
+}
+
+.param-table td input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-1);
+}
+
+/* Looks like the single-line inputs above at rest — same box, same
+   chrome — but wraps and grows with its content instead of scrolling
+   horizontally; `AutoGrowField` drives the height via `scrollHeight`. */
+.param-table-field {
+  display: block;
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-0);
+  font-size: var(--font-ui);
+  font-family: inherit;
+  line-height: 1.4;
+  resize: none;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.param-table-field:hover {
+  border-color: var(--border);
+}
+
+.param-table-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-1);
+}
+
+.param-table-required {
+  width: 1%;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.param-table-remove {
+  display: inline-flex;
+  padding: 4px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.param-table-remove:hover {
+  background: var(--bg-2);
+  color: var(--red-tag);
+}
+
+.response-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-1);
+}
+
+.response-card-status {
+  flex: none;
+  width: 80px;
+}
+
+.sample-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sample-editor-label {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.sample-editor-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-editor);
+  color: var(--text-0);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-ui);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.sample-editor-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+

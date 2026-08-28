@@ -1,3 +1,4 @@
+pub mod artifact_store;
 pub mod bundled_skills;
 pub mod chat_store;
 pub mod chunk_strategies;

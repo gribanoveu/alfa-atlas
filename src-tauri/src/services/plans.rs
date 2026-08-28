@@ -2,7 +2,6 @@
 //! repository-keyed storage directory, create/update/read/delete plans.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use uuid::Uuid;
 
@@ -10,44 +9,15 @@ use crate::domain::plan::{
     enforce_plan_todo_invariant, PlanError, PlanRecord, PlanSummary, PlanTodo, PlanTodoStatus,
     PlanTodoUpdateStatus,
 };
-use crate::infra::{plan_store, project_store, repository_identity};
-use crate::services::project_open;
+use crate::infra::plan_store;
+use crate::services::repository_scope;
 
-/// Stable identity string used as the folder name under `~/.atlas/plans/`
-/// (and embeddings). Same rules as `services::embedding_state::resolve_index_paths`.
-pub fn resolve_repository_id(repo_root: &Path) -> Result<String, PlanError> {
-    let identity = repository_identity::resolve(repo_root);
-    let source = match identity.canonical_url {
-        Some(url) => url,
-        None => local_identity(repo_root)?,
-    };
-    Ok(repository_identity::repository_id(&source))
-}
-
-fn local_identity(repo_root: &Path) -> Result<String, PlanError> {
-    let root_str = repo_root
-        .to_str()
-        .ok_or_else(|| PlanError::Project("repo root is not valid UTF-8".into()))?;
-    let mut config = project_store::load(root_str)
-        .map_err(|e| PlanError::Project(e.to_string()))?
-        .ok_or_else(|| PlanError::Project(format!("no project.json found for {root_str}")))?;
-
-    if let Some(id) = config.local_repository_id.clone() {
-        return Ok(id);
-    }
-
-    let id = Uuid::new_v4().to_string();
-    config.local_repository_id = Some(id.clone());
-    project_store::save(root_str, &config).map_err(|e| PlanError::Project(e.to_string()))?;
-    Ok(id)
-}
-
+/// The repository-keyed storage folder for the open project. Identity
+/// resolution itself lives in `services::repository_scope`, which owns the
+/// one copy of it (it can mint and persist a `local_repository_id`, so it
+/// must not be reimplemented per store).
 fn open_repo_id() -> Result<(String, String), PlanError> {
-    let opened = project_open::get_project()
-        .map_err(|e| PlanError::Project(e.to_string()))?
-        .ok_or_else(|| PlanError::Project("no project is open".into()))?;
-    let repo_id = resolve_repository_id(Path::new(&opened.root))?;
-    Ok((repo_id, opened.root))
+    repository_scope::open_repository().map_err(|e| PlanError::Project(e.to_string()))
 }
 
 /// Create a new plan from model-supplied fields. Assigns a UUID id and
