@@ -45,6 +45,7 @@ pub fn resolve_provider(
             .and_then(|o| o.trusted_cert_pem.clone())
             .or_else(|| preset.trusted_cert_pem.clone());
         let limit = over.and_then(|o| o.limit).or(preset.limit);
+        let known_models = over.map(|o| o.known_models.clone()).unwrap_or_default();
         return Ok(ResolvedLlmProvider {
             id: id.to_string(),
             label,
@@ -52,6 +53,7 @@ pub fn resolve_provider(
             is_system: true,
             model,
             trusted_cert_pem,
+            known_models,
             limit,
         });
     }
@@ -69,6 +71,7 @@ pub fn resolve_provider(
         is_system: false,
         model: over.model.clone(),
         trusted_cert_pem: over.trusted_cert_pem.clone(),
+        known_models: over.known_models.clone(),
         limit: over.limit,
     })
 }
@@ -193,6 +196,7 @@ mod tests {
                 base_url: None,
                 model: Some("DeepSeek-V4-Flash".to_string()),
                 trusted_cert_pem: None,
+                known_models: vec![],
                 limit: None,
             }],
             ..Default::default()
@@ -240,6 +244,7 @@ mod tests {
                 base_url: None,
                 model: Some("gpt-4o-mini".to_string()),
                 trusted_cert_pem: Some("-----BEGIN CERTIFICATE-----\n...".to_string()),
+                known_models: vec![],
                 limit: None,
             }],
             debug_logging: false,
@@ -276,6 +281,7 @@ mod tests {
                 base_url: None,
                 model: None,
                 trusted_cert_pem: None,
+                known_models: vec![],
                 limit: None,
             }],
             debug_logging: false,
@@ -299,6 +305,7 @@ mod tests {
                 base_url: Some("https://api.openai.com/v1".to_string()),
                 model: Some("gpt-4o".to_string()),
                 trusted_cert_pem: None,
+                known_models: vec![],
                 limit: None,
             }],
             debug_logging: false,
@@ -316,6 +323,38 @@ mod tests {
     }
 
     #[test]
+    fn resolve_provider_exposes_saved_model_catalog() {
+        let settings = LlmSettings {
+            active_provider_id: None,
+            providers: vec![LlmProviderConfig {
+                id: "openrouter".to_string(),
+                label: Some("OpenRouter".to_string()),
+                base_url: Some("https://openrouter.ai/api/v1".to_string()),
+                model: Some("anthropic/claude-3.5-sonnet".to_string()),
+                trusted_cert_pem: None,
+                known_models: vec![
+                    "anthropic/claude-3.5-sonnet".to_string(),
+                    "openai/gpt-4o".to_string(),
+                ],
+                limit: None,
+            }],
+            ..Default::default()
+        };
+        let resolved = resolve_provider("openrouter", &settings).unwrap();
+        assert_eq!(resolved.known_models.len(), 2);
+        assert_eq!(resolved.model.as_deref(), Some("anthropic/claude-3.5-sonnet"));
+        let model = effective_model(
+            &resolved,
+            &FakeProvider {
+                models: vec!["ignored"],
+                panics_on_list: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(model, "anthropic/claude-3.5-sonnet");
+    }
+
+    #[test]
     fn list_resolved_providers_always_includes_every_manifest_preset_once() {
         let settings = LlmSettings {
             active_provider_id: None,
@@ -325,6 +364,7 @@ mod tests {
                 base_url: None,
                 model: Some("pinned-model".to_string()),
                 trusted_cert_pem: None,
+                known_models: vec![],
                 limit: None,
             }],
             debug_logging: false,
@@ -351,6 +391,7 @@ mod tests {
                 base_url: Some("https://example.com/v1".to_string()),
                 model: None,
                 trusted_cert_pem: None,
+                known_models: vec![],
                 limit: None,
             }],
             debug_logging: false,
@@ -376,6 +417,7 @@ mod tests {
                 base_url: None,
                 model: None,
                 trusted_cert_pem: None,
+                known_models: vec![],
                 limit: None,
             }],
             debug_logging: false,
@@ -399,6 +441,7 @@ mod tests {
             is_system: true,
             model: Some("pinned-model".to_string()),
             trusted_cert_pem: None,
+            known_models: vec![],
             limit: None,
         };
         let provider = FakeProvider { models: vec![], panics_on_list: true };
@@ -415,6 +458,7 @@ mod tests {
             is_system: true,
             model: None,
             trusted_cert_pem: None,
+            known_models: vec![],
             limit: None,
         };
         let provider = FakeProvider { models: vec!["model-a", "model-b"], panics_on_list: false };
@@ -431,6 +475,7 @@ mod tests {
             is_system: true,
             model: None,
             trusted_cert_pem: None,
+            known_models: vec![],
             limit: None,
         };
         let provider = FakeProvider { models: vec![], panics_on_list: false };
@@ -442,11 +487,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None, limit: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None, limit: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None },
         );
         assert_eq!(settings.providers.len(), 1);
         assert_eq!(settings.providers[0].label.as_deref(), Some("Second"));
@@ -457,11 +502,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None },
+            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None },
+            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None },
         );
         assert_eq!(settings.providers.len(), 2);
     }
@@ -470,7 +515,7 @@ mod tests {
     fn remove_provider_config_clears_active_id_when_it_matches() {
         let mut settings = LlmSettings {
             active_provider_id: Some("a".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
             tool_call_logging: true,
@@ -488,7 +533,7 @@ mod tests {
     fn remove_provider_config_leaves_active_id_alone_when_it_does_not_match() {
         let mut settings = LlmSettings {
             active_provider_id: Some("b".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, limit: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
             tool_call_logging: true,

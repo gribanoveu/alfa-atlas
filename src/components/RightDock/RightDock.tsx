@@ -319,6 +319,7 @@ export function RightDock({
           <ToolWindowHeader label={TOOL_DEFS.assistant.label} onHide={onHide} />
           <div className="tool-window-body">
             <AssistantPanel
+              panelActive={showAssistant}
               onOpenSettings={assistant.onOpenSettings}
               specsRepoInfo={assistant.specsRepoInfo}
               docsRoot={assistant.docsRoot}

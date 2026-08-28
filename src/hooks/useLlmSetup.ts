@@ -107,6 +107,7 @@ export function useLlmSetup() {
         label: existing?.label ?? null,
         baseUrl: existing?.baseUrl ?? null,
         model: existing?.model ?? null,
+        knownModels: existing?.knownModels ?? [],
         trustedCertPem: existing?.trustedCertPem ?? null,
         limit: existing?.limit ?? null,
         ...patch,

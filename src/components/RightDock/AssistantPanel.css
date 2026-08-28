@@ -280,6 +280,12 @@
   word-break: break-word;
 }
 
+.assistant-model-select .clone-select-option.is-disabled {
+  opacity: 0.65;
+  cursor: default;
+  pointer-events: none;
+}
+
 
 /* =========================================================
    Index status

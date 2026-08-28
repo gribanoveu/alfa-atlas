@@ -1381,6 +1381,16 @@ export function formatToolArguments(argumentsJson: string): string {
 export const AUTO_MODEL_VALUE = "";
 export const AUTO_MODEL_LABEL = "Авто (первая доступная)";
 
+/** Placeholder for the manual model-id field — OpenRouter-style slugs. */
+export const CUSTOM_MODEL_PLACEHOLDER = "anthropic/claude-3.5-sonnet";
+
+/** Shown under the manual model field in Settings. */
+export const CUSTOM_MODEL_HINT =
+  "Добавьте одну или несколько моделей в каталог — в чате можно будет переключаться между ними. Для OpenRouter укажите slug с openrouter.ai/models.";
+
+/** Shown in the chat picker when the provider has no saved catalog yet. */
+export const CHAT_MODEL_CATALOG_EMPTY_HINT = "Настройте модели в параметрах LLM";
+
 // Visible text lines in the chat compose box (fixed, not auto-growing —
 // see `AssistantPanel.css`'s `.assistant-chat-input` comment).
 export const CHAT_INPUT_ROWS = 3;

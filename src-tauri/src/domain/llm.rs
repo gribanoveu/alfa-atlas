@@ -58,6 +58,12 @@ pub struct LlmProviderConfig {
     /// fallback — see `services::llm_config::effective_model`.
     #[serde(default)]
     pub model: Option<String>,
+    /// User-curated model ids for the chat/settings pickers — populated
+    /// when the Settings tab refreshes the live `/models` list or saves a
+    /// manual slug (OpenRouter-style providers). The chat panel reads this
+    /// catalog instead of calling the provider API on every open.
+    #[serde(default)]
+    pub known_models: Vec<String>,
     /// Overrides the manifest's baked-in `trusted_cert_pem` for a system
     /// provider (and takes priority over it — see
     /// `services::llm_config::resolve_provider`), or supplies one outright
@@ -214,6 +220,8 @@ pub struct ResolvedLlmProvider {
     /// model name.
     pub model: Option<String>,
     pub trusted_cert_pem: Option<String>,
+    /// Saved model ids for the picker UI — see `LlmProviderConfig::known_models`.
+    pub known_models: Vec<String>,
     /// Token limits for whichever model `model` names — informational only,
     /// `None` when the provider (system or custom) doesn't specify one.
     pub limit: Option<ModelLimit>,

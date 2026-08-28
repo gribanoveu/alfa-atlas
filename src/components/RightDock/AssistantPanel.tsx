@@ -79,6 +79,10 @@ type AssistantPanelProps = {
     conversationMode?: ConversationMode;
   } | null;
   onAssistantDraftHandled?: () => void;
+  /** True while the assistant tool window is visible in the right dock —
+   * used to re-fetch LLM provider config (model catalog + active pin) when
+   * the user opens chat after changing settings elsewhere. */
+  panelActive?: boolean;
 };
 
 /** This panel is the assistant's actual interaction surface. It owns
@@ -118,6 +122,7 @@ export function AssistantPanel({
   onAssistantSendHandled,
   assistantDraftRequest,
   onAssistantDraftHandled,
+  panelActive = true,
 }: AssistantPanelProps) {
   const {
     config: embeddingConfig,
@@ -134,7 +139,14 @@ export function AssistantPanel({
     setMode: setAccessMode,
     refresh: refreshAccessMode,
   } = useAiAccessMode();
-  const { settings, providers, hasApiKeyMap, updateProviderConfig, loadModels } = useLlmSetup();
+  const { settings, providers, hasApiKeyMap, updateProviderConfig, refresh: refreshLlmSetup } =
+    useLlmSetup();
+
+  useEffect(() => {
+    if (panelActive) {
+      void refreshLlmSetup();
+    }
+  }, [panelActive, refreshLlmSetup]);
   // Session-scoped, like `accessMode`: survives switching between chats but
   // isn't persisted per chat or to disk — resets only on app restart. A
   // manual `ChatModeSelect` click and an approved `requestModeSwitch` tool
@@ -359,7 +371,7 @@ export function AssistantPanel({
                 refreshAccessMode={refreshAccessMode}
                 activeProvider={activeProvider}
                 updateProviderConfig={updateProviderConfig}
-                loadModels={loadModels}
+                refreshLlmSetup={refreshLlmSetup}
                 followUpSuggestionsEnabled={!(settings?.followUpSuggestionsDisabled ?? false)}
                 taskDoneSoundEnabled={settings?.taskDoneSoundEnabled ?? true}
                 needAnswerSoundEnabled={settings?.needAnswerSoundEnabled ?? true}

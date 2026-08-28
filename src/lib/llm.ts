@@ -12,6 +12,8 @@ export type LlmProviderConfig = {
   label: string | null;
   baseUrl: string | null;
   model: string | null;
+  /** Saved model ids for the picker — populated from Settings. */
+  knownModels: string[];
   trustedCertPem: string | null;
   limit: ModelLimit | null;
 };
@@ -74,6 +76,7 @@ export type ResolvedLlmProvider = {
   baseUrl: string;
   isSystem: boolean;
   model: string | null;
+  knownModels: string[];
   trustedCertPem: string | null;
   limit: ModelLimit | null;
 };
@@ -226,6 +229,12 @@ export function hasLlmApiKey(providerId: string): Promise<boolean> {
  * picker and to auto-select the first entry when no explicit pin exists. */
 export function listLlmModels(providerId: string): Promise<LlmModelInfo[]> {
   return invoke<LlmModelInfo[]>("llm_list_models", { providerId });
+}
+
+/** Deduped union — used when persisting a refreshed or manually typed model
+ * id into the provider's saved catalog (`knownModels`). */
+export function mergeKnownModels(existing: string[], additions: string[]): string[] {
+  return [...new Set([...existing, ...additions.map((id) => id.trim()).filter(Boolean)])];
 }
 
 /** Sends one trivial message and returns the reply text — the manual,

@@ -37,6 +37,7 @@ mod tests {
             is_system: true,
             model: None,
             trusted_cert_pem: trusted_cert_pem.map(|s| s.to_string()),
+            known_models: vec![],
             limit: None,
         }
     }

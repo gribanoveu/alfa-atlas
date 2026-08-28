@@ -2,8 +2,8 @@ import { AlertCircle, Check, CheckCircle2, ChevronDown, ChevronRight, RefreshCw,
 import { useEffect, useRef, useState } from "react";
 import { toMessage } from "../../lib/errors";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
-import { AUTO_MODEL_LABEL, AUTO_MODEL_VALUE } from "../../lib/assistantConfig";
-import type { LlmModelInfo } from "../../lib/llm";
+import { AUTO_MODEL_LABEL, AUTO_MODEL_VALUE, CUSTOM_MODEL_HINT, CUSTOM_MODEL_PLACEHOLDER } from "../../lib/assistantConfig";
+import { mergeKnownModels } from "../../lib/llm";
 import "../Welcome/CloneRepoModal.css";
 import "./LlmTab.css";
 
@@ -55,11 +55,11 @@ export function LlmTab() {
   const expanded = providers.find((p) => p.id === expandedId) ?? null;
 
   const [baseUrlDraft, setBaseUrlDraft] = useState("");
+  const [newModelDraft, setNewModelDraft] = useState("");
   const [certDraft, setCertDraft] = useState("");
   const [certOpen, setCertOpen] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState(false);
-  const [models, setModels] = useState<LlmModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -83,7 +83,7 @@ export function LlmTab() {
   // keeps the intent explicit).
   useEffect(() => {
     setBaseUrlDraft(expanded?.baseUrl ?? "");
-    setModels([]);
+    setNewModelDraft("");
     setModelsError(null);
     setTestResult(null);
     setModelSelectOpen(false);
@@ -138,12 +138,35 @@ export function LlmTab() {
     void updateProviderConfig(expanded.id, { model: value === AUTO_MODEL_VALUE ? null : value });
   };
 
+  const handleAddModelToCatalog = async () => {
+    if (!expanded) return;
+    const trimmed = newModelDraft.trim();
+    if (!trimmed) return;
+    const existingKnown =
+      settings?.providers.find((p) => p.id === expanded.id)?.knownModels ?? expanded.knownModels ?? [];
+    const knownModels = mergeKnownModels(existingKnown, [trimmed]);
+    const patch: { knownModels: string[]; model?: string } = { knownModels };
+    if (!expanded.model) {
+      patch.model = trimmed;
+    }
+    await updateProviderConfig(expanded.id, patch);
+    setNewModelDraft("");
+  };
+
   const handleLoadModels = async () => {
     if (!expanded) return;
     setModelsLoading(true);
     setModelsError(null);
     try {
-      setModels(await loadModels(expanded.id));
+      const fetched = await loadModels(expanded.id);
+      const existingKnown =
+        settings?.providers.find((p) => p.id === expanded.id)?.knownModels ?? expanded.knownModels ?? [];
+      await updateProviderConfig(expanded.id, {
+        knownModels: mergeKnownModels(
+          existingKnown,
+          fetched.map((m) => m.id),
+        ),
+      });
     } catch (e) {
       setModelsError(toMessage(e));
     } finally {
@@ -251,7 +274,7 @@ export function LlmTab() {
 
                   <div className="clone-modal-field">
                     <span className="clone-modal-label" id="llm-model-label">
-                      Модель
+                      Активная модель
                     </span>
                     <div className="llm-model-row">
                       <div className="clone-select" ref={modelSelectRef}>
@@ -282,7 +305,7 @@ export function LlmTab() {
                             >
                               <span className="clone-select-path">{AUTO_MODEL_LABEL}</span>
                             </button>
-                            {provider.model && !models.some((m) => m.id === provider.model) ? (
+                            {provider.model && !provider.knownModels.includes(provider.model) ? (
                               <button
                                 type="button"
                                 role="option"
@@ -293,16 +316,16 @@ export function LlmTab() {
                                 <span className="clone-select-path">{provider.model}</span>
                               </button>
                             ) : null}
-                            {models.map((m) => (
+                            {provider.knownModels.map((id) => (
                               <button
-                                key={m.id}
+                                key={id}
                                 type="button"
                                 role="option"
-                                aria-selected={m.id === provider.model}
-                                className={`clone-select-option${m.id === provider.model ? " is-active" : ""}`}
-                                onClick={() => handleSelectModel(m.id)}
+                                aria-selected={id === provider.model}
+                                className={`clone-select-option${id === provider.model ? " is-active" : ""}`}
+                                onClick={() => handleSelectModel(id)}
                               >
-                                <span className="clone-select-path">{m.id}</span>
+                                <span className="clone-select-path">{id}</span>
                               </button>
                             ))}
                           </div>
@@ -311,14 +334,73 @@ export function LlmTab() {
                       <button
                         type="button"
                         className="llm-model-refresh"
-                        disabled={modelsLoading}
-                        title={modelsLoading ? "Загрузка списка моделей…" : "Обновить список моделей"}
-                        aria-label={modelsLoading ? "Загрузка списка моделей…" : "Обновить список моделей"}
+                        disabled={modelsLoading || busy}
+                        title={modelsLoading ? "Загрузка списка моделей…" : "Загрузить модели с API в каталог"}
+                        aria-label={modelsLoading ? "Загрузка списка моделей…" : "Загрузить модели с API в каталог"}
                         onClick={() => void handleLoadModels()}
                       >
                         <RefreshCw size={15} className={modelsLoading ? "spin" : ""} aria-hidden />
                       </button>
                     </div>
+                  </div>
+
+                  <div className="clone-modal-field">
+                    <span className="clone-modal-label" id="llm-model-catalog-label">
+                      Каталог моделей
+                    </span>
+                    <div className="llm-model-add-row">
+                      <input
+                        className="clone-modal-input"
+                        type="text"
+                        placeholder={CUSTOM_MODEL_PLACEHOLDER}
+                        value={newModelDraft}
+                        disabled={busy}
+                        aria-labelledby="llm-model-catalog-label"
+                        onChange={(event) => setNewModelDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void handleAddModelToCatalog();
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="settings-btn primary llm-model-add-btn"
+                        disabled={busy || !newModelDraft.trim()}
+                        onClick={() => void handleAddModelToCatalog()}
+                      >
+                        Добавить
+                      </button>
+                    </div>
+                    {provider.knownModels.length > 0 ? (
+                      <ul className="llm-model-catalog" aria-labelledby="llm-model-catalog-label">
+                        {provider.knownModels.map((id) => {
+                          const isActive = id === provider.model;
+                          return (
+                            <li key={id} className="llm-model-catalog-row">
+                              <button
+                                type="button"
+                                className={`llm-model-catalog-item${isActive ? " is-active" : ""}`}
+                                aria-pressed={isActive}
+                                disabled={busy}
+                                onClick={() => void handleSelectModel(id)}
+                              >
+                                <span className="llm-model-catalog-id">{id}</span>
+                                {isActive ? (
+                                  <span className="llm-model-catalog-badge">активна</span>
+                                ) : null}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <p className="settings-hint settings-hint-compact llm-model-catalog-empty">
+                        Каталог пуст — добавьте модель выше или загрузите с API.
+                      </p>
+                    )}
+                    <p className="settings-hint settings-hint-compact">{CUSTOM_MODEL_HINT}</p>
                   </div>
                   {modelsError ? <p className="settings-hint llm-inline-error">{modelsError}</p> : null}
 

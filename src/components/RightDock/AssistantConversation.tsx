@@ -8,13 +8,14 @@ import {
   AUTO_MODEL_LABEL,
   AUTO_MODEL_VALUE,
   CHAT_INPUT_ROWS,
+  CHAT_MODEL_CATALOG_EMPTY_HINT,
   CONTEXT_NEAR_LIMIT_RATIO,
   PLAN_EXECUTION_START_TEXT,
 } from "../../lib/assistantConfig";
 import type { AssistantSuggestion } from "../../lib/assistantConfig";
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, Task } from "../../lib/aiTools";
 import { groupBlocksForRender, type ChatMessage } from "../../lib/chatBlocks";
-import type { LlmModelInfo, LlmProviderConfig, PendingApproval, ResolvedLlmProvider } from "../../lib/llm";
+import type { LlmProviderConfig, PendingApproval, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
@@ -331,7 +332,10 @@ type AssistantConversationProps = {
   refreshAccessMode: () => Promise<void>;
   activeProvider: ResolvedLlmProvider | null;
   updateProviderConfig: (providerId: string, patch: Partial<Omit<LlmProviderConfig, "id">>) => Promise<void>;
-  loadModels: (providerId: string) => Promise<LlmModelInfo[]>;
+  /** Re-fetch provider config from the backend — called when the model
+   * picker opens so the catalog reflects Settings changes made since the
+   * panel was last visible. */
+  refreshLlmSetup: () => Promise<void>;
   /** Settings-tab toggle (`LlmSettings.followUpSuggestionsDisabled`,
    * inverted) — gates only the follow-up chip bar shown above the
    * transcript once a branch is picked. Never affects the empty-state
@@ -405,7 +409,7 @@ export function AssistantConversation({
   refreshAccessMode,
   activeProvider,
   updateProviderConfig,
-  loadModels,
+  refreshLlmSetup,
   followUpSuggestionsEnabled,
   taskDoneSoundEnabled,
   needAnswerSoundEnabled,
@@ -642,14 +646,13 @@ export function AssistantConversation({
   const didMountScrollRef = useRef(false);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
 
-  // Model picker — reuses the same `.clone-select*` trigger/menu pattern as
-  // `LlmTab.tsx`'s own model dropdown (and writes to the same underlying
-  // setting via `updateProviderConfig`), so picking a model here or in
-  // Settings stays a single source of truth.
-  const [models, setModels] = useState<LlmModelInfo[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
+  // Model picker — reads the catalog saved in Settings (`knownModels`).
+  // Choosing a model persists `LlmProviderConfig.model` (the provider-wide
+  // default used by chat, selection AI, compaction, and memory extraction —
+  // see `llm_session::resolve` / `effective_model` on the Rust side).
   const [modelSelectOpen, setModelSelectOpen] = useState(false);
   const modelSelectRef = useRef<HTMLDivElement>(null);
+  const catalogModels = activeProvider?.knownModels ?? [];
 
   // Sticks the transcript to its bottom edge as new messages/deltas arrive,
   // the way Cursor/ChatGPT do — but only while the user hasn't scrolled up
@@ -755,7 +758,6 @@ export function AssistantConversation({
   // provider itself changes, so a stale list from a different provider
   // never briefly shows.
   useEffect(() => {
-    setModels([]);
     setModelSelectOpen(false);
   }, [providerId]);
 
@@ -778,12 +780,8 @@ export function AssistantConversation({
   const handleToggleModelSelect = () => {
     setModelSelectOpen((open) => {
       const next = !open;
-      if (next && models.length === 0 && !modelsLoading && providerId) {
-        setModelsLoading(true);
-        loadModels(providerId)
-          .then(setModels)
-          .catch(() => {})
-          .finally(() => setModelsLoading(false));
+      if (next) {
+        void refreshLlmSetup();
       }
       return next;
     });
@@ -792,6 +790,8 @@ export function AssistantConversation({
   const handleSelectModel = (value: string) => {
     if (!providerId) return;
     setModelSelectOpen(false);
+    // Provider-wide pin — not per-chat — so every LLM caller that resolves
+    // this provider id picks up the same model on its next request.
     void updateProviderConfig(providerId, { model: value === AUTO_MODEL_VALUE ? null : value });
   };
 
@@ -1026,12 +1026,12 @@ export function AssistantConversation({
               >
                 <span className="clone-select-path">{AUTO_MODEL_LABEL}</span>
               </button>
-              {modelsLoading ? (
-                <div className="clone-select-option">
-                  <span className="clone-select-path">Загрузка…</span>
+              {catalogModels.length === 0 && !activeProvider?.model ? (
+                <div className="clone-select-option is-disabled" aria-disabled>
+                  <span className="clone-select-path">{CHAT_MODEL_CATALOG_EMPTY_HINT}</span>
                 </div>
               ) : null}
-              {activeProvider?.model && !models.some((m) => m.id === activeProvider.model) ? (
+              {activeProvider?.model && !catalogModels.includes(activeProvider.model) ? (
                 <button
                   type="button"
                   role="option"
@@ -1042,16 +1042,16 @@ export function AssistantConversation({
                   <span className="clone-select-path">{activeProvider.model}</span>
                 </button>
               ) : null}
-              {models.map((m) => (
+              {catalogModels.map((id) => (
                 <button
-                  key={m.id}
+                  key={id}
                   type="button"
                   role="option"
-                  aria-selected={m.id === activeProvider?.model}
-                  className={`clone-select-option${m.id === activeProvider?.model ? " is-active" : ""}`}
-                  onClick={() => handleSelectModel(m.id)}
+                  aria-selected={id === activeProvider?.model}
+                  className={`clone-select-option${id === activeProvider?.model ? " is-active" : ""}`}
+                  onClick={() => handleSelectModel(id)}
                 >
-                  <span className="clone-select-path">{m.id}</span>
+                  <span className="clone-select-path">{id}</span>
                 </button>
               ))}
             </div>
