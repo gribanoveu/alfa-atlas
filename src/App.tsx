@@ -777,9 +777,11 @@ function App() {
                     onSendToAssistant={(record) => {
                       // Nothing was paused on this artifact (it was opened
                       // from the utilities panel, or its turn ended long
-                      // ago) — announce it instead, and the assistant picks
-                      // it up with the `artifact` tool.
-                      assistant.sendAssistantPrompt(
+                      // ago) — drop the announcement into the composer
+                      // rather than sending it: the user should see (and
+                      // can still edit) what's about to go to the model,
+                      // not have it fire the instant they click Отправить.
+                      assistant.insertAssistantDraft(
                         `Я заполнил артефакт \`${record.id}\` — «${record.title}». Прочитай его тулом artifact (op: "read") и используй в документации.`,
                       );
                     }}
