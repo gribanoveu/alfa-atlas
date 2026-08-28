@@ -16,11 +16,24 @@ import {
 } from "../lib/llm";
 import { toMessage } from "../lib/errors";
 
+const llmSetupChangeListeners = new Set<() => void>();
+
+/** Notifies every mounted `useLlmSetup` instance to re-fetch from the
+ * backend. Settings, the assistant panel, and `App.tsx` each hold their
+ * own hook instance (they're not visible simultaneously, but a change
+ * made in Settings must reach the chat panel once it closes). */
+function notifyLlmSetupChanged() {
+  for (const listener of llmSetupChangeListeners) listener();
+}
+
 /**
  * LLM provider registry state, in one place — mirrors `useEmbeddingSetup`'s
  * shape (fetch-on-mount `refresh`, optimistic per-field updates, a
  * separate write-only API-key setter), adapted for a *list* of providers
  * (system presets + custom) rather than one global provider choice.
+ *
+ * Multiple components mount this hook independently; successful mutations
+ * broadcast via `notifyLlmSetupChanged` so their copies stay aligned.
  */
 export function useLlmSetup() {
   const [settings, setSettingsState] = useState<LlmSettings | null>(null);
@@ -51,6 +64,16 @@ export function useLlmSetup() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const onChange = () => {
+      void refresh();
+    };
+    llmSetupChangeListeners.add(onChange);
+    return () => {
+      llmSetupChangeListeners.delete(onChange);
+    };
+  }, [refresh]);
+
   const selectActiveProvider = useCallback(
     async (providerId: string) => {
       if (!settings) return;
@@ -60,6 +83,7 @@ export function useLlmSetup() {
       try {
         await setLlmSettings(next);
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -92,6 +116,7 @@ export function useLlmSetup() {
         await upsertLlmProvider(next);
         await refresh();
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -110,6 +135,7 @@ export function useLlmSetup() {
       try {
         await setLlmSettings(next);
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -128,6 +154,7 @@ export function useLlmSetup() {
       try {
         await setLlmSettings(next);
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -146,6 +173,7 @@ export function useLlmSetup() {
       try {
         await setLlmSettings(next);
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -164,6 +192,7 @@ export function useLlmSetup() {
       try {
         await setLlmSettings(next);
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -182,6 +211,7 @@ export function useLlmSetup() {
       try {
         await setLlmSettings(next);
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -200,6 +230,7 @@ export function useLlmSetup() {
       try {
         await setLlmSettings(next);
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -218,6 +249,7 @@ export function useLlmSetup() {
       try {
         await setLlmSettings(next);
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -234,6 +266,7 @@ export function useLlmSetup() {
         await removeLlmProvider(providerId);
         await refresh();
         setError(null);
+        notifyLlmSetupChanged();
       } catch (e) {
         setError(toMessage(e));
       } finally {
@@ -249,6 +282,7 @@ export function useLlmSetup() {
       await setLlmApiKey(providerId, apiKey);
       setHasApiKeyMap((prev) => ({ ...prev, [providerId]: true }));
       setError(null);
+      notifyLlmSetupChanged();
     } catch (e) {
       setError(toMessage(e));
     } finally {
