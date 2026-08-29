@@ -419,6 +419,49 @@ include::./fetchAusnTransactions.puml[]
         fs::remove_dir_all(&root).ok();
     }
 
+    /// The folder `createDirectory` scaffolds is the state every method
+    /// documentation starts from, and the skill tells the model to run `check`
+    /// on what it wrote — so the untouched scaffold has to pass the checker on
+    /// its own, before a single placeholder is replaced.
+    #[test]
+    fn the_rest_endpoint_scaffold_passes_the_standards_checker() {
+        let root = temp_dir();
+        crate::services::docs_fs::create_rest_endpoint_folder(
+            root.to_str().unwrap(),
+            "getUserProfile",
+            "getUserProfile",
+        )
+        .unwrap();
+        // `../CompositeException.adoc` lives one level above the method
+        // folder, exactly as the standard's include expects.
+        fs::write(
+            root.join("CompositeException.adoc"),
+            "Общее описание формата ошибки.\n",
+        )
+        .unwrap();
+
+        let report = check_repository(&root, &StandardsRuleConfig::default());
+        let folder = report
+            .folders
+            .iter()
+            .find(|f| f.method_name == "getUserProfile")
+            .expect("scaffolded folder is discovered");
+        let failed: Vec<&str> = folder
+            .findings
+            .iter()
+            .filter(|f| !f.passed)
+            .map(|f| f.rule_id.as_str())
+            .collect();
+        assert!(
+            failed.is_empty(),
+            "scaffold fails {failed:?} ({}/{})",
+            folder.score,
+            folder.max_score
+        );
+        assert!(folder.passed);
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn input_exception_marker_autopasses_k4_rules() {
         let root = temp_dir();

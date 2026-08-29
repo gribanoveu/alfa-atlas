@@ -4,6 +4,15 @@
 <summary><b>Пример запроса</b></summary>
 ++++
 
+// { Эндпоинт первой строкой: его ищет читатель, и по нему проверка K.4.4
+//   убеждается, что пример запроса действительно описывает вызов }
+[discrete#endpoint]
+=== Endpoint
+
+`POST /api/{organizationId}/documents`
+
+Хост: `https://corp-gateway-test`
+
 [discrete#path-params]
 === Параметры пути 
 |===
