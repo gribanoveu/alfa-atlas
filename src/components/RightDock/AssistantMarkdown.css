@@ -109,11 +109,14 @@
 .markdown-code-block {
   position: relative;
   margin: 8px 0;
-  padding: 8px 36px 8px 0;
   border-radius: 6px;
   background: var(--bg-0);
   border: 1px solid var(--border);
+}
+
+.markdown-code-scroll {
   overflow-x: auto;
+  padding: 8px 36px 8px 0;
 }
 
 .markdown-code-body {
@@ -150,6 +153,7 @@
   position: absolute;
   top: 6px;
   right: 6px;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;

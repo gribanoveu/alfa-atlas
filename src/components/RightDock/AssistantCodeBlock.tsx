@@ -103,24 +103,26 @@ export function AssistantCodeBlock({ className, children }: AssistantCodeBlockPr
   const showHighlight = !incomplete && tokens !== null;
 
   return (
-    <pre className="markdown-code-block" data-lang={rawLang}>
+    <div className="markdown-code-block" data-lang={rawLang}>
       <CodeCopyButton code={source} />
-      <div className="markdown-code-body">
-        {lines.map((line, index) => (
-          <div key={index} className="markdown-code-line">
-            <span className="markdown-code-gutter" aria-hidden>
-              {index + 1}
-            </span>
-            <code className="markdown-code-content">
-              {showHighlight ? (
-                <HighlightedCodeLine tokens={tokens[index]} />
-              ) : (
-                <PlainCodeLine line={line} />
-              )}
-            </code>
-          </div>
-        ))}
+      <div className="markdown-code-scroll">
+        <div className="markdown-code-body">
+          {lines.map((line, index) => (
+            <div key={index} className="markdown-code-line">
+              <span className="markdown-code-gutter" aria-hidden>
+                {index + 1}
+              </span>
+              <code className="markdown-code-content">
+                {showHighlight ? (
+                  <HighlightedCodeLine tokens={tokens[index]} />
+                ) : (
+                  <PlainCodeLine line={line} />
+                )}
+              </code>
+            </div>
+          ))}
+        </div>
       </div>
-    </pre>
+    </div>
   );
 }
