@@ -29,13 +29,12 @@ export type LlmProviderConfig = {
   /** Saved model ids for the picker — populated from Settings. */
   knownModels: string[];
   trustedCertPem: string | null;
-  limit: ModelLimit | null;
+  limit: ProviderTokenLimit | null;
 };
 
-// Mirrors `domain::llm::ModelLimit` — informational token limits for
-// whichever model is currently configured, not enforced anywhere in this
-// client.
-export type ModelLimit = {
+// Mirrors `domain::llm::ProviderTokenLimit` — provider-level token limits
+// (not per model id), informational only.
+export type ProviderTokenLimit = {
   context: number;
   output: number;
 };
@@ -72,7 +71,7 @@ export type LlmSettings = {
   needAnswerSoundEnabled: boolean;
   /** On by default. When off, the status-bar rate-limit chip is hidden
    * and completion tokens are not recorded. The baked-in rule lives in
-   * `system_providers.json` `rateLimits`. */
+   * `system_providers.yaml` `rateLimits`. */
   rateLimitEnabled: boolean;
   /** On by default. When on, a background extractor runs after each
    * persisted chat turn and writes lasting facts to OptMem. */
@@ -92,7 +91,7 @@ export type ResolvedLlmProvider = {
   model: string | null;
   knownModels: string[];
   trustedCertPem: string | null;
-  limit: ModelLimit | null;
+  limit: ProviderTokenLimit | null;
 };
 
 // Mirrors `domain::llm::LlmModelInfo`.

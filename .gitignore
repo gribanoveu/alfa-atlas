@@ -23,6 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 
+src-tauri/.secrets/
+
 ./idea/*
 ./vscode/*
 .DS_*

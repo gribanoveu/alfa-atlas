@@ -1374,10 +1374,9 @@ export function formatToolArguments(argumentsJson: string): string {
   }
 }
 
-// Synthetic model-picker value/label for "no explicit pin — resolve the
-// first live model at request time" (mirrors `domain::llm::
-// LlmProviderConfig.model: null`). Shared by the Settings model dropdown
-// and the assistant panel's own picker so both offer the identical choice.
+// Synthetic model-picker value/label for "no explicit pin — on first use
+// the backend fetches `/models`, saves the first result, and reuses it
+// until cleared here". Shared by Settings and the assistant panel picker.
 export const AUTO_MODEL_VALUE = "";
 export const AUTO_MODEL_LABEL = "Авто (первая доступная)";
 
@@ -1396,7 +1395,7 @@ export const CHAT_MODEL_CATALOG_EMPTY_HINT = "Настройте модели в
 export const CHAT_INPUT_ROWS = 3;
 
 // The context-usage bar switches to its warning color once estimated usage
-// crosses this fraction of the active model's `limit.context`.
+// crosses this fraction of the active provider's `limit.context`.
 export const CONTEXT_NEAR_LIMIT_RATIO = 0.9;
 
 // `useLlmChat`'s proactive history-compaction pass (see

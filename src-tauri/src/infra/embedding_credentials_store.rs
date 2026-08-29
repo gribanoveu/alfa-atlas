@@ -5,6 +5,10 @@
 //! `commands::embeddings` ever returns the decrypted key back over IPC,
 //! only a boolean "is one set" status (`has_api_key`).
 //!
+//! When no user key is stored, `get_api_key` falls back to a compile-time
+//! key baked in by `build.rs` (`infra::bundled_secrets`) — see
+//! `docs/build-secrets.md`.
+//!
 //! No filesystem-touching tests here, matching `key_management.rs`'s own
 //! convention — `settings_dir()` resolves against the real `~/.atlas`, so
 //! only the pure crypto helpers it reuses are unit-tested (already covered
@@ -13,6 +17,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::infra::bundled_secrets;
 use crate::infra::key_management::{decrypt_private_key, encrypt_private_key, get_or_create_encryption_key};
 use crate::infra::settings_store;
 
@@ -21,6 +26,21 @@ const CREDENTIALS_FILE: &str = "embedding_credentials.enc";
 fn credentials_path() -> Result<PathBuf, String> {
     let dir = settings_store::settings_dir().map_err(|e| e.to_string())?;
     Ok(dir.join(CREDENTIALS_FILE))
+}
+
+fn load_user_key() -> Option<String> {
+    let path = credentials_path().ok()?;
+    if !path.exists() {
+        return None;
+    }
+    let encrypted = fs::read(&path).ok()?;
+    let key = get_or_create_encryption_key().ok()?;
+    let plain = decrypt_private_key(&encrypted, &key).ok()?;
+    String::from_utf8(plain).ok()
+}
+
+fn has_user_key() -> bool {
+    credentials_path().map(|p| p.exists()).unwrap_or(false)
 }
 
 pub fn save_api_key(api_key: &str) -> Result<(), String> {
@@ -47,29 +67,21 @@ pub fn save_api_key(api_key: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Decrypts and returns the stored API key, if any — for internal use when
-/// actually constructing a `RemoteEmbeddingProvider`, never returned from
-/// an IPC command.
+/// User override first, then compile-time bundled key from `build.rs`.
 pub fn get_api_key() -> Option<String> {
-    let path = credentials_path().ok()?;
-    if !path.exists() {
-        return None;
-    }
-    let encrypted = fs::read(&path).ok()?;
-    let key = get_or_create_encryption_key().ok()?;
-    let plain = decrypt_private_key(&encrypted, &key).ok()?;
-    String::from_utf8(plain).ok()
+    load_user_key().or_else(|| bundled_secrets::EMBEDDING_API_KEY.map(str::to_owned))
 }
 
 pub fn has_api_key() -> bool {
-    credentials_path().map(|p| p.exists()).unwrap_or(false)
+    has_user_key() || bundled_secrets::EMBEDDING_API_KEY.is_some()
 }
 
-/// Idempotent — removing a key that was never set is a success, same as
-/// `infra::llm_credentials_store::delete_api_key`'s no-op on a missing
-/// provider id. Callers reach for this to *ensure* no key is stored, and a
-/// second click on the Settings "Удалить ключ" button must not surface an
-/// error just because the first one already did the work.
+pub fn has_bundled_api_key() -> bool {
+    bundled_secrets::EMBEDDING_API_KEY.is_some()
+}
+
+/// Idempotent — removes only the user-stored override; a compile-time
+/// bundled key (if any) remains available via `get_api_key`.
 pub fn delete_api_key() -> Result<(), String> {
     let path = credentials_path()?;
     if path.exists() {

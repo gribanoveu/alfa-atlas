@@ -74,7 +74,7 @@ pub struct RateLimitSnapshot {
     pub samples: Vec<RateLimitSample>,
 }
 
-/// Baked-in rate-limit rule from `assets/llm/system_providers.json`
+/// Baked-in rate-limit rule from `assets/llm/system_providers.yaml`
 /// (`rateLimits` array). A downstream fork edits that file — not this
 /// module — to change caps, hours, or which provider is limited.
 #[derive(Debug, Clone, PartialEq, Deserialize)]

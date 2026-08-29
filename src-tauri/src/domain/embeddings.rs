@@ -41,7 +41,7 @@ pub enum EmbeddingProviderKind {
 /// `null`s (meaning "use the Local BGE-M3 provider") and fill them later
 /// without touching Rust.
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EmbeddingPreset {
     #[serde(default)]
     pub base_url: Option<String>,
@@ -105,6 +105,10 @@ pub struct ResolvedEmbeddingConfig {
     pub remote_trusted_cert_pem: Option<String>,
     pub remote_system_id: Option<String>,
     pub remote_disable_tls_verification: bool,
+    /// `true` when this build ships a compile-time embedding API key
+    /// (see `infra::bundled_secrets` / `build.rs`) — the Settings UI
+    /// hides manual key entry when this is set.
+    pub api_key_bundled: bool,
 }
 
 impl Default for ResolvedEmbeddingConfig {
@@ -117,6 +121,7 @@ impl Default for ResolvedEmbeddingConfig {
             remote_trusted_cert_pem: None,
             remote_system_id: None,
             remote_disable_tls_verification: false,
+            api_key_bundled: false,
         }
     }
 }

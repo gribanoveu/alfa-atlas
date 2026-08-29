@@ -237,42 +237,50 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
               onBlur={() => void updateConfig({ remoteSystemId: systemId.trim() || null })}
             />
           </label>
-          <label className="clone-modal-field">
-            <span className="clone-modal-label">API ключ</span>
-            <input
-              className="clone-modal-input"
-              type="password"
-              placeholder={hasApiKey ? "Ключ сохранён — введите новый, чтобы заменить" : "sk-..."}
-              value={apiKeyInput}
-              disabled={busy}
-              onChange={(event) => setApiKeyInput(event.target.value)}
-            />
-          </label>
-          <div className="settings-actions">
-            <button
-              type="button"
-              className="settings-btn primary"
-              disabled={busy || !apiKeyInput.trim()}
-              onClick={() => void handleSaveApiKey()}
-            >
-              {apiKeySaved ? "Сохранено!" : "Сохранить ключ"}
-            </button>
-            {hasApiKey && (
-              <button
-                type="button"
-                className="settings-btn"
-                disabled={busy}
-                onClick={() => void handleDeleteApiKey()}
-              >
-                Удалить ключ
-              </button>
-            )}
-            {hasApiKey ? (
-              <span className="embeddings-status-badge ok">Ключ задан</span>
-            ) : (
-              <span className="embeddings-status-badge">Ключ не задан</span>
-            )}
-          </div>
+          {config.apiKeyBundled ? (
+            <p className="settings-hint settings-hint-compact">
+              <span className="embeddings-status-badge ok">Ключ встроен в сборку</span>
+            </p>
+          ) : (
+            <>
+              <label className="clone-modal-field">
+                <span className="clone-modal-label">API ключ</span>
+                <input
+                  className="clone-modal-input"
+                  type="password"
+                  placeholder={hasApiKey ? "Ключ сохранён — введите новый, чтобы заменить" : "sk-..."}
+                  value={apiKeyInput}
+                  disabled={busy}
+                  onChange={(event) => setApiKeyInput(event.target.value)}
+                />
+              </label>
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="settings-btn primary"
+                  disabled={busy || !apiKeyInput.trim()}
+                  onClick={() => void handleSaveApiKey()}
+                >
+                  {apiKeySaved ? "Сохранено!" : "Сохранить ключ"}
+                </button>
+                {hasApiKey && (
+                  <button
+                    type="button"
+                    className="settings-btn"
+                    disabled={busy}
+                    onClick={() => void handleDeleteApiKey()}
+                  >
+                    Удалить ключ
+                  </button>
+                )}
+                {hasApiKey ? (
+                  <span className="embeddings-status-badge ok">Ключ задан</span>
+                ) : (
+                  <span className="embeddings-status-badge">Ключ не задан</span>
+                )}
+              </div>
+            </>
+          )}
         </>
       )}
 

@@ -555,6 +555,7 @@ pub(crate) mod tests {
             remote_trusted_cert_pem: None,
             remote_system_id: None,
             remote_disable_tls_verification: false,
+            api_key_bundled: false,
         }
     }
 

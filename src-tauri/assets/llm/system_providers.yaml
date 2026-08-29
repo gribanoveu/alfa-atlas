@@ -1,0 +1,83 @@
+# API keys MUST NOT go here — see docs/build-secrets.md (embedding) and Settings (LLM).
+
+llm:
+  - id: alfagen
+    label: AlfaGen
+    baseUrl: https://alfagen.moscow.alfaintra.net/continue-dev/v1
+    # Provider-level token caps — apply regardless of which model is selected.
+    limit:
+      context: 200000
+      output: 30000
+    trustedCertPem: |
+      -----BEGIN CERTIFICATE-----
+      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
+      NhXqyzBsDdL1HDu7xFdxVI8=
+      -----END CERTIFICATE-----
+
+embedding:
+  baseUrl: https://agenapisandbox.moscow.alfaintra.net/internal/llm/v1
+  model: BAAI/bge-m3
+  dimensions: 1024
+  systemId: sanduser
+  disableTlsVerification: true
+  trustedCertPem: |
+    -----BEGIN CERTIFICATE-----
+    MIIDzjCCAragAwIBAgIQXmzr3WRUi6ZL6nG9DfauzTANBgkqhkiG9w0BAQsFADBZ
+    MRMwEQYKCZImiZPyLGQBGRYDbG9jMRYwFAYKCZImiZPyLGQBGRYGYWQyMDEyMRMw
+    EQYKCZImiZPyLGQBGRYDbXNrMRUwEwYDVQQDEwxUQ0EtU1VCLVJPT1QwHhcNMTcw
+    NTE5MDYzODQ0WhcNMzcwNTE5MDY0ODQyWjBZMRMwEQYKCZImiZPyLGQBGRYDbG9j
+    MRYwFAYKCZImiZPyLGQBGRYGYWQyMDEyMRMwEQYKCZImiZPyLGQBGRYDbXNrMRUw
+    EwYDVQQDEwxUQ0EtU1VCLVJPT1QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK
+    AoIBAQCfF7CmXQsO0GfBKNUXP5+O4vv409wonwt+TmpGvUSp64iocm/1cU2fmsTK
+    W5Fl8FyKsTyEYJ6WwxUMgtm3vDMBgSVsE3LBSlOfgrGms/5bdGvxX/CqvmBYaj2N
+    Lgoop9mWnoqOwafZnEYsE/YUndZWzgOA+Z/3BNs14unmDuPT6DaQ/dmlfGmq5xQQ
+    JakLKTZPl8fFfKhM2Qftv8rPCHmzBb0kXpisfv7iPKxfuWk/4Ta3V25VjpTzQTIC
+    BS1r2e103HSECuE65QlY64tGrtAuDViHE+24It+G0x4MxKxcu8+LxsBN5KurD8Ni
+    bx4fK3XS8zPMv41zuaMsKtsQBy6pAgMBAAGjgZEwgY4wEwYJKwYBBAGCNxQCBAYe
+    BABDAEEwDgYDVR0PAQH/BAQDAgGGMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYE
+    FKDuMmpyYkm3tewkA04MJie6xFpgMBIGCSsGAQQBgjcVAQQFAgMFAAUwIwYJKwYB
+    BAGCNxUCBBYEFJ4GnMgy7/zYLBbXLRlu7VXi0b+zMA0GCSqGSIb3DQEBCwUAA4IB
+    AQBPqcTMM5vwlF+0m/8DiyRsdY++SJk3DCSkKQ/CL+afOWmk9xu+28liY7faROsM
+    a0J+vS2rpDqahJ5Tq/mXfrawhbBxNcBz6jZ7I2fwlA2YlE29EuhoW5C3ngnTxxmS
+    vc9vVCF06ek42QXG9XisEUfqgbB4K7LYRxi/PX6pkwytUqDRtYsG1GtuCD6V++cC
+    f4sX2i1Dc2kF0SwQhpcUaU+TBe56kpzeTQ71BnafGx3zHKI1Iubv5sPhW9hJ0tbV
+    JtARIgn4jh7kYPvgHA5sr3tiKD+xq+oewW6AqFT+JB0JXKGSsKyJpsZavyZcS+su
+    RpUYAhHBr3VCJe4FUqLo+Hke
+    -----END CERTIFICATE-----
+
+rateLimits:
+  - providerId: alfagen
+    policyId: evc-sliding-window
+    label: EVC
+    limit: 60000
+    windowMinutes: 30
+    workFromHour: null
+    workToHour: null
+    timezoneOffsetHours: 3

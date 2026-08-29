@@ -112,8 +112,10 @@ pub fn list_resolved_providers(settings: &LlmSettings) -> Vec<ResolvedLlmProvide
 
 /// The model a `ChatRequest` should actually use: the resolved pin
 /// (explicit override, or the manifest's `default_model`) when one exists
-/// — no network call — otherwise the first result from the provider's live
-/// `list_models()`.
+/// — no network call. When unpinned, fetches `/models` once, persists the
+/// first result as a settings-layer override, and returns it — subsequent
+/// calls reuse that pin until the user clears it (Settings → «Авто») or
+/// removes the provider override.
 pub fn effective_model(
     resolved: &ResolvedLlmProvider,
     provider: &dyn LlmProvider,
@@ -121,14 +123,30 @@ pub fn effective_model(
     if let Some(model) = &resolved.model {
         return Ok(model.clone());
     }
-    provider
+    let model = provider
         .list_models()?
         .into_iter()
         .next()
         .map(|m| m.id)
         .ok_or_else(|| {
             LlmError::Provider(format!("provider \"{}\" returned no models", resolved.id))
-        })
+        })?;
+    pin_provider_model(&resolved.id, &model).map_err(|e| LlmError::Message(e.to_string()))?;
+    Ok(model)
+}
+
+/// Writes `model` into the settings-layer override for `provider_id`,
+/// preserving any other override fields already stored for that id.
+pub fn pin_provider_model(provider_id: &str, model: &str) -> Result<(), SettingsError> {
+    let mut settings = load_llm_settings()?;
+    let existing = settings.providers.iter().find(|p| p.id == provider_id).cloned();
+    let mut config = existing.unwrap_or_else(|| LlmProviderConfig {
+        id: provider_id.to_string(),
+        ..Default::default()
+    });
+    config.model = Some(model.to_string());
+    upsert_provider_config(&mut settings, config);
+    save_llm_settings(settings)
 }
 
 /// Replaces `config.id`'s existing entry, or appends a new one. Pure — kept
@@ -156,7 +174,7 @@ pub fn remove_provider_config(settings: &mut LlmSettings, provider_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmModelInfo, ModelLimit};
+    use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmModelInfo};
 
     struct FakeProvider {
         models: Vec<&'static str>,
@@ -223,15 +241,19 @@ mod tests {
         assert_eq!(resolved.label, "AlfaGen");
         assert_eq!(resolved.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
         assert!(resolved.is_system);
-        // AlfaGen ships with a pinned manifest default model (see
-        // `system_providers.json`) so the no-override case resolves to
-        // that, not `None`.
-        assert_eq!(resolved.model.as_deref(), Some("DeepSeek-V4-Flash"));
+        // AlfaGen ships without a manifest default model — the no-override
+        // case resolves to `None`; `effective_model` fetches `/models` once
+        // and persists the first result until the user changes it.
+        assert_eq!(resolved.model, None);
         // AlfaGen ships with a real bundled trust cert (its internal CA
         // root) — see `infra::llm_provider_manifest`'s doc comment — so the
         // no-override case must still resolve to *that*, not `None`.
         assert!(resolved.trusted_cert_pem.unwrap().contains("BEGIN CERTIFICATE"));
-        assert_eq!(resolved.limit, Some(ModelLimit { context: 1_000_000, output: 30_000 }));
+        assert_eq!(
+            resolved.limit,
+            llm_provider_manifest::find_system_provider("alfagen")
+                .and_then(|p| p.limit)
+        );
     }
 
     #[test]
@@ -259,7 +281,7 @@ mod tests {
         // Unset override fields still fall back to the manifest.
         assert_eq!(resolved.label, "AlfaGen");
         assert_eq!(resolved.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
-        assert_eq!(resolved.limit, Some(ModelLimit { context: 1_000_000, output: 30_000 }));
+        assert_eq!(resolved.limit, llm_provider_manifest::find_system_provider("alfagen").and_then(|p| p.limit));
         // Set override fields win.
         assert_eq!(resolved.model.as_deref(), Some("gpt-4o-mini"));
         assert!(resolved.trusted_cert_pem.unwrap().starts_with("-----BEGIN CERTIFICATE-----"));
@@ -433,6 +455,22 @@ mod tests {
     }
 
     #[test]
+    fn pin_provider_model_preserves_manifest_provider_limit() {
+        use crate::infra::settings_store::test_support::with_temp_home;
+
+        with_temp_home(|| {
+            pin_provider_model("alfagen", "other-model").unwrap();
+            let settings = load_llm_settings().unwrap();
+            let resolved = resolve_provider("alfagen", &settings).unwrap();
+            assert_eq!(resolved.model.as_deref(), Some("other-model"));
+            assert_eq!(
+                resolved.limit,
+                llm_provider_manifest::find_system_provider("alfagen").and_then(|p| p.limit)
+            );
+        });
+    }
+
+    #[test]
     fn effective_model_skips_list_models_when_pinned() {
         let resolved = ResolvedLlmProvider {
             id: "alfagen".to_string(),
@@ -450,20 +488,33 @@ mod tests {
     }
 
     #[test]
-    fn effective_model_fetches_and_takes_the_first_live_model_when_unpinned() {
-        let resolved = ResolvedLlmProvider {
-            id: "alfagen".to_string(),
-            label: "AlfaGen".to_string(),
-            base_url: "https://example.internal".to_string(),
-            is_system: true,
-            model: None,
-            trusted_cert_pem: None,
-            known_models: vec![],
-            limit: None,
-        };
-        let provider = FakeProvider { models: vec!["model-a", "model-b"], panics_on_list: false };
-        let model = effective_model(&resolved, &provider).unwrap();
-        assert_eq!(model, "model-a");
+    fn effective_model_pins_first_live_model_and_reuses_it() {
+        use crate::infra::settings_store::test_support::with_temp_home;
+
+        with_temp_home(|| {
+            let resolved = ResolvedLlmProvider {
+                id: "alfagen".to_string(),
+                label: "AlfaGen".to_string(),
+                base_url: "https://example.internal".to_string(),
+                is_system: true,
+                model: None,
+                trusted_cert_pem: None,
+                known_models: vec![],
+                limit: None,
+            };
+            let provider =
+                FakeProvider { models: vec!["model-a", "model-b"], panics_on_list: false };
+            assert_eq!(effective_model(&resolved, &provider).unwrap(), "model-a");
+
+            let settings = load_llm_settings().unwrap();
+            let entry = settings.providers.iter().find(|p| p.id == "alfagen").unwrap();
+            assert_eq!(entry.model.as_deref(), Some("model-a"));
+
+            let resolved = resolve_provider("alfagen", &settings).unwrap();
+            assert_eq!(resolved.model.as_deref(), Some("model-a"));
+            let provider = FakeProvider { models: vec![], panics_on_list: true };
+            assert_eq!(effective_model(&resolved, &provider).unwrap(), "model-a");
+        });
     }
 
     #[test]

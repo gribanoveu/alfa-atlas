@@ -15,6 +15,8 @@ export type ResolvedEmbeddingConfig = {
   remoteTrustedCertPem: string | null;
   remoteSystemId: string | null;
   remoteDisableTlsVerification: boolean;
+  /** True when this build ships a compile-time embedding API key. */
+  apiKeyBundled: boolean;
 };
 
 // Mirrors `domain::embeddings::EmbeddingProviderConfig` — the settings-layer

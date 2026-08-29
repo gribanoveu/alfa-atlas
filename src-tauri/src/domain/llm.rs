@@ -23,15 +23,14 @@ use thiserror::Error;
 
 use super::ai_tools::{Task, ToolResult};
 
-/// Token limits for a provider's (currently configured) model — informational
-/// only, not enforced anywhere in this client; surfaced to the frontend so
-/// the chat UI can show the user what they're working with. Not fetched
-/// live (OpenAI-compatible `/models` responses don't reliably carry this),
-/// so it travels through the same manifest-preset/settings-override layers
-/// as `model` itself.
+/// Token limits for an LLM **provider** (endpoint), not for an individual
+/// model id — informational only, not enforced in this client; shown in the
+/// chat UI context bar. Independent of which model is pinned or auto-selected.
+/// Not fetched live from `/models`; comes from the manifest preset and/or a
+/// settings-layer provider override.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ModelLimit {
+pub struct ProviderTokenLimit {
     pub context: u32,
     pub output: u32,
 }
@@ -54,8 +53,9 @@ pub struct LlmProviderConfig {
     #[serde(default)]
     pub base_url: Option<String>,
     /// An explicit pin, overriding both the manifest's `default_model` and
-    /// the "ask the live `/models` endpoint, take the first result"
-    /// fallback — see `services::llm_config::effective_model`.
+    /// the auto-pin from the first live `/models` fetch — see
+    /// `services::llm_config::effective_model`. Set to `None` («Авто» in
+    /// Settings) to clear the pin and re-discover on next use.
     #[serde(default)]
     pub model: Option<String>,
     /// User-curated model ids for the chat/settings pickers — populated
@@ -76,7 +76,7 @@ pub struct LlmProviderConfig {
     /// when `Some`" merge as the other fields, see
     /// `services::llm_config::resolve_provider`.
     #[serde(default)]
-    pub limit: Option<ModelLimit>,
+    pub limit: Option<ProviderTokenLimit>,
 }
 
 /// Persisted globally (`AppSettings.llm`) — provider configuration is not
@@ -136,7 +136,7 @@ pub struct LlmSettings {
     pub need_answer_sound_enabled: bool,
     /// On by default. When off, the status-bar rate-limit chip is hidden
     /// and completion tokens are not recorded — the baked-in rule from
-    /// `system_providers.json` `rateLimits` stays unused until this is
+    /// `system_providers.yaml` `rateLimits` stays unused until this is
     /// turned back on.
     #[serde(default = "default_true")]
     pub rate_limit_enabled: bool,
@@ -181,9 +181,9 @@ impl Default for LlmSettings {
 /// `infra::llm_provider_manifest`) — what a downstream fork edits to bake
 /// in its own provider(s), or empties out to ship with none, without
 /// touching any `.rs` file. Deserialize-only: this is read from the
-/// embedded JSON at startup and never written back out.
+/// embedded YAML at startup and never written back out.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LlmProviderPreset {
     pub id: String,
     pub label: String,
@@ -193,7 +193,7 @@ pub struct LlmProviderPreset {
     #[serde(default)]
     pub trusted_cert_pem: Option<String>,
     #[serde(default)]
-    pub limit: Option<ModelLimit>,
+    pub limit: Option<ProviderTokenLimit>,
 }
 
 /// The merged, ready-to-use view of one provider — a manifest preset (if
@@ -222,9 +222,9 @@ pub struct ResolvedLlmProvider {
     pub trusted_cert_pem: Option<String>,
     /// Saved model ids for the picker UI — see `LlmProviderConfig::known_models`.
     pub known_models: Vec<String>,
-    /// Token limits for whichever model `model` names — informational only,
-    /// `None` when the provider (system or custom) doesn't specify one.
-    pub limit: Option<ModelLimit>,
+    /// Provider-level token limits (see `ProviderTokenLimit`) — unchanged
+    /// when the pinned model changes.
+    pub limit: Option<ProviderTokenLimit>,
 }
 
 /// A chat message's speaker. `Tool` is needed even though nothing sends one

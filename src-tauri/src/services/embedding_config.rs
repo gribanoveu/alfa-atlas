@@ -6,6 +6,7 @@ use crate::domain::embeddings::{
     EmbeddingPreset, EmbeddingProviderConfig, EmbeddingProviderKind, ResolvedEmbeddingConfig,
 };
 use crate::domain::settings::SettingsError;
+use crate::infra::embedding_credentials_store;
 use crate::infra::embedding_provider_manifest;
 use crate::infra::settings_store;
 
@@ -74,6 +75,7 @@ pub fn resolve_with(
             .remote_disable_tls_verification
             .or(preset.disable_tls_verification)
             .unwrap_or(false),
+        api_key_bundled: embedding_credentials_store::has_bundled_api_key(),
     }
 }
 

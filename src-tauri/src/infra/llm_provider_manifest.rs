@@ -1,6 +1,6 @@
 //! Compiled-in registry of "system" LLM providers, embedded at compile
 //! time from the top-level `llm` section of
-//! `assets/llm/system_providers.json` (the same file that holds the
+//! `assets/llm/system_providers.yaml` (the same file that holds the
 //! global embedding preset under `embedding` and baked-in API rate-limit
 //! rules under `rateLimits`).
 //!
@@ -30,7 +30,7 @@ use crate::domain::llm::LlmProviderPreset;
 use crate::domain::llm_rate_limit::RateLimitPreset;
 use serde::Deserialize;
 
-const MANIFEST_JSON: &str = include_str!("../../assets/llm/system_providers.json");
+const MANIFEST_YAML: &str = include_str!("../../assets/llm/system_providers.yaml");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,8 +48,8 @@ struct SystemProvidersManifest {
 }
 
 static PARSED: LazyLock<SystemProvidersManifest> = LazyLock::new(|| {
-    serde_json::from_str(MANIFEST_JSON)
-        .expect("bundled system_providers.json must be a valid SystemProvidersManifest")
+    serde_yaml::from_str(MANIFEST_YAML)
+        .expect("bundled system_providers.yaml must be a valid SystemProvidersManifest")
 });
 
 /// Every system provider this build ships with — `&[]` if the `llm`
@@ -89,7 +89,7 @@ mod tests {
         assert_eq!(alfagen.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
         assert_eq!(
             alfagen.limit,
-            Some(crate::domain::llm::ModelLimit { context: 1_000_000, output: 30_000 })
+            Some(crate::domain::llm::ProviderTokenLimit { context: 200_000, output: 30_000 })
         );
     }
 
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn empty_llm_array_is_valid() {
         let manifest: SystemProvidersManifest =
-            serde_json::from_str(r#"{"llm":[],"embedding":{}}"#).unwrap();
+            serde_yaml::from_str("llm: []\nembedding: {}\n").unwrap();
         assert!(manifest.llm.is_empty());
         assert!(manifest.rate_limits.is_empty());
     }
@@ -144,5 +144,21 @@ mod tests {
         assert_eq!(preset.work_from_hour, None);
         assert_eq!(preset.work_to_hour, None);
         assert_eq!(preset.timezone_offset_hours, 3);
+    }
+
+    #[test]
+    fn manifest_rejects_api_key_field_in_llm_preset() {
+        let err = serde_yaml::from_str::<SystemProvidersManifest>(
+            r#"
+llm:
+  - id: x
+    label: X
+    baseUrl: https://example.com/v1
+    apiKey: secret
+embedding: {}
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 }

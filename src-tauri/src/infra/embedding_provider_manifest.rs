@@ -1,5 +1,5 @@
 //! Compiled-in embedding provider preset, embedded at compile time from
-//! the top-level `embedding` section of `assets/llm/system_providers.json`
+//! the top-level `embedding` section of `assets/llm/system_providers.yaml`
 //! (the same file that holds the LLM presets under `llm`).
 //!
 //! Embedding (rather than shipping as a Tauri bundle resource) sidesteps
@@ -18,7 +18,7 @@ use crate::domain::embeddings::EmbeddingPreset;
 use crate::domain::llm::LlmProviderPreset;
 use serde::Deserialize;
 
-const MANIFEST_JSON: &str = include_str!("../../assets/llm/system_providers.json");
+const MANIFEST_YAML: &str = include_str!("../../assets/llm/system_providers.yaml");
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -31,8 +31,8 @@ struct SystemProvidersManifest {
 }
 
 static PARSED: LazyLock<EmbeddingPreset> = LazyLock::new(|| {
-    let manifest: SystemProvidersManifest = serde_json::from_str(MANIFEST_JSON)
-        .expect("bundled system_providers.json must be a valid SystemProvidersManifest");
+    let manifest: SystemProvidersManifest = serde_yaml::from_str(MANIFEST_YAML)
+        .expect("bundled system_providers.yaml must be a valid SystemProvidersManifest");
     manifest.embedding
 });
 
@@ -97,5 +97,20 @@ mod tests {
             model: Some("emb".into()),
             ..Default::default()
         }));
+    }
+
+    #[test]
+    fn manifest_rejects_api_key_field_in_embedding_preset() {
+        let err = serde_yaml::from_str::<SystemProvidersManifest>(
+            r#"
+llm: []
+embedding:
+  baseUrl: https://example.com/v1
+  model: m
+  apiKey: secret
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 }

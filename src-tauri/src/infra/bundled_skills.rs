@@ -2,7 +2,7 @@
 //!
 //! Each skill is a `SKILL.md` under `src-tauri/assets/skills/<name>/`,
 //! loaded with `include_str!` the same way `llm_provider_manifest` bakes in
-//! `system_providers.json`. Companion files (if any) are listed beside the
+//! `system_providers.yaml`. Companion files (if any) are listed beside the
 //! markdown; v1 bundled skills are instruction-only.
 
 use crate::domain::agent_skills::{parse_skill_md, ParsedSkill, SkillError, SkillMeta, SkillSource};

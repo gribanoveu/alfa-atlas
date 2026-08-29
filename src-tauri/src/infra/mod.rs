@@ -1,3 +1,4 @@
+pub mod bundled_secrets;
 pub mod artifact_store;
 pub mod bundled_skills;
 pub mod chat_store;
