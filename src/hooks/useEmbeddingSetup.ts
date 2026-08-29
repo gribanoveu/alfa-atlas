@@ -202,24 +202,39 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
   }, [refresh]);
 
   const updateConfig = useCallback(
-    async (patch: Partial<ResolvedEmbeddingConfig>) => {
+    async (
+      patch: Partial<Omit<ResolvedEmbeddingConfig, "remoteRequestHeaders">> & {
+        remoteRequestHeaders?: Record<string, string> | null;
+      },
+    ) => {
       if (!config) return;
       // Optimistic resolved view for the UI; persist as an explicit override
       // (every field pinned) so Settings edits keep winning over the bundled
       // preset until the user clears them.
-      const next: ResolvedEmbeddingConfig = { ...config, ...patch };
+      const next: ResolvedEmbeddingConfig = {
+        ...config,
+        ...patch,
+        remoteRequestHeaders:
+          patch.remoteRequestHeaders === null
+            ? config.remoteRequestHeaders
+            : (patch.remoteRequestHeaders ?? config.remoteRequestHeaders),
+      };
       const override: EmbeddingProviderConfig = {
         kind: next.kind,
         remoteBaseUrl: next.remoteBaseUrl,
         remoteModel: next.remoteModel,
         remoteTrustedCertPem: next.remoteTrustedCertPem,
-        remoteSystemId: next.remoteSystemId,
+        remoteRequestHeaders:
+          patch.remoteRequestHeaders !== undefined
+            ? patch.remoteRequestHeaders
+            : next.remoteRequestHeaders,
         remoteDisableTlsVerification: next.remoteDisableTlsVerification,
       };
       setConfigState(next);
       setBusy(true);
       try {
         await setEmbeddingConfig(override);
+        await refresh();
         setError(null);
       } catch (e) {
         setError(toMessage(e));

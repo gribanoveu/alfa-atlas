@@ -446,6 +446,8 @@ pub fn embedded_count(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProviderKind};
     use crate::infra::embedding_credentials_store;
@@ -553,7 +555,7 @@ pub(crate) mod tests {
             remote_model: Some(model.to_string()),
             remote_dimensions: Some(768),
             remote_trusted_cert_pem: None,
-            remote_system_id: None,
+            remote_request_headers: HashMap::new(),
             remote_disable_tls_verification: false,
             api_key_bundled: false,
         }

@@ -8,12 +8,14 @@
 //! `sync, rt, macros, time` (no `net`), and a request-per-call blocking
 //! client doesn't justify expanding that.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::llm::{
     ChatRequest, ChatResponse, ChatStreamResult, ChatUsage, LlmError, LlmModelInfo, LlmProvider,
-    LlmRole, LlmToolCall,
+    LlmRole, LlmToolCall, REQUEST_HEADER_VALUE_UUID,
 };
 use crate::infra::http_agent;
 
@@ -369,11 +371,22 @@ pub struct OpenAiCompatibleProvider {
     agent: ureq::Agent,
     base_url: String,
     api_key: String,
+    request_headers: HashMap<String, String>,
 }
 
 impl OpenAiCompatibleProvider {
-    pub fn new(agent: ureq::Agent, base_url: String, api_key: String) -> Self {
-        Self { agent, base_url, api_key }
+    pub fn new(
+        agent: ureq::Agent,
+        base_url: String,
+        api_key: String,
+        request_headers: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            agent,
+            base_url,
+            api_key,
+            request_headers,
+        }
     }
 
     fn chat_url(&self) -> String {
@@ -431,6 +444,7 @@ impl OpenAiCompatibleProvider {
             stream_options,
         }
     }
+
 }
 
 impl LlmProvider for OpenAiCompatibleProvider {
@@ -464,10 +478,14 @@ impl LlmProvider for OpenAiCompatibleProvider {
     ) -> Result<ChatStreamResult, LlmError> {
         let body = self.build_body(&request, true);
 
-        let response = self
+        let mut request = self
             .agent
             .post(self.chat_url())
-            .header("Authorization", &format!("Bearer {}", self.api_key))
+            .header("Authorization", &format!("Bearer {}", self.api_key));
+        for (name, value) in &self.request_headers {
+            request = request.header(name.as_str(), resolve_header_value(value));
+        }
+        let response = request
             .send_json(&body)
             .map_err(|e| LlmError::Http(e.to_string()))?;
         let response = ok_or_status_error(response)?;
@@ -517,10 +535,14 @@ impl LlmProvider for OpenAiCompatibleProvider {
     }
 
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
-        let mut response = self
+        let mut request = self
             .agent
             .get(self.models_url())
-            .header("Authorization", &format!("Bearer {}", self.api_key))
+            .header("Authorization", &format!("Bearer {}", self.api_key));
+        for (name, value) in &self.request_headers {
+            request = request.header(name.as_str(), resolve_header_value(value));
+        }
+        let mut response = request
             .call()
             .map_err(|e| LlmError::Http(e.to_string()))?;
         response = ok_or_status_error(response)?;
@@ -534,6 +556,14 @@ impl LlmProvider for OpenAiCompatibleProvider {
     }
 }
 
+fn resolve_header_value(value: &str) -> String {
+    if value == REQUEST_HEADER_VALUE_UUID {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,6 +573,7 @@ mod tests {
             build_agent(None).unwrap(),
             base_url.to_string(),
             "key".to_string(),
+            HashMap::new(),
         )
     }
 

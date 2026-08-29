@@ -87,10 +87,8 @@ mod tests {
         let alfagen = find_system_provider("alfagen").expect("alfagen preset present");
         assert_eq!(alfagen.label, "AlfaGen");
         assert_eq!(alfagen.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
-        assert_eq!(
-            alfagen.limit,
-            Some(crate::domain::llm::ProviderTokenLimit { context: 200_000, output: 30_000 })
-        );
+        assert_eq!(alfagen.limit, Some(crate::domain::llm::ProviderTokenLimit { context: 200_000, output: 30_000 }));
+        assert_eq!(alfagen.request_headers, None);
     }
 
     /// AlfaGen sits behind an internal corporate CA (`Alfa-Bank ST CA

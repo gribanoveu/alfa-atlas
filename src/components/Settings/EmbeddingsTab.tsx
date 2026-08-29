@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
-import type { EmbeddingProviderKind } from "../../lib/embeddings";
+import {
+  EMBEDDING_REQUEST_HEADER_UUID,
+  formatRequestHeaders,
+  parseRequestHeaders,
+  type EmbeddingProviderKind,
+} from "../../lib/embeddings";
 import "../Welcome/CloneRepoModal.css";
 import "./EmbeddingsTab.css";
 
@@ -61,7 +66,7 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
 
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
-  const [systemId, setSystemId] = useState("");
+  const [headersDraft, setHeadersDraft] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -70,7 +75,7 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
     if (!config) return;
     setBaseUrl(config.remoteBaseUrl ?? "");
     setModel(config.remoteModel ?? "");
-    setSystemId(config.remoteSystemId ?? "");
+    setHeadersDraft(formatRequestHeaders(config.remoteRequestHeaders));
   }, [config]);
 
   if (!config) {
@@ -226,17 +231,23 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
             />
           </label>
           <label className="clone-modal-field">
-            <span className="clone-modal-label">System ID</span>
-            <input
-              className="clone-modal-input"
-              type="text"
-              placeholder="sanduser (если требует API)"
-              value={systemId}
+            <span className="clone-modal-label">HTTP-заголовки</span>
+            <textarea
+              className="llm-cert-textarea"
+              placeholder={`systemId: sanduser\nmessageId: ${EMBEDDING_REQUEST_HEADER_UUID}`}
+              value={headersDraft}
               disabled={busy}
-              onChange={(event) => setSystemId(event.target.value)}
-              onBlur={() => void updateConfig({ remoteSystemId: systemId.trim() || null })}
+              onChange={(event) => setHeadersDraft(event.target.value)}
+              onBlur={() =>
+                void updateConfig({ remoteRequestHeaders: parseRequestHeaders(headersDraft) })
+              }
             />
           </label>
+          <p className="settings-hint settings-hint-compact">
+            По одному заголовку на строку: <code>Имя: значение</code>. Значение{" "}
+            <code>{EMBEDDING_REQUEST_HEADER_UUID}</code> подставляет новый UUID на каждый запрос.
+            Пустое поле — наследовать из bundled-конфига.
+          </p>
           {config.apiKeyBundled ? (
             <p className="settings-hint settings-hint-compact">
               <span className="embeddings-status-badge ok">Ключ встроен в сборку</span>

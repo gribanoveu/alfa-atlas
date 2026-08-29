@@ -22,11 +22,14 @@ pub fn provider_for(
         agent,
         resolved.base_url.clone(),
         api_key,
+        resolved.request_headers.clone(),
     )))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     fn resolved(trusted_cert_pem: Option<&str>) -> ResolvedLlmProvider {
@@ -39,6 +42,7 @@ mod tests {
             trusted_cert_pem: trusted_cert_pem.map(|s| s.to_string()),
             known_models: vec![],
             limit: None,
+            request_headers: HashMap::new(),
         }
     }
 

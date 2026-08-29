@@ -100,7 +100,12 @@ export function useLlmSetup() {
    * entry up field by field, same as `useEmbeddingSetup`'s `updateConfig`
    * merges onto the single existing config. */
   const updateProviderConfig = useCallback(
-    async (providerId: string, patch: Partial<Omit<LlmProviderConfig, "id">>) => {
+    async (
+      providerId: string,
+      patch: Partial<Omit<LlmProviderConfig, "id" | "requestHeaders">> & {
+        requestHeaders?: Record<string, string> | null;
+      },
+    ) => {
       const existing = settings?.providers.find((p) => p.id === providerId);
       const next: LlmProviderConfig = {
         id: providerId,
@@ -110,6 +115,7 @@ export function useLlmSetup() {
         knownModels: existing?.knownModels ?? [],
         trustedCertPem: existing?.trustedCertPem ?? null,
         limit: existing?.limit ?? null,
+        requestHeaders: existing?.requestHeaders ?? null,
         ...patch,
       };
       setBusy(true);

@@ -4,7 +4,9 @@
 //! Pure, no I/O beyond `settings_store` — see `infra::llm_provider_manifest`
 //! for where the compiled-in preset data itself comes from.
 
-use crate::domain::llm::{LlmError, LlmProvider, LlmProviderConfig, LlmSettings, ResolvedLlmProvider};
+use std::collections::HashMap;
+
+use crate::domain::llm::{LlmError, LlmProvider, LlmProviderConfig, LlmProviderPreset, LlmSettings, ResolvedLlmProvider};
 use crate::domain::settings::SettingsError;
 use crate::infra::llm_provider_manifest;
 use crate::infra::settings_store;
@@ -46,6 +48,7 @@ pub fn resolve_provider(
             .or_else(|| preset.trusted_cert_pem.clone());
         let limit = over.and_then(|o| o.limit).or(preset.limit);
         let known_models = over.map(|o| o.known_models.clone()).unwrap_or_default();
+        let request_headers = resolve_request_headers(preset, over);
         return Ok(ResolvedLlmProvider {
             id: id.to_string(),
             label,
@@ -55,6 +58,7 @@ pub fn resolve_provider(
             trusted_cert_pem,
             known_models,
             limit,
+            request_headers,
         });
     }
 
@@ -73,7 +77,24 @@ pub fn resolve_provider(
         trusted_cert_pem: over.trusted_cert_pem.clone(),
         known_models: over.known_models.clone(),
         limit: over.limit,
+        request_headers: resolve_request_headers_from_override(over),
     })
+}
+
+/// HTTP headers for LLM requests. Settings override replaces the preset
+/// map entirely when set; otherwise the bundled preset applies.
+pub fn resolve_request_headers(
+    preset: &LlmProviderPreset,
+    over: Option<&LlmProviderConfig>,
+) -> HashMap<String, String> {
+    if let Some(headers) = over.and_then(|o| o.request_headers.as_ref()) {
+        return headers.clone();
+    }
+    preset.request_headers.clone().unwrap_or_default()
+}
+
+fn resolve_request_headers_from_override(over: &LlmProviderConfig) -> HashMap<String, String> {
+    over.request_headers.clone().unwrap_or_default()
 }
 
 /// Every provider available for selection: one row per manifest preset
@@ -174,7 +195,7 @@ pub fn remove_provider_config(settings: &mut LlmSettings, provider_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmModelInfo};
+    use crate::domain::llm::{ChatRequest, ChatResponse, ChatStreamResult, LlmModelInfo, LlmProviderPreset, REQUEST_HEADER_VALUE_UUID};
 
     struct FakeProvider {
         models: Vec<&'static str>,
@@ -216,6 +237,7 @@ mod tests {
                 trusted_cert_pem: None,
                 known_models: vec![],
                 limit: None,
+                request_headers: None,
             }],
             ..Default::default()
         };
@@ -268,6 +290,7 @@ mod tests {
                 trusted_cert_pem: Some("-----BEGIN CERTIFICATE-----\n...".to_string()),
                 known_models: vec![],
                 limit: None,
+                request_headers: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -282,6 +305,7 @@ mod tests {
         assert_eq!(resolved.label, "AlfaGen");
         assert_eq!(resolved.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
         assert_eq!(resolved.limit, llm_provider_manifest::find_system_provider("alfagen").and_then(|p| p.limit));
+        assert!(resolved.request_headers.is_empty());
         // Set override fields win.
         assert_eq!(resolved.model.as_deref(), Some("gpt-4o-mini"));
         assert!(resolved.trusted_cert_pem.unwrap().starts_with("-----BEGIN CERTIFICATE-----"));
@@ -305,6 +329,7 @@ mod tests {
                 trusted_cert_pem: None,
                 known_models: vec![],
                 limit: None,
+                request_headers: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -329,6 +354,7 @@ mod tests {
                 trusted_cert_pem: None,
                 known_models: vec![],
                 limit: None,
+                request_headers: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -359,6 +385,7 @@ mod tests {
                     "openai/gpt-4o".to_string(),
                 ],
                 limit: None,
+                request_headers: None,
             }],
             ..Default::default()
         };
@@ -388,6 +415,7 @@ mod tests {
                 trusted_cert_pem: None,
                 known_models: vec![],
                 limit: None,
+                request_headers: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -415,6 +443,7 @@ mod tests {
                 trusted_cert_pem: None,
                 known_models: vec![],
                 limit: None,
+                request_headers: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -441,6 +470,7 @@ mod tests {
                 trusted_cert_pem: None,
                 known_models: vec![],
                 limit: None,
+                request_headers: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -481,6 +511,7 @@ mod tests {
             trusted_cert_pem: None,
             known_models: vec![],
             limit: None,
+            request_headers: HashMap::new(),
         };
         let provider = FakeProvider { models: vec![], panics_on_list: true };
         let model = effective_model(&resolved, &provider).unwrap();
@@ -501,6 +532,7 @@ mod tests {
                 trusted_cert_pem: None,
                 known_models: vec![],
                 limit: None,
+                request_headers: HashMap::new(),
             };
             let provider =
                 FakeProvider { models: vec!["model-a", "model-b"], panics_on_list: false };
@@ -528,6 +560,7 @@ mod tests {
             trusted_cert_pem: None,
             known_models: vec![],
             limit: None,
+            request_headers: HashMap::new(),
         };
         let provider = FakeProvider { models: vec![], panics_on_list: false };
         assert!(effective_model(&resolved, &provider).is_err());
@@ -538,11 +571,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None },
         );
         assert_eq!(settings.providers.len(), 1);
         assert_eq!(settings.providers[0].label.as_deref(), Some("Second"));
@@ -553,11 +586,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None },
+            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None },
+            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None },
         );
         assert_eq!(settings.providers.len(), 2);
     }
@@ -566,7 +599,7 @@ mod tests {
     fn remove_provider_config_clears_active_id_when_it_matches() {
         let mut settings = LlmSettings {
             active_provider_id: Some("a".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
             tool_call_logging: true,
@@ -584,7 +617,7 @@ mod tests {
     fn remove_provider_config_leaves_active_id_alone_when_it_does_not_match() {
         let mut settings = LlmSettings {
             active_provider_id: Some("b".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
             tool_call_logging: true,
@@ -595,5 +628,43 @@ mod tests {
         };
         remove_provider_config(&mut settings, "a");
         assert_eq!(settings.active_provider_id.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn settings_request_headers_override_replaces_preset() {
+        let preset = llm_provider_manifest::find_system_provider("alfagen").expect("alfagen");
+        let mut preset_with_headers = preset.clone();
+        preset_with_headers.request_headers = Some(HashMap::from([
+            ("systemId".into(), "preset".into()),
+            ("messageId".into(), REQUEST_HEADER_VALUE_UUID.into()),
+        ]));
+
+        let settings = LlmSettings {
+            providers: vec![LlmProviderConfig {
+                id: "alfagen".to_string(),
+                request_headers: Some(HashMap::from([("X-Custom".into(), "1".into())])),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let headers = resolve_request_headers(&preset_with_headers, settings.providers.first());
+        assert_eq!(headers.get("X-Custom").map(String::as_str), Some("1"));
+        assert!(!headers.contains_key("systemId"));
+    }
+
+    #[test]
+    fn preset_request_headers_apply_when_no_override() {
+        let preset = LlmProviderPreset {
+            id: "x".into(),
+            label: "X".into(),
+            base_url: "https://example.com/v1".into(),
+            default_model: None,
+            trusted_cert_pem: None,
+            limit: None,
+            request_headers: Some(HashMap::from([("systemId".into(), "sanduser".into())])),
+        };
+        let headers = resolve_request_headers(&preset, None);
+        assert_eq!(headers.get("systemId").map(String::as_str), Some("sanduser"));
     }
 }

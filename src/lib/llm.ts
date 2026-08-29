@@ -30,6 +30,8 @@ export type LlmProviderConfig = {
   knownModels: string[];
   trustedCertPem: string | null;
   limit: ProviderTokenLimit | null;
+  /** When set, replaces bundled preset headers entirely. `null` = inherit. */
+  requestHeaders: Record<string, string> | null;
 };
 
 // Mirrors `domain::llm::ProviderTokenLimit` — provider-level token limits
@@ -92,7 +94,33 @@ export type ResolvedLlmProvider = {
   knownModels: string[];
   trustedCertPem: string | null;
   limit: ProviderTokenLimit | null;
+  /** HTTP headers sent with chat/models requests (merged preset + override). */
+  requestHeaders: Record<string, string>;
 };
+
+/** Substituted with a fresh UUID on each request — mirrors Rust `$uuid`. */
+export const LLM_REQUEST_HEADER_UUID = "$uuid";
+
+export function formatLlmRequestHeaders(headers: Record<string, string> | null | undefined): string {
+  if (!headers) return "";
+  return Object.entries(headers)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join("\n");
+}
+
+export function parseLlmRequestHeaders(text: string): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const colon = trimmed.indexOf(":");
+    if (colon <= 0) continue;
+    const name = trimmed.slice(0, colon).trim();
+    const value = trimmed.slice(colon + 1).trim();
+    if (name) out[name] = value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 // Mirrors `domain::llm::LlmModelInfo`.
 export type LlmModelInfo = {

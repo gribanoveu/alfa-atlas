@@ -3,6 +3,7 @@
 //! `fastembed`, ONNX, `usearch`, or HTTP — those are `infra` concerns
 //! implementing `EmbeddingProvider`/the vector store against these types.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -25,6 +26,10 @@ pub struct Embedding(pub Vec<f32>);
 pub struct EmbeddingRecord {
     pub chunk_hash: blake3::Hash,
 }
+
+/// Substituted with a fresh UUID on each HTTP request when used as a
+/// header value in `request_headers` / `remote_request_headers`.
+pub const REQUEST_HEADER_VALUE_UUID: &str = "$uuid";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,7 +56,14 @@ pub struct EmbeddingPreset {
     pub dimensions: Option<usize>,
     #[serde(default)]
     pub trusted_cert_pem: Option<String>,
-    /// Alfa internal API: required `systemId` header on `/embeddings`.
+    /// Extra HTTP headers on `POST /embeddings` (header name → value).
+    /// Use `$uuid` as a value for a fresh UUID per request (see
+    /// `REQUEST_HEADER_VALUE_UUID`).
+    #[serde(default)]
+    pub request_headers: Option<HashMap<String, String>>,
+    /// Deprecated — use `requestHeaders` in the manifest. When set and
+    /// `request_headers` has no `systemId`, expands to `systemId` +
+    /// `messageId: $uuid` at resolve time.
     #[serde(default)]
     pub system_id: Option<String>,
     /// Skip TLS certificate validation — sandbox-only escape hatch when the
@@ -80,6 +92,11 @@ pub struct EmbeddingProviderConfig {
     pub remote_model: Option<String>,
     #[serde(default)]
     pub remote_trusted_cert_pem: Option<String>,
+    /// Replaces the bundled preset headers entirely when `Some`.
+    #[serde(default)]
+    pub remote_request_headers: Option<HashMap<String, String>>,
+    /// Deprecated — use `remoteRequestHeaders`. Ignored when
+    /// `remote_request_headers` is set.
     #[serde(default)]
     pub remote_system_id: Option<String>,
     #[serde(default)]
@@ -103,7 +120,9 @@ pub struct ResolvedEmbeddingConfig {
     /// provider's `local::DIMENSIONS` constant.
     pub remote_dimensions: Option<usize>,
     pub remote_trusted_cert_pem: Option<String>,
-    pub remote_system_id: Option<String>,
+    /// Merged HTTP headers for remote `/embeddings` (preset + override).
+    #[serde(default)]
+    pub remote_request_headers: HashMap<String, String>,
     pub remote_disable_tls_verification: bool,
     /// `true` when this build ships a compile-time embedding API key
     /// (see `infra::bundled_secrets` / `build.rs`) — the Settings UI
@@ -119,7 +138,7 @@ impl Default for ResolvedEmbeddingConfig {
             remote_model: None,
             remote_dimensions: None,
             remote_trusted_cert_pem: None,
-            remote_system_id: None,
+            remote_request_headers: HashMap::new(),
             remote_disable_tls_verification: false,
             api_key_bundled: false,
         }

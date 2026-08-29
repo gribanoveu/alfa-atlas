@@ -3,7 +3,13 @@ import { useEffect, useRef, useState } from "react";
 import { toMessage } from "../../lib/errors";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
 import { AUTO_MODEL_LABEL, AUTO_MODEL_VALUE, CUSTOM_MODEL_HINT, CUSTOM_MODEL_PLACEHOLDER } from "../../lib/assistantConfig";
-import { mergeKnownModels, resolveOpenAiCompatibleEndpoints } from "../../lib/llm";
+import {
+  formatLlmRequestHeaders,
+  LLM_REQUEST_HEADER_UUID,
+  mergeKnownModels,
+  parseLlmRequestHeaders,
+  resolveOpenAiCompatibleEndpoints,
+} from "../../lib/llm";
 import "../Welcome/CloneRepoModal.css";
 import "./LlmTab.css";
 
@@ -79,6 +85,7 @@ export function LlmTab() {
   const expanded = providers.find((p) => p.id === expandedId) ?? null;
 
   const [baseUrlDraft, setBaseUrlDraft] = useState("");
+  const [headersDraft, setHeadersDraft] = useState("");
   const [newModelDraft, setNewModelDraft] = useState("");
   const [certDraft, setCertDraft] = useState("");
   const [certOpen, setCertOpen] = useState(false);
@@ -107,6 +114,7 @@ export function LlmTab() {
   // keeps the intent explicit).
   useEffect(() => {
     setBaseUrlDraft(expanded?.baseUrl ?? "");
+    setHeadersDraft(formatLlmRequestHeaders(expanded?.requestHeaders));
     setNewModelDraft("");
     setModelsError(null);
     setTestResult(null);
@@ -430,6 +438,27 @@ export function LlmTab() {
                     <p className="settings-hint settings-hint-compact">{CUSTOM_MODEL_HINT}</p>
                   </div>
                   {modelsError ? <p className="settings-hint llm-inline-error">{modelsError}</p> : null}
+
+                  <label className="clone-modal-field">
+                    <span className="clone-modal-label">HTTP-заголовки</span>
+                    <textarea
+                      className="llm-cert-textarea"
+                      placeholder={`systemId: sanduser\nmessageId: ${LLM_REQUEST_HEADER_UUID}`}
+                      value={headersDraft}
+                      disabled={busy}
+                      onChange={(event) => setHeadersDraft(event.target.value)}
+                      onBlur={() =>
+                        void updateProviderConfig(provider.id, {
+                          requestHeaders: parseLlmRequestHeaders(headersDraft),
+                        })
+                      }
+                    />
+                  </label>
+                  <p className="settings-hint settings-hint-compact">
+                    По одному заголовку на строку: <code>Имя: значение</code>. Значение{" "}
+                    <code>{LLM_REQUEST_HEADER_UUID}</code> подставляет новый UUID на каждый запрос.
+                    {provider.isSystem ? " Пустое поле — наследовать из bundled-конфига." : null}
+                  </p>
 
                   <div className="llm-cert-section">
                     <button

@@ -34,7 +34,7 @@ pub fn provider_for(
                 api_key,
                 dimensions,
                 config.remote_trusted_cert_pem.as_deref(),
-                config.remote_system_id.clone(),
+                config.remote_request_headers.clone(),
                 config.remote_disable_tls_verification,
             )?))
         }
@@ -60,6 +60,8 @@ pub fn expected_dimensions(config: &ResolvedEmbeddingConfig) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     fn remote_resolved() -> ResolvedEmbeddingConfig {
@@ -69,7 +71,7 @@ mod tests {
             remote_model: Some("text-embedding-3-small".to_string()),
             remote_dimensions: None,
             remote_trusted_cert_pem: None,
-            remote_system_id: None,
+            remote_request_headers: HashMap::new(),
             remote_disable_tls_verification: false,
             api_key_bundled: false,
         }
@@ -83,7 +85,7 @@ mod tests {
             remote_model: Some("m".into()),
             remote_dimensions: None,
             remote_trusted_cert_pem: None,
-            remote_system_id: None,
+            remote_request_headers: HashMap::new(),
             remote_disable_tls_verification: false,
             api_key_bundled: false,
         };

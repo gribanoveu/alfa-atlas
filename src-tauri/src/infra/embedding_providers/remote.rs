@@ -9,12 +9,15 @@
 //! corporate internal CA from the bundled embedding preset — or a user
 //! override — can replace the agent's trust store, same as the LLM client.
 //!
-//! When `system_id` is configured, sends the vendor-specific `systemId` and
-//! a fresh `messageId` (UUID) headers on each request.
+//! Optional `request_headers` are sent on every POST (after `Authorization`).
+//! Values of `$uuid` (see `domain::embeddings::REQUEST_HEADER_VALUE_UUID`)
+//! are replaced with a fresh UUID per request.
+
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
+use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider, REQUEST_HEADER_VALUE_UUID};
 use crate::infra::http_agent;
 
 #[derive(Debug, Serialize)]
@@ -40,7 +43,7 @@ pub struct RemoteEmbeddingProvider {
     model: String,
     api_key: String,
     dimensions: usize,
-    system_id: Option<String>,
+    request_headers: HashMap<String, String>,
 }
 
 impl RemoteEmbeddingProvider {
@@ -50,7 +53,7 @@ impl RemoteEmbeddingProvider {
         api_key: String,
         dimensions: usize,
         trusted_cert_pem: Option<&str>,
-        system_id: Option<String>,
+        request_headers: HashMap<String, String>,
         disable_tls_verification: bool,
     ) -> Result<Self, EmbeddingError> {
         let agent = http_agent::build_agent_with_options(trusted_cert_pem, disable_tls_verification)
@@ -61,12 +64,20 @@ impl RemoteEmbeddingProvider {
             model,
             api_key,
             dimensions,
-            system_id,
+            request_headers,
         })
     }
 
     fn embeddings_url(&self) -> String {
         format!("{}/embeddings", self.base_url.trim_end_matches('/'))
+    }
+}
+
+fn resolve_header_value(value: &str) -> String {
+    if value == REQUEST_HEADER_VALUE_UUID {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        value.to_string()
     }
 }
 
@@ -84,11 +95,8 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
             .header("Authorization", &format!("Bearer {}", self.api_key))
             .header("accept", "application/json");
 
-        if let Some(system_id) = &self.system_id {
-            let message_id = uuid::Uuid::new_v4().to_string();
-            request = request
-                .header("systemId", system_id.as_str())
-                .header("messageId", message_id.as_str());
+        for (name, value) in &self.request_headers {
+            request = request.header(name.as_str(), resolve_header_value(value));
         }
 
         let mut response = request
@@ -134,7 +142,7 @@ mod tests {
             "key".to_string(),
             1536,
             None,
-            None,
+            HashMap::new(),
             false,
         )
         .unwrap()
@@ -177,9 +185,17 @@ mod tests {
             "key".to_string(),
             1536,
             Some("not a pem"),
-            None,
+            HashMap::new(),
             false,
         );
         assert!(matches!(result, Err(EmbeddingError::Tls(_))));
+    }
+
+    #[test]
+    fn uuid_placeholder_expands_to_different_values() {
+        let a = resolve_header_value(REQUEST_HEADER_VALUE_UUID);
+        let b = resolve_header_value(REQUEST_HEADER_VALUE_UUID);
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 36);
     }
 }

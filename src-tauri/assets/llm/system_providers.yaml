@@ -4,10 +4,10 @@ llm:
   - id: alfagen
     label: AlfaGen
     baseUrl: https://alfagen.moscow.alfaintra.net/continue-dev/v1
-    # Provider-level token caps — apply regardless of which model is selected.
     limit:
-      context: 200000
+      context: 260000
       output: 30000
+    requestHeaders: null
     trustedCertPem: |
       -----BEGIN CERTIFICATE-----
       MIIFTTCCAzWgAwIBAgIGAZiEjyMbMA0GCSqGSIb3DQEBDQUAMEQxHTAbBgNVBAMM
@@ -45,7 +45,9 @@ embedding:
   baseUrl: https://agenapisandbox.moscow.alfaintra.net/internal/llm/v1
   model: BAAI/bge-m3
   dimensions: 1024
-  systemId: sanduser
+  requestHeaders:
+    systemId: sanduser
+    messageId: $uuid
   disableTlsVerification: true
   trustedCertPem: |
     -----BEGIN CERTIFICATE-----

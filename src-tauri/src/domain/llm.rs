@@ -16,12 +16,17 @@
 //! EmbeddingProviderKind` followed: that enum only grew a second variant
 //! once a second real implementation existed, not in anticipation of one.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use super::ai_tools::{Task, ToolResult};
+
+/// Substituted with a fresh UUID on each HTTP request when used as a
+/// header value in `request_headers` (manifest preset or settings override).
+pub const REQUEST_HEADER_VALUE_UUID: &str = "$uuid";
 
 /// Token limits for an LLM **provider** (endpoint), not for an individual
 /// model id — informational only, not enforced in this client; shown in the
@@ -77,6 +82,12 @@ pub struct LlmProviderConfig {
     /// `services::llm_config::resolve_provider`.
     #[serde(default)]
     pub limit: Option<ProviderTokenLimit>,
+    /// Overrides the manifest's baked-in `request_headers` for a system
+    /// provider, or supplies headers outright for a custom provider. When
+    /// `Some`, replaces the preset map entirely — same merge as other
+    /// override fields; `None` means inherit from the manifest.
+    #[serde(default)]
+    pub request_headers: Option<HashMap<String, String>>,
 }
 
 /// Persisted globally (`AppSettings.llm`) — provider configuration is not
@@ -194,6 +205,11 @@ pub struct LlmProviderPreset {
     pub trusted_cert_pem: Option<String>,
     #[serde(default)]
     pub limit: Option<ProviderTokenLimit>,
+    /// Optional HTTP headers sent on every LLM request (`/chat/completions`,
+    /// `/models`). Values of `$uuid` (see `REQUEST_HEADER_VALUE_UUID`) are
+    /// replaced with a fresh UUID per request.
+    #[serde(default)]
+    pub request_headers: Option<HashMap<String, String>>,
 }
 
 /// The merged, ready-to-use view of one provider — a manifest preset (if
@@ -225,6 +241,8 @@ pub struct ResolvedLlmProvider {
     /// Provider-level token limits (see `ProviderTokenLimit`) — unchanged
     /// when the pinned model changes.
     pub limit: Option<ProviderTokenLimit>,
+    /// HTTP headers merged from manifest preset and settings override.
+    pub request_headers: HashMap<String, String>,
 }
 
 /// A chat message's speaker. `Tool` is needed even though nothing sends one

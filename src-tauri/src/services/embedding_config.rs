@@ -2,8 +2,11 @@
 //! against the bundled `embedding` preset into the merged
 //! `ResolvedEmbeddingConfig` the rest of the app actually uses.
 
+use std::collections::HashMap;
+
 use crate::domain::embeddings::{
-    EmbeddingPreset, EmbeddingProviderConfig, EmbeddingProviderKind, ResolvedEmbeddingConfig,
+    EmbeddingPreset, EmbeddingProviderConfig, EmbeddingProviderKind, REQUEST_HEADER_VALUE_UUID,
+    ResolvedEmbeddingConfig,
 };
 use crate::domain::settings::SettingsError;
 use crate::infra::embedding_credentials_store;
@@ -67,16 +70,54 @@ pub fn resolve_with(
             .remote_trusted_cert_pem
             .clone()
             .or_else(|| preset.trusted_cert_pem.clone()),
-        remote_system_id: settings
-            .remote_system_id
-            .clone()
-            .or_else(|| preset.system_id.clone()),
+        remote_request_headers: resolve_request_headers(preset, settings),
         remote_disable_tls_verification: settings
             .remote_disable_tls_verification
             .or(preset.disable_tls_verification)
             .unwrap_or(false),
         api_key_bundled: embedding_credentials_store::has_bundled_api_key(),
     }
+}
+
+/// HTTP headers for remote `/embeddings`. Settings override replaces the
+/// preset map entirely when set; otherwise the bundled preset applies,
+/// including legacy `systemId` → `systemId` + `messageId: $uuid`.
+pub fn resolve_request_headers(
+    preset: &EmbeddingPreset,
+    settings: &EmbeddingProviderConfig,
+) -> HashMap<String, String> {
+    if let Some(headers) = &settings.remote_request_headers {
+        return headers.clone();
+    }
+
+    let mut headers = preset.request_headers.clone().unwrap_or_default();
+    apply_legacy_system_id_from_preset(&mut headers, preset.system_id.as_deref());
+    apply_legacy_system_id_from_settings(&mut headers, settings.remote_system_id.as_deref());
+    headers
+}
+
+fn apply_legacy_system_id_from_preset(headers: &mut HashMap<String, String>, system_id: Option<&str>) {
+    let Some(sid) = system_id.filter(|s| !s.trim().is_empty()) else {
+        return;
+    };
+    headers
+        .entry("systemId".to_string())
+        .or_insert_with(|| sid.to_string());
+    headers
+        .entry("messageId".to_string())
+        .or_insert_with(|| REQUEST_HEADER_VALUE_UUID.to_string());
+}
+
+/// Settings-layer legacy `remoteSystemId` wins over preset headers — same
+/// per-field override semantics as the other remote settings fields.
+fn apply_legacy_system_id_from_settings(headers: &mut HashMap<String, String>, system_id: Option<&str>) {
+    let Some(sid) = system_id.filter(|s| !s.trim().is_empty()) else {
+        return;
+    };
+    headers.insert("systemId".to_string(), sid.to_string());
+    headers
+        .entry("messageId".to_string())
+        .or_insert_with(|| REQUEST_HEADER_VALUE_UUID.to_string());
 }
 
 #[cfg(test)]
@@ -169,10 +210,71 @@ mod tests {
         assert_eq!(resolved.remote_model, preset.model.clone());
         assert_eq!(resolved.remote_dimensions, preset.dimensions);
         assert_eq!(resolved.remote_trusted_cert_pem, preset.trusted_cert_pem.clone());
-        assert_eq!(resolved.remote_system_id, preset.system_id.clone());
+        assert_eq!(
+            resolved.remote_request_headers,
+            resolve_request_headers(preset, &EmbeddingProviderConfig::default())
+        );
         assert_eq!(
             resolved.remote_disable_tls_verification,
             preset.disable_tls_verification.unwrap_or(false)
+        );
+    }
+
+    #[test]
+    fn settings_request_headers_override_replaces_preset() {
+        let preset = EmbeddingPreset {
+            request_headers: Some(HashMap::from([
+                ("systemId".into(), "preset".into()),
+                ("messageId".into(), REQUEST_HEADER_VALUE_UUID.into()),
+            ])),
+            ..remote_preset()
+        };
+        let settings = EmbeddingProviderConfig {
+            remote_request_headers: Some(HashMap::from([("X-Custom".into(), "1".into())])),
+            ..Default::default()
+        };
+        let resolved = resolve_with(&preset, &settings);
+        assert_eq!(
+            resolved.remote_request_headers,
+            HashMap::from([("X-Custom".into(), "1".into())])
+        );
+    }
+
+    #[test]
+    fn legacy_system_id_expands_to_system_and_message_headers() {
+        let preset = EmbeddingPreset {
+            system_id: Some("sanduser".into()),
+            ..remote_preset()
+        };
+        let resolved = resolve_with(&preset, &EmbeddingProviderConfig::default());
+        assert_eq!(resolved.remote_request_headers.get("systemId").map(String::as_str), Some("sanduser"));
+        assert_eq!(
+            resolved.remote_request_headers.get("messageId").map(String::as_str),
+            Some(REQUEST_HEADER_VALUE_UUID)
+        );
+    }
+
+    #[test]
+    fn legacy_settings_system_id_overrides_preset_request_headers() {
+        let preset = EmbeddingPreset {
+            request_headers: Some(HashMap::from([
+                ("systemId".into(), "sanduser".into()),
+                ("messageId".into(), REQUEST_HEADER_VALUE_UUID.into()),
+            ])),
+            ..remote_preset()
+        };
+        let settings = EmbeddingProviderConfig {
+            remote_system_id: Some("custom-user".into()),
+            ..Default::default()
+        };
+        let resolved = resolve_with(&preset, &settings);
+        assert_eq!(
+            resolved.remote_request_headers.get("systemId").map(String::as_str),
+            Some("custom-user")
+        );
+        assert_eq!(
+            resolved.remote_request_headers.get("messageId").map(String::as_str),
+            Some(REQUEST_HEADER_VALUE_UUID)
         );
     }
 }

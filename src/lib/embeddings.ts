@@ -13,7 +13,8 @@ export type ResolvedEmbeddingConfig = {
   // local provider's dimension, never user-editable.
   remoteDimensions: number | null;
   remoteTrustedCertPem: string | null;
-  remoteSystemId: string | null;
+  /** HTTP headers sent with remote `/embeddings` (merged preset + override). */
+  remoteRequestHeaders: Record<string, string>;
   remoteDisableTlsVerification: boolean;
   /** True when this build ships a compile-time embedding API key. */
   apiKeyBundled: boolean;
@@ -29,9 +30,36 @@ export type EmbeddingProviderConfig = {
   remoteBaseUrl: string | null;
   remoteModel: string | null;
   remoteTrustedCertPem: string | null;
-  remoteSystemId: string | null;
+  /** When set, replaces bundled preset headers entirely. `null` = inherit. */
+  remoteRequestHeaders: Record<string, string> | null;
+  /** @deprecated use `remoteRequestHeaders` */
+  remoteSystemId?: string | null;
   remoteDisableTlsVerification: boolean | null;
 };
+
+/** Substituted with a fresh UUID on each request — mirrors Rust `$uuid`. */
+export const EMBEDDING_REQUEST_HEADER_UUID = "$uuid";
+
+export function formatRequestHeaders(headers: Record<string, string> | null | undefined): string {
+  if (!headers) return "";
+  return Object.entries(headers)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join("\n");
+}
+
+export function parseRequestHeaders(text: string): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const colon = trimmed.indexOf(":");
+    if (colon <= 0) continue;
+    const name = trimmed.slice(0, colon).trim();
+    const value = trimmed.slice(colon + 1).trim();
+    if (name) out[name] = value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 // Mirrors `domain::embeddings::ModelStatus` (adjacently tagged,
 // `#[serde(tag = "status")]`).
