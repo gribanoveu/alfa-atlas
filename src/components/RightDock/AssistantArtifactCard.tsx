@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { FileInput } from "lucide-react";
 import { ARTIFACT_KIND_LABELS, artifactCreateDraft, type ArtifactContent, type ArtifactKind } from "../../lib/artifacts";
 import { toMessage } from "../../lib/errors";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
@@ -141,9 +140,6 @@ export function AssistantArtifactCard({
   return (
     <div className={`assistant-artifact-card${deferred ? " is-decided" : ""}`}>
       <div className="assistant-artifact-card-header">
-        <span className="assistant-artifact-card-icon">
-          <FileInput size={14} strokeWidth={1.75} aria-hidden />
-        </span>
         <div className="assistant-artifact-card-heading">
           <span className="assistant-artifact-card-eyebrow">
             Ассистент просит собрать артефакт · {ARTIFACT_KIND_LABELS[args.kind]}

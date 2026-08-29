@@ -3231,26 +3231,14 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
 
 .assistant-artifact-card-header {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.assistant-artifact-card-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
+  flex-direction: column;
+  min-width: 0;
 }
 
 .assistant-artifact-card-heading {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
   min-width: 0;
 }
 
