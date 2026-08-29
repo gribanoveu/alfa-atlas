@@ -1,4 +1,4 @@
-import type { ToolResult } from "./aiTools";
+import { normalizeSemanticSearchResult, type ToolResult } from "./aiTools";
 import { STEERING_PREFIX, type ChatUsage } from "./llm";
 
 /** One piece of an assistant message's transcript, in chronological order —
@@ -382,7 +382,10 @@ export function groupBlocksForRender(blocks: MessageBlock[]): RenderBlock[] {
  * from before blocks existed: previously *only* the final round's text
  * ever reached `ChatMessage.content` (intermediate-round prose was
  * streamed transiently then wiped, never persisted); now it's kept for
- * display, so it gets replayed too — what's replayed matches what's shown. */
+ * display, so it gets replayed too — what's replayed matches what's shown.
+ *
+ * Tool calls contribute nothing *here*; the file paths they touched are
+ * added back separately by `chatMessageToPlainText` via `toolLedger`. */
 export function flattenBlocksToText(blocks: MessageBlock[]): string {
   return blocks
     .flatMap((b) =>
@@ -395,9 +398,139 @@ export function flattenBlocksToText(blocks: MessageBlock[]): string {
     .join("\n\n");
 }
 
+/** Upper bound on paths in one turn's ledger. A 48-call research turn is
+ * real (see `toolLedger`'s doc comment), and replaying every path from it
+ * would cost more than the facts are worth — the most recent ones are the
+ * ones a follow-up asks about. */
+const TOOL_LEDGER_MAX_PATHS = 40;
+
+/** Wire tools whose `path` argument names a file the assistant actually
+ * saw the contents of. `check` is deliberately absent: it reports
+ * diagnostics about a file rather than showing it. */
+const READ_TOOLS = new Set(["readFile", "gitDiff", "gitBlame"]);
+
+const WRITE_TOOLS = new Set(["writeFile", "editFile", "createDirectory"]);
+
+const DELETE_TOOLS = new Set(["deleteFile", "deleteDirectory"]);
+
+/** Reads `path`/`newPath` off a tool call's raw arguments JSON. Purely
+ * cosmetic-grade parsing, like `describeToolActivity`'s: a call whose
+ * arguments don't parse contributes nothing rather than throwing. */
+export function toolCallPaths(block: ToolCallBlock): { path?: string; newPath?: string } {
+  try {
+    const parsed: unknown = JSON.parse(block.argumentsJson);
+    if (!parsed || typeof parsed !== "object") return {};
+    const args = parsed as Record<string, unknown>;
+    return {
+      path: typeof args.path === "string" ? args.path : undefined,
+      newPath: typeof args.newPath === "string" ? args.newPath : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** A one-line record of which files this turn touched, for replay into
+ * later turns.
+ *
+ * The problem it solves: tool calls and their results live only inside the
+ * turn that made them (`services::llm_chat::run_tool_loop` keeps them in
+ * its own `history`); cross-turn replay is `flattenBlocksToText`, which
+ * keeps prose only. So a follow-up turn sees the assistant's *answer* but
+ * has no record of the files behind it — and prose routinely shortens a
+ * path to a basename. Observed consequence: a turn that had read
+ * `.../thrift/services/AusnTransactionService.java` answered citing
+ * `AusnTransactionService.java:41`; the next turn needed that file again,
+ * reconstructed the directory from a neighbouring path in its own text,
+ * and called `grep` on a path that does not exist.
+ *
+ * Paths, not results: a re-read is one cheap call, while an invented path
+ * costs a failed call plus whatever the model does to recover. So this
+ * replays only the identity of what was touched — never snippets, never
+ * search hits (those are reproducible), never failed calls. Returns `""`
+ * when the turn touched nothing. */
+export function toolLedger(blocks: MessageBlock[]): string {
+  const read: string[] = [];
+  const written: string[] = [];
+  const deleted: string[] = [];
+
+  for (const block of blocks) {
+    if (block.type !== "toolCall" || block.status !== "done") continue;
+    const { path, newPath } = toolCallPaths(block);
+    if (block.name === "move") {
+      if (path && newPath) written.push(`${path} → ${newPath}`);
+      continue;
+    }
+    if (!path) continue;
+    if (READ_TOOLS.has(block.name)) read.push(path);
+    else if (WRITE_TOOLS.has(block.name)) written.push(path);
+    else if (DELETE_TOOLS.has(block.name)) deleted.push(path);
+  }
+
+  // Writes and deletes lead: they changed the project, so a later turn
+  // reasoning about its current state needs them even more than reads —
+  // and being first, they are never the entries the cap drops.
+  const groups: (readonly [string, string[]])[] = [
+    ["изменены", written],
+    ["удалены", deleted],
+    ["прочитаны", read],
+  ];
+
+  const sections: string[] = [];
+  let budget = TOOL_LEDGER_MAX_PATHS;
+  let omitted = 0;
+  for (const [label, paths] of groups) {
+    const unique = [...new Set(paths)];
+    if (unique.length === 0) continue;
+    // Keep the most recent entries of whatever no longer fits — a
+    // follow-up question is about the end of the turn far more often than
+    // its beginning.
+    const kept = unique.slice(Math.max(0, unique.length - budget));
+    omitted += unique.length - kept.length;
+    budget -= kept.length;
+    if (kept.length > 0) sections.push(`${label}: ${kept.join(", ")}`);
+  }
+
+  if (sections.length === 0) return "";
+  const tail = omitted > 0 ? `; и ещё ${omitted} файл(ов)` : "";
+  return `[Файлы, затронутые в этом ходе — ${sections.join("; ")}${tail}]`;
+}
+
+/** Whether this conversation's *most recent* search ran without the
+ * semantic tier, i.e. the embedding API could not be reached (see
+ * `services::ai_tools::tools::semantic_search`'s degraded path).
+ *
+ * Derived from the transcript rather than tracked as its own state: the
+ * transcript already records what actually happened, so this can't drift,
+ * needs no clearing on chat switch, and resolves itself the moment a later
+ * search succeeds. Only the newest search counts — an outage earlier in a
+ * long chat says nothing about now.
+ *
+ * Scans newest-first and stops at the first settled `semanticSearch`;
+ * returns `false` for a conversation that has not searched at all. */
+export function searchIsDegraded(messages: ChatMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message === undefined || message.role !== "assistant") continue;
+    for (let j = message.blocks.length - 1; j >= 0; j--) {
+      const block = message.blocks[j];
+      if (block === undefined || block.type !== "toolCall") continue;
+      if (block.status !== "done" || block.result?.tool !== "semanticSearchResults") continue;
+      return normalizeSemanticSearchResult(block.result.result).meta.degraded !== null;
+    }
+  }
+  return false;
+}
+
 /** The plain-text projection of one `ChatMessage` regardless of role — what
  * both `contextTokens`'s `estimateTokenCount` sum and `sendMessage`'s
- * `wireMessages` replay need. */
+ * `wireMessages` replay need. An assistant turn carries its `toolLedger`
+ * along with its prose, so the paths it worked on survive into the next
+ * turn (the estimate counts them because the wire replay sends them). */
 export function chatMessageToPlainText(message: ChatMessage): string {
-  return message.role === "user" ? message.content : flattenBlocksToText(message.blocks);
+  if (message.role === "user") return message.content;
+  const text = flattenBlocksToText(message.blocks);
+  const ledger = toolLedger(message.blocks);
+  if (!ledger) return text;
+  return text ? `${text}\n\n${ledger}` : ledger;
 }

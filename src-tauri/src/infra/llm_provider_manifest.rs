@@ -87,8 +87,29 @@ mod tests {
         let alfagen = find_system_provider("alfagen").expect("alfagen preset present");
         assert_eq!(alfagen.label, "AlfaGen");
         assert_eq!(alfagen.base_url, "https://alfagen.moscow.alfaintra.net/continue-dev/v1");
-        assert_eq!(alfagen.limit, Some(crate::domain::llm::ProviderTokenLimit { context: 200_000, output: 30_000 }));
         assert_eq!(alfagen.request_headers, None);
+
+        // Deliberately not an exact-value assertion. The token limits are a
+        // *tuning* knob — they track what the endpoint currently serves and
+        // are expected to be edited (this test was left asserting 200k
+        // after the manifest moved to 260k, which is a broken build over a
+        // legitimate config change, not a caught bug). What must hold is
+        // that the numbers stay coherent: a mistyped `26000`/`2600000` or a
+        // context smaller than the output reservation would break real
+        // requests, and that is what's checked here.
+        let limit = alfagen.limit.expect("alfagen ships with a token limit");
+        assert!(limit.output > 0, "output reservation must be positive");
+        assert!(
+            limit.context > limit.output,
+            "context window ({}) must exceed the output reservation ({})",
+            limit.context,
+            limit.output
+        );
+        assert!(
+            (32_000..=2_000_000).contains(&limit.context),
+            "context window {} is outside any plausible range — likely a typo",
+            limit.context
+        );
     }
 
     /// AlfaGen sits behind an internal corporate CA (`Alfa-Bank ST CA

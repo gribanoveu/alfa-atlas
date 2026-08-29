@@ -23,8 +23,8 @@ use crate::infra::{embedding_credentials_store, embedding_providers};
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::chunk_text::resolve_text;
 use crate::services::embedding_state::{
-    attach_current, attach_embedding_index, attach_index_store, embedded_count,
-    ensure_provider, resolve_index_paths,
+    attach_current, attach_embedding_index, attach_index_store, clear_embedding_outage,
+    embedded_count, ensure_provider, note_embedding_outage, resolve_index_paths,
 };
 use crate::services::repo_index::RepositoryIndex;
 use crate::services::{embedding_config, project_open};
@@ -166,13 +166,27 @@ pub(super) fn semantic_matches(
     let provider = ensure_provider(&deps.embedding_provider, &config, api_key)
         .map_err(ToolError::SemanticSearch)?;
 
-    let query_embedding = provider
-        .embed(&[query])?
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
-            ToolError::SemanticSearch("embedding provider returned no vector".to_string())
-        })?;
+    // The only network call in a search: the *index* holds document
+    // vectors, but the query still has to be embedded now, by the same
+    // model — so a `Remote` provider makes every search depend on the
+    // endpoint being reachable, however complete the index is. Failures
+    // here open a short cooldown (`note_embedding_outage`) so the rest of
+    // the session falls straight through to the lexical tier instead of
+    // paying a connect timeout per search; the caller
+    // (`tools::semantic_search`) is what turns this error into that
+    // fallback rather than a failed tool call.
+    let query_embedding = match provider.embed(&[query]) {
+        Ok(vectors) => {
+            clear_embedding_outage();
+            vectors.into_iter().next().ok_or_else(|| {
+                ToolError::SemanticSearch("embedding provider returned no vector".to_string())
+            })?
+        }
+        Err(e) => {
+            note_embedding_outage();
+            return Err(ToolError::from(e));
+        }
+    };
 
     let hits = {
         let slot = deps.embedding_index.lock().map_err(|_| {

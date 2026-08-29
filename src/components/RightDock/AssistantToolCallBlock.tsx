@@ -325,7 +325,15 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
       );
     case "semanticSearchResults": {
       const { matches, meta } = normalizeSemanticSearchResult(result.result);
+      // `meta.degraded` is worded for the model (it replaces `meta.hint` on
+      // the wire, see `tools::semantic_search::degraded_note`), so the user
+      // gets their own phrasing here — and the ordinary hint is suppressed,
+      // since the degradation is both the cause and the only useful advice.
+      const degradedText = meta.degraded
+        ? "Семантический поиск был недоступен — показаны совпадения только по именам и тексту. Проверьте доступ к провайдеру эмбеддингов."
+        : null;
       const hintText =
+        degradedText ??
         meta.hint ??
         (meta.weak
           ? "Поиск дал слабые результаты — уточните запрос английскими именами методов/классов."

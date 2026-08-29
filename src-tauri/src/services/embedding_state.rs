@@ -14,6 +14,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::domain::embeddings::{EmbeddingProvider, ResolvedEmbeddingConfig};
 use crate::domain::project_config::OpenedProject;
@@ -78,6 +79,53 @@ pub(crate) fn ensure_provider(
         *guard = Some((config.clone(), api_key, Arc::from(provider)));
     }
     Ok(guard.as_ref().expect("just set above if missing").2.clone())
+}
+
+/// How long one failed embedding request keeps `semanticSearch` from
+/// trying the network again. The failure mode this exists for is an
+/// *episodic* one — VPN down, endpoint unreachable, corporate host not
+/// resolving — which lasts minutes, not milliseconds, while a `ureq`
+/// connect attempt can hang for tens of seconds. Without a cooldown every
+/// search in the session pays that stall again before falling back to the
+/// lexical tier it was always going to use.
+const EMBEDDING_OUTAGE_COOLDOWN: Duration = Duration::from_secs(60);
+
+/// When the last embedding request failed, if it hasn't been superseded by
+/// a success. Global rather than per-project for the same reason
+/// `EmbeddingProviderSlot` is: the provider (and hence its reachability) is
+/// an app-level setting, not a per-repo one.
+static EMBEDDING_OUTAGE: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Records that a request to the embedding provider failed — called at the
+/// one place that talks to it during a search (`services::ai_tools::
+/// search::semantic_matches`'s query-embedding step).
+pub(crate) fn note_embedding_outage() {
+    if let Ok(mut guard) = EMBEDDING_OUTAGE.lock() {
+        *guard = Some(Instant::now());
+    }
+}
+
+/// Clears the cooldown after a successful request — a VPN coming back up
+/// shouldn't leave the remainder of the minute degraded.
+pub(crate) fn clear_embedding_outage() {
+    if let Ok(mut guard) = EMBEDDING_OUTAGE.lock() {
+        *guard = None;
+    }
+}
+
+/// Whether the embedding provider is still inside the cooldown from a
+/// recent failure. A poisoned lock reads as "no outage": the cost of
+/// wrongly trying the network is one slow call, the cost of wrongly
+/// skipping it is a permanently degraded search.
+pub(crate) fn embedding_outage_active() -> bool {
+    let marked = EMBEDDING_OUTAGE.lock().ok().and_then(|g| *g);
+    outage_active_at(marked, Instant::now())
+}
+
+/// The pure half of [`embedding_outage_active`], split out so the cooldown
+/// window itself is testable without sleeping.
+fn outage_active_at(marked: Option<Instant>, now: Instant) -> bool {
+    marked.is_some_and(|at| now.duration_since(at) < EMBEDDING_OUTAGE_COOLDOWN)
 }
 
 /// Serializes every full `embedding_sync` against every incremental
@@ -457,6 +505,27 @@ pub(crate) mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn the_embedding_outage_cooldown_expires_and_a_success_clears_it() {
+        let now = Instant::now();
+        assert!(!outage_active_at(None, now), "no failure recorded yet");
+        assert!(outage_active_at(Some(now), now), "a failure just happened");
+        assert!(
+            outage_active_at(Some(now - EMBEDDING_OUTAGE_COOLDOWN / 2), now),
+            "still inside the cooldown"
+        );
+        assert!(
+            !outage_active_at(Some(now - EMBEDDING_OUTAGE_COOLDOWN), now),
+            "the cooldown must expire on its own — a provider that came back \
+             would stay unusable otherwise"
+        );
+
+        note_embedding_outage();
+        assert!(embedding_outage_active());
+        clear_embedding_outage();
+        assert!(!embedding_outage_active(), "a successful request lifts the cooldown");
+    }
 
     pub(crate) fn fixture_dir(label: &str) -> PathBuf {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();

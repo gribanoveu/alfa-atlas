@@ -14,7 +14,7 @@ import {
 } from "../../lib/assistantConfig";
 import type { AssistantSuggestion } from "../../lib/assistantConfig";
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, Task } from "../../lib/aiTools";
-import { groupBlocksForRender, type ChatMessage } from "../../lib/chatBlocks";
+import { groupBlocksForRender, searchIsDegraded, type ChatMessage } from "../../lib/chatBlocks";
 import type { LlmProviderConfig, PendingApproval, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
@@ -638,6 +638,12 @@ export function AssistantConversation({
   const showFollowUpBar =
     followUpSuggestionsEnabled && messages.length > 0 && Boolean(followUpSuggestions?.length);
 
+  // Shown while the last search in this chat ran without its semantic tier
+  // — the assistant keeps working, but on a narrower search than usual, and
+  // that is worth knowing *before* trusting (or continuing) the answer.
+  // Cheap enough to recompute per render: it stops at the newest search.
+  const embeddingsUnavailable = searchIsDegraded(messages);
+
   const messagesRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // Auto-follow state for the transcript scroll — separate from React state
@@ -1093,6 +1099,14 @@ export function AssistantConversation({
           </div>
         ) : null}
       </div>
+      {embeddingsUnavailable ? (
+        <div className="assistant-degraded-bar" role="status">
+          <AlertCircle size={13} strokeWidth={1.75} aria-hidden />
+          <span>
+            API эмбеддингов недоступен — поиск идёт только по именам и тексту, результаты могут быть хуже.
+          </span>
+        </div>
+      ) : null}
       {showFollowUpBar && followUpSuggestions ? (
         <div className="assistant-followup-bar" role="group" aria-label="Похожие предложения">
           <Sparkles className="assistant-followup-bar-icon" size={12} strokeWidth={1.75} aria-hidden />

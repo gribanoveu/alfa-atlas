@@ -1,5 +1,11 @@
 import { CONTEXT_COMPACTION_MIN_MESSAGES, CONTEXT_COMPACTION_TRIGGER_RATIO, describeToolResult } from "./assistantConfig";
-import { chatMessageToPlainText, flattenBlocksToText, type ChatMessage, type ToolCallBlock } from "./chatBlocks";
+import {
+  chatMessageToPlainText,
+  flattenBlocksToText,
+  toolCallPaths,
+  type ChatMessage,
+  type ToolCallBlock,
+} from "./chatBlocks";
 
 /** What one proactive compaction pass leaves behind — cached by
  * `useLlmChat` (in a `useRef`, never persisted) so a later pass only has to
@@ -119,7 +125,16 @@ export function describeMessageForCompaction(m: ChatMessage): string {
 
   const toolLines = m.blocks
     .filter((b): b is ToolCallBlock => b.type === "toolCall" && (b.status === "done" || b.status === "error"))
-    .map((b) => `  [tool] ${b.name} -> ${describeToolResult(b)}`);
+    .map((b) => {
+      // The path, not just the tool name: the summarizer is asked for a
+      // `FILES:` section "by path" (see `buildHistoryCompactionPrompt`),
+      // and `describeToolResult` is a *result* summary — "Строк: 120",
+      // "Записано" — which names no file at all. Without this the section
+      // can only be filled from whatever paths happen to appear in prose.
+      const { path, newPath } = toolCallPaths(b);
+      const target = path ? (newPath ? ` ${path} → ${newPath}` : ` ${path}`) : "";
+      return `  [tool] ${b.name}${target} -> ${describeToolResult(b)}`;
+    });
   lines.push(...toolLines);
 
   return lines.join("\n");

@@ -243,6 +243,7 @@ the documentation root in Docs-only, the repository root in Full-repo.
 
 - Pass paths between tools unchanged — a \`listFiles\`/\`readFile\`/\`grep\`/\`semanticSearch\`/\`check\` path is already valid for \`writeFile\`/\`editFile\`/\`move\`/\`check\` in the same mode.
 - Write/mutate/\`check\` still only succeed for paths under the documentation tree. A path outside it (e.g. source code in Full-repo) fails immediately with an error — do not retry the same path, and do not ask the user to approve an impossible write.
+- Earlier assistant turns end with a \`[Файлы, затронутые в этом ходе — …]\` line. It is a record of what those turns actually read or changed, not prose you wrote: those paths are exact and can go straight into \`readFile\`/\`grep\`. Never reconstruct a path from a filename mentioned in prose when that line already has the full one, and never quote this line back to the user.
 
 ${pathExamples}
 
@@ -1188,6 +1189,7 @@ export function describeToolResult(
     case "semanticSearchResults": {
       const { matches, meta } = normalizeSemanticSearchResult(block.result.result);
       if (matches.length === 0) {
+        if (meta.degraded) return "Результатов: 0 · без семантики";
         return meta.weak ? "Результатов: 0 · слабый поиск" : "Результатов: 0";
       }
       const counts = new Map<MatchSource, number>();
@@ -1200,7 +1202,10 @@ export function describeToolResult(
       const breakdown = [...counts.entries()]
         .map(([source, count]) => `${describeMatchSourceShort(source)}: ${count}`)
         .join(", ");
-      const weakSuffix = meta.weak ? " · слабый поиск" : "";
+      // A degraded search is worth saying on the collapsed line: its
+      // results are a *narrower* search, not a weaker query, and that
+      // difference changes how much the answer built on them is worth.
+      const weakSuffix = meta.degraded ? " · без семантики" : meta.weak ? " · слабый поиск" : "";
       return `Результатов: ${matches.length} (${breakdown})${weakSuffix}`;
     }
     case "grepResults": {

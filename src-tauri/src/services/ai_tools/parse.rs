@@ -330,7 +330,26 @@ pub(super) fn parse_todo_call(input: &str) -> Result<ToolCall, String> {
 /// without counting characters by hand; the path does it directly.
 pub(super) fn lenient_json_object<T: serde::de::DeserializeOwned>(input: &str) -> Result<T, String> {
     let mut de = serde_json::Deserializer::from_str(input);
-    serde_path_to_error::deserialize(&mut de).map_err(|e| e.to_string())
+    serde_path_to_error::deserialize(&mut de).map_err(|e| humanize_serde_error(&e.to_string()))
+}
+
+/// Rewrites serde's Rust-shaped vocabulary into terms a model can act on.
+///
+/// The audience for this string is the model itself (it comes back as the
+/// `Tool`-role content of the failed call), and `expected u32` /
+/// `expected a sequence` describe Rust types it has no reason to know —
+/// observed consequence: after `invalid type: string "1", expected u32` a
+/// model retried the identical call once and then dropped the parameter
+/// entirely rather than unquoting it. Scalar quoting is now handled before
+/// this point by `domain::flexible_args`, so what reaches here is a real
+/// mistake; it should at least name the shape actually wanted.
+fn humanize_serde_error(reason: &str) -> String {
+    reason
+        .replace("expected u32", "expected a number")
+        .replace("expected u64", "expected a number")
+        .replace("expected usize", "expected a number")
+        .replace("expected a sequence", "expected a JSON array")
+        .replace("expected a map", "expected a JSON object")
 }
 
 /// Path-containment preflight for the chat tool loop — runs before
@@ -502,6 +521,82 @@ mod tests {
                 max_results: Some(20),
             })
         );
+    }
+
+    /// Every quoted-number call from one real transcript, verbatim. Each
+    /// of these previously failed with `invalid type: string ...`, costing
+    /// a round trip and (twice) the parameter itself — see
+    /// `domain::flexible_args`.
+    #[test]
+    fn parse_tool_call_accepts_numeric_arguments_sent_as_strings() {
+        let cases: [(&str, &str, ToolCall); 4] = [
+            (
+                "semanticSearch",
+                r#"{"query":"searchTransactions поиск транзакций","topK":"12"}"#,
+                ToolCall::SemanticSearch(SemanticSearchArgs {
+                    query: "searchTransactions поиск транзакций".to_string(),
+                    top_k: Some(12),
+                }),
+            ),
+            (
+                "listFiles",
+                r#"{"path":"src/docs/asciidoc","depth":"2"}"#,
+                ToolCall::ListFiles(ListFilesArgs {
+                    path: Some("src/docs/asciidoc".to_string()),
+                    depth: Some(2),
+                    pattern: None,
+                }),
+            ),
+            (
+                "readFile",
+                r#"{"path":"AusnController.java","startLine":"1","endLine":"90"}"#,
+                ToolCall::ReadFile(ReadFileArgs {
+                    path: "AusnController.java".to_string(),
+                    start_line: Some(1),
+                    end_line: Some(90),
+                }),
+            ),
+            (
+                "grep",
+                r#"{"pattern":"findAusnTransactions","glob":"*.java","maxResults":"20","caseInsensitive":"true"}"#,
+                ToolCall::Grep(GrepArgs {
+                    pattern: "findAusnTransactions".to_string(),
+                    path: None,
+                    glob: Some("*.java".to_string()),
+                    case_insensitive: Some(true),
+                    max_results: Some(20),
+                }),
+            ),
+        ];
+        for (name, arguments, expected) in cases {
+            let call = LlmToolCall {
+                id: "call_1".to_string(),
+                name: name.to_string(),
+                arguments: arguments.to_string(),
+            };
+            assert_eq!(parse_tool_call(&call).expect(name), expected, "{name}");
+        }
+    }
+
+    /// Coercion is for unambiguous spellings only — a value that isn't a
+    /// number in any reading must still come back as a tool error the model
+    /// can learn from, phrased without Rust type names.
+    #[test]
+    fn parse_tool_call_still_rejects_a_non_numeric_string_with_an_actionable_message() {
+        let call = LlmToolCall {
+            id: "call_1".to_string(),
+            name: "semanticSearch".to_string(),
+            arguments: r#"{"query":"x","topK":"как можно больше"}"#.to_string(),
+        };
+        match parse_tool_call(&call).unwrap_err() {
+            ToolError::InvalidArguments { tool, reason } => {
+                assert_eq!(tool, "semanticSearch");
+                assert!(reason.contains("topK"), "reason should name the field: {reason}");
+                assert!(reason.contains("unquoted"), "reason should say how to fix it: {reason}");
+                assert!(!reason.contains("usize"), "reason should not name Rust types: {reason}");
+            }
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
     }
 
     #[test]

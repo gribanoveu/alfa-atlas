@@ -8,6 +8,8 @@ use crate::domain::ai_tools::{MatchSource, SemanticSearchArgs, SemanticSearchMet
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::search_query::{SearchMetaInput, extract_search_tokens, weak_search_hint};
 
+use crate::services::embedding_state::embedding_outage_active;
+
 use super::super::EmbeddingDeps;
 use super::super::search::{
     DEFAULT_TOP_K, MAX_TOP_K, apply_related_boost, is_semantic_ready, lexical_matches,
@@ -32,6 +34,7 @@ pub(super) fn semantic_search(
     let mut results = symbol_matches(&deps.repo_index, scope, &args.query, top_k);
 
     let mut tiers_used = vec!["symbol".to_string()];
+    let mut degraded: Option<String> = None;
     let remaining = top_k.saturating_sub(results.len());
     if remaining > 0 {
         let related = deps
@@ -49,12 +52,36 @@ pub(super) fn semantic_search(
             (remaining * 3).min(MAX_TOP_K * 3)
         };
 
-        let tier_results = if is_semantic_ready(deps) {
-            tiers_used.push("semantic".to_string());
-            semantic_matches(scope, deps, &args.query, fetch_k)?
-        } else {
-            tiers_used.push("lexical".to_string());
-            lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
+        let tier = choose_tier(is_semantic_ready(deps), embedding_outage_active());
+        let tier_results = match tier {
+            Tier::Semantic => match semantic_matches(scope, deps, &args.query, fetch_k) {
+                Ok(hits) => {
+                    tiers_used.push("semantic".to_string());
+                    hits
+                }
+                // The index was ready and the semantic tier still failed —
+                // in practice the query-embedding call couldn't reach the
+                // provider. The two cheap tiers are fully local and one of
+                // them has already produced `results`, so failing the whole
+                // call here would throw away working search and leave the
+                // model with no discovery tool at all (observed: it then
+                // spends the turn on blind `listFiles`/`grep`). Degrade,
+                // and say so in `meta` so the answer isn't overtrusted.
+                Err(e) => {
+                    degraded = Some(degraded_note(&DegradedReason::SemanticFailed(e.to_string())));
+                    tiers_used.push("lexical".to_string());
+                    lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
+                }
+            },
+            Tier::LexicalDuringOutage => {
+                degraded = Some(degraded_note(&DegradedReason::ProviderCoolingDown));
+                tiers_used.push("lexical".to_string());
+                lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
+            }
+            Tier::Lexical => {
+                tiers_used.push("lexical".to_string());
+                lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
+            }
         };
 
         results.extend(apply_related_boost(tier_results, &related, remaining));
@@ -76,6 +103,12 @@ pub(super) fn semantic_search(
         tiers_used: &tiers_used,
         extracted_tokens: &extracted_tokens,
     });
+    // A degradation outranks the ordinary weak-search advice: the standard
+    // only-lexical hint tells the model to "wait for embeddings to sync",
+    // which is actively wrong when the index is fine and the provider is
+    // unreachable — the model would keep re-searching for a tier that
+    // cannot come back this turn.
+    let hint = degraded.clone().or(hint);
 
     Ok(SemanticSearchPayload {
         matches: results,
@@ -85,8 +118,56 @@ pub(super) fn semantic_search(
             extracted_tokens,
             weak,
             hint,
+            degraded,
         },
     })
+}
+
+/// Which tier the cascade's second step should run. Split from
+/// `semantic_search` so the "ready but cooling down" case — the one that
+/// only shows up with a wall clock and a broken network — is decided by a
+/// function that can be tested directly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tier {
+    Semantic,
+    /// Lexical because the semantic tier is *supposed* to work but the
+    /// provider recently failed — worth telling the model about.
+    LexicalDuringOutage,
+    /// Lexical because the index isn't ready (never synced, stale, or a
+    /// sync is running) — the long-standing normal case, not a degradation.
+    Lexical,
+}
+
+fn choose_tier(semantic_ready: bool, outage: bool) -> Tier {
+    match (semantic_ready, outage) {
+        (true, false) => Tier::Semantic,
+        (true, true) => Tier::LexicalDuringOutage,
+        (false, _) => Tier::Lexical,
+    }
+}
+
+enum DegradedReason {
+    /// The tier ran and failed; carries the underlying error text.
+    SemanticFailed(String),
+    /// Skipped without trying, inside the cooldown from a recent failure.
+    ProviderCoolingDown,
+}
+
+/// What the model reads instead of a silent quality drop. Says which tier
+/// is missing, that the results are still usable, and what to do instead —
+/// specifically *not* "search again", since a retry cannot restore the
+/// semantic tier within this turn.
+fn degraded_note(reason: &DegradedReason) -> String {
+    let cause = match reason {
+        DegradedReason::SemanticFailed(err) => format!("не удалось обратиться к провайдеру эмбеддингов ({err})"),
+        DegradedReason::ProviderCoolingDown => {
+            "провайдер эмбеддингов недоступен (недавняя ошибка запроса)".to_string()
+        }
+    };
+    format!(
+        "Семантический ярус отключён: {cause}. Результаты ниже — только точные имена и текст. \
+         Повторный такой же поиск не поможет: уточняйте query точными именами (camelCase) или используйте grep."
+    )
 }
 
 /// The `semanticSearch` schema the model sees.
@@ -112,4 +193,32 @@ pub(super) fn definition() -> LlmToolDefinition {
             "required": ["query"]
         }),
         }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tier_choice_separates_a_missing_index_from_an_unreachable_provider() {
+        assert_eq!(choose_tier(true, false), Tier::Semantic);
+        assert_eq!(choose_tier(true, true), Tier::LexicalDuringOutage);
+        // Index not ready: lexical, but this is the normal cheap path, not
+        // a degradation — nothing to warn the model about.
+        assert_eq!(choose_tier(false, false), Tier::Lexical);
+        assert_eq!(choose_tier(false, true), Tier::Lexical);
+    }
+
+    #[test]
+    fn the_degraded_note_names_the_cause_and_steers_away_from_a_retry() {
+        let note = degraded_note(&DegradedReason::SemanticFailed(
+            "semantic search failed: http error: io: failed to lookup address information".into(),
+        ));
+        assert!(note.contains("failed to lookup address information"), "{note}");
+        assert!(note.contains("grep"), "should offer a usable alternative: {note}");
+        assert!(note.contains("не поможет"), "should discourage an identical retry: {note}");
+
+        let cooling = degraded_note(&DegradedReason::ProviderCoolingDown);
+        assert!(cooling.contains("недоступен"), "{cooling}");
+    }
 }

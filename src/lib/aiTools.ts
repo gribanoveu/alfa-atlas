@@ -59,6 +59,11 @@ export type SemanticSearchMeta = {
   extractedTokens: string[];
   weak: boolean;
   hint: string | null;
+  /** Non-null when the cascade lost a tier it should have had — today only
+   * "the embedding provider was unreachable, so this is symbol + lexical
+   * only". A plain lexical search on a project with no index is *not*
+   * degraded: this marks lost capability, not a cheap tier. */
+  degraded: string | null;
 };
 
 /** Mirrors `domain::ai_tools::SemanticSearchPayload`. */
@@ -95,6 +100,10 @@ export function normalizeSemanticSearchResult(
             ? "Ничего не найдено. Добавьте английские имена методов/классов (camelCase) и повторите поиск."
             : "Поиск шёл по тексту без совпадений по именам. Уточните query английскими терминами или дождитесь синхронизации эмбеддингов."
           : null,
+        // A chat old enough to store a bare `ToolMatch[]` predates
+        // degradation reporting entirely — absence of the field is not
+        // evidence the search was degraded.
+        degraded: null,
       },
     };
   }

@@ -10,6 +10,8 @@ import {
   flattenBlocksToText,
   groupBlocksForRender,
   markRunningToolCallsAsInterrupted,
+  searchIsDegraded,
+  toolLedger,
   settleToolCallBlock,
   type ChatMessage,
   type MessageBlock,
@@ -254,6 +256,137 @@ describe("flattenBlocksToText / chatMessageToPlainText", () => {
       blocks: [{ type: "text", id: "t1", content: "the answer" }],
     };
     expect(chatMessageToPlainText(message)).toBe("the answer");
+  });
+});
+
+describe("searchIsDegraded", () => {
+  const searchCall = (degraded: string | null, status: ToolCallBlock["status"] = "done"): ToolCallBlock => ({
+    type: "toolCall",
+    id: `call_${degraded ?? "ok"}_${Math.random()}`,
+    name: "semanticSearch",
+    argumentsJson: '{"query":"x"}',
+    status,
+    result: {
+      tool: "semanticSearchResults",
+      result: {
+        matches: [],
+        meta: { tiersUsed: ["symbol"], symbolHits: 0, extractedTokens: [], weak: false, hint: null, degraded },
+      },
+    },
+  });
+
+  const withBlocks = (id: string, blocks: MessageBlock[]): ChatMessage => ({
+    id,
+    role: "assistant",
+    blocks,
+  });
+
+  test("false for a conversation that never searched", () => {
+    expect(searchIsDegraded([])).toBe(false);
+    expect(searchIsDegraded([withBlocks("a", [{ type: "text", id: "t", content: "hi" }])])).toBe(false);
+  });
+
+  test("true while the newest search ran without the semantic tier", () => {
+    expect(searchIsDegraded([withBlocks("a", [searchCall("провайдер недоступен")])])).toBe(true);
+  });
+
+  test("clears once a later search succeeds", () => {
+    const messages = [
+      withBlocks("a", [searchCall("провайдер недоступен")]),
+      withBlocks("b", [searchCall(null)]),
+    ];
+    expect(searchIsDegraded(messages)).toBe(false);
+  });
+
+  test("an unfinished search does not clear a standing degradation", () => {
+    const messages = [
+      withBlocks("a", [searchCall("провайдер недоступен")]),
+      withBlocks("b", [searchCall(null, "running")]),
+    ];
+    expect(searchIsDegraded(messages)).toBe(true);
+  });
+
+  test("only the newest search counts, even within one turn", () => {
+    const messages = [
+      withBlocks("a", [searchCall("провайдер недоступен"), searchCall(null)]),
+    ];
+    expect(searchIsDegraded(messages)).toBe(false);
+  });
+});
+
+describe("toolLedger", () => {
+  const call = (
+    name: string,
+    args: Record<string, unknown>,
+    status: ToolCallBlock["status"] = "done",
+  ): ToolCallBlock => ({
+    type: "toolCall",
+    id: `call_${name}_${JSON.stringify(args)}`,
+    name,
+    argumentsJson: JSON.stringify(args),
+    status,
+  });
+
+  test("records read, changed and deleted paths, changes first", () => {
+    const ledger = toolLedger([
+      call("readFile", { path: "src/api/AusnController.java" }),
+      call("editFile", { path: "docs/fetch.adoc", edits: [] }),
+      call("deleteFile", { path: "docs/old.adoc" }),
+    ]);
+    expect(ledger).toBe(
+      "[Файлы, затронутые в этом ходе — изменены: docs/fetch.adoc; удалены: docs/old.adoc; прочитаны: src/api/AusnController.java]",
+    );
+  });
+
+  test("is empty for a turn that touched no files", () => {
+    expect(toolLedger([{ type: "text", id: "t1", content: "just prose" }])).toBe("");
+    expect(toolLedger([call("semanticSearch", { query: "x" }), call("todo", { op: "write" })])).toBe("");
+  });
+
+  test("ignores calls that did not settle successfully", () => {
+    expect(toolLedger([call("readFile", { path: "a.adoc" }, "error")])).toBe("");
+    expect(toolLedger([call("readFile", { path: "a.adoc" }, "running")])).toBe("");
+    expect(toolLedger([call("writeFile", { path: "a.adoc" }, "pendingApproval")])).toBe("");
+  });
+
+  test("dedupes repeated paths and survives unparseable arguments", () => {
+    const ledger = toolLedger([
+      call("readFile", { path: "a.adoc" }),
+      call("readFile", { path: "a.adoc" }),
+      { type: "toolCall", id: "c3", name: "readFile", argumentsJson: "{not json", status: "done" },
+    ]);
+    expect(ledger).toBe("[Файлы, затронутые в этом ходе — прочитаны: a.adoc]");
+  });
+
+  test("renders a move as its before → after pair", () => {
+    expect(toolLedger([call("move", { path: "old.adoc", newPath: "new.adoc" })])).toBe(
+      "[Файлы, затронутые в этом ходе — изменены: old.adoc → new.adoc]",
+    );
+  });
+
+  test("caps a long research turn and reports how many paths were dropped", () => {
+    const reads = Array.from({ length: 45 }, (_, i) => call("readFile", { path: `f${i}.java` }));
+    const ledger = toolLedger([call("writeFile", { path: "docs/out.adoc" }), ...reads]);
+    // Writes are never the entries dropped, and what survives of the reads
+    // is the tail — the files the turn ended on.
+    expect(ledger).toContain("изменены: docs/out.adoc");
+    expect(ledger).toContain("f44.java");
+    expect(ledger).not.toContain("f5.java,");
+    expect(ledger).toContain("и ещё 6 файл(ов)");
+  });
+
+  test("chatMessageToPlainText appends the ledger so paths survive into the next turn", () => {
+    const message: ChatMessage = {
+      id: "m1",
+      role: "assistant",
+      blocks: [
+        { type: "text", id: "t1", content: "Смотри AusnTransactionService.java:41." },
+        call("readFile", { path: "src/thrift/services/AusnTransactionService.java" }),
+      ],
+    };
+    expect(chatMessageToPlainText(message)).toBe(
+      "Смотри AusnTransactionService.java:41.\n\n[Файлы, затронутые в этом ходе — прочитаны: src/thrift/services/AusnTransactionService.java]",
+    );
   });
 });
 

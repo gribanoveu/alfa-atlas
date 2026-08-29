@@ -76,7 +76,14 @@ function formatMessage(message: ChatMessage): string {
   const body = formatBlocks(message.blocks);
   const streamingNote = message.streaming ? "\n\n_(ответ ещё формируется)_" : "";
   const cancelledNote = message.cancelled ? "\n\n_(остановлено пользователем)_" : "";
-  const failedNote = message.failed ? "\n\n_(завершилось ошибкой)_" : "";
+  // With the reason: an export is what gets shared when a turn goes wrong,
+  // and "завершилось ошибкой" alone can't distinguish a provider hiccup
+  // from an exhausted context window — the two call for opposite fixes.
+  const failedNote = message.failed
+    ? message.errorMessage
+      ? `\n\n_(завершилось ошибкой: ${message.errorMessage})_`
+      : "\n\n_(завершилось ошибкой)_"
+    : "";
   return `## Ассистент\n\n${body}${streamingNote}${cancelledNote}${failedNote}`;
 }
 

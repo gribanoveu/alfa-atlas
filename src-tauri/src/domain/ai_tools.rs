@@ -9,6 +9,7 @@ use super::ai_access::default_allowed_tools;
 use super::ai_access::{AiAccessMode, ToolName};
 use super::conversation_mode::ConversationMode;
 use super::embeddings::EmbeddingError;
+use super::flexible_args;
 use super::paths;
 use super::project_config::ProjectError;
 use super::repo_index::FileId;
@@ -24,6 +25,7 @@ pub struct ListFilesArgs {
     /// 1, so `Some(1)` means direct children only). `Some(0)` is valid —
     /// no descendant entries at all, not an error. `None` = unlimited,
     /// matching the behavior before this field existed.
+    #[serde(default, deserialize_with = "flexible_args::opt_u32")]
     pub depth: Option<u32>,
     /// Glob matched against each entry's filename only, never its full
     /// path (e.g. `"*.java"` matches at any depth). Directory entries are
@@ -40,8 +42,10 @@ pub struct ReadFileArgs {
     /// 1-indexed, inclusive. `None` means "from the beginning of the
     /// file". Out-of-range values are clamped, not rejected — see
     /// `services::ai_tools::tools::read_file::slice_lines`.
+    #[serde(default, deserialize_with = "flexible_args::opt_u32")]
     pub start_line: Option<u32>,
     /// 1-indexed, inclusive. `None` means "through the end of the file".
+    #[serde(default, deserialize_with = "flexible_args::opt_u32")]
     pub end_line: Option<u32>,
 }
 
@@ -59,6 +63,7 @@ pub struct SemanticSearchArgs {
     pub query: String,
     /// `None` falls back to a default (see `services::ai_tools`), clamped
     /// to a hard maximum regardless of what's requested.
+    #[serde(default, deserialize_with = "flexible_args::opt_usize")]
     pub top_k: Option<usize>,
 }
 
@@ -77,9 +82,11 @@ pub struct GrepArgs {
     /// Filename-only glob filter (same semantics as `ListFilesArgs::pattern`).
     pub glob: Option<String>,
     /// Default `false` — exact case-sensitive match unless opted in.
+    #[serde(default, deserialize_with = "flexible_args::opt_bool")]
     pub case_insensitive: Option<bool>,
     /// Cap on returned matches; `None` → default, clamped to a hard max
     /// (see `services::docs_search`).
+    #[serde(default, deserialize_with = "flexible_args::opt_usize")]
     pub max_results: Option<usize>,
 }
 
@@ -165,6 +172,7 @@ pub struct DeleteDirectoryArgs {
     /// `None`/omitted means `false`: a non-empty directory is refused
     /// rather than silently deleted — see
     /// `services::ai_tools::tools::delete_directory::delete_directory`.
+    #[serde(default, deserialize_with = "flexible_args::opt_bool")]
     pub recursive: Option<bool>,
 }
 
@@ -216,7 +224,7 @@ pub struct AskUserQuestion {
     pub id: String,
     pub prompt: String,
     pub options: Vec<AskUserOption>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "flexible_args::flag")]
     pub allow_multiple: bool,
 }
 
@@ -324,7 +332,9 @@ pub struct GitDiffArgs {
 #[serde(rename_all = "camelCase")]
 pub struct GitBlameArgs {
     pub path: String,
+    #[serde(default, deserialize_with = "flexible_args::opt_u32")]
     pub start_line: Option<u32>,
+    #[serde(default, deserialize_with = "flexible_args::opt_u32")]
     pub end_line: Option<u32>,
 }
 
@@ -559,6 +569,13 @@ pub struct SemanticSearchMeta {
     pub extracted_tokens: Vec<String>,
     pub weak: bool,
     pub hint: Option<String>,
+    /// Set when the cascade could not run the tier it should have —
+    /// today only "the embedding provider was unreachable, so this is
+    /// symbol + lexical only". `None` is the ordinary case, including a
+    /// plain lexical search on a project whose index simply isn't built:
+    /// this field means *lost capability*, not *cheap tier*. The text is
+    /// read by both the model (it replaces `hint`) and the UI.
+    pub degraded: Option<String>,
 }
 
 /// Settled `SemanticSearch` payload — matches plus `meta` so the model can

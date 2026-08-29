@@ -516,6 +516,32 @@
   background: var(--bg-0);
 }
 
+/* Sits just above the composer, in the same strip as the follow-up bar:
+   a standing condition of the current chat (search is running degraded),
+   not an event in the transcript — so it stays put while the message list
+   scrolls, and disappears on its own once a search succeeds. */
+.assistant-degraded-bar {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+
+  padding: 6px 10px;
+
+  border-top: 1px solid var(--border);
+  background: var(--bg-0);
+
+  font-size: var(--font-ui-xs);
+  line-height: 1.4;
+  color: var(--text-1);
+}
+
+.assistant-degraded-bar svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--yellow);
+}
+
 .assistant-followup-bar-icon {
   flex: none;
   color: var(--text-2);

@@ -151,6 +151,37 @@ describe("describeMessageForCompaction", () => {
     expect(out).toContain("Assistant: Reading the file now.");
     expect(out).toContain("[tool] readFile ->");
   });
+
+  test("names the file a tool call worked on, so the FILES: section has paths to use", () => {
+    const message: ChatMessage = {
+      id: "a",
+      role: "assistant",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "readFile",
+          argumentsJson: '{"path":"src/thrift/services/AusnTransactionService.java"}',
+          status: "done",
+          result: {
+            tool: "file",
+            result: { startLine: 1, endLine: 42, totalLines: 42, content: "..." },
+          } as ToolCallBlock["result"],
+        },
+        {
+          type: "toolCall",
+          id: "call_2",
+          name: "move",
+          argumentsJson: '{"path":"old.adoc","newPath":"new.adoc"}',
+          status: "done",
+        },
+      ],
+      streaming: false,
+    };
+    const out = describeMessageForCompaction(message);
+    expect(out).toContain("[tool] readFile src/thrift/services/AusnTransactionService.java ->");
+    expect(out).toContain("[tool] move old.adoc → new.adoc ->");
+  });
 });
 
 describe("formatCompactionNoticeText", () => {
