@@ -136,12 +136,13 @@ const THRIFT_METHOD: &str = r#"=== Входные параметры
 
 const RESPONSE_FIELDS: &str = r#"=== Выходные параметры
 
-[cols="1,1,3,1"]
+[cols="1,1,1,1,1"]
 |===
-| *Параметр* | *Формат* | *Описание* | *Варианты значений*
+| *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*
 
 | fieldName
 | string
+| required
 | Описание поля и источник значения
 | -
 |===
@@ -469,6 +470,30 @@ mod tests {
         // A trailing blank line here would push `doc-attrs` out of the header.
         assert!(by_id("doc-title").ends_with("документа\n"));
         assert!(by_id("doc-attrs").starts_with(':'));
+    }
+
+    /// The parameter tables have one shape each, shared with the scaffold in
+    /// `src/templates/asciidoc/rest-endpoint/` and with what `artifact_render`
+    /// generates — a reviewer diffs a written table against a generated one.
+    #[test]
+    fn parameter_tables_have_the_house_columns() {
+        let by_id = |id: &str| {
+            ASCIIDOC_ELEMENT_TEMPLATES
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap_or_else(|| panic!("no template {id}"))
+                .template
+        };
+        assert!(by_id("http-method").contains(
+            "| *Тип параметра* | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*"
+        ));
+        // Пять колонок, как у скаффолда и у `outputParams` артефакта — не
+        // четыре: обязательность поля ответа такая же часть контракта.
+        assert!(by_id("response-fields")
+            .contains("| *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*"));
+        assert!(by_id("response-fields").contains("[cols=\"1,1,1,1,1\"]"));
+        assert!(by_id("thrift-method")
+            .contains("| *Параметр* | *Формат* | *Обязательность* | *Описание*"));
     }
 
     /// The house standard spells obligation `required`/`optional` everywhere —
