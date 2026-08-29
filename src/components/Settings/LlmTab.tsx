@@ -4,6 +4,7 @@ import { toMessage } from "../../lib/errors";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
 import { AUTO_MODEL_LABEL, AUTO_MODEL_VALUE, CUSTOM_MODEL_PLACEHOLDER } from "../../lib/assistantConfig";
 import {
+  DEFAULT_PROVIDER_TOKEN_LIMIT,
   formatLlmRequestHeaders,
   LLM_REQUEST_HEADER_UUID,
   mergeKnownModels,
@@ -30,6 +31,19 @@ function uniqueProviderId(label: string, existingIds: string[]): string {
   let suffix = 2;
   while (existingIds.includes(`${base}-${suffix}`)) suffix += 1;
   return `${base}-${suffix}`;
+}
+
+function effectiveTokenLimit(provider: ProviderDetailProps["provider"]) {
+  return {
+    context: provider.limit?.context ?? DEFAULT_PROVIDER_TOKEN_LIMIT.context,
+    output: provider.limit?.output ?? DEFAULT_PROVIDER_TOKEN_LIMIT.output,
+  };
+}
+
+function parseTokenLimitField(raw: string): number | null {
+  const n = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return n;
 }
 
 function LlmEndpointHint({ baseUrl }: { baseUrl: string | null | undefined }) {
@@ -75,6 +89,8 @@ function ProviderDetail({
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl);
   const [headersDraft, setHeadersDraft] = useState(formatLlmRequestHeaders(provider.requestHeaders));
   const [certDraft, setCertDraft] = useState(provider.trustedCertPem ?? "");
+  const [contextDraft, setContextDraft] = useState(String(effectiveTokenLimit(provider).context));
+  const [outputDraft, setOutputDraft] = useState(String(effectiveTokenLimit(provider).output));
   const [newModelDraft, setNewModelDraft] = useState("");
   const [modelFilterDraft, setModelFilterDraft] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -101,6 +117,12 @@ function ProviderDetail({
   useEffect(() => {
     setCertDraft(provider.trustedCertPem ?? "");
   }, [provider.id, provider.trustedCertPem]);
+
+  useEffect(() => {
+    const limit = effectiveTokenLimit(provider);
+    setContextDraft(String(limit.context));
+    setOutputDraft(String(limit.output));
+  }, [provider.id, provider.limit?.context, provider.limit?.output]);
 
   useEffect(() => {
     if (!modelSelectOpen) return;
@@ -172,6 +194,24 @@ function ProviderDetail({
     } finally {
       setTesting(false);
     }
+  };
+
+  const handleSaveTokenLimits = () => {
+    const context = parseTokenLimitField(contextDraft);
+    const output = parseTokenLimitField(outputDraft);
+    if (context === null || output === null) {
+      const limit = effectiveTokenLimit(provider);
+      setContextDraft(String(limit.context));
+      setOutputDraft(String(limit.output));
+      return;
+    }
+    const current = effectiveTokenLimit(provider);
+    if (context === current.context && output === current.output) return;
+    void updateProviderConfig(provider.id, { limit: { context, output } });
+  };
+
+  const handleResetTokenLimits = () => {
+    void updateProviderConfig(provider.id, { limit: null });
   };
 
   const modelOptions = [
@@ -432,6 +472,49 @@ function ProviderDetail({
         ) : (
           <p className="settings-hint settings-hint-compact">Каталог пуст — добавьте модель или загрузите с API.</p>
         )}
+      </section>
+
+      <section className="llm-detail-group">
+        <h4 className="llm-detail-group-title">Контекст</h4>
+        <div className="llm-limit-row">
+          <label className="llm-field">
+            <span className="llm-field-label">Контекстное окно (токены)</span>
+            <input
+              className="clone-modal-input"
+              type="number"
+              min={1}
+              step={1000}
+              placeholder={String(DEFAULT_PROVIDER_TOKEN_LIMIT.context)}
+              value={contextDraft}
+              disabled={busy}
+              onChange={(event) => setContextDraft(event.target.value)}
+              onBlur={handleSaveTokenLimits}
+            />
+          </label>
+          <label className="llm-field">
+            <span className="llm-field-label">Макс. ответ (токены)</span>
+            <input
+              className="clone-modal-input"
+              type="number"
+              min={1}
+              step={1000}
+              placeholder={String(DEFAULT_PROVIDER_TOKEN_LIMIT.output)}
+              value={outputDraft}
+              disabled={busy}
+              onChange={(event) => setOutputDraft(event.target.value)}
+              onBlur={handleSaveTokenLimits}
+            />
+          </label>
+        </div>
+        <p className="settings-hint settings-hint-compact">
+          По умолчанию — {DEFAULT_PROVIDER_TOKEN_LIMIT.context.toLocaleString("ru-RU")}. Используется для
+          счётчика контекста в чате и авто-сжатия истории.
+        </p>
+        <div className="llm-limit-actions">
+          <button type="button" className="settings-btn" disabled={busy} onClick={handleResetTokenLimits}>
+            Сбросить
+          </button>
+        </div>
       </section>
 
       <section className="llm-detail-group llm-detail-advanced">

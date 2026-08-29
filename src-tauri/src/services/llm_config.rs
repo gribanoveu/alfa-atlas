@@ -6,7 +6,10 @@
 
 use std::collections::HashMap;
 
-use crate::domain::llm::{LlmError, LlmProvider, LlmProviderConfig, LlmProviderPreset, LlmSettings, ResolvedLlmProvider};
+use crate::domain::llm::{
+    DEFAULT_PROVIDER_TOKEN_LIMIT, LlmError, LlmProvider, LlmProviderConfig, LlmProviderPreset,
+    LlmSettings, ResolvedLlmProvider,
+};
 use crate::domain::settings::SettingsError;
 use crate::infra::llm_provider_manifest;
 use crate::infra::settings_store;
@@ -76,7 +79,7 @@ pub fn resolve_provider(
         model: over.model.clone(),
         trusted_cert_pem: over.trusted_cert_pem.clone(),
         known_models: over.known_models.clone(),
-        limit: over.limit,
+        limit: over.limit.or(Some(DEFAULT_PROVIDER_TOKEN_LIMIT)),
         request_headers: resolve_request_headers_from_override(over),
     })
 }
@@ -368,6 +371,26 @@ mod tests {
         assert!(!resolved.is_system);
         assert_eq!(resolved.base_url, "https://api.openai.com/v1");
         assert_eq!(resolved.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn resolve_custom_provider_without_limit_gets_default() {
+        let settings = LlmSettings {
+            active_provider_id: None,
+            providers: vec![LlmProviderConfig {
+                id: "my-custom".to_string(),
+                label: Some("My Custom".to_string()),
+                base_url: Some("https://api.openai.com/v1".to_string()),
+                model: None,
+                trusted_cert_pem: None,
+                known_models: vec![],
+                limit: None,
+                request_headers: None,
+            }],
+            ..Default::default()
+        };
+        let resolved = resolve_provider("my-custom", &settings).unwrap();
+        assert_eq!(resolved.limit, Some(DEFAULT_PROVIDER_TOKEN_LIMIT));
     }
 
     #[test]

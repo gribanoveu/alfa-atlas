@@ -40,6 +40,13 @@ pub struct ProviderTokenLimit {
     pub output: u32,
 }
 
+/// Fallback when a custom provider has no explicit `limit` in settings.
+/// Drives the chat context ring and compaction trigger for non-system ids.
+pub const DEFAULT_PROVIDER_TOKEN_LIMIT: ProviderTokenLimit = ProviderTokenLimit {
+    context: 200_000,
+    output: 30_000,
+};
+
 /// One entry in a project-independent, globally-persisted list of
 /// configured LLM providers (`AppSettings.llm.providers`). For a `System`
 /// provider (an id that also appears in the compiled-in manifest, see

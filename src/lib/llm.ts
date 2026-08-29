@@ -41,6 +41,12 @@ export type ProviderTokenLimit = {
   output: number;
 };
 
+/** Mirrors `domain::llm::DEFAULT_PROVIDER_TOKEN_LIMIT`. */
+export const DEFAULT_PROVIDER_TOKEN_LIMIT: ProviderTokenLimit = {
+  context: 200_000,
+  output: 30_000,
+};
+
 // Mirrors `domain::llm::LlmSettings`.
 export type LlmSettings = {
   activeProviderId: string | null;

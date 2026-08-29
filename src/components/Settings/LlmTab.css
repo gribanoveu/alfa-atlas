@@ -168,6 +168,17 @@
   color: var(--text-1);
 }
 
+.llm-limit-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.llm-limit-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .llm-readonly-value {
   margin: 0;
   padding: 7px 10px;
