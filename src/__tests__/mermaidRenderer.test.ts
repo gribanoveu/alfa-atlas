@@ -5,9 +5,13 @@ if (typeof globalThis.window === "undefined") {
     globalThis;
 }
 
+const initCalls: { theme: string }[] = [];
+
 mock.module("mermaid", () => ({
   default: {
-    initialize: () => {},
+    initialize: (config: { theme: string }) => {
+      initCalls.push(config);
+    },
     render: async (_id: string, text: string) => {
       if (text.includes("INVALID")) {
         throw new Error("Syntax error in diagram");
@@ -55,5 +59,36 @@ describe("renderMermaid", () => {
       kind: "error",
       message: "Syntax error in diagram",
     });
+  });
+});
+
+describe("renderMermaid theming", () => {
+  test("maps the app's palette onto mermaid's built-in themes", async () => {
+    initCalls.length = 0;
+    await renderMermaid("flowchart TD\n  A --> B", "dark");
+    await renderMermaid("flowchart TD\n  A --> B", "light");
+    expect(initCalls.map((c) => c.theme)).toEqual(["dark", "default"]);
+  });
+
+  test("defaults to the dark palette", async () => {
+    initCalls.length = 0;
+    await renderMermaid("flowchart TD\n  A --> B");
+    expect(initCalls.at(-1)?.theme).toBe("dark");
+  });
+
+  test("re-initializes per render so a theme change takes effect", async () => {
+    // `initialize` is the only way to change mermaid's theme, and the
+    // module is shared — this is why it runs per render rather than once
+    // at load, and why the render queue has to serialize it.
+    initCalls.length = 0;
+    await renderMermaid("flowchart TD\n  A --> B", "light");
+    await renderMermaid("flowchart TD\n  A --> B", "light");
+    expect(initCalls.length).toBe(2);
+  });
+
+  test("an empty source never reaches the engine", async () => {
+    initCalls.length = 0;
+    await renderMermaid("  \n ", "dark");
+    expect(initCalls).toEqual([]);
   });
 });

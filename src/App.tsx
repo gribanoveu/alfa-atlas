@@ -44,7 +44,8 @@ import { OpenApiExplorer } from "./components/OpenApiExplorer/OpenApiExplorer";
 import { UtilityView } from "./components/Utilities/UtilityView";
 import { utilityTabId } from "./data/utilities";
 import { artifactTabId, createAndOpenArtifact } from "./lib/artifactTabs";
-import { normalizeDiagramBackdrop } from "./lib/prefs";
+import { normalizeDiagramTheme, resolveDiagramBackdrop } from "./lib/prefs";
+import { setDiagramTheme } from "./lib/diagramTheme";
 import { visualTabId, type Visual } from "./lib/visuals";
 import { VisualView } from "./components/Visuals/VisualView";
 import { ARTIFACT_KINDS } from "./data/artifactKinds";
@@ -478,6 +479,13 @@ function App() {
 
 
 
+  // `AscMermaid` reads the palette from a store rather than a prop — it
+  // renders from three unrelated subtrees; see `lib/diagramTheme.ts`.
+  const diagramTheme = normalizeDiagramTheme(generalPrefs.prefs.diagramTheme);
+  useEffect(() => {
+    setDiagramTheme(diagramTheme);
+  }, [diagramTheme]);
+
   const panelStyle = {
     ["--sidebar-width" as string]: `${panels.layout.sidebarWidth}px`,
     ["--right-width" as string]: `${panels.layout.rightWidth}px`,
@@ -488,10 +496,12 @@ function App() {
     ["--font-editor" as string]: `${generalPrefs.prefs.editorFontSizePx}px`,
     ["--font-preview" as string]: `${generalPrefs.prefs.previewFontSizePx}px`,
     ["--font-assistant" as string]: `${generalPrefs.prefs.assistantFontSizePx}px`,
-    // Normalized on the way in as well as on the way out of the store: this
-    // interpolates into a CSS custom property, which React does not escape.
-    ["--diagram-backdrop" as string]: normalizeDiagramBackdrop(
+    // Resolved (so `"auto"` becomes a real colour) and normalized on the way
+    // in as well as on the way out of the store: this interpolates into a
+    // CSS custom property, which React does not escape.
+    ["--diagram-backdrop" as string]: resolveDiagramBackdrop(
       generalPrefs.prefs.diagramBackdrop,
+      diagramTheme,
     ),
   };
 

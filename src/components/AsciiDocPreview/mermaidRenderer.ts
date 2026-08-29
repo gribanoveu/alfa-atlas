@@ -6,14 +6,30 @@
  */
 
 import { toMessage } from "../../lib/errors";
+import { DEFAULT_DIAGRAM_THEME, type DiagramTheme } from "../../lib/prefs";
 type RenderResult = { kind: "ok"; svg: string } | { kind: "error"; message: string };
 
 type MermaidModule = {
   initialize: (config: {
     startOnLoad: boolean;
     securityLevel: string;
+    theme: string;
   }) => void;
   render: (id: string, text: string) => Promise<{ svg: string }>;
+};
+
+/** Our two palettes in Mermaid's own vocabulary.
+ *
+ * Deliberately Mermaid's *built-in* themes rather than `base` plus
+ * `themeVariables` mapped from the app's tokens. The token-mapped version
+ * looks better on flowcharts, but the categorical scales derive from
+ * `primaryColor`/`secondaryColor`/`tertiaryColor` — feeding those the app's
+ * greys collapses a pie chart into three near-identical slices, and fixing
+ * that means hand-maintaining `pie1..pie12`, `cScale0..` and friends across
+ * every diagram type. The built-in themes already cover all of them. */
+const MERMAID_THEMES: Record<DiagramTheme, string> = {
+  dark: "dark",
+  light: "default",
 };
 
 let mermaidPromise: Promise<MermaidModule> | null = null;
@@ -33,9 +49,7 @@ async function loadMermaid(): Promise<MermaidModule> {
   if (mermaidPromise) return mermaidPromise;
   mermaidPromise = (async () => {
     const mod = await import("mermaid");
-    const mermaid = (mod.default ?? mod) as MermaidModule;
-    mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
-    return mermaid;
+    return (mod.default ?? mod) as MermaidModule;
   })();
   return mermaidPromise;
 }
@@ -63,8 +77,16 @@ function processQueue(): void {
 /**
  * Render a Mermaid source string to an SVG string.
  * Multiple calls are serialized internally.
+ *
+ * `theme` is applied per render rather than once at load: it is a live
+ * setting, and `initialize` is the only way to change it. That is safe
+ * precisely because of the queue above — no other render can be in flight
+ * while this one re-configures the shared module.
  */
-export function renderMermaid(source: string): Promise<RenderResult> {
+export function renderMermaid(
+  source: string,
+  theme: DiagramTheme = DEFAULT_DIAGRAM_THEME,
+): Promise<RenderResult> {
   return new Promise<RenderResult>((resolve) => {
     const run = async () => {
       const normalized = normalizeMermaidSource(source);
@@ -75,6 +97,11 @@ export function renderMermaid(source: string): Promise<RenderResult> {
 
       try {
         const mermaid = await loadMermaid();
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: MERMAID_THEMES[theme],
+        });
         const id = nextRenderId();
 
         let settled = false;

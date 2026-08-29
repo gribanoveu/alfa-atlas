@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { readProjectFile } from "../../lib/project";
 import type { AbstractBlock } from "./types";
+import { useDiagramTheme } from "../../lib/diagramTheme";
 import { normalizeMermaidSource, renderMermaid } from "./mermaidRenderer";
 
 type RenderState =
@@ -74,6 +75,9 @@ export function AscMermaid({
   docsRoot?: string | null;
 }) {
   const rawSource = safeGetSource(block) ?? "";
+  // In the effect's dependency list below, so flipping the setting redraws
+  // whatever is already on screen rather than waiting for a navigation.
+  const theme = useDiagramTheme();
 
   const [scale, setScale] = useState(1);
   const [naturalSize, setNaturalSize] = useState<SvgSize | null>(null);
@@ -112,7 +116,7 @@ export function AscMermaid({
     let cancelled = false;
     setState({ kind: "loading" });
     expandIncludes(rawSource, docsRoot)
-      .then((source) => renderMermaid(normalizeMermaidSource(source)))
+      .then((source) => renderMermaid(normalizeMermaidSource(source), theme))
       .then((r) => {
         if (cancelled) return;
         if (r.kind === "ok") {
@@ -128,7 +132,7 @@ export function AscMermaid({
     return () => {
       cancelled = true;
     };
-  }, [rawSource, docsRoot]);
+  }, [rawSource, docsRoot, theme]);
 
   const clampScale = useCallback((s: number) => {
     return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));

@@ -7,6 +7,9 @@ import {
   DIAGRAM_BACKDROP_PRESETS,
   FONT_SIZE_LIMITS,
   normalizeDiagramBackdrop,
+  normalizeDiagramTheme,
+  resolveDiagramBackdrop,
+  type DiagramTheme,
   type GeneralPrefs,
 } from "../../lib/prefs";
 
@@ -55,6 +58,11 @@ const FONT_SIZE_FIELDS: {
   },
 ];
 
+const DIAGRAM_THEMES: { value: DiagramTheme; label: string }[] = [
+  { value: "dark", label: "Тёмная" },
+  { value: "light", label: "Светлая" },
+];
+
 type AppearanceTabProps = {
   editor: GeneralPrefsEditor;
 };
@@ -66,6 +74,10 @@ export function AppearanceTab({ editor }: AppearanceTabProps) {
   const backdrop = normalizeDiagramBackdrop(
     prefs?.diagramBackdrop ?? DEFAULT_GENERAL_PREFS.diagramBackdrop,
   );
+  const diagramTheme = normalizeDiagramTheme(prefs?.diagramTheme);
+  // What "Авто" currently resolves to, so its swatch shows the real colour
+  // instead of a stand-in the user then has to guess at.
+  const resolvedBackdrop = resolveDiagramBackdrop(backdrop, diagramTheme);
 
   return (
     <div className="settings-sections">
@@ -150,6 +162,31 @@ export function AppearanceTab({ editor }: AppearanceTabProps) {
       </div>
 
       <div className="settings-card">
+        <div className="settings-section-title">Тема диаграмм</div>
+        <div className="settings-backdrop-row" role="group" aria-label="Тема диаграмм">
+          {DIAGRAM_THEMES.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={`settings-theme-btn${
+                diagramTheme === option.value ? " is-active" : ""
+              }`}
+              disabled={!prefs || busy}
+              aria-pressed={diagramTheme === option.value}
+              onClick={() => patchPrefs({ diagramTheme: option.value })}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <p className="settings-hint settings-hint-compact">
+          Палитра самих схем. Тёмная — под цвет интерфейса. Применяется к
+          Mermaid; PlantUML рисуется цветами из исходника диаграммы и эту
+          настройку не поддерживает.
+        </p>
+      </div>
+
+      <div className="settings-card">
         <div className="settings-section-head">
           <div className="settings-section-title">Подложка диаграмм</div>
           <button
@@ -168,9 +205,15 @@ export function AppearanceTab({ editor }: AppearanceTabProps) {
               type="button"
               className={`settings-backdrop-preset${
                 backdrop === preset.value ? " is-active" : ""
-              }${preset.value === "transparent" ? " is-transparent" : ""}`}
+              }${
+                (preset.value === "auto" ? resolvedBackdrop : preset.value) === "transparent"
+                  ? " is-transparent"
+                  : ""
+              }`}
               style={
-                preset.value === "transparent" ? undefined : { background: preset.value }
+                (preset.value === "auto" ? resolvedBackdrop : preset.value) === "transparent"
+                  ? undefined
+                  : { background: preset.value === "auto" ? resolvedBackdrop : preset.value }
               }
               disabled={!prefs || busy}
               aria-pressed={backdrop === preset.value}
@@ -184,10 +227,10 @@ export function AppearanceTab({ editor }: AppearanceTabProps) {
             <input
               type="color"
               className="settings-backdrop-input"
-              // `<input type="color">` has no notion of `transparent`, so it
-              // shows the default swatch while that preset is picked rather
-              // than pretending some colour is selected.
-              value={backdrop === "transparent" ? DEFAULT_DIAGRAM_BACKDROP : backdrop}
+              // `<input type="color">` understands neither `transparent` nor
+              // `auto`, so it shows whatever those currently resolve to
+              // rather than pretending some other colour is selected.
+              value={resolvedBackdrop === "transparent" ? "#ffffff" : resolvedBackdrop}
               disabled={!prefs || busy}
               aria-label="Свой цвет подложки"
               onChange={(event) =>
@@ -199,9 +242,9 @@ export function AppearanceTab({ editor }: AppearanceTabProps) {
         </div>
         <p className="settings-hint settings-hint-compact">
           Фон под отрисованными схемами Mermaid и PlantUML — в превью документов
-          и во вкладках схем от ассистента. Обе библиотеки рисуют тёмным по
-          светлому, поэтому на тёмной или прозрачной подложке диаграмма может
-          читаться хуже.
+          и во вкладках схем от ассистента. «Авто» следует за темой выше:
+          прозрачная для тёмной темы, белая для светлой. PlantUML всегда рисует
+          тёмным по светлому, поэтому для него белая подложка надёжнее.
         </p>
       </div>
 

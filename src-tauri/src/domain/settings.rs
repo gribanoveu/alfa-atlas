@@ -126,14 +126,15 @@ fn default_true() -> bool {
 /// plate behind the SVG rather than letting the app's dark chrome show
 /// through (see `.asc-mermaid-svg svg` in `AsciiDocPreview.css`). White is
 /// what that plate has always been; this pref makes it choosable.
-pub const DEFAULT_DIAGRAM_BACKDROP: &str = "#ffffff";
+pub const DEFAULT_DIAGRAM_BACKDROP: &str = "auto";
 
 fn default_diagram_backdrop() -> String {
     DEFAULT_DIAGRAM_BACKDROP.to_string()
 }
 
-/// Accepts `transparent` or a `#rgb`/`#rrggbb`/`#rrggbbaa` hex literal, and
-/// falls back to the default for anything else.
+/// Accepts `auto` (follow `diagram_theme`), `transparent`, or a
+/// `#rgb`/`#rrggbb`/`#rrggbbaa` hex literal, and falls back to the default
+/// for anything else.
 ///
 /// This is a **security** check, not a tidiness one: the value is written
 /// into a CSS custom property on the app shell (`App.tsx`'s `panelStyle`),
@@ -143,6 +144,9 @@ fn default_diagram_backdrop() -> String {
 /// hand-edited `settings.json`.
 pub fn normalize_diagram_backdrop(value: &str) -> String {
     let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case("auto") {
+        return "auto".to_string();
+    }
     if trimmed.eq_ignore_ascii_case("transparent") {
         return "transparent".to_string();
     }
@@ -175,6 +179,25 @@ pub enum ErrorLanguage {
 
 fn default_error_language() -> ErrorLanguage {
     ErrorLanguage::Ru
+}
+
+/// Which palette rendered diagrams use. Only Mermaid honours this — it has
+/// a built-in `dark` theme covering every diagram type. PlantUML is
+/// deliberately excluded: `!theme` directives are a silent no-op in the
+/// bundled TeaVM build (they render without error and change nothing), and
+/// the only thing that does work — injecting `skinparam` lines — would mean
+/// rewriting author-written diagram source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagramTheme {
+    /// Mermaid's built-in `dark` — matches the app's own dark chrome.
+    Dark,
+    /// Mermaid's `default` — dark-on-light, needs a light backdrop.
+    Light,
+}
+
+fn default_diagram_theme() -> DiagramTheme {
+    DiagramTheme::Dark
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -218,8 +241,12 @@ pub struct GeneralPrefs {
     /// Раскрыта ли секция «Начать работу» на вкладке уведомлений.
     #[serde(default = "default_true")]
     pub notifications_onboarding_expanded: bool,
-    /// Цвет подложки под отрисованными диаграммами (Mermaid/PlantUML) —
-    /// hex-литерал или `transparent`. См. `normalize_diagram_backdrop`.
+    /// Палитра отрисованных диаграмм. См. `DiagramTheme`.
+    #[serde(default = "default_diagram_theme")]
+    pub diagram_theme: DiagramTheme,
+    /// Цвет подложки под отрисованными диаграммами — `auto` (следует за
+    /// `diagram_theme`), `transparent` или hex-литерал. См.
+    /// `normalize_diagram_backdrop`.
     #[serde(default = "default_diagram_backdrop")]
     pub diagram_backdrop: String,
 }
@@ -259,6 +286,7 @@ impl Default for GeneralPrefs {
             last_clone_dir: None,
             notifications_alerts_expanded: true,
             notifications_onboarding_expanded: true,
+            diagram_theme: default_diagram_theme(),
             diagram_backdrop: default_diagram_backdrop(),
         }
     }
@@ -465,6 +493,8 @@ mod tests {
 
     #[test]
     fn diagram_backdrop_accepts_hex_and_transparent() {
+        assert_eq!(normalize_diagram_backdrop("auto"), "auto");
+        assert_eq!(normalize_diagram_backdrop(" AUTO "), "auto");
         assert_eq!(normalize_diagram_backdrop("#FFF"), "#fff");
         assert_eq!(normalize_diagram_backdrop("#1e1f22"), "#1e1f22");
         assert_eq!(normalize_diagram_backdrop("#1E1F22AA"), "#1e1f22aa");
@@ -506,9 +536,20 @@ mod tests {
     }
 
     #[test]
-    fn general_prefs_without_a_backdrop_field_gets_the_default() {
+    fn general_prefs_without_the_diagram_fields_gets_the_defaults() {
+        // Upgrading from a build that predates these fields must not fail
+        // to parse, and must land on the dark-by-default pairing.
         let prefs: GeneralPrefs = serde_json::from_str("{}").unwrap();
         assert_eq!(prefs.diagram_backdrop, DEFAULT_DIAGRAM_BACKDROP);
+        assert_eq!(prefs.diagram_theme, DiagramTheme::Dark);
+    }
+
+    #[test]
+    fn diagram_theme_round_trips_as_camel_case() {
+        let json = serde_json::to_string(&DiagramTheme::Light).unwrap();
+        assert_eq!(json, r#""light""#);
+        let back: DiagramTheme = serde_json::from_str(r#""dark""#).unwrap();
+        assert_eq!(back, DiagramTheme::Dark);
     }
 
     #[test]

@@ -18,8 +18,11 @@ export type GeneralPrefs = {
   lastCloneDir: string | null;
   notificationsAlertsExpanded: boolean;
   notificationsOnboardingExpanded: boolean;
-  /** Colour painted behind a rendered Mermaid/PlantUML diagram. Hex literal
-   *  or `"transparent"` — see `normalizeDiagramBackdrop`. */
+  /** Palette rendered Mermaid diagrams use. */
+  diagramTheme: DiagramTheme;
+  /** Colour painted behind a rendered diagram: `"auto"` (follow
+   *  `diagramTheme`), `"transparent"`, or a hex literal — see
+   *  `normalizeDiagramBackdrop` and `resolveDiagramBackdrop`. */
   diagramBackdrop: string;
 };
 
@@ -27,7 +30,16 @@ export type GeneralPrefs = {
  *  instead of letting the app's dark chrome show through. White is what it
  *  has always been; the pref makes it choosable. Mirrors
  *  `domain::settings::DEFAULT_DIAGRAM_BACKDROP`. */
-export const DEFAULT_DIAGRAM_BACKDROP = "#ffffff";
+export const DEFAULT_DIAGRAM_BACKDROP = "auto";
+
+/** Which palette rendered diagrams use. Mirrors
+ *  `domain::settings::DiagramTheme`. Only Mermaid honours it: PlantUML's
+ *  `!theme` directives are a silent no-op in the bundled TeaVM engine, and
+ *  the one thing that does work — injecting `skinparam` lines — would mean
+ *  rewriting author-written diagram source. */
+export type DiagramTheme = "dark" | "light";
+
+export const DEFAULT_DIAGRAM_THEME: DiagramTheme = "dark";
 
 export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
   restoreLastProject: true,
@@ -45,12 +57,14 @@ export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
   lastCloneDir: null,
   notificationsAlertsExpanded: true,
   notificationsOnboardingExpanded: true,
+  diagramTheme: DEFAULT_DIAGRAM_THEME,
   diagramBackdrop: DEFAULT_DIAGRAM_BACKDROP,
 };
 
 /** Presets offered in Настройки → Оформление, alongside the free picker. */
 export const DIAGRAM_BACKDROP_PRESETS: { value: string; label: string }[] = [
-  { value: DEFAULT_DIAGRAM_BACKDROP, label: "Белая" },
+  { value: "auto", label: "Авто" },
+  { value: "#ffffff", label: "Белая" },
   { value: "#f5f5f4", label: "Тёплая" },
   { value: "#1e1f22", label: "Тёмная" },
   { value: "transparent", label: "Прозрачная" },
@@ -68,8 +82,28 @@ export function normalizeDiagramBackdrop(value: string | null | undefined): stri
   // field, where it is genuinely absent.
   if (typeof value !== "string") return DEFAULT_DIAGRAM_BACKDROP;
   const trimmed = value.trim();
-  if (trimmed.toLowerCase() === "transparent") return "transparent";
+  const lower = trimmed.toLowerCase();
+  if (lower === "auto") return "auto";
+  if (lower === "transparent") return "transparent";
   return HEX_COLOR_RE.test(trimmed) ? trimmed.toLowerCase() : DEFAULT_DIAGRAM_BACKDROP;
+}
+
+/** The actual CSS colour to paint behind a diagram. `"auto"` is the point
+ *  of this function: a dark-themed diagram wants the app's own chrome
+ *  showing through, a light-themed one needs a light plate under it, and
+ *  pairing those by hand is exactly the mistake the preset exists to
+ *  prevent. Any explicit colour is passed through untouched. */
+export function resolveDiagramBackdrop(
+  backdrop: string,
+  theme: DiagramTheme,
+): string {
+  const normalized = normalizeDiagramBackdrop(backdrop);
+  if (normalized !== "auto") return normalized;
+  return theme === "dark" ? "transparent" : "#ffffff";
+}
+
+export function normalizeDiagramTheme(value: unknown): DiagramTheme {
+  return value === "light" ? "light" : DEFAULT_DIAGRAM_THEME;
 }
 
 export const AUTOSAVE_DELAY_LIMITS = { min: 300, max: 10_000 } as const;
@@ -100,6 +134,7 @@ export function clampGeneralPrefs(prefs: GeneralPrefs): GeneralPrefs {
     editorFontSizePx: clampFontSizePx(prefs.editorFontSizePx),
     previewFontSizePx: clampFontSizePx(prefs.previewFontSizePx),
     assistantFontSizePx: clampFontSizePx(prefs.assistantFontSizePx),
+    diagramTheme: normalizeDiagramTheme(prefs.diagramTheme),
     diagramBackdrop: normalizeDiagramBackdrop(prefs.diagramBackdrop),
   };
 }
