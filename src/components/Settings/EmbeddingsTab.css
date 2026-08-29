@@ -120,3 +120,22 @@
 .settings-hint-button:disabled {
   cursor: default;
 }
+
+.embeddings-config-textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+  font-family: var(--font-mono, monospace);
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.embeddings-config-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}

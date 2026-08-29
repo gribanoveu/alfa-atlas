@@ -233,7 +233,7 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
           <label className="clone-modal-field">
             <span className="clone-modal-label">HTTP-заголовки</span>
             <textarea
-              className="llm-cert-textarea"
+              className="embeddings-config-textarea"
               placeholder={`systemId: sanduser\nmessageId: ${EMBEDDING_REQUEST_HEADER_UUID}`}
               value={headersDraft}
               disabled={busy}
