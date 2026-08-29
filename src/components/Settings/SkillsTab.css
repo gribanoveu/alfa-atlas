@@ -52,7 +52,8 @@
   color: var(--text-2);
 }
 
-.skills-expand-btn {
+.skills-expand-btn,
+.skills-icon-btn {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -67,7 +68,8 @@
   cursor: pointer;
 }
 
-.skills-expand-btn:hover {
+.skills-expand-btn:hover,
+.skills-icon-btn:hover {
   background: var(--bg-1);
   color: var(--text-0);
 }

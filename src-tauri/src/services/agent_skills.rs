@@ -10,6 +10,8 @@ use crate::domain::ai_tools::{
 use crate::domain::settings::SettingsError;
 use crate::infra::{bundled_skills, settings_store, user_skills_store};
 
+const SKILL_MD: &str = "SKILL.md";
+
 pub fn load_skills_settings() -> Result<SkillsSettings, SettingsError> {
     Ok(settings_store::load()?.skills)
 }
@@ -71,6 +73,39 @@ pub fn list_skills() -> Result<Vec<SkillListItem>, SkillError> {
         }
     }
     Ok(items)
+}
+
+/// Settings preview: the files of one skill, `SKILL.md` first. Read-only, and
+/// deliberately unfiltered by the enable/disable setting — Settings shows
+/// disabled and broken skills too, and both are worth looking inside.
+pub fn preview_files(source: SkillSource, name: &str) -> Result<Vec<String>, SkillError> {
+    match source {
+        SkillSource::Bundled => {
+            let skill = bundled_skills::bundled_skill(name)
+                .ok_or_else(|| SkillError::NotFound(name.to_string()))?;
+            let mut files = vec![SKILL_MD.to_string()];
+            files.extend(skill.files.iter().map(|f| f.path.to_string()));
+            Ok(files)
+        }
+        SkillSource::User => user_skills_store::preview_files(name),
+    }
+}
+
+/// Settings preview: the text of one file listed by `preview_files`.
+pub fn preview_file(source: SkillSource, name: &str, path: &str) -> Result<String, SkillError> {
+    match source {
+        SkillSource::Bundled => {
+            let skill = bundled_skills::bundled_skill(name)
+                .ok_or_else(|| SkillError::NotFound(name.to_string()))?;
+            if path == SKILL_MD {
+                return Ok(skill.skill_md.to_string());
+            }
+            bundled_skills::bundled_file(skill, path)
+                .map(|c| c.to_string())
+                .ok_or_else(|| SkillError::NotFound(format!("{name}/{path}")))
+        }
+        SkillSource::User => user_skills_store::preview_file(name, path),
+    }
 }
 
 /// Remove a user-installed skill. Bundled skills cannot be deleted.
@@ -254,6 +289,64 @@ mod tests {
             let rest = catalog.iter().find(|s| s.name == "method-spec").unwrap();
             assert_eq!(rest.source, SkillSource::User);
             assert!(rest.description.contains("User overlay"));
+        });
+    }
+
+    #[test]
+    fn preview_lists_bundled_skill_md_first_and_reads_it() {
+        with_temp_home(|| {
+            let files = preview_files(SkillSource::Bundled, "method-spec").unwrap();
+            assert_eq!(files.first().map(String::as_str), Some("SKILL.md"));
+            assert!(files.iter().any(|f| f == "references/structure.md"));
+            let md = preview_file(SkillSource::Bundled, "method-spec", "SKILL.md").unwrap();
+            // The raw file, frontmatter included — the viewer shows the source.
+            assert!(md.starts_with("---"));
+        });
+    }
+
+    #[test]
+    fn preview_works_for_a_disabled_skill() {
+        with_temp_home(|| {
+            set_skill_enabled(SkillSource::Bundled, "method-spec", false).unwrap();
+            assert!(preview_file(SkillSource::Bundled, "method-spec", "SKILL.md").is_ok());
+        });
+    }
+
+    #[test]
+    fn preview_works_for_a_user_skill_with_broken_frontmatter() {
+        with_temp_home(|| {
+            let dir = ensure_user_skills_dir().unwrap();
+            let skill_dir = dir.join("broken-skill");
+            std::fs::create_dir_all(&skill_dir).unwrap();
+            std::fs::write(skill_dir.join("SKILL.md"), "no frontmatter here\n").unwrap();
+            std::fs::write(skill_dir.join("notes.md"), "companion").unwrap();
+
+            let files = preview_files(SkillSource::User, "broken-skill").unwrap();
+            assert_eq!(files, vec!["SKILL.md", "notes.md"]);
+            let text = preview_file(SkillSource::User, "broken-skill", "SKILL.md").unwrap();
+            assert_eq!(text, "no frontmatter here\n");
+        });
+    }
+
+    #[test]
+    fn preview_rejects_a_path_escape() {
+        with_temp_home(|| {
+            let dir = ensure_user_skills_dir().unwrap();
+            let skill_dir = dir.join("my-skill");
+            std::fs::create_dir_all(&skill_dir).unwrap();
+            std::fs::write(
+                skill_dir.join("SKILL.md"),
+                "---\nname: my-skill\ndescription: A user skill.\n---\n# Body\n",
+            )
+            .unwrap();
+            assert!(matches!(
+                preview_file(SkillSource::User, "my-skill", "../../settings.json").unwrap_err(),
+                SkillError::PathEscape(_)
+            ));
+            assert!(matches!(
+                preview_files(SkillSource::User, "../..").unwrap_err(),
+                SkillError::PathEscape(_)
+            ));
         });
     }
 

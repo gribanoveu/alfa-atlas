@@ -29,7 +29,10 @@ mock.module("../lib/skills", () => ({
   skillsUserDir: async () => "/tmp/skills",
 }));
 mock.module("@tauri-apps/plugin-dialog", () => ({ open: async () => null }));
-mock.module("@tauri-apps/plugin-opener", () => ({ openPath: async () => {} }));
+mock.module("@tauri-apps/plugin-opener", () => ({
+  openPath: async () => {},
+  openUrl: async () => {},
+}));
 
 const { useSkills } = await import("../hooks/useSkills");
 

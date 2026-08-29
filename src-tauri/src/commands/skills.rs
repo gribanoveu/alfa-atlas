@@ -13,6 +13,16 @@ pub fn skills_set_enabled(source: SkillSource, name: String, enabled: bool) -> R
 }
 
 #[tauri::command]
+pub fn skills_files(source: SkillSource, name: String) -> Result<Vec<String>, String> {
+    agent_skills::preview_files(source, &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn skills_read_file(source: SkillSource, name: String, path: String) -> Result<String, String> {
+    agent_skills::preview_file(source, &name, &path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn skills_import(path: String) -> Result<SkillMeta, String> {
     user_skills_store::import_skill_dir(std::path::Path::new(&path)).map_err(|e| e.to_string())
 }

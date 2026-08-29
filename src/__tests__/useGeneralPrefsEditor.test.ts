@@ -28,7 +28,10 @@ mock.module("../lib/prefs", () => ({
     stored = next;
   },
 }));
-mock.module("@tauri-apps/plugin-opener", () => ({ openPath: async () => {} }));
+mock.module("@tauri-apps/plugin-opener", () => ({
+  openPath: async () => {},
+  openUrl: async () => {},
+}));
 
 const { useGeneralPrefsEditor } = await import("../hooks/useGeneralPrefsEditor");
 

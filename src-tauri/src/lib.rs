@@ -286,6 +286,8 @@ pub fn run() {
             commands::standards::check_standards,
             commands::skills::skills_list,
             commands::skills::skills_set_enabled,
+            commands::skills::skills_files,
+            commands::skills::skills_read_file,
             commands::skills::skills_import,
             commands::skills::skills_remove,
             commands::skills::skills_user_dir,

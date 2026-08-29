@@ -103,13 +103,43 @@ pub fn companion_files(name: &str) -> Result<Vec<String>, SkillError> {
 pub fn read_companion(name: &str, relative: &str) -> Result<String, SkillError> {
     let root = skill_root(name)?;
     let target = resolve_under(&root, relative)?;
-    fs::read_to_string(&target).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            SkillError::NotFound(format!("{name}/{relative}"))
-        } else {
-            SkillError::Message(e.to_string())
+    read_text(&target, &format!("{name}/{relative}"))
+}
+
+fn read_text(path: &Path, label: &str) -> Result<String, SkillError> {
+    fs::read_to_string(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => SkillError::NotFound(label.to_string()),
+        std::io::ErrorKind::InvalidData => {
+            SkillError::Message(format!("{label} is not UTF-8 text"))
         }
+        _ => SkillError::Message(e.to_string()),
     })
+}
+
+/// Every file in a user skill folder, `SKILL.md` first. Unlike
+/// `companion_files` this resolves the folder by its directory name without
+/// the spec name check, so a folder whose `SKILL.md` is broken can still be
+/// previewed — reading it is how you find out what's wrong with it.
+pub fn preview_files(dir_name: &str) -> Result<Vec<String>, SkillError> {
+    let root = preview_root(dir_name)?;
+    if !root.is_dir() {
+        return Err(SkillError::NotFound(dir_name.to_string()));
+    }
+    let mut files = Vec::new();
+    collect_files(&root, &root, &mut files)?;
+    files.sort();
+    if root.join(SKILL_MD).is_file() {
+        files.insert(0, SKILL_MD.to_string());
+    }
+    Ok(files)
+}
+
+/// Text of one file inside a user skill folder — `SKILL.md` included, and
+/// without the spec name check, for the same reason as `preview_files`.
+pub fn preview_file(dir_name: &str, relative: &str) -> Result<String, SkillError> {
+    let root = preview_root(dir_name)?;
+    let target = resolve_under(&root, relative)?;
+    read_text(&target, &format!("{dir_name}/{relative}"))
 }
 
 /// Copy `src_dir` into `~/.atlas/skills/{parsed.name}/`. Fails if that name
@@ -161,6 +191,14 @@ pub fn remove_user_skill(name: &str) -> Result<(), SkillError> {
 fn skill_root(name: &str) -> Result<PathBuf, SkillError> {
     crate::domain::agent_skills::validate_skill_name(name)?;
     Ok(user_skills_dir()?.join(name))
+}
+
+/// A skill folder resolved by directory name only. `resolve_under` keeps the
+/// result inside `~/.atlas/skills`, which is what `skill_root` relies on
+/// `validate_skill_name` for.
+fn preview_root(dir_name: &str) -> Result<PathBuf, SkillError> {
+    let dir = ensure_user_skills_dir()?;
+    resolve_under(&dir, dir_name)
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), SkillError> {

@@ -1,7 +1,8 @@
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye } from "lucide-react";
 import { useState } from "react";
 import { useSkills } from "../../hooks/useSkills";
 import type { SkillListItem } from "../../lib/skills";
+import { SkillPreviewModal } from "./SkillPreviewModal";
 import "../Welcome/CloneRepoModal.css";
 import "./SkillsTab.css";
 
@@ -12,6 +13,7 @@ function skillKey(item: SkillListItem): string {
 export function SkillsTab() {
   const { items, error, busy, toggle, addSkill, removeSkill, openFolder } = useSkills();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [previewed, setPreviewed] = useState<SkillListItem | null>(null);
 
   const toggleExpanded = (key: string) => {
     setExpanded((prev) => {
@@ -77,6 +79,15 @@ export function SkillsTab() {
                       <Chevron size={14} aria-hidden />
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    className="skills-icon-btn"
+                    aria-label={`Просмотреть скил ${item.name}`}
+                    title="Просмотреть содержимое"
+                    onClick={() => setPreviewed(item)}
+                  >
+                    <Eye size={14} aria-hidden />
+                  </button>
                   {item.source === "user" ? (
                     <button
                       type="button"
@@ -97,6 +108,9 @@ export function SkillsTab() {
         )}
       </div>
       {error ? <div className="settings-error">{error}</div> : null}
+      {previewed ? (
+        <SkillPreviewModal skill={previewed} onClose={() => setPreviewed(null)} />
+      ) : null}
     </>
   );
 }
