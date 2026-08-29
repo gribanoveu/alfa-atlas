@@ -36,7 +36,7 @@ pub enum ArtifactStatus {
 
 /// One row of a documentation parameter table. The five fields are exactly
 /// the five columns of the REST template's tables (`Параметр | Формат |
-/// Обязательный | Описание | Варианты значений`, see
+/// Обязательность | Описание | Варианты значений`, see
 /// `src/templates/asciidoc/rest-endpoint/methodName.adoc`) — keeping them
 /// aligned is what makes `artifact_render` a straight projection rather
 /// than a transformation with judgement calls in it.

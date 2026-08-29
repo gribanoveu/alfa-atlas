@@ -69,6 +69,18 @@ describe("каталог элементов AsciiDoc", () => {
     }
   });
 
+  test("обязательность пишется одним способом — required/optional", () => {
+    for (const { id, template } of ASCIIDOC_SNIPPETS) {
+      expect(template, `${id}: колонка называется «Обязательность»`).not.toContain(
+        "*Обязательный*",
+      );
+      for (const line of template.split("\n")) {
+        const cell = line.replace(/^\|+/, "").trim();
+        expect(["да", "нет", "Да", "Нет"], `${id}: ячейка ${cell}`).not.toContain(cell);
+      }
+    }
+  });
+
   test("таблица кодов ошибок описана в формате постановки", () => {
     const template = snippet("error-codes").template;
     expect(template).toContain("| *Условие* | *Описание* | *Type* | *Code*");

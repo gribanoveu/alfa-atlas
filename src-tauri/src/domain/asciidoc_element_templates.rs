@@ -98,38 +98,38 @@ const THRIFT_METHOD: &str = r#"=== Входные параметры
 
 [cols="1,1,1,3"]
 |===
-| *Параметр* | *Формат* | *Обязательный* | *Описание*
+| *Параметр* | *Формат* | *Обязательность* | *Описание*
 
 |Endpoint 3+| {host}/<сервис>/tapi
 
 | userData
 | struct
-| да
+| required
 | Данные пользователя
 
 | userData.id
 | string
-| да
+| required
 | Идентификатор пользователя (xpin/acus)
 
 | userData.authorizedApplicationId
 | string
-| да
+| required
 | Идентификатор приложения
 
 | userData.ip
 | string
-| да
+| required
 | IP-адрес пользователя
 
 | userData.customerId
 | string
-| да
+| required
 | Идентификатор клиента
 
 | fieldName
 | string
-| да
+| required
 | Описание поля и чем оно заполняется
 |===
 "#;
@@ -469,6 +469,28 @@ mod tests {
         // A trailing blank line here would push `doc-attrs` out of the header.
         assert!(by_id("doc-title").ends_with("документа\n"));
         assert!(by_id("doc-attrs").starts_with(':'));
+    }
+
+    /// The house standard spells obligation `required`/`optional` everywhere —
+    /// contract tables, body structures and the Thrift envelope alike. The
+    /// Russian `да`/`нет` form used to survive in half the catalog.
+    #[test]
+    fn obligation_is_spelled_one_way() {
+        for entry in ASCIIDOC_ELEMENT_TEMPLATES {
+            assert!(
+                !entry.template.contains("*Обязательный*"),
+                "{}: column is «Обязательность»",
+                entry.id
+            );
+            for line in entry.template.lines() {
+                let cell = line.trim_start_matches('|').trim();
+                assert!(
+                    !matches!(cell, "да" | "нет" | "Да" | "Нет"),
+                    "{}: obligation cell {cell:?} is not required/optional",
+                    entry.id
+                );
+            }
+        }
     }
 
     /// Column count from the first row, then every cell of each `|===` block.

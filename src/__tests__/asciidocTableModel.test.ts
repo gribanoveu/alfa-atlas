@@ -175,7 +175,7 @@ describe("serializeAsciidocTable round-trip", () => {
     expect(userDataRow?.layout).toBe("vertical");
 
     const out = serializeAsciidocTable(parsed.table);
-    expect(out).toContain("| userData\n| struct\n| да\n| Данные пользователя");
+    expect(out).toContain("| userData\n| struct\n| required\n| Данные пользователя");
     expect(out).toContain("3+| {host}/");
   });
 });

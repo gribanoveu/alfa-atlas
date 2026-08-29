@@ -166,38 +166,38 @@ export const BANG_COMMANDS: BangCommand[] = [
       "\n" +
       '[cols="1,1,1,3"]\n' +
       "|===\n" +
-      "| *Параметр* | *Формат* | *Обязательный* | *Описание*\n" +
+      "| *Параметр* | *Формат* | *Обязательность* | *Описание*\n" +
       "\n" +
       "|Endpoint 3+| ${1:\\{host\\}/<сервис>/tapi}\n" +
       "\n" +
       "| userData\n" +
       "| struct\n" +
-      "| да\n" +
+      "| required\n" +
       "| Данные пользователя\n" +
       "\n" +
       "| userData.id\n" +
       "| string\n" +
-      "| да\n" +
+      "| required\n" +
       "| Идентификатор пользователя (xpin/acus)\n" +
       "\n" +
       "| userData.authorizedApplicationId\n" +
       "| string\n" +
-      "| да\n" +
+      "| required\n" +
       "| Идентификатор приложения\n" +
       "\n" +
       "| userData.ip\n" +
       "| string\n" +
-      "| да\n" +
+      "| required\n" +
       "| IP-адрес пользователя\n" +
       "\n" +
       "| userData.customerId\n" +
       "| string\n" +
-      "| да\n" +
+      "| required\n" +
       "| Идентификатор клиента\n" +
       "\n" +
       "| ${2:fieldName}\n" +
       "| ${3:string}\n" +
-      "| ${4:да}\n" +
+      "| ${4:required}\n" +
       "| ${5:Описание поля и чем оно заполняется}\n" +
       "|===\n" +
       "$0",

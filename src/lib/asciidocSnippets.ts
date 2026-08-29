@@ -222,38 +222,38 @@ Job не принимает входных параметров.
 
 [cols="1,1,1,3"]
 |===
-| *Параметр* | *Формат* | *Обязательный* | *Описание*
+| *Параметр* | *Формат* | *Обязательность* | *Описание*
 
 |Endpoint 3+| {host}/<сервис>/tapi
 
 | userData
 | struct
-| да
+| required
 | Данные пользователя
 
 | userData.id
 | string
-| да
+| required
 | Идентификатор пользователя (xpin/acus)
 
 | userData.authorizedApplicationId
 | string
-| да
+| required
 | Идентификатор приложения
 
 | userData.ip
 | string
-| да
+| required
 | IP-адрес пользователя
 
 | userData.customerId
 | string
-| да
+| required
 | Идентификатор клиента
 
 | fieldName
 | string
-| да
+| required
 | Описание поля и чем оно заполняется
 |===
 `,

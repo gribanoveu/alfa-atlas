@@ -15,11 +15,10 @@
 //!   - `request.adoc` / `response.adoc` reproduce that same folder's files,
 //!     `<details>` wrappers and `[discrete#…]` anchors included.
 //!
-//! The templates disagree with each other on the obligation column
-//! (`required`/`optional` in the input table, `Да`/`Нет` in the output one).
-//! That inconsistency is reproduced deliberately: matching each template the
-//! section is actually filling matters more than being self-consistent,
-//! since reviewers diff against those templates.
+//! The obligation column is `required`/`optional` in every table. The house
+//! standard has one spelling (`method-spec`'s `references/structure.md`), and
+//! the scaffold templates were brought to it too — the older `Да`/`Нет` form
+//! survives only in documents written before that.
 
 use serde::{Deserialize, Serialize};
 
@@ -96,20 +95,12 @@ fn cell(value: &str) -> String {
     }
 }
 
-/// Input tables say `required`/`optional`; output tables say `Да`/`Нет`.
-fn obligation_en(required: bool) -> &'static str {
+/// The one spelling of the obligation column, in every table.
+fn obligation(required: bool) -> &'static str {
     if required {
         "required"
     } else {
         "optional"
-    }
-}
-
-fn obligation_ru(required: bool) -> &'static str {
-    if required {
-        "Да"
-    } else {
-        "Нет"
     }
 }
 
@@ -171,7 +162,7 @@ pub fn endpoint_path(spec: &HttpRequestSpec) -> String {
 /// grouped path → query → header, then a spanning «Тело запроса» separator
 /// and the body rows — the same order the request itself is read in.
 pub fn render_input_params_table(spec: &HttpRequestSpec) -> String {
-    let mut out = String::from("== Входные параметры\n\n[cols=\"1,1,1,1,3,1\"]\n|===\n");
+    let mut out = String::from("=== Входные параметры\n\n[cols=\"1,1,1,1,3,1\"]\n|===\n");
     out.push_str(
         "| *Тип параметра* | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*\n\n",
     );
@@ -212,7 +203,7 @@ fn input_row(location: &str, param: &ParamSpec) -> String {
         location,
         cell(&param.name),
         cell(&param.format),
-        obligation_en(param.required),
+        obligation(param.required),
         cell(&param.description),
         cell(&param.values),
     )
@@ -232,7 +223,7 @@ pub fn render_output_params_table(spec: &HttpRequestSpec) -> String {
         .collect();
 
     let mut out = String::from("=== Выходные параметры\n\n[cols=\"1,1,1,1,1\"]\n|===\n");
-    out.push_str("| *Параметр* | *Формат* | *Обязательный* | *Описание* | *Варианты значений*\n");
+    out.push_str("| *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*\n");
 
     if with_params.is_empty() {
         out.push('\n');
@@ -260,7 +251,7 @@ fn output_row(param: &ParamSpec) -> String {
         "| {}\n| {}\n| {}\n| {}\n| {}\n",
         cell(&param.name),
         cell(&param.format),
-        obligation_ru(param.required),
+        obligation(param.required),
         cell(&param.description),
         cell(&param.values),
     )
@@ -464,11 +455,11 @@ pub fn render_request_adoc(spec: &HttpRequestSpec) -> String {
 }
 
 /// The five-column table `request.adoc` uses per location — same columns as
-/// the output table, obligation in Russian, no `[cols]` attribute (the
+/// the output table, no `[cols]` attribute (the
 /// template omits it there).
 fn request_param_table(params: &[ParamSpec]) -> String {
     let mut out = String::from("|===\n");
-    out.push_str("| *Параметр* | *Формат* | *Обязательный* | *Описание* | *Варианты значений*\n");
+    out.push_str("| *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*\n");
     for param in params {
         out.push('\n');
         out.push_str(&output_row(param));
@@ -554,7 +545,7 @@ mod tests {
     #[test]
     fn input_table_carries_every_location_and_the_body_separator() {
         let table = render_input_params_table(&spec());
-        assert!(table.starts_with("== Входные параметры\n"));
+        assert!(table.starts_with("=== Входные параметры\n"));
         assert!(table.contains("| *Тип параметра* |"));
         assert!(table.contains("|Метод 5+| POST"));
         assert!(table.contains("|Endpoint 5+| https://corp-gateway-test/api/{organizationId}/documents"));
@@ -599,9 +590,9 @@ mod tests {
     }
 
     #[test]
-    fn output_table_uses_russian_obligation_and_no_group_header_for_one_response() {
+    fn output_table_uses_the_house_obligation_and_no_group_header_for_one_response() {
         let table = render_output_params_table(&spec());
-        assert!(table.contains("| id\n| string\n| Да\n| Идентификатор\n| DOC-1\n"));
+        assert!(table.contains("| id\n| string\n| required\n| Идентификатор\n| DOC-1\n"));
         assert!(!table.contains("5+| Ответ"));
     }
 
@@ -622,7 +613,7 @@ mod tests {
     #[test]
     fn output_table_of_an_empty_spec_is_a_placeholder_row() {
         let table = render_output_params_table(&HttpRequestSpec::default());
-        assert!(table.contains("| -\n| -\n| Нет\n| -\n| -\n"));
+        assert!(table.contains("| -\n| -\n| optional\n| -\n| -\n"));
     }
 
     #[test]
