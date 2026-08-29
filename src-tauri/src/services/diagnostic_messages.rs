@@ -57,6 +57,21 @@ pub fn circular_include(lang: ErrorLanguage, chain: &[String]) -> String {
     }
 }
 
+pub fn detached_header_attributes(lang: ErrorLanguage) -> String {
+    match lang {
+        ErrorLanguage::Ru => {
+            "атрибуты отделены от заголовка пустой строкой — она закрывает шапку документа, \
+             и :toc: не действует: оглавление не построится"
+                .to_string()
+        }
+        ErrorLanguage::En => {
+            "a blank line separates these attributes from the document title, which ends the \
+             document header — :toc: no longer applies and no table of contents is rendered"
+                .to_string()
+        }
+    }
+}
+
 pub fn parse_timeout(lang: ErrorLanguage, secs: u64) -> String {
     match lang {
         ErrorLanguage::Ru => format!("превышен таймаут разбора: {secs} с"),
@@ -85,6 +100,7 @@ mod tests {
             assert!(!duplicate_anchor(lang, "id").is_empty());
             assert!(!circular_include(lang, &["a.adoc".to_string()]).is_empty());
             assert!(!parse_timeout(lang, 30).is_empty());
+            assert!(!detached_header_attributes(lang).is_empty());
         }
     }
 }

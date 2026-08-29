@@ -121,6 +121,22 @@ pub enum DiagnosticKind {
     DuplicateAnchor,
     CircularInclude,
     ParseError,
+    /// Атрибуты шапки отделены от заголовка пустой строкой — см.
+    /// `domain::asciidoc_header`. Как и `ParseError`, вычисляется из текста
+    /// одного документа, а не из связей между документами.
+    DetachedHeaderAttributes,
+}
+
+impl DiagnosticKind {
+    /// True для диагностик, которые считаются по тексту самого документа.
+    /// `diagnostics::run_all`/`run_for` пересчитывают только межфайловые
+    /// правила и обязаны сохранить эти.
+    pub fn is_document_local(self) -> bool {
+        matches!(
+            self,
+            DiagnosticKind::ParseError | DiagnosticKind::DetachedHeaderAttributes
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

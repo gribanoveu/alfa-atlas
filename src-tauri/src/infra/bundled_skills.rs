@@ -41,6 +41,10 @@ const METHOD_SPEC: BundledSkill = BundledSkill {
             content: include_str!("../../assets/skills/method-spec/references/glossary.md"),
         },
         BundledFile {
+            path: "references/tools.md",
+            content: include_str!("../../assets/skills/method-spec/references/tools.md"),
+        },
+        BundledFile {
             path: "assets/template.adoc",
             content: include_str!("../../assets/skills/method-spec/assets/template.adoc"),
         },

@@ -262,6 +262,12 @@ fn tokenize(query: &str) -> Vec<String> {
     tokens
 }
 
+/// Tokens shorter than this never score on a substring match. Matching is
+/// `contains`, so a one- or two-letter token — every Russian preposition, and
+/// the tail of any hyphenated word — hits some substring of any prose
+/// description, which made every Cyrillic query match every skill.
+const MIN_SUBSTRING_TOKEN_CHARS: usize = 3;
+
 fn score_skill(query_lower: &str, tokens: &[String], skill: &SkillMeta) -> u32 {
     let name_lower = skill.name.to_lowercase();
     let desc_lower = skill.description.to_lowercase();
@@ -270,6 +276,11 @@ fn score_skill(query_lower: &str, tokens: &[String], skill: &SkillMeta) -> u32 {
         score += 1000;
     }
     for token in tokens {
+        // A short token still counts as a whole-name match ("api"), just not
+        // as a fragment found somewhere inside a longer word.
+        if token.chars().count() < MIN_SUBSTRING_TOKEN_CHARS && name_lower != *token {
+            continue;
+        }
         if name_lower == *token {
             score += 40;
         } else if name_lower.contains(token.as_str()) {
@@ -395,6 +406,24 @@ mod tests {
         )];
         let hits = search_skills("unrelated-zzzz", &catalog).unwrap();
         assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn search_skills_ignores_stopword_length_tokens() {
+        let catalog = vec![meta(
+            "method-spec",
+            "Постановки на REST-методы в AsciiDoc — разделы, таблицы входных параметров.",
+            SkillSource::Bundled,
+        )];
+        // "в" is a substring of "входных"; without the length floor this
+        // query — and every other Russian sentence — would score a hit.
+        assert!(search_skills("поправь опечатку в readme", &catalog)
+            .unwrap()
+            .is_empty());
+        // The floor must not cost a real match on the rest of the query.
+        assert!(!search_skills("постановки на метод", &catalog)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

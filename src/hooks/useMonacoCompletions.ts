@@ -76,7 +76,10 @@ type BangCommand = {
   insertText: string;
 };
 
-const BANG_COMMANDS: BangCommand[] = [
+/** Exported for the sync test against `ASCIIDOC_SNIPPETS` — stripped of its
+ * tab stops, each command must reproduce the snippet catalog's template
+ * verbatim, so the two hand-kept copies cannot drift apart silently. */
+export const BANG_COMMANDS: BangCommand[] = [
   {
     command: "table",
     detail: "Таблица AsciiDoc (2 колонки, 1 строка)",
@@ -91,81 +94,81 @@ const BANG_COMMANDS: BangCommand[] = [
   },
   {
     command: "request",
-    detail: "Таблица входных параметров запроса",
+    detail: "Входные параметры REST-метода",
     insertText:
-      "== Входные параметры\n" +
+      "=== Входные параметры\n" +
       "\n" +
       '[cols="1,1,1,1,3,1"]\n' +
       "|===\n" +
-      "| *Тип параметра*   | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*\n" +
+      "| *Тип параметра* | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*\n" +
       "\n" +
-      "|Метод            5+| ${1:POST}\n" +
-      "|Endpoint         5+| ${2:corp-}\n" +
+      "|Метод 5+| ${1:POST}\n" +
+      "|Endpoint 5+| ${2:https://\\{host\\}/<сервис>/<путь>}\n" +
       "\n" +
-      "| Header          \n" +
-      "| A-userId     \n" +
-      "| string\n" +
+      "| Header\n" +
+      "| A-userId\n" +
+      "| string (length 6 or 9)\n" +
       "| required\n" +
-      "| X-pin клиента, инициатора запроса\n" +
+      "| Идентификатор УЛ интернет-банка. Заполняется входным параметром A-userId\n" +
       "| XAAAAA\n" +
       "\n" +
-      "| Header          \n" +
-      "| A-userIp    \n" +
-      "| string\n" +
-      "| optional\n" +
-      "| Ip-адресс клиента\n" +
-      "| 64.233.165.113\n" +
-      "\n" +
-      "| Header          \n" +
-      "| A-customerId  \n" +
-      "| string\n" +
+      "| Header\n" +
+      "| A-customerId\n" +
+      "| string (length 6 or 9)\n" +
       "| required\n" +
-      "| U-pin клиента, инициатора запроса\n" +
+      "| Идентификатор клиента. Заполняется входным параметром A-customerId\n" +
       "| UAAAAA\n" +
       "\n" +
-      "| Header          \n" +
+      "| Header\n" +
+      "| A-userIp\n" +
+      "| string\n" +
+      "| optional\n" +
+      "| IP УЛ.\n" +
+      "| 64.233.165.113\n" +
+      "\n" +
+      "| Header\n" +
       "| A-projectId\n" +
       "| string\n" +
-      "| required\n" +
-      "| Идентификатор приложения инициатора запроса\n" +
-      "| WOWTAX\n" +
+      "| optional\n" +
+      "| Идентификатор приложения (модуля приложения) потребителя.\n" +
+      "| CORP-<ПРОЕКТ>\n" +
       "\n" +
-      "| Header          \n" +
+      "| Header\n" +
       "| A-clientType\n" +
       "| string\n" +
       "| required\n" +
-      "| Тип сервиса инициатора запроса\n" +
+      "| Тип сервиса инициатора запроса.\n" +
       "| FRONT\n" +
       "\n" +
-      "| Header          \n" +
+      "| Header\n" +
       "| A-channelId\n" +
       "| string\n" +
       "| required\n" +
-      "| Идентификатор вызывающей системы (канала) NIB/ABM/BAAS\n" +
+      "| Идентификатор вызывающей системы (канала).\n" +
       "| NIB\n" +
       "\n" +
       "6+| Тело запроса\n" +
       "\n" +
-      "| Body          \n" +
+      "| Body\n" +
       "| ${3:fieldName}\n" +
       "| ${4:string}\n" +
       "| ${5:required}\n" +
-      "| ${6:Описание поля}\n" +
+      "| ${6:Описание поля и чем оно заполняется}\n" +
       "| ${7:-}\n" +
       "|===\n" +
       "$0",
   },
   {
     command: "thrift",
-    detail: "Таблица входных параметров Thrift-запроса (userData)",
+    detail: "Входные параметры Thrift-метода (userData)",
     insertText:
-      "== Входные параметры\n" +
+      "=== Входные параметры\n" +
       "\n" +
       '[cols="1,1,1,3"]\n' +
       "|===\n" +
       "| *Параметр* | *Формат* | *Обязательный* | *Описание*\n" +
       "\n" +
-      "|Endpoint         3+| ${1:\\{host\\}/<сервис>/tapi}\n" +
+      "|Endpoint 3+| ${1:\\{host\\}/<сервис>/tapi}\n" +
       "\n" +
       "| userData\n" +
       "| struct\n" +
@@ -191,56 +194,68 @@ const BANG_COMMANDS: BangCommand[] = [
       "| string\n" +
       "| да\n" +
       "| Идентификатор клиента\n" +
+      "\n" +
+      "| ${2:fieldName}\n" +
+      "| ${3:string}\n" +
+      "| ${4:да}\n" +
+      "| ${5:Описание поля и чем оно заполняется}\n" +
       "|===\n" +
       "$0",
   },
   {
     command: "response",
-    detail: "Таблица полей ответа",
+    detail: "Выходные параметры",
     insertText:
-      "== Поля ответа\n" +
+      "=== Выходные параметры\n" +
       "\n" +
       '[cols="1,1,3,1"]\n' +
       "|===\n" +
-      "| Параметр | Формат | Описание | Варианты значений\n" +
+      "| *Параметр* | *Формат* | *Описание* | *Варианты значений*\n" +
       "\n" +
       "| ${1:fieldName}\n" +
       "| ${2:string}\n" +
-      "| ${3:description}\n" +
-      "| ${4:values}\n" +
+      "| ${3:Описание поля и источник значения}\n" +
+      "| ${4:-}\n" +
       "|===\n" +
       "$0",
   },
   {
     command: "validation",
-    detail: "Таблица полей валидации",
+    detail: "Валидация входных параметров",
     insertText:
-      "== Поля валидации\n" +
+      "=== Валидация входных параметров\n" +
       "\n" +
-      '[cols="1,1,1"]\n' +
+      '[cols="1,2,3"]\n' +
       "|===\n" +
-      "| Параметр | Условие | Результат \n" +
+      "| *Параметр* | *Условие* | *Результат*\n" +
       "\n" +
-      "| ${1:param}\n" +
-      "| ${2:condition}\n" +
-      "| ${3:result}\n" +
+      ".2+|${1:A-userId}\n" +
+      "|Параметр имеет значение null или пусто\n" +
+      '|Вернуть исключение с http code 400 (Bad Request), указанием на некорректный параметр - "A-userId не указан", type = VALIDATION_ERROR и code = INCORRECT_CONTRACT\n' +
+      "|Длина значения не равна 6 символам либо символы не являются алфавитно-числовыми\n" +
+      '|Вернуть исключение с http code 400 (Bad Request), указанием на некорректный параметр - "A-userId должен содержать 6 алфавитно-цифровых символов", type = VALIDATION_ERROR и code = INCORRECT_CONTRACT\n' +
       "|===\n" +
       "$0",
   },
   {
     command: "errors",
-    detail: "Таблица кодов ошибок",
+    detail: "Обработка ошибок (include + таблица кодов)",
     insertText:
-      "== Коды ошибок\n" +
+      "== Обработка ошибок\n" +
+      "Описание приведено по ссылке ниже.\n" +
       "\n" +
-      '[cols="1,1,2,2"]\n' +
+      "include::../CompositeException.adoc[]\n" +
+      "\n" +
+      "*Коды ошибок*\n" +
+      "\n" +
+      '[cols="2,2,1,1"]\n' +
       "|===\n" +
-      "| Type | Error Code | Message | Описание\n" +
+      "| *Условие* | *Описание* | *Type* | *Code*\n" +
       "\n" +
-      "| ${1:ValidationException}\n" +
-      "| ${2:validationError}\n" +
-      "| ${3:Some of input parameters are incorrect}\n" +
-      "| ${4:Входные параметры не прошли валидацию}\n" +
+      "| ${1:Шаг 1. Валидация. Не указан параметр}\n" +
+      "| ${2:A-userId не указан}\n" +
+      "| ${3:VALIDATION_ERROR}\n" +
+      "| ${4:INCORRECT_CONTRACT}\n" +
       "|===\n" +
       "$0",
   },

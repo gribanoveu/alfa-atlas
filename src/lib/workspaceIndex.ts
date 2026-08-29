@@ -18,7 +18,9 @@ export type DiagnosticKind =
   | "missingImage"
   | "duplicateAnchor"
   | "circularInclude"
-  | "parseError";
+  | "parseError"
+  /** Атрибуты шапки отделены от заголовка пустой строкой — `:toc:` не действует. */
+  | "detachedHeaderAttributes";
 
 export type Document = {
   id: string;

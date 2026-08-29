@@ -229,6 +229,137 @@ mod tests {
     use super::*;
     use crate::infra::settings_store::test_support::with_temp_home;
     use crate::infra::user_skills_store::{ensure_user_skills_dir, import_skill_dir};
+    use crate::services::standards_rules::{FileEntry, MethodFolderCtx, RULES};
+
+    /// The `method-spec` skill tells the model to run `check` on what it
+    /// wrote, so the document its own template produces has to survive that
+    /// check. Builds a method folder out of the bundled template and runs
+    /// the real rule registry over it.
+    fn template_method_folder() -> MethodFolderCtx {
+        let method = "createSignOperationV2";
+        let template = preview_file(SkillSource::Bundled, "method-spec", "assets/template.adoc")
+            .unwrap()
+            .replace("{имяРучки}", method);
+        let file = |name: String, content: &str| FileEntry {
+            path: std::path::PathBuf::from(&name),
+            name,
+            content: content.to_string(),
+        };
+        MethodFolderCtx::new(
+            method.to_string(),
+            vec![
+                file(format!("{method}.adoc"), &template),
+                file(
+                    "request.adoc".to_string(),
+                    "[discrete#endpoint]\n=== Endpoint\n\n`POST /api/documents`\n",
+                ),
+                file("response.adoc".to_string(), "[source,json]\n----\n{}\n----\n"),
+                file(format!("{method}.puml"), "@startuml\nA -> B\n@enduml\n"),
+            ],
+        )
+    }
+
+    fn rule_outcome(ctx: &MethodFolderCtx, id: &str) -> bool {
+        let rule = RULES.iter().find(|r| r.def.id == id).expect(id);
+        (rule.check)(ctx).passed
+    }
+
+    #[test]
+    fn bundled_template_passes_the_standards_checker() {
+        with_temp_home(|| {
+            let ctx = template_method_folder();
+            let failed: Vec<&str> = RULES
+                .iter()
+                .filter(|rule| !(rule.check)(&ctx).passed)
+                .map(|rule| rule.def.id)
+                .collect();
+            assert!(failed.is_empty(), "template fails rules: {failed:?}");
+        });
+    }
+
+    /// A blank line between the document title and the attribute entries
+    /// closes the AsciiDoc header, and `:toc:` stops applying — the document
+    /// renders without its «Оглавление» at all. K.2.1 does not catch it (it
+    /// only greps for the `:toc:` string), so the template is the guard.
+    #[test]
+    fn bundled_template_keeps_its_attributes_inside_the_document_header() {
+        with_temp_home(|| {
+            let template =
+                preview_file(SkillSource::Bundled, "method-spec", "assets/template.adoc").unwrap();
+            let lines: Vec<&str> = template.lines().collect();
+            let title = lines
+                .iter()
+                .position(|l| l.starts_with("= "))
+                .expect("template has a document title");
+            assert!(
+                lines[title + 1].starts_with(':'),
+                "blank line after the title closes the header: {:?}",
+                lines[title + 1]
+            );
+            // No stray `//` on the title line either — it is not a comment
+            // there, it becomes part of the title.
+            assert!(!lines[title].contains("//"));
+        });
+    }
+
+    #[test]
+    fn empty_table_cells_are_what_would_break_the_template() {
+        with_temp_home(|| {
+            // Guards the fix for the empty «Варианты значений» cells: K.4.2 and
+            // K.5.2 count any blank cell in a 4+-column table as a failure, so
+            // the template writes the house `-` placeholder instead.
+            let mut ctx = template_method_folder();
+            ctx.files[0].content = ctx.files[0].content.replacen("|-\n", "|\n", 1);
+            assert!(!rule_outcome(&ctx, "K.4.2"));
+        });
+    }
+
+    fn search_hits(query: &str) -> Vec<String> {
+        let ToolResult::SkillSearch(SkillSearchResult { matches }) = search(query).unwrap() else {
+            panic!("expected search result");
+        };
+        matches.into_iter().map(|m| m.name).collect()
+    }
+
+    /// Nothing lists the catalog for the model — a skill exists only if
+    /// `search` finds it, and matching is plain substring over name +
+    /// description, with no stemming. So every phrase a skill claims as its
+    /// own trigger has to actually hit it, in the grammatical form a user
+    /// would type.
+    #[test]
+    fn bundled_skills_are_found_by_the_phrases_they_claim() {
+        with_temp_home(|| {
+            for query in [
+                "описать ручку",
+                "документация на ручку",
+                "оформить постановку",
+                "сделать постановку на метод",
+                "поправить постановку",
+                "постановка на REST метод",
+                "расписать флоу",
+                "ТЗ на эндпоинт",
+                "добавить таблицу ошибок в постановку",
+                "описать вызов соседнего сервиса",
+            ] {
+                assert!(
+                    search_hits(query).contains(&"method-spec".to_string()),
+                    "method-spec not found by {query:?}"
+                );
+            }
+            for query in [
+                "openapi спецификация",
+                "куда положить схему в спецификации",
+                "$ref schemas",
+                "swagger",
+                "operations layout",
+            ] {
+                assert!(
+                    search_hits(query).contains(&"openapi-specs-layout".to_string()),
+                    "openapi-specs-layout not found by {query:?}"
+                );
+            }
+        });
+    }
 
     #[test]
     fn enabled_catalog_includes_bundled_by_default() {

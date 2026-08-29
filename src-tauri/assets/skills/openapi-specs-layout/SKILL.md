@@ -1,6 +1,6 @@
 ---
 name: openapi-specs-layout
-description: OpenAPI multi-file spec layout used by Atlas (specs root with schemas, responses, parameters, operations, and $ref). Use when the user mentions OpenAPI, спецификация, swagger, schemas, operations, $ref, or Project type is OpenAPI Specification.
+description: OpenAPI multi-file spec layout used by Atlas (specs root with schemas, responses, parameters, operations, and $ref). Use when the user mentions OpenAPI, swagger, schemas, operations, $ref, or Project type is OpenAPI Specification. Русские формы — спецификация, спецификации, спецификацию, спеку openapi, схемы openapi, операции openapi.
 ---
 
 # OpenAPI multi-file spec layout
@@ -57,6 +57,6 @@ Pass paths between tools unchanged. Writes/edits still only succeed under the do
 ## Workflow
 
 1. Confirm the spec root (`listFiles` on `.` / the docs root) — look for the entry file and the four folders.
-2. Find the operation or schema with search, then `readFile` before editing.
+2. Find the operation or schema with `grep` (exact tokens: an operationId, a schema name, a `$ref` target) or `semanticSearch` (when you only know what the endpoint does), then `readFile` before editing.
 3. Add or edit the file in the folder that matches its kind; wire it with a relative `$ref`.
 4. Do not flatten the layout into a single mega-YAML unless the repository already uses that style (this skill is for the multi-file convention Atlas detects).

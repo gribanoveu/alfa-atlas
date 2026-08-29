@@ -72,6 +72,13 @@ pub struct WorkspaceIndex {
     /// do not interfere with each other. The value is the `JoinHandle` itself
     /// (Tauri's wrapper over tokio's), which exposes `.abort()` directly.
     parse_timeouts: DashMap<(DocumentId, u64), tauri::async_runtime::JoinHandle<()>>,
+    /// Line of a detached header attribute (`domain::asciidoc_header`) for each
+    /// document handed to the frontend, keyed like `parse_timeouts`. The check
+    /// runs at dispatch, where the file's text is in hand, but the diagnostic
+    /// can only be attached once the facts come back: `submit_asciidoc_facts`
+    /// clears the document's diagnostics on its way in. Entries are removed
+    /// there for every response, stale ones included, so the map cannot grow.
+    detached_headers: DashMap<(DocumentId, u64), u32>,
     /// Number of parse requests currently in flight to the frontend.
     inflight_adoc_count: AtomicU32,
     /// Maximum number of concurrent in-flight parse requests. A field rather
@@ -110,6 +117,7 @@ impl WorkspaceIndex {
             doc_versions: DashMap::new(),
             pending_adoc_queue: RwLock::new(VecDeque::new()),
             parse_timeouts: DashMap::new(),
+            detached_headers: DashMap::new(),
             inflight_adoc_count: AtomicU32::new(0),
             max_inflight: 8,
             build_adoc_pending: AtomicU32::new(0),
@@ -420,7 +428,12 @@ impl WorkspaceIndex {
             self_arc.dispatch_asciidoc_parse(&id, content, relative);
         } else {
             // Tests or non-AsciiDoc: synchronous parser.
-            let parsed = self.parsers.parse(&path_str, &content);
+            let mut parsed = self.parsers.parse(&path_str, &content);
+            if doc_type == DocumentType::AsciiDoc {
+                if let Some(diag) = self.detached_header_diagnostic(&id, &content) {
+                    parsed.diagnostics.push(diag);
+                }
+            }
             self.insert_parsed(&id, parsed);
         }
 
@@ -651,6 +664,27 @@ impl WorkspaceIndex {
     /// buffers it in `pending_adoc_queue`. Also increments `build_adoc_pending`
     /// when a build is in progress, so `try_finish_build` knows when the last
     /// fact has arrived.
+    /// The header rule (`domain::asciidoc_header`) as a ready diagnostic, or
+    /// `None` when the document's header is fine. A warning, not an error: the
+    /// document still converts, it just silently loses its table of contents.
+    fn detached_header_diagnostic(&self, doc_id: &DocumentId, content: &str) -> Option<Diagnostic> {
+        let line = crate::domain::asciidoc_header::detached_header_attribute_line(content)?;
+        Some(self.detached_header_diagnostic_at(doc_id, line))
+    }
+
+    fn detached_header_diagnostic_at(&self, doc_id: &DocumentId, line: u32) -> Diagnostic {
+        Diagnostic {
+            kind: DiagnosticKind::DetachedHeaderAttributes,
+            message: crate::services::diagnostic_messages::detached_header_attributes(
+                diagnostics::current_error_language(),
+            ),
+            document: doc_id.clone(),
+            line,
+            column: 1,
+            severity: Severity::Warning,
+        }
+    }
+
     fn dispatch_asciidoc_parse(
         self: &Arc<Self>,
         doc_id: &DocumentId,
@@ -662,6 +696,13 @@ impl WorkspaceIndex {
             .entry(doc_id.clone())
             .and_modify(|v| *v += 1)
             .or_insert(1);
+
+        // Checked here because this is the last place holding the file's text;
+        // attached in `submit_asciidoc_facts` once the facts return.
+        if let Some(line) = crate::domain::asciidoc_header::detached_header_attribute_line(&content)
+        {
+            self.detached_headers.insert((doc_id.clone(), version), line);
+        }
 
         let payload = AsciiDocParseRequested {
             document_id: doc_id.clone(),
@@ -742,6 +783,11 @@ impl WorkspaceIndex {
         if let Some((_, handle)) = self.parse_timeouts.remove(&(doc_id.clone(), version)) {
             handle.abort();
         }
+        // Taken for every response, valid or stale, so the map never leaks.
+        let detached_header = self
+            .detached_headers
+            .remove(&(doc_id.clone(), version))
+            .map(|(_, line)| line);
 
         let is_valid = match self.doc_versions.get(doc_id) {
             Some(current) => *current == version,
@@ -761,11 +807,15 @@ impl WorkspaceIndex {
             // arrive. This also sets the canonical diagnostics for `doc_id`.
             diagnostics::run_for(self, doc_id);
 
-            // Parse errors are added AFTER run_for so they survive — they are
-            // orthogonal to the cross-document diagnostics run_for computes
-            // (missing includes, broken xrefs, duplicate anchors, etc.).
-            if !facts.parse_errors.is_empty() {
+            // Document-local diagnostics are added AFTER run_for so they
+            // survive — they are orthogonal to the cross-document diagnostics
+            // run_for computes (missing includes, broken xrefs, duplicate
+            // anchors, etc.).
+            if !facts.parse_errors.is_empty() || detached_header.is_some() {
                 let mut diags = self.get_diagnostics_for(doc_id);
+                if let Some(line) = detached_header {
+                    diags.push(self.detached_header_diagnostic_at(doc_id, line));
+                }
                 for e in &facts.parse_errors {
                     diags.push(Diagnostic {
                         kind: DiagnosticKind::ParseError,
@@ -1185,6 +1235,107 @@ mod tests {
             .iter()
             .any(|d| d.kind == crate::domain::workspace_index::DiagnosticKind::MissingInclude));
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn detached_header_attributes_are_reported_and_survive_a_diagnostics_run() {
+        let root = temp_dir();
+        // Пустая строка после заголовка закрывает шапку — :toc: не сработает.
+        fs::write(
+            root.join("broken.adoc"),
+            "= Rest-метод createX\n\n:sectnums:\n:toc: left\n\n== Назначение\nТекст.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("ok.adoc"),
+            "= Rest-метод createY\n:toc: left\n\n== Назначение\nТекст.\n",
+        )
+        .unwrap();
+        let idx = build_index(&root);
+
+        let broken = idx.get_diagnostics_for(&DocumentId::new("broken.adoc".to_string()));
+        let hit = broken
+            .iter()
+            .find(|d| d.kind == DiagnosticKind::DetachedHeaderAttributes)
+            .expect("detached header reported");
+        assert_eq!(hit.line, 3);
+        assert_eq!(hit.severity, Severity::Warning);
+        assert!(idx
+            .get_diagnostics_for(&DocumentId::new("ok.adoc".to_string()))
+            .iter()
+            .all(|d| d.kind != DiagnosticKind::DetachedHeaderAttributes));
+
+        // `build` ends with a full diagnostics pass; a second one must not
+        // drop the finding, the way it would if it were treated as a
+        // cross-document rule.
+        diagnostics::run_all(&idx);
+        assert!(idx
+            .get_diagnostics_for(&DocumentId::new("broken.adoc".to_string()))
+            .iter()
+            .any(|d| d.kind == DiagnosticKind::DetachedHeaderAttributes));
+
+        // Fixing the file clears it.
+        fs::write(
+            root.join("broken.adoc"),
+            "= Rest-метод createX\n:sectnums:\n:toc: left\n\n== Назначение\nТекст.\n",
+        )
+        .unwrap();
+        idx.update_document(root.join("broken.adoc")).unwrap();
+        assert!(idx
+            .get_diagnostics_for(&DocumentId::new("broken.adoc".to_string()))
+            .iter()
+            .all(|d| d.kind != DiagnosticKind::DetachedHeaderAttributes));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Production path: parsing is delegated to the frontend, so the header
+    /// check runs at dispatch and the diagnostic is attached only when the
+    /// facts come back — after `submit_asciidoc_facts` has cleared the
+    /// document's diagnostics and re-run the cross-document rules.
+    #[test]
+    fn detached_header_survives_the_frontend_round_trip() {
+        let root = temp_dir();
+        fs::write(
+            root.join("broken.adoc"),
+            "= Rest-метод createX\n\n:toc: left\n\n== Назначение\nТекст.\n",
+        )
+        .unwrap();
+
+        let requests: Arc<std::sync::Mutex<Vec<(String, u64)>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&requests);
+        let idx = Arc::new(WorkspaceIndex::new(ParserRegistry::new()));
+        idx.set_event_sink(Arc::new(move |event| {
+            if let WorkspaceIndexEvent::AsciiDocParseRequested(req) = event {
+                seen.lock().unwrap().push((req.document_id.0, req.version));
+            }
+        }));
+        idx.frontend_ready();
+        idx.build(root.to_path_buf()).unwrap();
+
+        let (doc, version) = requests.lock().unwrap().first().cloned().expect("dispatched");
+        let doc_id = DocumentId::new(doc);
+        // Facts with nothing in them: the finding comes from the header check,
+        // not from anything asciidoctor reported.
+        idx.submit_asciidoc_facts(&doc_id, version, empty_facts())
+            .unwrap();
+
+        assert!(idx
+            .get_diagnostics_for(&doc_id)
+            .iter()
+            .any(|d| d.kind == DiagnosticKind::DetachedHeaderAttributes));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    fn empty_facts() -> AsciiDocFacts {
+        AsciiDocFacts {
+            anchors: Vec::new(),
+            includes: Vec::new(),
+            references: Vec::new(),
+            attributes: Vec::new(),
+            images: Vec::new(),
+            parse_errors: Vec::new(),
+        }
     }
 
     #[test]

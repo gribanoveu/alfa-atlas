@@ -19,7 +19,7 @@ use crate::services::workspace_index::WorkspaceIndex;
 /// каждом вызове `run_all`/`run_for`, чтобы смена настройки сразу применялась
 /// при следующем build. Ошибка чтения настроек тихо откатывается на `Ru`
 /// (значение по умолчанию) — диагностики важнее, чем язык.
-fn current_error_language() -> ErrorLanguage {
+pub(crate) fn current_error_language() -> ErrorLanguage {
     settings_store::load()
         .map(|s| s.general.error_language)
         .unwrap_or_default()
@@ -52,17 +52,18 @@ pub fn run_for(index: &WorkspaceIndex, doc: &DocumentId) {
     }
 }
 
-/// Cross-document diagnostics plus any `ParseError` entries already attached
-/// to the document (from the frontend asciidoctor logger). `ParseError`s are
-/// orthogonal to include/xref/image checks and must survive `run_all` at the
-/// end of an async build.
+/// Cross-document diagnostics plus the document-local entries already attached
+/// to the document — `ParseError` (from the frontend asciidoctor logger) and
+/// `DetachedHeaderAttributes`. Both are computed from one document's own text,
+/// are orthogonal to include/xref/image checks, and must survive `run_all` at
+/// the end of an async build.
 fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId, lang: ErrorLanguage) -> Vec<Diagnostic> {
     let mut diags = diagnose_one(index, doc, lang);
     diags.extend(
         index
             .get_diagnostics_for(doc)
             .into_iter()
-            .filter(|d| d.kind == DiagnosticKind::ParseError),
+            .filter(|d| d.kind.is_document_local()),
     );
     diags
 }

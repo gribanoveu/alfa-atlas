@@ -5,6 +5,7 @@ pub mod artifact;
 pub mod artifact_render;
 pub mod asciidoc_element_templates;
 pub mod asciidoc_facts;
+pub mod asciidoc_header;
 pub mod asciidoc_macro_brackets;
 pub mod asciidoc_templates;
 pub mod chat;

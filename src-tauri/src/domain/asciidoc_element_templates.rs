@@ -18,19 +18,183 @@ pub struct AsciidocElementTemplate {
     pub template: &'static str,
 }
 
+// Шаблоны разделов постановки. Держатся ровно в том виде, который описан в
+// bundled-скиле `method-spec` (`references/structure.md`, `references/errors.md`)
+// и проходит проверку стандарта (`services::standards_rules`):
+//
+// * заголовки того уровня, который задан каркасом документа — таблицы
+//   параметров живут на третьем уровне, «Обработка ошибок» на втором;
+// * ни одной пустой ячейки в таблицах от четырёх колонок (K.4.2 / K.5.2),
+//   вместо пустой ячейки — дефис;
+// * строки «Метод» и «Endpoint» на всю ширину через `5+|`, а не четырьмя
+//   пустыми ячейками.
+//
+// Записаны raw-строками, чтобы совпадать символ в символ с шаблонами в
+// `src/lib/asciidocSnippets.ts` — за этим следит тест `mirrors_the_editor_catalog`.
+
+const HTTP_METHOD: &str = r#"=== Входные параметры
+
+[cols="1,1,1,1,3,1"]
+|===
+| *Тип параметра* | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*
+
+|Метод 5+| POST
+|Endpoint 5+| https://{host}/<сервис>/<путь>
+
+| Header
+| A-userId
+| string (length 6 or 9)
+| required
+| Идентификатор УЛ интернет-банка. Заполняется входным параметром A-userId
+| XAAAAA
+
+| Header
+| A-customerId
+| string (length 6 or 9)
+| required
+| Идентификатор клиента. Заполняется входным параметром A-customerId
+| UAAAAA
+
+| Header
+| A-userIp
+| string
+| optional
+| IP УЛ.
+| 64.233.165.113
+
+| Header
+| A-projectId
+| string
+| optional
+| Идентификатор приложения (модуля приложения) потребителя.
+| CORP-<ПРОЕКТ>
+
+| Header
+| A-clientType
+| string
+| required
+| Тип сервиса инициатора запроса.
+| FRONT
+
+| Header
+| A-channelId
+| string
+| required
+| Идентификатор вызывающей системы (канала).
+| NIB
+
+6+| Тело запроса
+
+| Body
+| fieldName
+| string
+| required
+| Описание поля и чем оно заполняется
+| -
+|===
+"#;
+
+const THRIFT_METHOD: &str = r#"=== Входные параметры
+
+[cols="1,1,1,3"]
+|===
+| *Параметр* | *Формат* | *Обязательный* | *Описание*
+
+|Endpoint 3+| {host}/<сервис>/tapi
+
+| userData
+| struct
+| да
+| Данные пользователя
+
+| userData.id
+| string
+| да
+| Идентификатор пользователя (xpin/acus)
+
+| userData.authorizedApplicationId
+| string
+| да
+| Идентификатор приложения
+
+| userData.ip
+| string
+| да
+| IP-адрес пользователя
+
+| userData.customerId
+| string
+| да
+| Идентификатор клиента
+
+| fieldName
+| string
+| да
+| Описание поля и чем оно заполняется
+|===
+"#;
+
+const RESPONSE_FIELDS: &str = r#"=== Выходные параметры
+
+[cols="1,1,3,1"]
+|===
+| *Параметр* | *Формат* | *Описание* | *Варианты значений*
+
+| fieldName
+| string
+| Описание поля и источник значения
+| -
+|===
+"#;
+
+const VALIDATION_FIELDS: &str = r#"=== Валидация входных параметров
+
+[cols="1,2,3"]
+|===
+| *Параметр* | *Условие* | *Результат*
+
+.2+|A-userId
+|Параметр имеет значение null или пусто
+|Вернуть исключение с http code 400 (Bad Request), указанием на некорректный параметр - "A-userId не указан", type = VALIDATION_ERROR и code = INCORRECT_CONTRACT
+|Длина значения не равна 6 символам либо символы не являются алфавитно-числовыми
+|Вернуть исключение с http code 400 (Bad Request), указанием на некорректный параметр - "A-userId должен содержать 6 алфавитно-цифровых символов", type = VALIDATION_ERROR и code = INCORRECT_CONTRACT
+|===
+"#;
+
+const ERROR_CODES: &str = r#"== Обработка ошибок
+Описание приведено по ссылке ниже.
+
+include::../CompositeException.adoc[]
+
+*Коды ошибок*
+
+[cols="2,2,1,1"]
+|===
+| *Условие* | *Описание* | *Type* | *Code*
+
+| Шаг 1. Валидация. Не указан параметр
+| A-userId не указан
+| VALIDATION_ERROR
+| INCORRECT_CONTRACT
+|===
+"#;
+
 pub const ASCIIDOC_ELEMENT_TEMPLATES: &[AsciidocElementTemplate] = &[
     AsciidocElementTemplate {
         id: "doc-title",
         label: "Заголовок документа (1 уровень)",
         category: "structure",
-        description: "Заголовок первого уровня (=)",
-        template: "= Заголовок документа\n\n",
+        description: "Заголовок первого уровня (=); атрибуты шапки идут следующей строкой",
+        // Без пустой строки на конце: она закрыла бы шапку документа, и
+        // вставленный следом `doc-attrs` уже не сработал бы (`:toc:` из тела
+        // не действует). См. `domain::asciidoc_header`.
+        template: "= Заголовок документа\n",
     },
     AsciidocElementTemplate {
         id: "doc-attrs",
         label: "Секция оглавления",
         category: "structure",
-        description: "Нумерация разделов и оглавление слева",
+        description: "Нумерация разделов и оглавление слева; вставляется сразу под заголовком, без пустой строки",
         template: ":sectnums:\n:sectnumlevels: 3\n:toc: left\n:toclevels: 3\n:toc-title: Оглавление\n\n",
     },
     AsciidocElementTemplate {
@@ -91,38 +255,38 @@ pub const ASCIIDOC_ELEMENT_TEMPLATES: &[AsciidocElementTemplate] = &[
     },
     AsciidocElementTemplate {
         id: "http-method",
-        label: "Параметры запроса",
+        label: "Входные параметры REST-метода",
         category: "tables",
-        description: "Таблица метода, URL и описания",
-        template: "== Входные параметры\n\n[cols=\"1,1,1,1,3,1\"]\n|===\n| *Тип параметра*   | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*\n\n|Метод            5+| POST\n|Endpoint         5+| corp-\n\n| Header          \n| A-userId     \n| string\n| required\n| X-pin клиента, инициатора запроса\n| XAAAAA\n\n| Header          \n| A-userIp    \n| string\n| optional\n| Ip-адресс клиента\n| 64.233.165.113\n\n| Header          \n| A-customerId  \n| string\n| required\n| U-pin клиента, инициатора запроса\n| UAAAAA\n\n| Header          \n| A-projectId\n| string\n| required\n| Идентификатор приложения инициатора запроса\n| WOWTAX\n\n| Header          \n| A-clientType\n| string\n| required\n| Тип сервиса инициатора запроса\n| FRONT\n\n| Header          \n| A-channelId\n| string\n| required\n| Идентификатор вызывающей системы (канала) NIB/ABM/BAAS\n| NIB\n\n6+| Тело запроса\n\n| Body          \n| -\n| -\n| required\n| -\n| -\n|===\n",
+        description: "Таблица метода, эндпоинта и стандартного блока заголовков A-*",
+        template: HTTP_METHOD,
     },
     AsciidocElementTemplate {
         id: "thrift-method",
-        label: "Параметры Thrift-запроса",
+        label: "Входные параметры Thrift-метода",
         category: "tables",
-        description: "Таблица стандартного конверта Thrift-запроса (userData) и endpoint",
-        template: "== Входные параметры\n\n[cols=\"1,1,1,3\"]\n|===\n| *Параметр* | *Формат* | *Обязательный* | *Описание*\n\n|Endpoint         3+| {host}/<сервис>/tapi\n\n| userData\n| struct\n| да\n| Данные пользователя\n\n| userData.id\n| string\n| да\n| Идентификатор пользователя (xpin/acus)\n\n| userData.authorizedApplicationId\n| string\n| да\n| Идентификатор приложения\n\n| userData.ip\n| string\n| да\n| IP-адрес пользователя\n\n| userData.customerId\n| string\n| да\n| Идентификатор клиента\n|===\n",
+        description: "Таблица эндпоинта и стандартного конверта userData",
+        template: THRIFT_METHOD,
     },
     AsciidocElementTemplate {
         id: "response-fields",
-        label: "Поля ответа",
+        label: "Выходные параметры",
         category: "tables",
-        description: "Таблица полей ответа",
-        template: "== Поля ответа\n\n[cols=\"1,1,3,1\"]\n|===\n| Параметр | Формат | Описание | Варианты значений\n\n| fieldName\n| string\n| description\n| values\n|===\n",
+        description: "Таблица полей ответа с источником значения",
+        template: RESPONSE_FIELDS,
     },
     AsciidocElementTemplate {
         id: "validation-fields",
-        label: "Поля валидации",
+        label: "Валидация входных параметров",
         category: "tables",
-        description: "Таблица полей валидации",
-        template: "== Поля валидации\n\n[cols=\"1,1,1\"]\n|===\n| Параметр | Условие | Результат \n\n| param\n| condition\n| result\n|===\n",
+        description: "Таблица Параметр/Условие/Результат с объединением ячеек (.2+|)",
+        template: VALIDATION_FIELDS,
     },
     AsciidocElementTemplate {
         id: "error-codes",
-        label: "Коды ошибок",
+        label: "Обработка ошибок",
         category: "tables",
-        description: "Таблица кодов и сообщений об ошибках",
-        template: "== Коды ошибок\n\n[cols=\"1,1,2,2\"]\n|===\n| Type | Error Code | Message | Описание\n\n| ValidationException\n| validationError\n| Some of input parameters are incorrect\n| Входные параметры не прошли валидацию\n|===\n",
+        description: "Раздел с include CompositeException и таблицей Условие/Описание/Type/Code",
+        template: ERROR_CODES,
     },
     AsciidocElementTemplate {
         id: "source-code",
@@ -230,6 +394,115 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), 26);
+    }
+
+    /// The editor catalog (`src/lib/asciidocSnippets.ts`) is the same content
+    /// kept by hand in TypeScript. Its templates are plain template literals,
+    /// so every template here must appear in that file verbatim — which is
+    /// exactly what silently stopped being true for the parameter and
+    /// error-code tables.
+    #[test]
+    fn mirrors_the_editor_catalog() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/lib/asciidocSnippets.ts");
+        let source = std::fs::read_to_string(&path).expect("editor catalog is readable");
+        for entry in ASCIIDOC_ELEMENT_TEMPLATES {
+            assert!(
+                source.contains(entry.template),
+                "template {:?} is missing from {}",
+                entry.id,
+                path.display()
+            );
+            assert!(
+                source.contains(&format!("id: \"{}\"", entry.id)),
+                "id {:?} is missing from the editor catalog",
+                entry.id
+            );
+        }
+    }
+
+    /// K.4.2/K.5.2 fail a 4+-column table with any blank cell, and these
+    /// templates are what a document starts from.
+    #[test]
+    fn wide_tables_have_no_blank_cells() {
+        for entry in ASCIIDOC_ELEMENT_TEMPLATES {
+            for (columns, cells) in tables_of(entry.template) {
+                if columns < 4 {
+                    continue;
+                }
+                for cell in cells {
+                    assert!(
+                        !cell.trim().is_empty(),
+                        "blank cell in template {:?}",
+                        entry.id
+                    );
+                }
+            }
+        }
+    }
+
+    /// Section titles the standards checker looks for by name.
+    #[test]
+    fn section_titles_match_the_document_skeleton() {
+        let by_id = |id: &str| {
+            ASCIIDOC_ELEMENT_TEMPLATES
+                .iter()
+                .find(|t| t.id == id)
+                .unwrap_or_else(|| panic!("no template {id}"))
+                .template
+        };
+        // K.7.1 looks for «Обработка ошибок»; «Коды ошибок» is the caption of
+        // the table inside it, not a heading of its own.
+        assert!(by_id("error-codes").starts_with("== Обработка ошибок\n"));
+        assert!(by_id("error-codes").contains("*Коды ошибок*"));
+        assert!(by_id("error-codes").contains("| *Условие* | *Описание* | *Type* | *Code*"));
+        assert!(!by_id("error-codes").contains("ValidationException"));
+        for id in [
+            "http-method",
+            "thrift-method",
+            "response-fields",
+            "validation-fields",
+            "job-table",
+        ] {
+            assert!(by_id(id).starts_with("=== "), "{id} is not a level-3 section");
+        }
+        // A trailing blank line here would push `doc-attrs` out of the header.
+        assert!(by_id("doc-title").ends_with("документа\n"));
+        assert!(by_id("doc-attrs").starts_with(':'));
+    }
+
+    /// Column count from the first row, then every cell of each `|===` block.
+    fn tables_of(source: &str) -> Vec<(usize, Vec<String>)> {
+        let mut out = Vec::new();
+        let mut current: Option<Vec<&str>> = None;
+        for line in source.lines() {
+            if line.trim() == "|===" {
+                match current.take() {
+                    Some(body) => {
+                        let columns = body
+                            .iter()
+                            .map(|l| l.matches('|').count())
+                            .find(|n| *n > 0)
+                            .unwrap_or(0);
+                        let cells = body
+                            .iter()
+                            .filter(|l| {
+                                let t = l.trim_start();
+                                t.starts_with('|') || t.starts_with('.')
+                            })
+                            .flat_map(|l| l.trim().split('|').skip(1).map(str::to_string))
+                            .collect();
+                        out.push((columns, cells));
+                    }
+                    None => current = Some(Vec::new()),
+                }
+                continue;
+            }
+            if let Some(body) = current.as_mut() {
+                body.push(line);
+            }
+        }
+        out
     }
 
     #[test]

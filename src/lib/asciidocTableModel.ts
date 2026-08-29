@@ -422,55 +422,35 @@ export async function parseAsciidocTable(source: string): Promise<ParseTableResu
   }
 }
 
-function serializeCellText(text: string, rowspan: number): string {
-  const trimmed = text.trim();
-  if (rowspan > 1) return `.${rowspan}+${trimmed}`;
-  return trimmed;
+/** A cell's span specifier, which AsciiDoc puts *before* the cell's `|`:
+ * `2+|` spans columns, `.3+|` spans rows, `2.3+|` spans both. Empty string
+ * when the cell spans nothing.
+ *
+ * Writing a row span after the pipe (`| .2+A-userId`) does not span anything —
+ * it makes the text start with ".2+" and leaves the row one cell short, which
+ * is how a validation table (the standard's `.2+|` parameter with two
+ * conditions) used to come back mangled from the table editor. */
+function cellSpec(cell: EditableCell): string {
+  const colspan = normalizeSpan(cell.colspan);
+  const rowspan = normalizeSpan(cell.rowspan);
+  if (colspan > 1 && rowspan > 1) return `${colspan}.${rowspan}+`;
+  if (colspan > 1) return `${colspan}+`;
+  if (rowspan > 1) return `.${rowspan}+`;
+  return "";
+}
+
+function serializeCell(cell: EditableCell): string {
+  return `${cellSpec(cell)}| ${cell.text.trim()}`;
 }
 
 /** Serialize one pipe-table row. */
 export function serializeRow(cells: EditableCell[]): string {
   if (cells.length === 0) return "|";
-
-  if (cells.length === 1) {
-    const cell = cells[0];
-    const colspan = normalizeSpan(cell.colspan);
-    const rowspan = normalizeSpan(cell.rowspan);
-    const text = serializeCellText(cell.text, rowspan);
-    if (colspan > 1) {
-      return `${colspan}+| ${text}`;
-    }
-    return `| ${text}`;
-  }
-
-  let line = "";
-  for (let i = 0; i < cells.length; i++) {
-    const cell = cells[i];
-    const colspan = normalizeSpan(cell.colspan);
-    const rowspan = normalizeSpan(cell.rowspan);
-    const text = serializeCellText(cell.text, rowspan);
-
-    if (i === 0) {
-      line = `| ${text}`;
-      if (colspan > 1) line += ` ${colspan}+|`;
-      continue;
-    }
-
-    if (colspan > 1) {
-      line += ` ${colspan}+| ${text}`;
-    } else {
-      line += ` | ${text}`;
-    }
-  }
-
-  return line;
+  return cells.map(serializeCell).join(" ");
 }
 
 function serializeVerticalRow(cells: EditableCell[]): string[] {
-  return cells.map((cell) => {
-    const text = serializeCellText(cell.text, normalizeSpan(cell.rowspan));
-    return `| ${text}`;
-  });
+  return cells.map(serializeCell);
 }
 
 function shouldBlankLineAfterRow(table: EditableTable, rowIndex: number): boolean {

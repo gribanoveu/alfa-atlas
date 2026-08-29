@@ -27,16 +27,19 @@ export const ASCIIDOC_SNIPPETS: AsciiDocSnippet[] = [
     id: "doc-title",
     label: "Заголовок документа (1 уровень)",
     category: "structure",
-    description: "Заголовок первого уровня (=)",
+    description: "Заголовок первого уровня (=); атрибуты шапки идут следующей строкой",
+    // Без пустой строки на конце: она закрыла бы шапку документа, и
+    // вставленный следом `doc-attrs` уже не сработал бы (`:toc:` из тела
+    // не действует) — это ловит диагностика detachedHeaderAttributes.
     template: `= Заголовок документа
-
 `,
   },
   {
     id: "doc-attrs",
     label: "Секция оглавления",
     category: "structure",
-    description: "Нумерация разделов и оглавление слева",
+    description:
+      "Нумерация разделов и оглавление слева; вставляется сразу под заголовком, без пустой строки",
     template: `:sectnums:
 :sectnumlevels: 3
 :toc: left
@@ -136,85 +139,92 @@ Job не принимает входных параметров.
 |===
 `,
   },
+  // Шаблоны разделов постановки ниже держатся ровно в том виде, который описан
+  // в bundled-скиле `method-spec` и проходит проверку стандарта: заголовки того
+  // уровня, который задан каркасом документа, и ни одной пустой ячейки в
+  // таблицах от четырёх колонок (K.4.2/K.5.2 — вместо пустой ячейки дефис).
+  // Их зеркала: `src-tauri/src/domain/asciidoc_element_templates.rs` (для AI) и
+  // `BANG_COMMANDS` в `useMonacoCompletions.ts` (для `!`-команд) — оба сверяются
+  // с этим файлом тестами.
   {
     id: "http-method",
-    label: "Параметры запроса",
+    label: "Входные параметры REST-метода",
     category: "tables",
-    description: "Таблица метода, URL и описания",
-    template: `== Входные параметры
+    description: "Таблица метода, эндпоинта и стандартного блока заголовков A-*",
+    template: `=== Входные параметры
 
 [cols="1,1,1,1,3,1"]
 |===
-| *Тип параметра*   | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*
+| *Тип параметра* | *Параметр* | *Формат* | *Обязательность* | *Описание* | *Варианты значений*
 
-|Метод            5+| POST
-|Endpoint         5+| corp-
+|Метод 5+| POST
+|Endpoint 5+| https://{host}/<сервис>/<путь>
 
-| Header          
-| A-userId     
-| string
+| Header
+| A-userId
+| string (length 6 or 9)
 | required
-| X-pin клиента, инициатора запроса
+| Идентификатор УЛ интернет-банка. Заполняется входным параметром A-userId
 | XAAAAA
 
-| Header          
-| A-userIp    
-| string
-| optional
-| Ip-адресс клиента
-| 64.233.165.113
-
-| Header          
-| A-customerId  
-| string
+| Header
+| A-customerId
+| string (length 6 or 9)
 | required
-| U-pin клиента, инициатора запроса
+| Идентификатор клиента. Заполняется входным параметром A-customerId
 | UAAAAA
 
-| Header          
+| Header
+| A-userIp
+| string
+| optional
+| IP УЛ.
+| 64.233.165.113
+
+| Header
 | A-projectId
 | string
-| required
-| Идентификатор приложения инициатора запроса
-| WOWTAX
+| optional
+| Идентификатор приложения (модуля приложения) потребителя.
+| CORP-<ПРОЕКТ>
 
-| Header          
+| Header
 | A-clientType
 | string
 | required
-| Тип сервиса инициатора запроса
+| Тип сервиса инициатора запроса.
 | FRONT
 
-| Header          
+| Header
 | A-channelId
 | string
 | required
-| Идентификатор вызывающей системы (канала) NIB/ABM/BAAS
+| Идентификатор вызывающей системы (канала).
 | NIB
 
 6+| Тело запроса
 
-| Body          
-| -
-| -
+| Body
+| fieldName
+| string
 | required
-| -
+| Описание поля и чем оно заполняется
 | -
 |===
 `,
   },
   {
     id: "thrift-method",
-    label: "Параметры Thrift-запроса",
+    label: "Входные параметры Thrift-метода",
     category: "tables",
-    description: "Таблица стандартного конверта Thrift-запроса (userData) и endpoint",
-    template: `== Входные параметры
+    description: "Таблица эндпоинта и стандартного конверта userData",
+    template: `=== Входные параметры
 
 [cols="1,1,1,3"]
 |===
 | *Параметр* | *Формат* | *Обязательный* | *Описание*
 
-|Endpoint         3+| {host}/<сервис>/tapi
+|Endpoint 3+| {host}/<сервис>/tapi
 
 | userData
 | struct
@@ -240,59 +250,71 @@ Job не принимает входных параметров.
 | string
 | да
 | Идентификатор клиента
+
+| fieldName
+| string
+| да
+| Описание поля и чем оно заполняется
 |===
 `,
   },
   {
     id: "response-fields",
-    label: "Поля ответа",
+    label: "Выходные параметры",
     category: "tables",
-    description: "Таблица полей ответа",
-    template: `== Поля ответа
+    description: "Таблица полей ответа с источником значения",
+    template: `=== Выходные параметры
 
 [cols="1,1,3,1"]
 |===
-| Параметр | Формат | Описание | Варианты значений
+| *Параметр* | *Формат* | *Описание* | *Варианты значений*
 
 | fieldName
 | string
-| description
-| values
+| Описание поля и источник значения
+| -
 |===
 `,
   },
   {
     id: "validation-fields",
-    label: "Поля валидации",
+    label: "Валидация входных параметров",
     category: "tables",
-    description: "Таблица полей валидации",
-    template: `== Поля валидации
+    description: "Таблица Параметр/Условие/Результат с объединением ячеек (.2+|)",
+    template: `=== Валидация входных параметров
 
-[cols="1,1,1"]
+[cols="1,2,3"]
 |===
-| Параметр | Условие | Результат 
+| *Параметр* | *Условие* | *Результат*
 
-| param
-| condition
-| result
+.2+|A-userId
+|Параметр имеет значение null или пусто
+|Вернуть исключение с http code 400 (Bad Request), указанием на некорректный параметр - "A-userId не указан", type = VALIDATION_ERROR и code = INCORRECT_CONTRACT
+|Длина значения не равна 6 символам либо символы не являются алфавитно-числовыми
+|Вернуть исключение с http code 400 (Bad Request), указанием на некорректный параметр - "A-userId должен содержать 6 алфавитно-цифровых символов", type = VALIDATION_ERROR и code = INCORRECT_CONTRACT
 |===
 `,
   },
   {
     id: "error-codes",
-    label: "Коды ошибок",
+    label: "Обработка ошибок",
     category: "tables",
-    description: "Таблица кодов и сообщений об ошибках",
-    template: `== Коды ошибок
+    description: "Раздел с include CompositeException и таблицей Условие/Описание/Type/Code",
+    template: `== Обработка ошибок
+Описание приведено по ссылке ниже.
 
-[cols="1,1,2,2"]
+include::../CompositeException.adoc[]
+
+*Коды ошибок*
+
+[cols="2,2,1,1"]
 |===
-| Type | Error Code | Message | Описание
+| *Условие* | *Описание* | *Type* | *Code*
 
-| ValidationException
-| validationError
-| Some of input parameters are incorrect
-| Входные параметры не прошли валидацию
+| Шаг 1. Валидация. Не указан параметр
+| A-userId не указан
+| VALIDATION_ERROR
+| INCORRECT_CONTRACT
 |===
 `,
   },

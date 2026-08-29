@@ -115,6 +115,52 @@ describe("serializeAsciidocTable round-trip", () => {
     expect(out).toContain("| *Параметр* | *Формат*");
   });
 
+  test("writes a row span before the pipe, not into the cell text", async () => {
+    // `.2+|` перед трубой — единственная форма, которую AsciiDoc считает
+    // объединением ячеек по вертикали. Так оформлена таблица валидации в
+    // стандарте, и раньше редактор таблиц возвращал её как `| .2+A-userId`,
+    // теряя ячейку.
+    const source = [
+      '[cols="1,2,3"]',
+      "|===",
+      "| *Параметр* | *Условие* | *Результат*",
+      "",
+      ".2+|A-userId",
+      "|Пусто",
+      "|Ошибка 400",
+      "|Слишком длинный",
+      "|Ошибка 400",
+      "|===",
+    ].join("\n");
+    const parsed = await parseAsciidocTable(source);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const out = serializeAsciidocTable(parsed.table);
+    expect(out).toContain(".2+| A-userId");
+    expect(out).not.toContain("| .2+A-userId");
+
+    const reparsed = await parseAsciidocTable(out);
+    expect(reparsed.ok).toBe(true);
+    if (!reparsed.ok) return;
+    expect(reparsed.table.rows[1].cells[0].rowspan).toBe(2);
+    expect(reparsed.table.rows).toHaveLength(3);
+  });
+
+  test("writes a leading cell's column span before its pipe", async () => {
+    const source = '[cols="1,1,1"]\n|===\n| A | B | C\n\n2+| Занимает две | C2\n|===';
+    const parsed = await parseAsciidocTable(source);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+
+    const out = serializeAsciidocTable(parsed.table);
+    expect(out).toContain("2+| Занимает две | C2");
+    const reparsed = await parseAsciidocTable(out);
+    expect(reparsed.ok).toBe(true);
+    if (!reparsed.ok) return;
+    expect(reparsed.table.rows[1].cells[0].colspan).toBe(2);
+  });
+
   test("preserves vertical body row format for thrift-method", async () => {
     const source = extractTableFromTemplate(
       TABLE_SNIPPETS.find((s) => s.id === "thrift-method")!.template,
