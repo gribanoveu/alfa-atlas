@@ -24,6 +24,7 @@ mod read_file;
 mod semantic_search;
 mod skill;
 mod todo;
+mod visualize;
 mod write_file;
 
 use crate::domain::ai_access::{AiAccessMode, ToolName};
@@ -70,6 +71,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::UpdatePlan, plans::update_definition),
     (ToolName::ReadPlan, plans::read_definition),
     (ToolName::UpdatePlanTodo, plans::update_todo_definition),
+    (ToolName::Visualize, visualize::definition),
 ];
 
 /// Stable display order for Settings → Permissions ("Разрешённые
@@ -194,6 +196,7 @@ pub fn execute_tool(
         ToolCall::UpdatePlan(args) => plans::update_plan(args),
         ToolCall::ReadPlan(args) => plans::read_plan(args),
         ToolCall::UpdatePlanTodo(args) => plans::update_plan_todo(args),
+        ToolCall::Visualize(args) => visualize::visualize(args),
     }
 }
 
@@ -206,8 +209,8 @@ mod tests {
     use crate::domain::ai_access::{AiAccessMode, ToolName};
     use crate::domain::ai_tools::{
     AskUserArgs, CheckArgs, CheckKind, GitBlameArgs, GitDiffArgs, GrepArgs, ListFilesArgs,
-    ReadFileArgs, RequestModeSwitchArgs, SemanticSearchArgs, ToolCall, ToolError, ToolResult,
-    ToolScope,
+    DiagramFormat, ReadFileArgs, RequestModeSwitchArgs, SemanticSearchArgs, ToolCall, ToolError,
+    ToolResult, ToolScope, VisualContent, VisualizeArgs,
 };
     use crate::domain::conversation_mode::ConversationMode;
     use crate::services::ai_tools::testing::*;
@@ -362,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_twenty_three_in_agent_mode_by_default() {
+    fn llm_tool_definitions_includes_all_twenty_four_in_agent_mode_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -394,6 +397,7 @@ mod tests {
                 "artifact",
                 "readPlan",
                 "updatePlanTodo",
+                "visualize",
             ]
         );
 
@@ -444,6 +448,10 @@ mod tests {
         assert!(question_names.contains("getAsciidocTemplates"));
         assert!(question_names.contains("skill"));
         assert!(question_names.contains("askUser"));
+        // Explaining code with a diagram is exactly what Question mode is
+        // for, so `visualize` is a base tool rather than an Agent extra.
+        assert!(question_names.contains("visualize"));
+        assert!(plan_names.contains("visualize"));
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -539,6 +547,38 @@ mod tests {
             serde_json::from_value(serde_json::json!({"kind": "standards"})).unwrap();
         assert_eq!(standards_args.kind, CheckKind::Standards);
         assert_eq!(standards_args.path, None);
+
+        // `VisualizeArgs` flattens an internally-tagged enum, so its
+        // schema is flat while its type is not — exactly the drift this
+        // test exists to catch.
+        let visualize = defs.iter().find(|d| d.name == "visualize").unwrap();
+        assert_eq!(
+            visualize.parameters["required"],
+            serde_json::json!(["kind", "title", "format", "source"])
+        );
+        let args: VisualizeArgs = serde_json::from_value(serde_json::json!({
+            "kind": "diagram",
+            "title": "Поток данных",
+            "caption": "Слева направо",
+            "format": "mermaid",
+            "source": "flowchart TD\n  a-->b"
+        }))
+        .unwrap();
+        assert_eq!(args.title, "Поток данных");
+        assert_eq!(args.caption.as_deref(), Some("Слева направо"));
+        assert_eq!(
+            args.content,
+            VisualContent::Diagram {
+                format: DiagramFormat::Mermaid,
+                source: "flowchart TD\n  a-->b".to_string()
+            }
+        );
+        // `caption` is the only optional field.
+        let args: VisualizeArgs = serde_json::from_value(serde_json::json!({
+            "kind": "diagram", "title": "x", "format": "plantuml", "source": "@startuml\n@enduml"
+        }))
+        .unwrap();
+        assert_eq!(args.caption, None);
 
         assert!(defs.iter().find(|d| d.name == "memory").is_none());
 

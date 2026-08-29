@@ -26,6 +26,8 @@ import { AssistantSteerBlock } from "./AssistantSteerBlock";
 import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import { AssistantPlanCard, isPlanToolBlock } from "./AssistantPlanCard";
+import { AssistantVisualCard, isVisualToolBlock } from "./AssistantVisualCard";
+import { openVisualTab } from "../../lib/visuals";
 import { TodoProgressWidget } from "./TodoProgressWidget";
 import { PlanProgressWidget } from "./PlanProgressWidget";
 
@@ -966,6 +968,12 @@ export function AssistantConversation({
                               );
                             }}
                             onStartPlan={startPlan}
+                          />
+                        ) : isVisualToolBlock(item.block) ? (
+                          <AssistantVisualCard
+                            key={item.block.id}
+                            block={item.block}
+                            onOpenVisual={openVisualTab}
                           />
                         ) : (
                           <AssistantToolCallBlock key={item.block.id} block={item.block} />

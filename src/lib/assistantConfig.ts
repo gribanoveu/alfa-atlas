@@ -40,6 +40,15 @@ const SKILLS_ROUTER_HINT = `## Skills
 
 Specialized workflows (writing or filling REST/Thrift method documentation, OpenAPI specs layout, and any user-installed packs) live behind the \`skill\` tool. Before that kind of work, call \`skill\` with \`op: "search"\` and a short query, then \`op: "load"\` a match and follow it. Do not skip this for those tasks. Ordinary AsciiDoc authoring does not need a skill — do not search for one just because the request mentions documentation in general. Empty search queries are rejected.`;
 
+/** Applies in every mode: a `visualize` call is display-only, so nothing
+ *  about it depends on write access or on whether a plan is in flight. It
+ *  lives here rather than in the tool's own description because it is a
+ *  rule about *when to answer with a picture*, which the model weighs
+ *  against writing prose — a choice the tool list alone doesn't frame. */
+const VISUALIZE_HINT = `## Explaining with a diagram
+
+When the user asks how something works — a flow through the code, an architecture, a sequence of calls, a state machine, relationships between entities — answer with a diagram: call \`visualize\` once with the diagram, then explain in a few sentences. Do not draw boxes and arrows out of text characters in your prose, and do not paste the diagram source into your reply; the chat shows a card the user opens in a tab. Base the diagram on code you actually read. A short question with a one-sentence answer does not need one.`;
+
 // System prompt for the assistant embedded in Alfa Atlas. Built by a
 // function rather than a plain const so the date/timezone context line is
 // evaluated per-request instead of being frozen at module load (the app
@@ -252,6 +261,8 @@ ${pathExamples}
 ${toolUsageSection}
 
 ${SKILLS_ROUTER_HINT}
+
+${VISUALIZE_HINT}
 
 When a project-specific claim requires verification: (1) check whether evidence is already in context, (2) if not, use the appropriate tool, (3) inspect the source, (4) only then present the claim as fact. Do not use tools to confirm avoidable assumptions. Do not perform exploratory searches unrelated to the request. If search results are only weak/indirect evidence, do not treat them as definitive. Read the source when precision matters. If a tool result contradicts an assumption, discard the assumption.
 
@@ -528,6 +539,8 @@ ${toolUsageSection}
 
 ${SKILLS_ROUTER_HINT}
 
+${VISUALIZE_HINT}
+
 **Use read-only tools to:**
 - Discover the current structure of the area you'll propose changes to
 - Read existing content that will be modified or referenced
@@ -690,6 +703,8 @@ ${pathExamples}
 ${toolUsageSection}
 
 ${SKILLS_ROUTER_HINT}
+
+${VISUALIZE_HINT}
 
 ## Boundaries
 
@@ -1138,6 +1153,10 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
           return `Работает с памятью${suffix}…`;
       }
     }
+    case "visualize":
+      return typeof args.title === "string" && args.title.trim() !== ""
+        ? `Рисует схему: «${args.title}»…`
+        : "Рисует схему…";
     default:
       return "Выполняет действие…";
   }
@@ -1327,6 +1346,12 @@ export function describeToolResult(
       const remaining = todos.filter((t) => t.status === "pending" || t.status === "inProgress").length;
       return `Выполнено: ${completed}, осталось: ${remaining}`;
     }
+    // Only reachable when a `visualize` call falls through to the generic
+    // tool-call chip instead of `AssistantVisualCard` — which the card's
+    // own null-payload branch makes rare, but the chip must still say
+    // something truthful.
+    case "visualShown":
+      return `Схема: ${block.result.result.title}`;
     default:
       return "Готово";
   }

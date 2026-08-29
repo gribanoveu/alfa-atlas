@@ -44,6 +44,9 @@ import { OpenApiExplorer } from "./components/OpenApiExplorer/OpenApiExplorer";
 import { UtilityView } from "./components/Utilities/UtilityView";
 import { utilityTabId } from "./data/utilities";
 import { artifactTabId, createAndOpenArtifact } from "./lib/artifactTabs";
+import { normalizeDiagramBackdrop } from "./lib/prefs";
+import { visualTabId, type Visual } from "./lib/visuals";
+import { VisualView } from "./components/Visuals/VisualView";
 import { ARTIFACT_KINDS } from "./data/artifactKinds";
 import { ArtifactView } from "./components/Artifacts/ArtifactView";
 import { useGeneralPrefs } from "./hooks/useGeneralPrefs";
@@ -170,6 +173,8 @@ function App() {
     openArtifactTab,
     setArtifactTitle,
     setArtifactDirtyFlag,
+    activeVisual,
+    openVisualTab,
   } = tabs;
 
   const openApiBundle = useOpenApiBundle(
@@ -200,6 +205,20 @@ function App() {
     window.addEventListener("atlas-open-artifact", onOpenArtifact);
     return () => window.removeEventListener("atlas-open-artifact", onOpenArtifact);
   }, [openArtifactTab]);
+
+  // Dispatched by the assistant's `visualize` card. Unlike the two above,
+  // the event carries the whole payload rather than an id: a visualization
+  // has no store to load it back from — it lives on the chat message that
+  // produced it (see `src/lib/visuals.ts`).
+  useEffect(() => {
+    const onOpenVisual = (event: Event) => {
+      const visual = (event as CustomEvent<Visual>).detail;
+      if (!visual?.id) return;
+      openVisualTab(visual);
+    };
+    window.addEventListener("atlas-open-visual", onOpenVisual);
+    return () => window.removeEventListener("atlas-open-visual", onOpenVisual);
+  }, [openVisualTab]);
 
 
 
@@ -469,6 +488,11 @@ function App() {
     ["--font-editor" as string]: `${generalPrefs.prefs.editorFontSizePx}px`,
     ["--font-preview" as string]: `${generalPrefs.prefs.previewFontSizePx}px`,
     ["--font-assistant" as string]: `${generalPrefs.prefs.assistantFontSizePx}px`,
+    // Normalized on the way in as well as on the way out of the store: this
+    // interpolates into a CSS custom property, which React does not escape.
+    ["--diagram-backdrop" as string]: normalizeDiagramBackdrop(
+      generalPrefs.prefs.diagramBackdrop,
+    ),
   };
 
   const openFolder = useCallback(async () => {
@@ -751,7 +775,9 @@ function App() {
                     ? utilityTabId(activeUtility)
                     : activeKind === "artifact" && activeArtifact
                       ? artifactTabId(activeArtifact)
-                      : editor.activeTabId
+                      : activeKind === "visual" && activeVisual
+                        ? visualTabId(activeVisual.id)
+                        : editor.activeTabId
               }
               activeTab={editor.activeTab}
               activeKind={activeKind}
@@ -787,6 +813,9 @@ function App() {
                     }}
                   />
                 ) : undefined
+              }
+              visualView={
+                activeVisual ? <VisualView key={activeVisual.id} visual={activeVisual} /> : undefined
               }
               onSelectTab={tabs.selectTab}
               onCloseTab={tabs.closeTab}

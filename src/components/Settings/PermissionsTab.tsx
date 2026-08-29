@@ -24,6 +24,7 @@ const PERMISSION_TOOL_LABELS: Record<string, string> = {
   updatePlan: "Обновление плана (updatePlan)",
   readPlan: "Чтение плана (readPlan)",
   updatePlanTodo: "Статус шага плана (updatePlanTodo)",
+  visualize: "Схемы и визуализации (visualize)",
 };
 
 /** Per-project "always allow" list for the assistant's tool-calling loop

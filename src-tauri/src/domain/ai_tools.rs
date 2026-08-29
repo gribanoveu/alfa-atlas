@@ -618,6 +618,70 @@ pub struct ArtifactReadArgs {
     pub id: String,
 }
 
+/// Which engine renders a `VisualContent::Diagram`. Both already exist in
+/// the webview (`src/components/AsciiDocPreview/mermaidRenderer.ts` and
+/// `plantumlRenderer.ts`), which is the whole constraint on this enum: a
+/// format is only offered to the model once something can actually draw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiagramFormat {
+    Mermaid,
+    Plantuml,
+}
+
+impl DiagramFormat {
+    /// Human label for the result summary and the chat card's eyebrow.
+    pub fn label(self) -> &'static str {
+        match self {
+            DiagramFormat::Mermaid => "mermaid",
+            DiagramFormat::Plantuml => "plantuml",
+        }
+    }
+}
+
+/// The kind-specific payload of a visualization. Internally tagged by
+/// `kind` and `#[serde(flatten)]`ed into `VisualizeArgs`, so the wire shape
+/// the model fills in is flat (`kind`/`format`/`source` side by side) —
+/// models fill a flat object far more reliably than a nested one.
+///
+/// This enum is the extension point: a second kind is one variant here, one
+/// renderer in `VisualView`, and one more value in the tool's JSON schema.
+/// Nothing in the tool loop, the chat card, or the tab machinery is
+/// kind-specific. The rule for adding one is the same as `DiagramFormat`'s:
+/// only kinds the app can actually render may appear in the schema, or the
+/// model will confidently produce something that shows up as an error card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum VisualContent {
+    #[serde(rename_all = "camelCase")]
+    Diagram { format: DiagramFormat, source: String },
+}
+
+impl VisualContent {
+    /// Wire name of the variant — echoed back in `ToolResult::VisualShown`
+    /// so the frontend card can label itself without re-parsing the args.
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            VisualContent::Diagram { .. } => "diagram",
+        }
+    }
+}
+
+/// Args for `visualize`. The visualization is never persisted anywhere:
+/// these args live on the chat's own tool-call block (which the chat store
+/// already writes to SQLite), and the frontend reads the source straight
+/// back out of them. That is the entire storage story — see
+/// `src/lib/visuals.ts`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisualizeArgs {
+    pub title: String,
+    #[serde(default)]
+    pub caption: Option<String>,
+    #[serde(flatten)]
+    pub content: VisualContent,
+}
+
 /// One call into the tool executor. This — not the individual `ToolName`
 /// variants — is the harness-facing unit: `services::ai_tools::execute_tool`
 /// takes exactly one of these and returns exactly one `ToolResult`, so a
@@ -654,6 +718,7 @@ pub enum ToolCall {
     UpdatePlan(UpdatePlanArgs),
     ReadPlan(ReadPlanArgs),
     UpdatePlanTodo(UpdatePlanTodoArgs),
+    Visualize(VisualizeArgs),
 }
 
 impl ToolCall {
@@ -688,6 +753,7 @@ impl ToolCall {
             ToolCall::UpdatePlan(_) => ToolName::UpdatePlan,
             ToolCall::ReadPlan(_) => ToolName::ReadPlan,
             ToolCall::UpdatePlanTodo(_) => ToolName::UpdatePlanTodo,
+            ToolCall::Visualize(_) => ToolName::Visualize,
         }
     }
 }
@@ -900,6 +966,18 @@ pub enum ToolResult {
     PlanTodoUpdated {
         plan_id: String,
         todos: Vec<crate::domain::plan::PlanTodo>,
+    },
+    /// Settled `visualize` — deliberately *not* an echo of the source the
+    /// model just sent: repeating it back would double the token cost of
+    /// every diagram for no gain. `summary` is the one-line confirmation
+    /// («mermaid, 24 строки»); the frontend card reads the real content off
+    /// the call's own arguments.
+    #[serde(rename_all = "camelCase")]
+    VisualShown {
+        visual_id: String,
+        kind: String,
+        title: String,
+        summary: String,
     },
 }
 

@@ -1,0 +1,185 @@
+.visual-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  background: var(--bg-editor);
+  color: var(--text-0);
+  font-size: var(--font-preview);
+}
+
+.visual-view-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex: none;
+}
+
+.visual-view-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.visual-view-eyebrow {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.visual-view-title {
+  font-size: var(--font-preview);
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visual-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.visual-view-toggle {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.visual-toggle-btn {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--font-ui);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.visual-toggle-btn:hover:not(.is-active) {
+  color: var(--text-0);
+}
+
+.visual-toggle-btn.is-active {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.visual-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: var(--font-ui);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.visual-btn:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.visual-view-caption {
+  flex: none;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  font-size: var(--font-ui);
+  line-height: 1.45;
+  color: var(--text-1);
+}
+
+.visual-view-error {
+  flex: none;
+  margin: 0;
+  font-size: var(--font-ui);
+  color: var(--danger, #d84c4c);
+}
+
+/* Just a bounded box: the frame the user sees is the viewer's own viewport
+   border, not another one here. Nesting them was the "diagram sits inside a
+   dark box" problem. */
+.visual-view-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.visual-view-body > * {
+  flex: 1;
+  min-height: 0;
+}
+
+/* `AscMermaid`/`AscPlantuml` are styled as a *card embedded in a document*
+   — outer margin, padding, border and a `--bg-1` fill — which is right
+   inside a `.adoc` preview and wrong for a whole tab, where it reads as an
+   empty dark band above the toolbar and a frame around a frame. Strip that
+   chrome and let the viewport take the height, the same way
+   `.asc-preview-standalone-plantuml` already does for a standalone `.puml`
+   file. */
+.visual-view-body .asc-mermaid,
+.visual-view-body .asc-plantuml {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+.visual-view-body .asc-mermaid-viewport,
+.visual-view-body .asc-plantuml-viewport {
+  flex: 1;
+  min-height: 0;
+  /* 70vh is sized for a diagram sharing a scrolling document; here the tab
+     is the whole viewport and the diagram should fill it. */
+  max-height: none;
+  border-radius: 8px;
+}
+
+/* The error state replaces the toolbar+viewport entirely, so it has to
+   carry the scrolling itself once the card padding above is gone. */
+.visual-view-body .asc-mermaid-error,
+.visual-view-body .asc-plantuml-error,
+.visual-view-body .asc-mermaid-loading,
+.visual-view-body .asc-plantuml-loading {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.visual-view-source {
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-0);
+}
+
+.visual-view-source .asc-code {
+  margin: 0;
+}

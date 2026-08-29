@@ -8,7 +8,8 @@ import { AscPlantuml } from "./AscPlantuml";
 import { AscPreviewProvider } from "./AscPreviewContext";
 import { AscToc, type AscTocPlacement } from "./AscToc";
 import { InlineHtml } from "./InlineHtml";
-import type { AbstractBlock, Section } from "./types";
+import { makeDiagramBlock } from "./syntheticBlock";
+import type { Section } from "./types";
 import "./AsciiDocPreview.css";
 
 type XrefHandler = (href: string) => void;
@@ -37,26 +38,6 @@ const MERMAID_EXTS = new Set([".mmd", ".mermaid"]);
  * narrow app window or open sidebars.
  */
 const TOC_SIDEBAR_MIN_WIDTH_RATIO = 0.6;
-
-/**
- * Standalone `.puml` file → fake asciidoctor "listing" block whose
- * `getSource()` returns the raw PlantUML source. `AscPlantuml` renders it
- * through the vendored TeaVM engine, identical to `[plantuml] ---- … ----`
- * blocks embedded in `.adoc`.
- */
-function makePlantumlBlock(source: string, name: string | null): AbstractBlock {
-  return {
-    getSource: () => source,
-    getAttribute: (key: string) => (key === "1" ? name : null),
-  } as unknown as AbstractBlock;
-}
-
-function makeMermaidBlock(source: string, name: string | null): AbstractBlock {
-  return {
-    getSource: () => source,
-    getAttribute: (key: string) => (key === "1" ? name : null),
-  } as unknown as AbstractBlock;
-}
 
 /**
  * Контейнер превью AsciiDoc: парсит контент в AST и рендерит дерево блоков
@@ -108,7 +89,7 @@ export function AsciiDocPreview({
     const name = filePath ? (filePath.split(/[/\\]/).pop() ?? null) : null;
     return (
       <div className="asc-preview asc-preview-standalone-plantuml">
-        <AscPlantuml block={makePlantumlBlock(content, name)} docsRoot={docsRoot} />
+        <AscPlantuml block={makeDiagramBlock(content, name)} docsRoot={docsRoot} />
       </div>
     );
   }
@@ -117,7 +98,7 @@ export function AsciiDocPreview({
     const name = filePath ? (filePath.split(/[/\\]/).pop() ?? null) : null;
     return (
       <div className="asc-preview">
-        <AscMermaid block={makeMermaidBlock(content, name)} docsRoot={docsRoot} />
+        <AscMermaid block={makeDiagramBlock(content, name)} docsRoot={docsRoot} />
       </div>
     );
   }

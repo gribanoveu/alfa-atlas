@@ -2,8 +2,11 @@ import { Fragment } from "react";
 import type { GeneralPrefsEditor } from "../../hooks/useGeneralPrefsEditor";
 import {
   clampFontSizePx,
+  DEFAULT_DIAGRAM_BACKDROP,
   DEFAULT_GENERAL_PREFS,
+  DIAGRAM_BACKDROP_PRESETS,
   FONT_SIZE_LIMITS,
+  normalizeDiagramBackdrop,
   type GeneralPrefs,
 } from "../../lib/prefs";
 
@@ -60,6 +63,9 @@ type AppearanceTabProps = {
  * how the file tree lays itself out. */
 export function AppearanceTab({ editor }: AppearanceTabProps) {
   const { prefs, error, busy, patchPrefs, stagePref, persistPref, resetFontPrefs } = editor;
+  const backdrop = normalizeDiagramBackdrop(
+    prefs?.diagramBackdrop ?? DEFAULT_GENERAL_PREFS.diagramBackdrop,
+  );
 
   return (
     <div className="settings-sections">
@@ -140,6 +146,62 @@ export function AppearanceTab({ editor }: AppearanceTabProps) {
         <p className="settings-hint">
           Если в корне документации есть папка _external, она отображается
           отдельным блоком под основным деревом.
+        </p>
+      </div>
+
+      <div className="settings-card">
+        <div className="settings-section-head">
+          <div className="settings-section-title">Подложка диаграмм</div>
+          <button
+            type="button"
+            className="settings-link-btn"
+            disabled={!prefs || busy || backdrop === DEFAULT_DIAGRAM_BACKDROP}
+            onClick={() => patchPrefs({ diagramBackdrop: DEFAULT_DIAGRAM_BACKDROP })}
+          >
+            Сбросить
+          </button>
+        </div>
+        <div className="settings-backdrop-row">
+          {DIAGRAM_BACKDROP_PRESETS.map((preset) => (
+            <button
+              key={preset.value}
+              type="button"
+              className={`settings-backdrop-preset${
+                backdrop === preset.value ? " is-active" : ""
+              }${preset.value === "transparent" ? " is-transparent" : ""}`}
+              style={
+                preset.value === "transparent" ? undefined : { background: preset.value }
+              }
+              disabled={!prefs || busy}
+              aria-pressed={backdrop === preset.value}
+              title={preset.label}
+              onClick={() => patchPrefs({ diagramBackdrop: preset.value })}
+            >
+              <span className="settings-backdrop-preset-label">{preset.label}</span>
+            </button>
+          ))}
+          <label className="settings-backdrop-custom">
+            <input
+              type="color"
+              className="settings-backdrop-input"
+              // `<input type="color">` has no notion of `transparent`, so it
+              // shows the default swatch while that preset is picked rather
+              // than pretending some colour is selected.
+              value={backdrop === "transparent" ? DEFAULT_DIAGRAM_BACKDROP : backdrop}
+              disabled={!prefs || busy}
+              aria-label="Свой цвет подложки"
+              onChange={(event) =>
+                patchPrefs({ diagramBackdrop: normalizeDiagramBackdrop(event.target.value) })
+              }
+            />
+            <span>Свой цвет</span>
+          </label>
+        </div>
+        <p className="settings-hint settings-hint-compact">
+          Фон под отрисованными схемами Mermaid и PlantUML — в превью документов
+          и во вкладках схем от ассистента. Обе библиотеки рисуют тёмным по
+          светлому, поэтому на тёмной или прозрачной подложке диаграмма может
+          читаться хуже.
         </p>
       </div>
 

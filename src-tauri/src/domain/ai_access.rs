@@ -49,6 +49,7 @@ pub enum ToolName {
     UpdatePlan,
     ReadPlan,
     UpdatePlanTodo,
+    Visualize,
 }
 
 impl ToolName {
@@ -135,6 +136,7 @@ impl ToolName {
             "updatePlan" => Some(ToolName::UpdatePlan),
             "readPlan" => Some(ToolName::ReadPlan),
             "updatePlanTodo" => Some(ToolName::UpdatePlanTodo),
+            "visualize" => Some(ToolName::Visualize),
             _ => None,
         }
     }
@@ -187,6 +189,9 @@ impl ToolName {
             ToolName::UpdatePlan => 1,
             ToolName::ReadPlan => 1,
             ToolName::UpdatePlanTodo => 1,
+            // Validates the model's own diagram source and mints an id —
+            // no I/O at all, the rendering happens in the webview.
+            ToolName::Visualize => 1,
         }
     }
 }
@@ -264,6 +269,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::UpdatePlan,
         ToolName::ReadPlan,
         ToolName::UpdatePlanTodo,
+        ToolName::Visualize,
     ]
     .into_iter()
     .collect()
@@ -303,6 +309,8 @@ mod tests {
         assert!(!ToolName::UpdatePlan.requires_confirmation());
         assert!(!ToolName::ReadPlan.requires_confirmation());
         assert!(!ToolName::UpdatePlanTodo.requires_confirmation());
+        // Draws a diagram into the chat — no filesystem, no access change.
+        assert!(!ToolName::Visualize.requires_confirmation());
     }
 
     #[test]
@@ -348,6 +356,7 @@ mod tests {
             ToolName::from_wire_name("updatePlanTodo"),
             Some(ToolName::UpdatePlanTodo)
         );
+        assert_eq!(ToolName::from_wire_name("visualize"), Some(ToolName::Visualize));
         assert_eq!(ToolName::from_wire_name("somethingElse"), None);
     }
 
@@ -377,12 +386,13 @@ mod tests {
         assert_eq!(ToolName::UpdatePlan.loop_weight(), 1);
         assert_eq!(ToolName::ReadPlan.loop_weight(), 1);
         assert_eq!(ToolName::UpdatePlanTodo.loop_weight(), 1);
+        assert_eq!(ToolName::Visualize.loop_weight(), 1);
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_twenty_five() {
+    fn default_allowed_tools_includes_all_twenty_six() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 25);
+        assert_eq!(allowed.len(), 26);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
@@ -406,6 +416,7 @@ mod tests {
         assert!(allowed.contains(&ToolName::UpdatePlan));
         assert!(allowed.contains(&ToolName::ReadPlan));
         assert!(allowed.contains(&ToolName::UpdatePlanTodo));
+        assert!(allowed.contains(&ToolName::Visualize));
     }
 
     #[test]

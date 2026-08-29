@@ -8,6 +8,7 @@ import {
   type UtilityId,
 } from "../data/utilities";
 import { artifactIdFromTabId, artifactTabId } from "../lib/artifactTabs";
+import { visualIdFromTabId, visualTabId, type Visual } from "../lib/visuals";
 import type { SpecsRepoInfo } from "../lib/openapi";
 import type { useEditorTabs } from "./useEditorTabs";
 
@@ -18,7 +19,7 @@ type Deps = {
 
 /** Which pane the editor column shows: a real file tab, or one of the
  * pseudo-tabs that have no file behind them. */
-export type EditorPaneKind = "file" | "openapi" | "utility" | "artifact";
+export type EditorPaneKind = "file" | "openapi" | "utility" | "artifact" | "visual";
 
 /** The tab strip, which shows two things `useEditorTabs` knows nothing about:
  * the API Explorer and the utilities (Unixtime converter and friends).
@@ -46,6 +47,13 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
   const [activeArtifact, setActiveArtifact] = useState<string | null>(null);
   const [artifactTitles, setArtifactTitles] = useState<Record<string, string>>({});
   const [artifactDirty, setArtifactDirty] = useState<Record<string, boolean>>({});
+  // Visualizations are pseudo-tabs too, but the simplest kind: read-only,
+  // so there is no dirty flag, and *not backed by any store*, so the tab
+  // has to hold the payload itself rather than an id it could reload from
+  // (see `src/lib/visuals.ts`). That is why this is `Visual[]` where the
+  // artifacts above are `string[]`.
+  const [openVisuals, setOpenVisuals] = useState<Visual[]>([]);
+  const [activeVisualId, setActiveVisualId] = useState<string | null>(null);
   const [activeKind, setActiveKind] = useState<EditorPaneKind>("file");
 
   // Any real file tab becoming active (open/select/restore-on-load) hands
@@ -71,12 +79,18 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
       title: artifactTitles[id] ?? "Артефакт",
       dirty: artifactDirty[id] ?? false,
     }));
-    if (!openApiTabOpen) return [...fileTabs, ...utilityTabs, ...artifactTabs];
+    const visualTabs: DisplayTab[] = openVisuals.map((visual) => ({
+      id: visualTabId(visual.id),
+      title: visual.title,
+      dirty: false,
+    }));
+    if (!openApiTabOpen) return [...fileTabs, ...utilityTabs, ...artifactTabs, ...visualTabs];
     return [
       ...fileTabs,
       { id: "openapi", title: specsRepo.info?.title ?? "API Explorer", dirty: false },
       ...utilityTabs,
       ...artifactTabs,
+      ...visualTabs,
     ];
   }, [
     editor.tabs,
@@ -85,6 +99,7 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
     openArtifacts,
     artifactTitles,
     artifactDirty,
+    openVisuals,
     specsRepo.info,
   ]);
 
@@ -121,6 +136,12 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
         setActiveKind("artifact");
         return;
       }
+      const visualId = visualIdFromTabId(id);
+      if (visualId) {
+        setActiveVisualId(visualId);
+        setActiveKind("visual");
+        return;
+      }
       editor.selectTab(id);
     },
     [editor.selectTab],
@@ -153,9 +174,18 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
         }
         return;
       }
+      const visualId = visualIdFromTabId(id);
+      if (visualId) {
+        setOpenVisuals((prev) => prev.filter((open) => open.id !== visualId));
+        if (activeVisualId === visualId) {
+          setActiveVisualId(null);
+          setActiveKind("file");
+        }
+        return;
+      }
       void editor.closeTab(id);
     },
-    [editor.closeTab, activeUtility, activeArtifact, forgetArtifact],
+    [editor.closeTab, activeUtility, activeArtifact, activeVisualId, forgetArtifact],
   );
 
   /** Открывает утилиту вкладкой (или переключается на уже открытую). */
@@ -170,6 +200,22 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
     setOpenArtifacts((prev) => (prev.includes(artifactId) ? prev : [...prev, artifactId]));
     setActiveArtifact(artifactId);
     setActiveKind("artifact");
+  }, []);
+
+  /** Opens a visualization's tab (or switches to the already-open one).
+   *  Re-opening an id that is already open replaces its payload rather than
+   *  keeping the old one — the assistant redrawing a diagram under the same
+   *  id should update the tab, not be silently ignored. */
+  const openVisualTab = useCallback((visual: Visual) => {
+    setOpenVisuals((prev) => {
+      const index = prev.findIndex((open) => open.id === visual.id);
+      if (index === -1) return [...prev, visual];
+      const next = [...prev];
+      next[index] = visual;
+      return next;
+    });
+    setActiveVisualId(visual.id);
+    setActiveKind("visual");
   }, []);
 
   const setArtifactTitle = useCallback((artifactId: string, title: string) => {
@@ -195,6 +241,8 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
     setActiveArtifact(null);
     setArtifactTitles({});
     setArtifactDirty({});
+    setOpenVisuals([]);
+    setActiveVisualId(null);
     setActiveKind("file");
     void editor.closeAllTabs();
   }, [editor.closeAllTabs]);
@@ -209,6 +257,8 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
         setActiveUtility(null);
         setOpenArtifacts([]);
         setActiveArtifact(null);
+        setOpenVisuals([]);
+        setActiveVisualId(null);
         setActiveKind("openapi");
         void editor.closeAllTabs();
         return;
@@ -220,6 +270,8 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
         setActiveUtility(utilityId);
         setOpenArtifacts([]);
         setActiveArtifact(null);
+        setOpenVisuals([]);
+        setActiveVisualId(null);
         setActiveKind("utility");
         void editor.closeAllTabs();
         return;
@@ -231,7 +283,22 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
         setActiveUtility(null);
         setOpenArtifacts([artifactId]);
         setActiveArtifact(artifactId);
+        setOpenVisuals([]);
+        setActiveVisualId(null);
         setActiveKind("artifact");
+        void editor.closeAllTabs();
+        return;
+      }
+      const visualId = visualIdFromTabId(id);
+      if (visualId) {
+        setOpenApiTabOpen(false);
+        setOpenUtilities([]);
+        setActiveUtility(null);
+        setOpenArtifacts([]);
+        setActiveArtifact(null);
+        setOpenVisuals((prev) => prev.filter((open) => open.id === visualId));
+        setActiveVisualId(visualId);
+        setActiveKind("visual");
         void editor.closeAllTabs();
         return;
       }
@@ -240,6 +307,8 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
       setActiveUtility(null);
       setOpenArtifacts([]);
       setActiveArtifact(null);
+      setOpenVisuals([]);
+      setActiveVisualId(null);
       void editor.closeOtherTabs(id);
     },
     [editor.closeAllTabs, editor.closeOtherTabs],
@@ -280,6 +349,8 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
     openArtifactTab,
     setArtifactTitle,
     setArtifactDirtyFlag,
+    activeVisual: openVisuals.find((visual) => visual.id === activeVisualId) ?? null,
+    openVisualTab,
     onEditorInstanceChange,
     undo,
     redo,

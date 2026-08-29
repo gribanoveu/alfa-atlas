@@ -18,7 +18,16 @@ export type GeneralPrefs = {
   lastCloneDir: string | null;
   notificationsAlertsExpanded: boolean;
   notificationsOnboardingExpanded: boolean;
+  /** Colour painted behind a rendered Mermaid/PlantUML diagram. Hex literal
+   *  or `"transparent"` — see `normalizeDiagramBackdrop`. */
+  diagramBackdrop: string;
 };
+
+/** Mermaid and PlantUML draw dark-on-light, so a plate goes behind the SVG
+ *  instead of letting the app's dark chrome show through. White is what it
+ *  has always been; the pref makes it choosable. Mirrors
+ *  `domain::settings::DEFAULT_DIAGRAM_BACKDROP`. */
+export const DEFAULT_DIAGRAM_BACKDROP = "#ffffff";
 
 export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
   restoreLastProject: true,
@@ -36,7 +45,32 @@ export const DEFAULT_GENERAL_PREFS: GeneralPrefs = {
   lastCloneDir: null,
   notificationsAlertsExpanded: true,
   notificationsOnboardingExpanded: true,
+  diagramBackdrop: DEFAULT_DIAGRAM_BACKDROP,
 };
+
+/** Presets offered in Настройки → Оформление, alongside the free picker. */
+export const DIAGRAM_BACKDROP_PRESETS: { value: string; label: string }[] = [
+  { value: DEFAULT_DIAGRAM_BACKDROP, label: "Белая" },
+  { value: "#f5f5f4", label: "Тёплая" },
+  { value: "#1e1f22", label: "Тёмная" },
+  { value: "transparent", label: "Прозрачная" },
+];
+
+const HEX_COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+/** Mirrors `domain::settings::normalize_diagram_backdrop`. Both halves
+ *  validate because the value is written into a CSS custom property, which
+ *  React does not escape — an arbitrary string there can close the
+ *  declaration and inject rules. */
+export function normalizeDiagramBackdrop(value: string | null | undefined): string {
+  // Tolerates a missing value on purpose: `clampGeneralPrefs` also runs
+  // over prefs loaded from an older `settings.json` that predates this
+  // field, where it is genuinely absent.
+  if (typeof value !== "string") return DEFAULT_DIAGRAM_BACKDROP;
+  const trimmed = value.trim();
+  if (trimmed.toLowerCase() === "transparent") return "transparent";
+  return HEX_COLOR_RE.test(trimmed) ? trimmed.toLowerCase() : DEFAULT_DIAGRAM_BACKDROP;
+}
 
 export const AUTOSAVE_DELAY_LIMITS = { min: 300, max: 10_000 } as const;
 
@@ -66,6 +100,7 @@ export function clampGeneralPrefs(prefs: GeneralPrefs): GeneralPrefs {
     editorFontSizePx: clampFontSizePx(prefs.editorFontSizePx),
     previewFontSizePx: clampFontSizePx(prefs.previewFontSizePx),
     assistantFontSizePx: clampFontSizePx(prefs.assistantFontSizePx),
+    diagramBackdrop: normalizeDiagramBackdrop(prefs.diagramBackdrop),
   };
 }
 

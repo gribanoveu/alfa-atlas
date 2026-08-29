@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { act, renderHook } from "@testing-library/react";
 import { useEditorTabActions } from "../hooks/useEditorTabActions";
+import type { Visual } from "../lib/visuals";
 
 type EditorStub = ReturnType<typeof makeEditor>;
 
@@ -24,6 +25,10 @@ function render(editor: EditorStub, title: string | null = "Мой API") {
       specsRepo: { info: title ? ({ title } as never) : null },
     }),
   );
+}
+
+function visual(id: string, title: string, source = "flowchart TD"): Visual {
+  return { id, title, content: { kind: "diagram", format: "mermaid", source } };
 }
 
 describe("useEditorTabActions", () => {
@@ -193,6 +198,101 @@ describe("useEditorTabActions", () => {
     expect(result.current.displayTabs.map((t) => t.id)).toEqual(["a.adoc"]);
     expect(result.current.activeUtility).toBeNull();
     expect(editor.closeOtherTabs).toHaveBeenCalledWith("a.adoc");
+  });
+
+  test("a visualization opens as its own tab and carries its title", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+
+    act(() => result.current.openVisualTab(visual("v1", "Поток данных")));
+    expect(result.current.activeKind).toBe("visual");
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual(["a.adoc", "visual:v1"]);
+    expect(result.current.displayTabs[1]?.title).toBe("Поток данных");
+    // Read-only tab: nothing can make it dirty.
+    expect(result.current.displayTabs[1]?.dirty).toBe(false);
+    expect(result.current.activeVisual?.content.source).toBe("flowchart TD");
+  });
+
+  test("reopening the same id replaces the payload instead of duplicating the tab", () => {
+    // The assistant redrawing a diagram must update the open tab, not be
+    // silently ignored and not stack a second tab with the same id.
+    const { result } = render(makeEditor());
+    act(() => result.current.openVisualTab(visual("v1", "Первый", "flowchart TD")));
+    act(() => result.current.openVisualTab(visual("v1", "Второй", "sequenceDiagram")));
+
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual(["visual:v1"]);
+    expect(result.current.displayTabs[0]?.title).toBe("Второй");
+    expect(result.current.activeVisual?.content.source).toBe("sequenceDiagram");
+  });
+
+  test("selecting a visualization tab does not touch the file editor", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    act(() => result.current.openVisualTab(visual("v1", "Схема")));
+    act(() => result.current.selectTab("a.adoc"));
+    act(() => result.current.selectTab("visual:v1"));
+
+    expect(result.current.activeKind).toBe("visual");
+    expect(result.current.activeVisual?.id).toBe("v1");
+    expect(editor.selectTab).toHaveBeenCalledTimes(1);
+    expect(editor.selectTab).toHaveBeenCalledWith("a.adoc");
+  });
+
+  test("closing the active visualization hands focus back to the file view", () => {
+    const { result } = render(makeEditor());
+    act(() => result.current.openVisualTab(visual("v1", "Схема")));
+    act(() => result.current.closeTab("visual:v1"));
+
+    expect(result.current.displayTabs).toEqual([]);
+    expect(result.current.activeVisual).toBeNull();
+    expect(result.current.activeKind).toBe("file");
+  });
+
+  test("closing an inactive visualization leaves the active one alone", () => {
+    const { result } = render(makeEditor());
+    act(() => result.current.openVisualTab(visual("v1", "Первая")));
+    act(() => result.current.openVisualTab(visual("v2", "Вторая")));
+    act(() => result.current.closeTab("visual:v1"));
+
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual(["visual:v2"]);
+    expect(result.current.activeVisual?.id).toBe("v2");
+    expect(result.current.activeKind).toBe("visual");
+  });
+
+  test("\"close others\" from a visualization keeps it and closes everything else", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    act(() => result.current.openUtilityTab("unixtime" as never));
+    act(() => result.current.openVisualTab(visual("v1", "Первая")));
+    act(() => result.current.openVisualTab(visual("v2", "Вторая")));
+    act(() => result.current.closeOtherTabs("visual:v1"));
+
+    // File tabs are the stub editor's to drop (it only records the call),
+    // so assert on the pseudo-tabs this hook actually owns.
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual(["a.adoc", "visual:v1"]);
+    expect(result.current.activeVisual?.id).toBe("v1");
+    expect(result.current.activeKind).toBe("visual");
+    expect(editor.closeAllTabs).toHaveBeenCalled();
+  });
+
+  test("\"close others\" from a file tab drops open visualizations too", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    act(() => result.current.openVisualTab(visual("v1", "Схема")));
+    act(() => result.current.closeOtherTabs("a.adoc"));
+
+    expect(result.current.activeVisual).toBeNull();
+    expect(editor.closeOtherTabs).toHaveBeenCalledWith("a.adoc");
+  });
+
+  test("closing all tabs clears open visualizations", () => {
+    const { result } = render(makeEditor());
+    act(() => result.current.openVisualTab(visual("v1", "Схема")));
+    act(() => result.current.closeAllTabs());
+
+    expect(result.current.displayTabs).toEqual([]);
+    expect(result.current.activeVisual).toBeNull();
+    expect(result.current.activeKind).toBe("file");
   });
 
   test("undo and redo are inert until an editor instance is attached", () => {

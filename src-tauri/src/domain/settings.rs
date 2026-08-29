@@ -122,6 +122,41 @@ fn default_true() -> bool {
     true
 }
 
+/// Mermaid and PlantUML both draw dark-on-light, so the renderer paints a
+/// plate behind the SVG rather than letting the app's dark chrome show
+/// through (see `.asc-mermaid-svg svg` in `AsciiDocPreview.css`). White is
+/// what that plate has always been; this pref makes it choosable.
+pub const DEFAULT_DIAGRAM_BACKDROP: &str = "#ffffff";
+
+fn default_diagram_backdrop() -> String {
+    DEFAULT_DIAGRAM_BACKDROP.to_string()
+}
+
+/// Accepts `transparent` or a `#rgb`/`#rrggbb`/`#rrggbbaa` hex literal, and
+/// falls back to the default for anything else.
+///
+/// This is a **security** check, not a tidiness one: the value is written
+/// into a CSS custom property on the app shell (`App.tsx`'s `panelStyle`),
+/// and neither React nor the CSSOM escapes custom-property values — an
+/// arbitrary string there can close the declaration and inject rules. The
+/// frontend validates too; this is the half that also guards a
+/// hand-edited `settings.json`.
+pub fn normalize_diagram_backdrop(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.eq_ignore_ascii_case("transparent") {
+        return "transparent".to_string();
+    }
+    let Some(hex) = trimmed.strip_prefix('#') else {
+        return default_diagram_backdrop();
+    };
+    let valid_len = matches!(hex.len(), 3 | 4 | 6 | 8);
+    if valid_len && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        format!("#{}", hex.to_ascii_lowercase())
+    } else {
+        default_diagram_backdrop()
+    }
+}
+
 fn default_autosave_delay_ms() -> u64 {
     DEFAULT_AUTOSAVE_DELAY_MS
 }
@@ -183,6 +218,10 @@ pub struct GeneralPrefs {
     /// Раскрыта ли секция «Начать работу» на вкладке уведомлений.
     #[serde(default = "default_true")]
     pub notifications_onboarding_expanded: bool,
+    /// Цвет подложки под отрисованными диаграммами (Mermaid/PlantUML) —
+    /// hex-литерал или `transparent`. См. `normalize_diagram_backdrop`.
+    #[serde(default = "default_diagram_backdrop")]
+    pub diagram_backdrop: String,
 }
 
 impl GeneralPrefs {
@@ -196,6 +235,7 @@ impl GeneralPrefs {
             editor_font_size_px: clamp_font_size_px(self.editor_font_size_px),
             preview_font_size_px: clamp_font_size_px(self.preview_font_size_px),
             assistant_font_size_px: clamp_font_size_px(self.assistant_font_size_px),
+            diagram_backdrop: normalize_diagram_backdrop(&self.diagram_backdrop),
             ..self
         }
     }
@@ -219,6 +259,7 @@ impl Default for GeneralPrefs {
             last_clone_dir: None,
             notifications_alerts_expanded: true,
             notifications_onboarding_expanded: true,
+            diagram_backdrop: default_diagram_backdrop(),
         }
     }
 }
@@ -420,6 +461,54 @@ mod tests {
         }
         .clamped();
         assert_eq!(prefs.autosave_delay_ms, MIN_AUTOSAVE_DELAY_MS);
+    }
+
+    #[test]
+    fn diagram_backdrop_accepts_hex_and_transparent() {
+        assert_eq!(normalize_diagram_backdrop("#FFF"), "#fff");
+        assert_eq!(normalize_diagram_backdrop("#1e1f22"), "#1e1f22");
+        assert_eq!(normalize_diagram_backdrop("#1E1F22AA"), "#1e1f22aa");
+        assert_eq!(normalize_diagram_backdrop("  transparent "), "transparent");
+        assert_eq!(normalize_diagram_backdrop("TRANSPARENT"), "transparent");
+    }
+
+    #[test]
+    fn diagram_backdrop_rejects_anything_that_could_escape_a_css_declaration() {
+        // The value lands in a CSS custom property unescaped, so a string
+        // that can close the declaration must never survive validation.
+        for hostile in [
+            "red; background-image: url(http://evil/x)",
+            "#fff; } body { display: none",
+            "url(http://evil/x)",
+            "expression(alert(1))",
+            "white",
+            "#12345",
+            "#gggggg",
+            "",
+        ] {
+            assert_eq!(
+                normalize_diagram_backdrop(hostile),
+                DEFAULT_DIAGRAM_BACKDROP,
+                "should have fallen back for {hostile:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn clamped_normalizes_a_hand_edited_backdrop() {
+        // `settings.json` is editable by hand, so `clamped` — not just the
+        // settings UI — has to be the gate.
+        let prefs = GeneralPrefs {
+            diagram_backdrop: "javascript:alert(1)".to_string(),
+            ..GeneralPrefs::default()
+        };
+        assert_eq!(prefs.clamped().diagram_backdrop, DEFAULT_DIAGRAM_BACKDROP);
+    }
+
+    #[test]
+    fn general_prefs_without_a_backdrop_field_gets_the_default() {
+        let prefs: GeneralPrefs = serde_json::from_str("{}").unwrap();
+        assert_eq!(prefs.diagram_backdrop, DEFAULT_DIAGRAM_BACKDROP);
     }
 
     #[test]

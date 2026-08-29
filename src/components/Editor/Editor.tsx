@@ -76,14 +76,15 @@ type EditorPaneProps = {
   tabs: DisplayTab[];
   activeTabId: string | null;
   activeTab: EditorTab | null;
-  /** "file" shows the active file tab (Monaco/preview); "openapi" and
-   * "utility"/"artifact" show `openApiExplorer` / `utilityView` /
-   * `artifactView` instead, regardless of
+  /** "file" shows the active file tab (Monaco/preview); "openapi",
+   * "utility", "artifact" and "visual" show `openApiExplorer` /
+   * `utilityView` / `artifactView` / `visualView` instead, regardless of
    * `activeTab`/`activeTabId`. */
   activeKind: EditorPaneKind;
   openApiExplorer?: React.ReactNode;
   utilityView?: React.ReactNode;
   artifactView?: React.ReactNode;
+  visualView?: React.ReactNode;
   onSelectTab: (id: string) => void;
   onCloseTab: (id: string) => void;
   onCloseAllTabs: () => void;
@@ -146,6 +147,7 @@ export function EditorPane({
   activeKind,
   utilityView,
   artifactView,
+  visualView,
   openApiExplorer,
   onSelectTab,
   onCloseTab,
@@ -605,7 +607,13 @@ export function EditorPane({
         onCloseOthers={onCloseOtherTabs}
         viewMode={effectiveViewMode}
         onViewModeChange={isPlanTab ? setPlanViewMode : onViewModeChange}
-        hideViewMode={isImageTab || activeKind === "utility" || activeKind === "artifact"}
+        hideViewMode={
+          isImageTab ||
+          activeKind === "utility" ||
+          activeKind === "artifact" ||
+          // A visualization tab carries its own Схема/Исходник toggle.
+          activeKind === "visual"
+        }
         allowedViewModes={isPlanTab ? (["source", "render"] as const) : undefined}
         actions={planActions}
       />
@@ -616,6 +624,8 @@ export function EditorPane({
           utilityView
         ) : activeKind === "artifact" ? (
           artifactView
+        ) : activeKind === "visual" ? (
+          visualView
         ) : activeTab ? (
           isImageTab || effectiveViewMode === "render" ? (
             <>

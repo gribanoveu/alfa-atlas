@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import * as actualFileSave from "../lib/fileSave";
 
 afterEach(cleanup);
 
@@ -7,7 +8,11 @@ mock.module("../lib/clipboard", () => ({
   copyToClipboard: async () => {},
 }));
 
+// `mock.module` is process-wide and replaces the whole module: keep the
+// rest of `fileSave`'s surface, or another test file importing
+// `saveBytesViaDialog` from it fails to resolve the binding.
 mock.module("../lib/fileSave", () => ({
+  ...actualFileSave,
   saveDecodedBinaryFile: async () => false,
 }));
 

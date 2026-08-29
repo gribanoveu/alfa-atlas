@@ -14,7 +14,7 @@ use crate::domain::ai_tools::{
     GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
     RequestArtifactArgs, RequestModeSwitchArgs, SemanticSearchArgs, SkillArgs, TodoUpdateArgs,
     TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolScope, UpdatePlanArgs,
-    UpdatePlanTodoArgs, WriteFileArgs,
+    UpdatePlanTodoArgs, VisualizeArgs, WriteFileArgs,
 };
 use crate::domain::artifact::ArtifactKind;
 use crate::domain::llm::LlmToolCall;
@@ -105,6 +105,13 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "updatePlanTodo" => lenient_json_object::<UpdatePlanTodoArgs>(&call.arguments)
             .map(ToolCall::UpdatePlanTodo)
+            .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        // `VisualizeArgs` flattens an internally-tagged `VisualContent`, so
+        // the flat `{kind, format, source}` the schema asks for lands
+        // straight in the typed struct — no per-tool massaging needed the
+        // way `requestArtifact`'s nested `prefill` needs it.
+        "visualize" => lenient_json_object::<VisualizeArgs>(&call.arguments)
+            .map(ToolCall::Visualize)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         other => Err(ToolError::UnknownTool(other.to_string())),
     }
@@ -397,7 +404,7 @@ mod tests {
     CheckArgs, CheckKind, CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs,
     EditFileArgs, FileEdit, GitBlameArgs, GitDiffArgs, GrepArgs, ListFilesArgs, MoveArgs,
     ReadFileArgs, SemanticSearchArgs, SkillArgs, TodoUpdateArgs, TodoUpdateStatus,
-    TodoWriteArgs, ToolCall, ToolError, ToolScope, WriteFileArgs,
+    DiagramFormat, TodoWriteArgs, ToolCall, ToolError, ToolScope, VisualContent, WriteFileArgs,
 };
     use crate::domain::conversation_mode::ConversationMode;
     use crate::domain::llm::LlmToolCall;
@@ -1138,5 +1145,45 @@ mod tests {
         };
         let err = parse_tool_call(&call).unwrap_err();
         assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "todo"));
+    }
+
+    #[test]
+    fn visualize_parses_the_flat_kind_format_source_shape() {
+        // The schema is flat but `VisualizeArgs` flattens an internally
+        // tagged enum — this is the seam where the two could drift.
+        let call = LlmToolCall {
+            id: "1".to_string(),
+            name: "visualize".to_string(),
+            arguments: r#"{"kind":"diagram","title":"Поток","format":"mermaid","source":"flowchart TD\n  a-->b"}"#
+                .to_string(),
+        };
+        match parse_tool_call(&call).expect("parse") {
+            ToolCall::Visualize(args) => {
+                assert_eq!(args.title, "Поток");
+                assert_eq!(args.caption, None);
+                assert_eq!(
+                    args.content,
+                    VisualContent::Diagram {
+                        format: DiagramFormat::Mermaid,
+                        source: "flowchart TD\n  a-->b".to_string()
+                    }
+                );
+            }
+            other => panic!("unexpected call: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn visualize_rejects_a_kind_the_app_cannot_render() {
+        // A closed enum in the schema is only half the guard; the parser
+        // has to refuse an invented kind too, so the model gets a tool
+        // error it can correct rather than a silently empty tab.
+        let call = LlmToolCall {
+            id: "1".to_string(),
+            name: "visualize".to_string(),
+            arguments: r#"{"kind":"spreadsheet","title":"x","rows":[]}"#.to_string(),
+        };
+        let err = parse_tool_call(&call).unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "visualize"));
     }
 }

@@ -256,8 +256,9 @@ fn redacted() -> serde_json::Value {
 /// (`{"tool": "...", "args": {...}}`) is preserved so a logged entry looks
 /// exactly like the wire shape everywhere else in this codebase, only the
 /// fields that carry raw document text are replaced with a placeholder:
-/// `writeFile.content`, `editFile.edits[].old`/`.new`, and
-/// `requestArtifact.prefill` (which can carry an example request body).
+/// `writeFile.content`, `editFile.edits[].old`/`.new`,
+/// `requestArtifact.prefill` (which can carry an example request body), and
+/// `visualize.source` (a whole generated diagram).
 /// Every other tool's args are already path/query/pattern-shaped, not
 /// document content, so they pass through unchanged.
 pub fn redact_args(call: &ToolCall) -> serde_json::Value {
@@ -290,6 +291,12 @@ pub fn redact_args(call: &ToolCall) -> serde_json::Value {
         // payload, so it goes the way of `writeFile.content`.
         ToolCall::RequestArtifact(_) if args.contains_key("prefill") => {
             args.insert("prefill".to_string(), redacted());
+        }
+        // The diagram source is generated document-shaped text and can run
+        // to hundreds of lines; `kind`/`format`/`title` are the fields
+        // worth auditing.
+        ToolCall::Visualize(_) if args.contains_key("source") => {
+            args.insert("source".to_string(), redacted());
         }
         _ => {}
     }

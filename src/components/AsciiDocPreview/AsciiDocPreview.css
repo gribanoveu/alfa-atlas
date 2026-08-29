@@ -642,8 +642,11 @@
   user-select: none;
   -webkit-user-select: none;
   /* PlantUML генерирует прозрачный SVG с центрированным контентом внутри
-     viewBox. Белый фон делает диаграмму читаемой на всю ширину рендера. */
-  background: #ffffff;
+     viewBox. Подложка делает диаграмму читаемой на всю ширину рендера.
+     Цвет настраивается: Настройки → Оформление → Подложка диаграмм
+     (`--diagram-backdrop`, задаётся на `.app` в App.tsx). Фолбэк нужен
+     для контекстов вне оболочки приложения — например превью в тестах. */
+  background: var(--diagram-backdrop, #ffffff);
 }
 
 .asc-plantuml-svg svg text,

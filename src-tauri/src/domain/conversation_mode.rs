@@ -53,6 +53,12 @@ pub fn base_tools() -> HashSet<ToolName> {
         // `extra_tools_for_mode`.
         ToolName::Artifact,
         ToolName::Skill,
+        // Drawing a diagram of code the model just read is display-only —
+        // no writes, no access change — and answering "как это работает"
+        // with a picture is most valuable in Question mode, the one mode
+        // that gets no extras at all. So it belongs here, not in
+        // `extra_tools_for_mode`.
+        ToolName::Visualize,
     ]
     .into_iter()
     .collect()
@@ -118,7 +124,7 @@ mod tests {
 
     #[test]
     fn agent_mode_has_every_tool() {
-        assert_eq!(mode_tools(ConversationMode::Agent).len(), 23);
+        assert_eq!(mode_tools(ConversationMode::Agent).len(), 24);
     }
 
     #[test]
@@ -152,6 +158,15 @@ mod tests {
         let tools = mode_tools(ConversationMode::Question);
         assert!(tools.contains(&ToolName::Artifact));
         assert!(!tools.contains(&ToolName::RequestArtifact));
+    }
+
+    #[test]
+    fn visualize_is_reachable_from_every_mode() {
+        // A diagram is display-only, and "объясни, как это работает" is a
+        // Question-mode question as often as an Agent one.
+        for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Question] {
+            assert!(mode_tools(mode).contains(&ToolName::Visualize));
+        }
     }
 
     #[test]

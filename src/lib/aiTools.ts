@@ -218,7 +218,23 @@ export type ToolCall =
         status: "completed" | "cancelled";
         note: string | null;
       };
-    };
+    }
+  | { tool: "visualize"; args: VisualizeArgs };
+
+/** Mirrors `domain::ai_tools::DiagramFormat`. Closed on purpose: a format
+ *  is only listed once something in the app can draw it. */
+export type DiagramFormat = "mermaid" | "plantuml";
+
+/** Mirrors `domain::ai_tools::VisualContent` — internally tagged by `kind`
+ *  and flattened into the args, so the wire shape is flat. Adding a second
+ *  kind here is one variant, one renderer in `VisualView`, and one more
+ *  value in the Rust tool's JSON schema. */
+export type VisualContent = { kind: "diagram"; format: DiagramFormat; source: string };
+
+/** Mirrors `domain::ai_tools::VisualizeArgs`. These args *are* the storage
+ *  for a visualization — nothing writes it anywhere else; see
+ *  `src/lib/visuals.ts`. */
+export type VisualizeArgs = { title: string; caption?: string | null } & VisualContent;
 
 // Mirrors Rust's `domain::ai_tools::FileDiffStats` — attached to a settled
 // `fileWritten`/`fileEdited`/`fileDeleted` result, computed once
@@ -349,6 +365,13 @@ export type ToolResult =
   | {
       tool: "planTodoUpdated";
       result: { planId: string; todos: PlanTodo[] };
+    }
+  // Deliberately carries no source: the diagram the model just sent is
+  // already on the call's own `argumentsJson`, and echoing it back would
+  // double the token cost of every diagram.
+  | {
+      tool: "visualShown";
+      result: { visualId: string; kind: string; title: string; summary: string };
     };
 
 /**
