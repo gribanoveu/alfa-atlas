@@ -1,0 +1,15 @@
+.skills-guide-dialog {
+  width: min(780px, 100%);
+  height: min(700px, 100%);
+}
+
+.skills-guide-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 22px 28px;
+  background: var(--bg-1);
+  color: var(--text-0);
+  font-size: var(--font-ui);
+  line-height: 1.5;
+}

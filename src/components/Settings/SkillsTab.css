@@ -5,6 +5,14 @@
   margin-bottom: 10px;
 }
 
+/* Единственная кнопка в тулбаре с иконкой — остальные текстовые. */
+.skills-guide-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
 .skills-list {
   display: flex;
   flex-direction: column;

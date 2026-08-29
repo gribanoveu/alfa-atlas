@@ -1,8 +1,9 @@
-import { ChevronDown, ChevronRight, Eye } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, Eye } from "lucide-react";
 import { useState } from "react";
 import { useSkills } from "../../hooks/useSkills";
 import type { SkillListItem } from "../../lib/skills";
 import { SkillPreviewModal } from "./SkillPreviewModal";
+import { SkillsGuideModal } from "./SkillsGuideModal";
 import "../Welcome/CloneRepoModal.css";
 import "./SkillsTab.css";
 
@@ -14,6 +15,7 @@ export function SkillsTab() {
   const { items, error, busy, toggle, addSkill, removeSkill, openFolder } = useSkills();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [previewed, setPreviewed] = useState<SkillListItem | null>(null);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   const toggleExpanded = (key: string) => {
     setExpanded((prev) => {
@@ -32,6 +34,15 @@ export function SkillsTab() {
         </button>
         <button type="button" className="settings-link-btn" onClick={() => void openFolder()}>
           Открыть папку
+        </button>
+        <button
+          type="button"
+          className="settings-link-btn skills-guide-btn"
+          title="Формат SKILL.md и порядок установки"
+          onClick={() => setGuideOpen(true)}
+        >
+          <BookOpen size={14} aria-hidden />
+          Как написать скил
         </button>
       </div>
       <div className="skills-list">
@@ -111,6 +122,7 @@ export function SkillsTab() {
       {previewed ? (
         <SkillPreviewModal skill={previewed} onClose={() => setPreviewed(null)} />
       ) : null}
+      {guideOpen ? <SkillsGuideModal onClose={() => setGuideOpen(false)} /> : null}
     </>
   );
 }
