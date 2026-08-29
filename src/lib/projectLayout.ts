@@ -16,7 +16,7 @@ export const DEFAULT_PANEL_LAYOUT: PanelLayout = {
 
 export const PANEL_LAYOUT_LIMITS = {
   sidebarWidth: { min: 160, max: 480 },
-  rightWidth: { min: 400, max: 560 },
+  rightWidth: { min: 400, max: 672 },
   bottomHeight: { min: 120, max: 480 },
   externalHeight: { min: 80, max: 400 },
 } as const;
