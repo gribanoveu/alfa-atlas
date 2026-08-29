@@ -148,6 +148,14 @@ pub fn ai_get_allowed_tools() -> Result<Vec<ToolName>, String> {
         .collect())
 }
 
+/// Every tool the Permissions tab can show and toggle — same order as
+/// `services::ai_tools::permission_tool_catalog` (mirrors `DEFINITIONS`).
+/// Project-independent; does not require an open repo.
+#[tauri::command]
+pub fn ai_list_permission_tools() -> Vec<ToolName> {
+    ai_tools::permission_tool_catalog()
+}
+
 /// Persists (or revokes) one tool's membership in `ai_allowed_tools` for the
 /// currently open project — called from the Settings "Разрешённые
 /// инструменты" checkbox list.

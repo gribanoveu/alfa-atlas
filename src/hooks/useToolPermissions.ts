@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   getAllowedTools,
   getAutoApprovedTools,
+  listPermissionTools,
   setToolAllowed,
   setToolAutoApproved,
 } from "../lib/aiTools";
@@ -44,6 +45,9 @@ function isNoProject(message: string): boolean {
 export function useToolPermissions() {
   const [autoApproved, setAutoApproved] = useState<ToolList>(EMPTY);
   const [allowed, setAllowed] = useState<ToolList>(EMPTY);
+  const [permissionCatalog, setPermissionCatalog] = useState<string[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -51,6 +55,19 @@ export function useToolPermissions() {
     return () => {
       mounted.current = false;
     };
+  }, []);
+
+  useEffect(() => {
+    void listPermissionTools()
+      .then((tools) => {
+        if (mounted.current) setPermissionCatalog(tools);
+      })
+      .catch((e) => {
+        if (mounted.current) setCatalogError(toMessage(e));
+      })
+      .finally(() => {
+        if (mounted.current) setCatalogLoading(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -113,5 +130,5 @@ export function useToolPermissions() {
     }
   }, []);
 
-  return { autoApproved, allowed, revokeAutoApproval, toggleAllowed };
+  return { autoApproved, allowed, permissionCatalog, catalogLoading, catalogError, revokeAutoApproval, toggleAllowed };
 }

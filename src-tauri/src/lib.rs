@@ -306,6 +306,7 @@ pub fn run() {
             commands::ai_tools::ai_get_auto_approved_tools,
             commands::ai_tools::ai_set_tool_auto_approved,
             commands::ai_tools::ai_get_allowed_tools,
+            commands::ai_tools::ai_list_permission_tools,
             commands::ai_tools::ai_set_tool_allowed,
             commands::ai_tools::ai_get_memory_wake,
             commands::search::docs_search,

@@ -72,6 +72,13 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::UpdatePlanTodo, plans::update_todo_definition),
 ];
 
+/// Stable display order for Settings → Permissions ("Разрешённые
+/// инструменты"). Mirrors `DEFINITIONS` exactly — the one source of truth
+/// for which tools exist and may be toggled in the project allowlist.
+pub fn permission_tool_catalog() -> Vec<ToolName> {
+    DEFINITIONS.iter().map(|(tool, _)| *tool).collect()
+}
+
 /// One `LlmToolDefinition` per tool `scope` allows, to advertise to the
 /// model — so a customized (narrowed) allowlist only offers tools that will
 /// actually succeed if called, rather than the model discovering
@@ -334,6 +341,24 @@ mod tests {
         assert!(matches!(err, ToolError::InvalidArguments { tool, .. } if tool == "askUser"));
 
         fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn permission_tool_catalog_matches_definitions() {
+        let catalog = permission_tool_catalog();
+        assert_eq!(catalog.len(), DEFINITIONS.len());
+        for ((tool, _), got) in DEFINITIONS.iter().zip(catalog.iter()) {
+            assert_eq!(*tool, *got);
+        }
+    }
+
+    #[test]
+    fn permission_tool_catalog_matches_default_allowlist() {
+        use std::collections::HashSet;
+
+        let catalog: HashSet<ToolName> = permission_tool_catalog().into_iter().collect();
+        let defaults = crate::domain::ai_access::default_allowed_tools(AiAccessMode::DocsOnly);
+        assert_eq!(catalog, defaults);
     }
 
     #[test]

@@ -42,7 +42,7 @@ pub use scope::{
     allowed_tools, auto_approved_tools, current_scope, set_access_mode, set_tool_allowed,
     set_tool_auto_approved,
 };
-pub use tools::{artifact_result, execute_tool, llm_tool_definitions, render_file_tree};
+pub use tools::{artifact_result, execute_tool, llm_tool_definitions, permission_tool_catalog, render_file_tree};
 
 /// The embedding/chunk/repo-index/workspace-index state `SemanticSearch`/
 /// `Move` need to reach — `execute_tool` is otherwise a pure function with

@@ -402,6 +402,12 @@ export function getAllowedTools(): Promise<string[]> {
   return invoke<string[]>("ai_get_allowed_tools");
 }
 
+/** Every tool shown in Settings → Permissions — mirrors
+ * `services::ai_tools::permission_tool_catalog` on the Rust side. */
+export function listPermissionTools(): Promise<string[]> {
+  return invoke<string[]>("ai_list_permission_tools");
+}
+
 /** Persists (or revokes) one tool's membership in `ai_allowed_tools` for the
  * currently open project. */
 export function setToolAllowed(tool: string, allowed: boolean): Promise<void> {
