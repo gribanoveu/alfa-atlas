@@ -587,6 +587,15 @@ pub struct ChatStreamReasoning {
     pub delta: String,
 }
 
+pub const STEERING_PREFIX: &str =
+    "[Уточнение от пользователя, не новое задание — учти в текущей работе]: ";
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteeringAppliedEvent {
+    pub text: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCallEvent {
@@ -629,6 +638,7 @@ pub struct ToolResultEvent {
 pub enum ChatEvent {
     Delta(ChatStreamDelta),
     Reasoning(ChatStreamReasoning),
+    SteeringApplied(SteeringAppliedEvent),
     /// Fired just before a tool executes; always followed by exactly one
     /// `ToolResult` carrying the same `id`. The frontend pairs them by that
     /// id (see `chatBlocks.ts`), so the order is a contract, not an

@@ -32,6 +32,7 @@ import {
   appendDeltaToBlocks,
   appendPendingApprovalBlock,
   appendReasoningDeltaToBlocks,
+  appendSteerBlock,
   appendToolCallBlock,
   chatMessageToPlainText,
   correctTrailingReasoning,
@@ -55,11 +56,13 @@ import {
   cancelLlmChat,
   listenLlmChatDelta,
   listenLlmChatReasoningDelta,
+  listenLlmSteeringApplied,
   listenLlmToolCall,
   listenLlmToolResult,
   llmChatOnce,
   streamLlmChat,
   streamLlmChatResume,
+  steerLlmChat,
   type ChatStreamOutcome,
   type LlmMessage,
   type AskUserAnswerPayload,
@@ -72,7 +75,7 @@ import { artifactList } from "../lib/artifacts";
 import { planGet, type PlanRecord } from "../lib/plans";
 import { estimateTokenCount } from "../lib/tokens";
 
-export type { ChatMessage, MessageBlock, ReasoningBlock, TextBlock, ToolCallBlock, ToolCallStatus } from "../lib/chatBlocks";
+export type { ChatMessage, MessageBlock, ReasoningBlock, SteerBlock, TextBlock, ToolCallBlock, ToolCallStatus } from "../lib/chatBlocks";
 
 /** Owns one conversation's state for the assistant chat panel. The
  * tool-calling loop itself (ReadFile/ListFiles/SemanticSearch) runs
@@ -135,6 +138,7 @@ export function useLlmChat(
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [sending, setSending] = useState(false);
+  const [pendingSteers, setPendingSteers] = useState<string[]>([]);
 
   // Sound toggles live in refs so `collectDecisions` (empty deps — one
   // stable Promise factory for the panel's lifetime) always reads the
@@ -396,6 +400,22 @@ export function useLlmChat(
   const stopChat = useCallback(() => {
     void cancelLlmChat();
     activeApprovalRef.current?.denyAll();
+    setPendingSteers([]);
+  }, []);
+
+  const steerChat = useCallback(async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setPendingSteers((prev) => [...prev, trimmed]);
+    try {
+      await steerLlmChat(trimmed);
+    } catch (error) {
+      setPendingSteers((prev) => {
+        const index = prev.indexOf(trimmed);
+        return index === -1 ? prev : [...prev.slice(0, index), ...prev.slice(index + 1)];
+      });
+      throw error;
+    }
   }, []);
 
   // Live token deltas — subscribed once for the hook's lifetime, matching
@@ -408,6 +428,27 @@ export function useLlmChat(
     let cancelled = false;
     void listenLlmChatDelta(({ delta }) => {
       setMessages((prev) => updateLastAssistantBlocks(prev, (blocks) => appendDeltaToBlocks(blocks, delta)));
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenLlmSteeringApplied(({ text }) => {
+      setMessages((prev) =>
+        updateLastAssistantBlocks(prev, (blocks) => appendSteerBlock(blocks, text)),
+      );
+      setPendingSteers((prev) => {
+        const index = prev.indexOf(text);
+        return index === -1 ? prev : [...prev.slice(0, index), ...prev.slice(index + 1)];
+      });
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -1044,7 +1085,9 @@ export function useLlmChat(
   return {
     messages,
     sending,
+    pendingSteers,
     sendMessage,
+    steerChat,
     retryWithCompaction,
     contextTokens,
     todos,

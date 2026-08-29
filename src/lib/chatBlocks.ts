@@ -1,5 +1,5 @@
 import type { ToolResult } from "./aiTools";
-import type { ChatUsage } from "./llm";
+import { STEERING_PREFIX, type ChatUsage } from "./llm";
 
 /** One piece of an assistant message's transcript, in chronological order —
  * a run of streamed prose, or one tool invocation with its eventual
@@ -32,6 +32,12 @@ export type ReasoningBlock = {
   type: "reasoning";
   id: string;
   content: string;
+};
+
+export type SteerBlock = {
+  type: "steer";
+  id: string;
+  text: string;
 };
 
 export type ToolCallStatus = "pendingApproval" | "running" | "done" | "error";
@@ -68,7 +74,7 @@ export type ToolCallBlock = {
   approvalGroupId?: string;
 };
 
-export type MessageBlock = TextBlock | ToolCallBlock | ReasoningBlock;
+export type MessageBlock = TextBlock | ToolCallBlock | ReasoningBlock | SteerBlock;
 
 /** A user turn stays a plain string — only an assistant turn's shape
  * changes, from flat `content` to an ordered `blocks` array. A
@@ -195,6 +201,10 @@ export function appendToolCallBlock(
       autoApproved: call.autoApproved,
     },
   ];
+}
+
+export function appendSteerBlock(blocks: MessageBlock[], text: string): MessageBlock[] {
+  return [...blocks, { type: "steer", id: crypto.randomUUID(), text }];
 }
 
 /** Shows a call awaiting user approval inline in the transcript, right
@@ -366,16 +376,22 @@ export function groupBlocksForRender(blocks: MessageBlock[]): RenderBlock[] {
 // ---- Flattening back to plain text (replay into future requests) ------
 
 /** Joins every non-empty text block's content — both intermediate
- * commentary before a tool call and the final answer — `\n\n`-separated;
- * tool-call blocks contribute nothing. Deliberate small behavior change
+ * commentary before a tool call and the final answer — plus applied user
+ * steering notes, `\n\n`-separated; tool-call and reasoning blocks
+ * contribute nothing. Deliberate small behavior change
  * from before blocks existed: previously *only* the final round's text
  * ever reached `ChatMessage.content` (intermediate-round prose was
  * streamed transiently then wiped, never persisted); now it's kept for
  * display, so it gets replayed too — what's replayed matches what's shown. */
 export function flattenBlocksToText(blocks: MessageBlock[]): string {
   return blocks
-    .filter((b): b is TextBlock => b.type === "text" && b.content !== "")
-    .map((b) => b.content)
+    .flatMap((b) =>
+      b.type === "text" && b.content !== ""
+        ? [b.content]
+        : b.type === "steer"
+          ? [`${STEERING_PREFIX}${b.text}`]
+          : [],
+    )
     .join("\n\n");
 }
 

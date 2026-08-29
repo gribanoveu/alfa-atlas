@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, ChevronUp, FileText, FolderGit2, Send, Sparkles, Square, X } from "lucide-react";
+import { AlertCircle, ArrowDown, ChevronUp, Clock3, FileText, FolderGit2, Send, Sparkles, Square, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import { formatElapsedDuration } from "../../hooks/useElapsedSeconds";
@@ -22,6 +22,7 @@ import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AssistantArtifactCard } from "./AssistantArtifactCard";
 import { AssistantAskUserCard } from "./AssistantAskUserCard";
 import { AssistantReasoningBlock } from "./AssistantReasoningBlock";
+import { AssistantSteerBlock } from "./AssistantSteerBlock";
 import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import { AssistantPlanCard, isPlanToolBlock } from "./AssistantPlanCard";
@@ -425,7 +426,9 @@ export function AssistantConversation({
   const {
     messages,
     sending,
+    pendingSteers,
     sendMessage,
+    steerChat,
     retryWithCompaction,
     stopChat,
     contextTokens,
@@ -808,7 +811,16 @@ export function AssistantConversation({
 
   const handleSend = () => {
     const text = draft.trim();
-    if ((!text && attachments.length === 0) || sending) return;
+    if (sending) {
+      if (!text) return;
+      setDraft("");
+      void steerChat(text).catch((error) => {
+        console.error("Не удалось добавить уточнение", error);
+        setDraft((current) => current || text);
+      });
+      return;
+    }
+    if (!text && attachments.length === 0) return;
     // Attachment chips carry no text of their own in the draft — the model
     // still needs their content, so it's woven in here, at the point the
     // message actually leaves, ahead of whatever the user typed.
@@ -935,6 +947,8 @@ export function AssistantConversation({
                             content={item.block.content}
                             streaming={Boolean(m.streaming) && i === arr.length - 1}
                           />
+                        ) : item.block.type === "steer" ? (
+                          <AssistantSteerBlock key={item.block.id} block={item.block} />
                         ) : isPlanToolBlock(item.block) ? (
                           <AssistantPlanCard
                             key={item.block.id}
@@ -1107,6 +1121,17 @@ export function AssistantConversation({
       ) : null}
       <div className={`assistant-chat-input-row${showFollowUpBar ? " has-followups" : ""}`}>
         <div className="assistant-chat-input-wrap">
+          {pendingSteers.length > 0 ? (
+            <div className="assistant-steer-pending-list" role="status" aria-label="Уточнения в очереди">
+              {pendingSteers.map((text, index) => (
+                <div className="assistant-steer-pending" key={`${index}-${text}`}>
+                  <Clock3 size={12} strokeWidth={1.75} aria-hidden />
+                  <span className="assistant-steer-pending-text">{text}</span>
+                  <span className="assistant-steer-pending-label">В очереди</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
           {attachments.length === 0 ? null : attachments.length <= ATTACHMENTS_INLINE_LIMIT ? (
             <div className="assistant-chat-attachments" role="list">
               {attachments.map((attachment) => (
@@ -1163,8 +1188,11 @@ export function AssistantConversation({
             className="assistant-chat-input"
             rows={CHAT_INPUT_ROWS}
             value={draft}
-            placeholder={`Спросите что-нибудь…\n(Enter — отправить, Shift+Enter — новая строка)`}
-            disabled={sending}
+            placeholder={
+              sending
+                ? "Уточнение…\n(Enter — добавить в работу, Shift+Enter — новая строка)"
+                : "Спросите что-нибудь…\n(Enter — отправить, Shift+Enter — новая строка)"
+            }
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {

@@ -55,7 +55,7 @@ use crate::services::embedding_state::{
 };
 use crate::commands::chat_events::{chat_event_sink, RATE_LIMIT_CHANGED_EVENT};
 use crate::services::llm_chat::{self, ChatTurnContext};
-use crate::services::llm_session::{self, ChatCancelFlag, LlmProviderSlot};
+use crate::services::llm_session::{self, ChatCancelFlag, LlmProviderSlot, SteeringQueue};
 use crate::services::{
     chunk_builder::ChunkIndex, llm_config, llm_rate_limit, repo_index::RepositoryIndex,
     workspace_index::WorkspaceIndex,
@@ -71,6 +71,7 @@ fn turn_context_from_state(
     conversation_mode: ConversationMode,
     llm_provider: &State<'_, Arc<LlmProviderSlot>>,
     cancel_flag: &State<'_, Arc<ChatCancelFlag>>,
+    steering: &State<'_, Arc<SteeringQueue>>,
     repo_index: &State<'_, Arc<RepositoryIndex>>,
     chunk_index: &State<'_, Arc<ChunkIndex>>,
     embedding_index: &State<'_, Arc<EmbeddingIndexSlot>>,
@@ -82,6 +83,7 @@ fn turn_context_from_state(
     ChatTurnContext {
         provider_slot: llm_provider.inner().clone(),
         cancel_flag: cancel_flag.inner().clone(),
+        steering: steering.inner().clone(),
         deps: EmbeddingDeps {
             repo_index: repo_index.inner().clone(),
             chunk_index: chunk_index.inner().clone(),
@@ -114,8 +116,31 @@ fn turn_context_from_state(
 /// running (the flag is simply left `true` until the next fresh turn resets
 /// it) — safe to call speculatively, no state to check first.
 #[tauri::command]
-pub fn llm_cancel_chat(cancel_flag: State<'_, Arc<ChatCancelFlag>>) {
+pub fn llm_cancel_chat(
+    cancel_flag: State<'_, Arc<ChatCancelFlag>>,
+    steering: State<'_, Arc<SteeringQueue>>,
+) -> Result<(), String> {
     cancel_flag.store(true, Ordering::SeqCst);
+    steering.lock().map_err(|_| "steering queue lock poisoned".to_string())?.clear();
+    Ok(())
+}
+
+/// Queues a user clarification for the next fresh model round without
+/// interrupting the stream or tool call currently in flight.
+#[tauri::command]
+pub fn llm_steer_chat(
+    text: String,
+    steering: State<'_, Arc<SteeringQueue>>,
+) -> Result<(), String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(());
+    }
+    steering
+        .lock()
+        .map_err(|_| "steering queue lock poisoned".to_string())?
+        .push(text.to_string());
+    Ok(())
 }
 
 #[tauri::command]
@@ -283,6 +308,7 @@ pub async fn llm_chat_stream(
     conversation_mode: ConversationMode,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
     cancel_flag: State<'_, Arc<ChatCancelFlag>>,
+    steering: State<'_, Arc<SteeringQueue>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
     chunk_index: State<'_, Arc<ChunkIndex>>,
     embedding_index: State<'_, Arc<EmbeddingIndexSlot>>,
@@ -297,6 +323,7 @@ pub async fn llm_chat_stream(
         conversation_mode,
         &llm_provider,
         &cancel_flag,
+        &steering,
         &repo_index,
         &chunk_index,
         &embedding_index,
@@ -340,6 +367,7 @@ pub async fn llm_chat_stream_resume(
     conversation_mode: ConversationMode,
     llm_provider: State<'_, Arc<LlmProviderSlot>>,
     cancel_flag: State<'_, Arc<ChatCancelFlag>>,
+    steering: State<'_, Arc<SteeringQueue>>,
     repo_index: State<'_, Arc<RepositoryIndex>>,
     chunk_index: State<'_, Arc<ChunkIndex>>,
     embedding_index: State<'_, Arc<EmbeddingIndexSlot>>,
@@ -357,6 +385,7 @@ pub async fn llm_chat_stream_resume(
         conversation_mode,
         &llm_provider,
         &cancel_flag,
+        &steering,
         &repo_index,
         &chunk_index,
         &embedding_index,

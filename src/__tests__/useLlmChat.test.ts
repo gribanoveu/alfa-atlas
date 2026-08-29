@@ -11,6 +11,7 @@ type Listener<T> = (payload: T) => void;
 
 let deltaListeners: Listener<{ delta: string }>[] = [];
 let reasoningListeners: Listener<{ delta: string }>[] = [];
+let steeringListeners: Listener<{ text: string }>[] = [];
 let toolCallListeners: Listener<{ id: string; name: string; arguments: string }>[] = [];
 let toolResultListeners: Listener<{ id: string; result: unknown; error: string | null }>[] = [];
 
@@ -20,6 +21,7 @@ let streamThrows: string | null = null;
 let streamCalls: unknown[][] = [];
 let resumeCalls: unknown[][] = [];
 let cancelCalls = 0;
+let steerCalls: string[] = [];
 let autoApprovedTools: string[] = [];
 let setAutoApprovedCalls: Array<[string, boolean]> = [];
 let onceResponse = "сводка";
@@ -49,6 +51,9 @@ mock.module("../lib/llm", () => ({
   cancelLlmChat: async () => {
     cancelCalls += 1;
   },
+  steerLlmChat: async (text: string) => {
+    steerCalls.push(text);
+  },
   llmChatOnce: async () => ({ content: onceResponse, toolCalls: [], usage: null }),
   listenLlmChatDelta: async (cb: Listener<{ delta: string }>) => {
     deltaListeners.push(cb);
@@ -60,6 +65,12 @@ mock.module("../lib/llm", () => ({
     reasoningListeners.push(cb);
     return () => {
       reasoningListeners = reasoningListeners.filter((l) => l !== cb);
+    };
+  },
+  listenLlmSteeringApplied: async (cb: Listener<{ text: string }>) => {
+    steeringListeners.push(cb);
+    return () => {
+      steeringListeners = steeringListeners.filter((l) => l !== cb);
     };
   },
   listenLlmToolCall: async (cb: Listener<{ id: string; name: string; arguments: string }>) => {
@@ -178,6 +189,7 @@ function textOf(m: ChatMessage | undefined) {
 beforeEach(() => {
   deltaListeners = [];
   reasoningListeners = [];
+  steeringListeners = [];
   toolCallListeners = [];
   toolResultListeners = [];
   outcomes = [];
@@ -185,6 +197,7 @@ beforeEach(() => {
   streamCalls = [];
   resumeCalls = [];
   cancelCalls = 0;
+  steerCalls = [];
   autoApprovedTools = [];
   setAutoApprovedCalls = [];
   onceResponse = "сводка";
@@ -287,6 +300,36 @@ describe("useLlmChat — live events", () => {
     // record of what the assistant actually did.
     expect(block).toMatchObject({ name: "readFile" });
     expect((block as { status: string }).status).not.toBe("running");
+
+    await act(async () => {
+      pendingStream[0]?.(done(""));
+      await sent;
+    });
+  });
+
+  test("applied steering becomes a permanent block and leaves the pending queue", async () => {
+    deferStream = true;
+    const { result } = render();
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("вопрос");
+      await Promise.resolve();
+      await result.current.steerChat("Проверь ru locale");
+    });
+    expect(steerCalls).toEqual(["Проверь ru locale"]);
+    expect(result.current.pendingSteers).toEqual(["Проверь ru locale"]);
+
+    await act(async () => {
+      for (const listener of [...steeringListeners]) {
+        listener({ text: "Проверь ru locale" });
+      }
+    });
+
+    expect(result.current.pendingSteers).toEqual([]);
+    expect(lastAssistant(result.current.messages)?.blocks).toContainEqual(
+      expect.objectContaining({ type: "steer", text: "Проверь ru locale" }),
+    );
 
     await act(async () => {
       pendingStream[0]?.(done(""));

@@ -1,0 +1,53 @@
+.assistant-steer-block,
+.assistant-steer-pending {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.assistant-steer-block {
+  padding: 4px 8px;
+  border-left: 2px solid var(--border);
+}
+
+.assistant-steer-block svg {
+  flex: none;
+}
+
+.assistant-steer-pending-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.assistant-steer-pending {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text-1);
+}
+
+.assistant-steer-pending svg {
+  flex: none;
+  color: var(--text-2);
+}
+
+.assistant-steer-pending-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.assistant-steer-pending-label {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-2);
+  font-size: 11px;
+}

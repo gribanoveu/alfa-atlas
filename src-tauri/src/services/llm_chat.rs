@@ -27,7 +27,7 @@ use crate::domain::llm::{
     ChatStreamResult,
     ChatStreamOutcome, ChatStreamReasoning, LlmMessage, LlmProvider, LlmRole, LlmSettings,
     LlmToolCall, LlmToolDefinition, PendingApproval, PendingToolCall, ToolCallDecision,
-    ToolCallEvent, ToolResultEvent,
+    SteeringAppliedEvent, ToolCallEvent, ToolResultEvent, STEERING_PREFIX,
 };
 use crate::domain::paths;
 use crate::domain::repo_index::FileId;
@@ -35,7 +35,7 @@ use crate::infra::llm_debug_log;
 use crate::services::ai_tools::{self, EmbeddingDeps, ToolCallLogContext};
 use crate::services::llm_rate_limit;
 use crate::services::llm_session;
-use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot};
+use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot, SteeringQueue};
 
 
 /// A misbehaving/looping model shouldn't be able to hold the UI in a
@@ -94,6 +94,7 @@ struct LoopCtx<'a> {
     settings: &'a LlmSettings,
     deps: &'a EmbeddingDeps,
     cancel_flag: &'a ChatCancelFlag,
+    steering: &'a SteeringQueue,
     /// Pinned for the whole call — unlike `scope`/`tools` (which
     /// `RequestFullRepoAccess` widens mid-loop), a `RequestModeSwitch`
     /// deliberately does *not* take effect within the same turn (see
@@ -191,6 +192,21 @@ fn run_tool_loop(
                 budget_used += round_cost(&calls);
                 (calls, decisions)
             } else {
+                let notes: Vec<String> = ctx
+                    .steering
+                    .lock()
+                    .map_err(|_| "steering queue lock poisoned".to_string())?
+                    .drain(..)
+                    .collect();
+                for note in notes {
+                    history.push(LlmMessage {
+                        role: LlmRole::User,
+                        content: Some(format!("{STEERING_PREFIX}{note}")),
+                        tool_call_id: None,
+                        tool_calls: vec![],
+                    });
+                    (ctx.events)(ChatEvent::SteeringApplied(SteeringAppliedEvent { text: note }));
+                }
                 let request = ChatRequest {
                     messages: history.clone(),
                     tools: tools.clone(),
@@ -226,7 +242,21 @@ fn run_tool_loop(
                 }
 
                 if result.tool_calls.is_empty() {
-                    return Ok(ChatStreamOutcome::Done(ChatDone { result, todos }));
+                    let has_pending_steering = !ctx
+                        .steering
+                        .lock()
+                        .map_err(|_| "steering queue lock poisoned".to_string())?
+                        .is_empty();
+                    if !has_pending_steering {
+                        return Ok(ChatStreamOutcome::Done(ChatDone { result, todos }));
+                    }
+                    history.push(LlmMessage {
+                        role: LlmRole::Assistant,
+                        content: if result.text.is_empty() { None } else { Some(result.text) },
+                        tool_call_id: None,
+                        tool_calls: vec![],
+                    });
+                    continue;
                 }
 
                 // Round-trip the assistant's tool-call turn back into history
@@ -475,6 +505,7 @@ fn run_tool_loop(
 pub struct ChatTurnContext {
     pub provider_slot: Arc<LlmProviderSlot>,
     pub cancel_flag: Arc<ChatCancelFlag>,
+    pub steering: Arc<SteeringQueue>,
     /// `fast_apply` and `active_file` are filled in here, once the provider
     /// and scope are resolved — callers leave them `None`.
     pub deps: EmbeddingDeps,
@@ -532,6 +563,10 @@ pub fn stream(
     // already-finished previous turn must never bleed into this one.
     // `stream_resume` deliberately does not do this (see `ChatCancelFlag`).
     ctx.cancel_flag.store(false, Ordering::SeqCst);
+    ctx.steering
+        .lock()
+        .map_err(|_| "steering queue lock poisoned".to_string())?
+        .clear();
 
     let setup = setup(&mut ctx)?;
     let loop_ctx = LoopCtx {
@@ -542,6 +577,7 @@ pub fn stream(
         settings: &setup.settings,
         deps: &ctx.deps,
         cancel_flag: &ctx.cancel_flag,
+        steering: &ctx.steering,
         conversation_mode: ctx.conversation_mode,
     };
     run_tool_loop(&loop_ctx, setup.scope, setup.tools, messages, 0, 0, None, todos)
@@ -586,6 +622,7 @@ pub fn stream_resume(
         settings: &setup.settings,
         deps: &ctx.deps,
         cancel_flag: &ctx.cancel_flag,
+        steering: &ctx.steering,
         conversation_mode: ctx.conversation_mode,
     };
     run_tool_loop(
@@ -660,6 +697,7 @@ mod tests {
         /// what a settled tool call actually handed back to the model, since
         /// `ChatDone` carries the answer but not the history behind it.
         requests: Mutex<Vec<ChatRequest>>,
+        steer_after_call: Option<(usize, Arc<SteeringQueue>, String)>,
     }
 
     impl ScriptedProvider {
@@ -669,6 +707,7 @@ mod tests {
                 fallback: None,
                 calls: AtomicUsize::new(0),
                 requests: Mutex::new(Vec::new()),
+                steer_after_call: None,
             }
         }
 
@@ -678,7 +717,13 @@ mod tests {
                 fallback: Some(round),
                 calls: AtomicUsize::new(0),
                 requests: Mutex::new(Vec::new()),
+                steer_after_call: None,
             }
+        }
+
+        fn steering_after_call(mut self, call: usize, queue: Arc<SteeringQueue>, text: &str) -> Self {
+            self.steer_after_call = Some((call, queue, text.to_string()));
+            self
         }
 
         /// The `Tool`-role content the model read back for `call_id`.
@@ -706,8 +751,13 @@ mod tests {
             _on_reasoning: &dyn Fn(&str),
             _cancelled: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
+            let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
             self.requests.lock().unwrap().push(_request);
+            if let Some((target, queue, text)) = &self.steer_after_call {
+                if call == *target {
+                    queue.lock().unwrap().push(text.clone());
+                }
+            }
             let next = self.rounds.lock().unwrap().pop_front();
             let round = match (next, &self.fallback) {
                 (Some(r), _) => r,
@@ -757,6 +807,17 @@ mod tests {
         events: &ChatEventSink,
         cancel_flag: &ChatCancelFlag,
     ) -> Result<ChatStreamOutcome, String> {
+        let steering = SteeringQueue::default();
+        run_with_steering(provider, root, events, cancel_flag, &steering)
+    }
+
+    fn run_with_steering(
+        provider: &dyn LlmProvider,
+        root: &std::path::Path,
+        events: &ChatEventSink,
+        cancel_flag: &ChatCancelFlag,
+        steering: &SteeringQueue,
+    ) -> Result<ChatStreamOutcome, String> {
         let scope = ToolScope::new(
             root,
             root,
@@ -773,6 +834,7 @@ mod tests {
             settings: &settings,
             deps: &deps,
             cancel_flag,
+            steering,
             conversation_mode: ConversationMode::Agent,
         };
         run_tool_loop(&ctx, scope, Vec::new(), Vec::new(), 0, 0, None, Vec::new())
@@ -786,6 +848,19 @@ mod tests {
         root: &std::path::Path,
         events: &ChatEventSink,
         cancel_flag: &ChatCancelFlag,
+        calls: Vec<LlmToolCall>,
+        decisions: Vec<ToolCallDecision>,
+    ) -> Result<ChatStreamOutcome, String> {
+        let steering = SteeringQueue::default();
+        run_resumed_with_steering(provider, root, events, cancel_flag, &steering, calls, decisions)
+    }
+
+    fn run_resumed_with_steering(
+        provider: &dyn LlmProvider,
+        root: &std::path::Path,
+        events: &ChatEventSink,
+        cancel_flag: &ChatCancelFlag,
+        steering: &SteeringQueue,
         calls: Vec<LlmToolCall>,
         decisions: Vec<ToolCallDecision>,
     ) -> Result<ChatStreamOutcome, String> {
@@ -805,6 +880,7 @@ mod tests {
             settings: &settings,
             deps: &deps,
             cancel_flag,
+            steering,
             conversation_mode: ConversationMode::Agent,
         };
         let history = vec![LlmMessage {
@@ -880,6 +956,116 @@ mod tests {
                 ("result".to_string(), "c1".to_string()),
             ]
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn queued_steering_is_applied_to_the_next_fresh_round() {
+        let root = fixture_repo("steering");
+        let steering = Arc::new(SteeringQueue::default());
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![tool_call("c1", "readFile", r#"{"path":"intro.adoc"}"#)]),
+            round("Готово.", vec![]),
+        ])
+        .steering_after_call(1, steering.clone(), "Проверь ru locale");
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome =
+            run_with_steering(&provider, &root, &events, &cancel, steering.as_ref()).unwrap();
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(!requests[0].messages.iter().any(|m| {
+            m.role == LlmRole::User
+                && m.content.as_deref() == Some(&format!("{STEERING_PREFIX}Проверь ru locale"))
+        }));
+        assert!(requests[1].messages.iter().any(|m| {
+            m.role == LlmRole::User
+                && m.content.as_deref() == Some(&format!("{STEERING_PREFIX}Проверь ru locale"))
+        }));
+        assert!(seen.lock().unwrap().iter().any(|event| matches!(
+            event,
+            ChatEvent::SteeringApplied(SteeringAppliedEvent { text })
+                if text == "Проверь ru locale"
+        )));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn steering_during_a_final_stream_creates_a_follow_up_round() {
+        let root = fixture_repo("steering-final");
+        let steering = Arc::new(SteeringQueue::default());
+        let provider = ScriptedProvider::new(vec![
+            round("Первый ответ.", vec![]),
+            round("Ответ с уточнением.", vec![]),
+        ])
+        .steering_after_call(1, steering.clone(), "Проверь ru locale");
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome =
+            run_with_steering(&provider, &root, &events, &cancel, steering.as_ref()).unwrap();
+
+        let ChatStreamOutcome::Done(done) = outcome else {
+            panic!("expected Done");
+        };
+        assert_eq!(done.result.text, "Ответ с уточнением.");
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].messages.iter().any(|message| {
+            message.role == LlmRole::User
+                && message.content.as_deref()
+                    == Some(&format!("{STEERING_PREFIX}Проверь ru locale"))
+        }));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn steering_queued_during_approval_waits_for_post_resume_round() {
+        let root = fixture_repo("steering-approval");
+        let steering = Arc::new(SteeringQueue::default());
+        let call = tool_call("write", "writeFile", r#"{"path":"new.adoc","content":"x"}"#);
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![call.clone()]),
+            round("Изменение выполнено.", vec![]),
+        ])
+        .steering_after_call(1, steering.clone(), "Добавь заголовок");
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let paused =
+            run_with_steering(&provider, &root, &events, &cancel, steering.as_ref()).unwrap();
+        assert!(matches!(paused, ChatStreamOutcome::PendingApproval(_)));
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+
+        let resumed = run_resumed_with_steering(
+            &provider,
+            &root,
+            &events,
+            &cancel,
+            steering.as_ref(),
+            vec![call],
+            vec![ToolCallDecision {
+                id: "write".to_string(),
+                approved: true,
+                answer: None,
+                artifact_id: None,
+            }],
+        )
+        .unwrap();
+
+        assert!(matches!(resumed, ChatStreamOutcome::Done(_)));
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2, "resume executes calls before making a fresh request");
+        assert!(requests[1].messages.iter().any(|m| {
+            m.role == LlmRole::User
+                && m.content.as_deref() == Some(&format!("{STEERING_PREFIX}Добавь заголовок"))
+        }));
 
         std::fs::remove_dir_all(&root).ok();
     }

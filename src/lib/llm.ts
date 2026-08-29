@@ -148,6 +148,13 @@ export type LlmChatStreamReasoningDelta = {
   delta: string;
 };
 
+export const STEERING_PREFIX =
+  "[Уточнение от пользователя, не новое задание — учти в текущей работе]: ";
+
+export type LlmSteeringAppliedEvent = {
+  text: string;
+};
+
 // Mirrors `domain::llm::ChatUsage` — real token accounting for one completed
 // turn, when the provider reports it (requested via `stream_options.
 // include_usage`; not every OpenAI-compatible server sends it).
@@ -413,6 +420,12 @@ export function cancelLlmChat(): Promise<void> {
   return invoke("llm_cancel_chat");
 }
 
+/** Adds guidance to the next fresh model round without interrupting the
+ * stream or tool call currently in flight. */
+export function steerLlmChat(text: string): Promise<void> {
+  return invoke("llm_steer_chat", { text });
+}
+
 /** Fires once per non-empty text chunk while a `streamLlmChat()` call is in
  * flight. */
 export function listenLlmChatDelta(
@@ -429,6 +442,12 @@ export function listenLlmChatReasoningDelta(
   onDelta: (payload: LlmChatStreamReasoningDelta) => void,
 ): Promise<UnlistenFn> {
   return listen<LlmChatStreamReasoningDelta>("llm:chat-stream-reasoning-delta", (event) => onDelta(event.payload));
+}
+
+export function listenLlmSteeringApplied(
+  onApplied: (payload: LlmSteeringAppliedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<LlmSteeringAppliedEvent>("llm:steering-applied", (event) => onApplied(event.payload));
 }
 
 // Mirrors `domain::llm::ToolCallEvent` — fired just before the

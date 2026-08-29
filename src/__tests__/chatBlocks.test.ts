@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   appendDeltaToBlocks,
   appendReasoningDeltaToBlocks,
+  appendSteerBlock,
   appendToolCallBlock,
   chatMessageToPlainText,
   correctTrailingReasoning,
@@ -213,6 +214,17 @@ describe("markRunningToolCallsAsInterrupted", () => {
 });
 
 describe("flattenBlocksToText / chatMessageToPlainText", () => {
+  test("keeps applied steering in replay text", () => {
+    const blocks = appendSteerBlock(
+      [{ type: "text", id: "t1", content: "Проверяю." }],
+      "Проверь ru locale",
+    );
+
+    expect(flattenBlocksToText(blocks)).toBe(
+      "Проверяю.\n\n[Уточнение от пользователя, не новое задание — учти в текущей работе]: Проверь ru locale",
+    );
+  });
+
   test("joins multiple text blocks with a blank line, skipping tool-call blocks", () => {
     const blocks: MessageBlock[] = [
       { type: "text", id: "t1", content: "Let me check that." },

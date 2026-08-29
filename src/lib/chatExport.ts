@@ -56,7 +56,15 @@ function formatToolCallBlock(block: Extract<MessageBlock, { type: "toolCall" }>)
  * that serializes `ChatMessage[]` as-is). */
 function formatBlocks(blocks: MessageBlock[]): string {
   return blocks
-    .map((block) => (block.type === "text" ? block.content : block.type === "reasoning" ? "" : formatToolCallBlock(block)))
+    .map((block) =>
+      block.type === "text"
+        ? block.content
+        : block.type === "steer"
+          ? `_Уточнение пользователя: ${block.text}_`
+          : block.type === "reasoning"
+            ? ""
+            : formatToolCallBlock(block),
+    )
     .filter((part) => part !== "")
     .join("\n\n");
 }

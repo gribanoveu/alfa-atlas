@@ -40,6 +40,11 @@ pub type LlmProviderSlot = Mutex<Option<(ResolvedLlmProvider, Option<String>, Ar
 /// continuing once it reads `true`.
 pub type ChatCancelFlag = AtomicBool;
 
+/// User-authored notes waiting to be added to the next fresh model round.
+/// Like `ChatCancelFlag`, this is global because the app permits only one
+/// in-flight conversation at a time.
+pub type SteeringQueue = Mutex<Vec<String>>;
+
 pub fn ensure_provider(
     slot: &LlmProviderSlot,
     resolved: &ResolvedLlmProvider,

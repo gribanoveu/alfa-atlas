@@ -13,7 +13,7 @@ use crate::services::embedding_state::{
     BackgroundBacklogSlot, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard,
     FullSyncActiveSlot, IndexStoreSlot, IndexWatcherSlot, PriorityFilesSlot,
 };
-use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot};
+use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot, SteeringQueue};
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::embedding_model::DownloadState;
@@ -154,6 +154,7 @@ pub fn run() {
             app.manage(Arc::new(DownloadState::default()));
             app.manage(Arc::new(LlmProviderSlot::new(None)));
             app.manage(Arc::new(ChatCancelFlag::new(false)));
+            app.manage(Arc::new(SteeringQueue::default()));
             app.manage(Arc::new(services::memory_pipeline::MemoryExtractGuard::new()));
 
             Ok(())
@@ -335,6 +336,7 @@ pub fn run() {
             commands::llm::llm_chat_stream,
             commands::llm::llm_chat_stream_resume,
             commands::llm::llm_cancel_chat,
+            commands::llm::llm_steer_chat,
             commands::llm::llm_chat_once,
             commands::llm::llm_rate_limit_snapshot,
             commands::chat_history::chat_list,

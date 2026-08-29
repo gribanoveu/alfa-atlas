@@ -27,6 +27,9 @@ pub const CHAT_STREAM_DELTA_EVENT: &str = "llm:chat-stream-delta";
 /// provider/model that doesn't send `reasoning_content`.
 pub const CHAT_STREAM_REASONING_EVENT: &str = "llm:chat-stream-reasoning-delta";
 
+/// Fires when queued user guidance is added to the history of a fresh round.
+pub const STEERING_APPLIED_EVENT: &str = "llm:steering-applied";
+
 /// Fires immediately before executing one tool call in a `llm_chat_stream`
 /// round — before, not after, so the UI can show e.g. "reading
 /// docs/x.adoc…" while the (possibly slow — `SemanticSearch` can hit an
@@ -56,6 +59,7 @@ pub fn chat_event_sink(app: &AppHandle) -> ChatEventSink {
         let _ = match event {
             ChatEvent::Delta(p) => app.emit(CHAT_STREAM_DELTA_EVENT, p),
             ChatEvent::Reasoning(p) => app.emit(CHAT_STREAM_REASONING_EVENT, p),
+            ChatEvent::SteeringApplied(p) => app.emit(STEERING_APPLIED_EVENT, p),
             ChatEvent::ToolCall(p) => app.emit(TOOL_CALL_EVENT, p),
             ChatEvent::ToolResult(p) => app.emit(TOOL_RESULT_EVENT, p),
             ChatEvent::RateLimitChanged => app.emit(RATE_LIMIT_CHANGED_EVENT, ()),
