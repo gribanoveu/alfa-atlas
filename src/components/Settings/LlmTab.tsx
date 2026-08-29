@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { toMessage } from "../../lib/errors";
 import { useLlmSetup } from "../../hooks/useLlmSetup";
 import { AUTO_MODEL_LABEL, AUTO_MODEL_VALUE, CUSTOM_MODEL_HINT, CUSTOM_MODEL_PLACEHOLDER } from "../../lib/assistantConfig";
-import { mergeKnownModels } from "../../lib/llm";
+import { mergeKnownModels, resolveOpenAiCompatibleEndpoints } from "../../lib/llm";
 import "../Welcome/CloneRepoModal.css";
 import "./LlmTab.css";
 
@@ -27,6 +27,30 @@ function uniqueProviderId(label: string, existingIds: string[]): string {
   let suffix = 2;
   while (existingIds.includes(`${base}-${suffix}`)) suffix += 1;
   return `${base}-${suffix}`;
+}
+
+function LlmEndpointPreview({ baseUrl }: { baseUrl: string | null | undefined }) {
+  const endpoints = resolveOpenAiCompatibleEndpoints(baseUrl);
+  if (!endpoints) return null;
+  return (
+    <div className="llm-endpoint-preview" aria-live="polite">
+      <p className="llm-endpoint-preview-title">Итоговые адреса</p>
+      <p className="settings-hint settings-hint-compact llm-endpoint-preview-hint">
+        Вычисляются из Base URL — редактировать их здесь нельзя. Укажите только корень API без{" "}
+        <span className="llm-endpoint-suffix">/chat/completions</span>.
+      </p>
+      <dl className="llm-endpoint-list">
+        <div className="llm-endpoint-item">
+          <dt className="llm-endpoint-label">Чат</dt>
+          <dd className="llm-endpoint-url">{endpoints.chat}</dd>
+        </div>
+        <div className="llm-endpoint-item">
+          <dt className="llm-endpoint-label">Модели</dt>
+          <dd className="llm-endpoint-url">{endpoints.models}</dd>
+        </div>
+      </dl>
+    </div>
+  );
 }
 
 export function LlmTab() {
@@ -266,6 +290,9 @@ export function LlmTab() {
                       }}
                     />
                   </label>
+                  <LlmEndpointPreview
+                    baseUrl={provider.isSystem ? provider.baseUrl : baseUrlDraft.trim() || provider.baseUrl}
+                  />
                   {provider.isSystem ? (
                     <p className="settings-hint settings-hint-compact">
                       Встроенный провайдер — base URL задаётся сборкой приложения.
@@ -532,8 +559,9 @@ export function LlmTab() {
       <div className="settings-card llm-add-provider">
         <div className="settings-section-title">Добавить провайдера</div>
         <p className="settings-hint settings-hint-compact">
-          Укажите название и адрес OpenAI-совместимого API — модель, сертификат и ключ
-          настраиваются после добавления, в развёрнутой карточке провайдера.
+          Укажите название и корень OpenAI-совместимого API (например{" "}
+          <span className="llm-endpoint-suffix">https://openrouter.ai/api/v1</span>) — модель, сертификат и ключ
+          настраиваются после добавления.
         </p>
         <label className="clone-modal-field">
           <span className="clone-modal-label">Название</span>
@@ -555,6 +583,7 @@ export function LlmTab() {
             onChange={(event) => setNewProviderBaseUrl(event.target.value)}
           />
         </label>
+        <LlmEndpointPreview baseUrl={newProviderBaseUrl} />
         <div className="settings-actions">
           <button
             type="button"

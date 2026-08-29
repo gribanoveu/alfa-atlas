@@ -2,6 +2,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { ConversationMode, Task, ToolResult } from "./aiTools";
 
+/** Mirrors `OpenAiCompatibleProvider::{chat_url,models_url}` in
+ * `infra/llm_providers/openai_compatible.rs` — the Settings UI uses this to
+ * show which endpoints the app will actually call. */
+export function resolveOpenAiCompatibleEndpoints(
+  baseUrl: string | null | undefined,
+): { chat: string; models: string } | null {
+  const root = baseUrl?.trim().replace(/\/+$/, "");
+  if (!root) return null;
+  return {
+    chat: `${root}/chat/completions`,
+    models: `${root}/models`,
+  };
+}
+
 // Mirrors `domain::llm::LlmProviderConfig`. Every field but `id` is
 // nullable — for a system provider id this is an *override* (`null` means
 // "inherit from the compiled-in manifest preset"), for a custom id it's

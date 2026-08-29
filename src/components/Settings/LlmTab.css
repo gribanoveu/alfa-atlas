@@ -202,6 +202,65 @@
   background: var(--bg-0);
 }
 
+.llm-endpoint-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+}
+
+.llm-endpoint-preview-title {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.llm-endpoint-preview-hint {
+  margin: 0;
+}
+
+.llm-endpoint-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+
+.llm-endpoint-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.llm-endpoint-label {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.llm-endpoint-url {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  font-family: var(--font-mono, monospace);
+  color: var(--text-1);
+  line-height: 1.45;
+  word-break: break-all;
+  user-select: text;
+}
+
+.llm-endpoint-suffix {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.95em;
+  color: var(--text-1);
+}
+
 .llm-model-refresh {
   flex: none;
   display: flex;
