@@ -509,3 +509,13 @@ export function listenLlmToolResult(
 ): Promise<UnlistenFn> {
   return listen<LlmToolResultEvent>("llm:tool-result", (event) => onToolResult(event.payload));
 }
+
+/** Fires after each LLM round of an in-flight `streamLlmChat()` turn for
+ * which the provider reported usage — `totalTokens` is the authoritative
+ * context size as of that round (every request resends the whole history),
+ * so the context ring can stop guessing at each round boundary instead of
+ * waiting for the turn's final `ChatStreamResult.usage`. Never fires for a
+ * provider that doesn't report usage. */
+export function listenLlmContextUsage(onUsage: (usage: ChatUsage) => void): Promise<UnlistenFn> {
+  return listen<ChatUsage>("llm:context-usage", (event) => onUsage(event.payload));
+}

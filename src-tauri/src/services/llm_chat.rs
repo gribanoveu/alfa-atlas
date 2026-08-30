@@ -239,6 +239,7 @@ fn run_tool_loop(
                 if let Some(usage) = result.usage {
                     llm_rate_limit::record(ctx.provider_id, usage.completion_tokens);
                     (ctx.events)(ChatEvent::RateLimitChanged);
+                    (ctx.events)(ChatEvent::ContextUsage(usage));
                 }
 
                 // Checkpoint 2 — see this function's doc comment. Checked
@@ -1286,6 +1287,13 @@ mod tests {
         assert!(
             seen.lock().unwrap().iter().any(|e| matches!(e, ChatEvent::RateLimitChanged)),
             "the status-bar chip is driven by this event"
+        );
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .any(|e| matches!(e, ChatEvent::ContextUsage(u) if u.total_tokens == 15)),
+            "the chat panel's context ring is driven by this event"
         );
 
         std::fs::remove_dir_all(&root).ok();

@@ -669,6 +669,15 @@ pub enum ChatEvent {
     /// The provider reported token usage and it has been recorded — the
     /// status-bar chip should re-read its snapshot.
     RateLimitChanged,
+    /// The same usage report, for the chat panel's context ring rather than
+    /// the rate-limit chip. Since every request resends the whole history,
+    /// `total_tokens` here is the authoritative context size as of the round
+    /// that just finished — the frontend's own character estimate only has
+    /// to cover the tool results appended *after* it, until the next round
+    /// reports again. Only `run_tool_loop` fires this: `llm_chat_once`'s
+    /// usage belongs to a separate one-shot conversation (history
+    /// compaction, the memory pipeline), not to the chat's context.
+    ContextUsage(ChatUsage),
 }
 
 /// Where a turn's `ChatEvent`s go. A port like `LlmProvider`: the services

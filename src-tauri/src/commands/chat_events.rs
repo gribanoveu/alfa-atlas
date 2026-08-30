@@ -52,6 +52,14 @@ pub const TOOL_CALL_EVENT: &str = "llm:tool-call";
 /// ever `Some`.
 pub const TOOL_RESULT_EVENT: &str = "llm:tool-result";
 
+/// Fires after each LLM round inside one turn for which the provider
+/// reported usage — carries that `ChatUsage` so the chat panel's context
+/// ring can snap to the provider's own number instead of coasting on its
+/// character estimate until the whole turn finishes. Never fires for a
+/// provider that doesn't send usage, and never for `llm_chat_once`'s
+/// one-shot calls (compaction, the memory pipeline).
+pub const CONTEXT_USAGE_EVENT: &str = "llm:context-usage";
+
 /// Fires after completion tokens are recorded into the rate-limit store,
 /// and after LLM settings are saved (the tracking toggle lives there) —
 /// the status-bar chip refreshes without waiting for its poll interval.
@@ -72,6 +80,7 @@ pub fn chat_event_sink(app: &AppHandle) -> ChatEventSink {
             ChatEvent::ToolCall(p) => app.emit(TOOL_CALL_EVENT, p),
             ChatEvent::ToolResult(p) => app.emit(TOOL_RESULT_EVENT, p),
             ChatEvent::RateLimitChanged => app.emit(RATE_LIMIT_CHANGED_EVENT, ()),
+            ChatEvent::ContextUsage(p) => app.emit(CONTEXT_USAGE_EVENT, p),
         };
     })
 }

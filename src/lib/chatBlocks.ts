@@ -1,5 +1,6 @@
 import { normalizeSemanticSearchResult, type ToolResult } from "./aiTools";
 import { STEERING_PREFIX, type ChatUsage } from "./llm";
+import { estimateTokenCount, estimateTokensFromChars } from "./tokens";
 
 /** One piece of an assistant message's transcript, in chronological order —
  * a run of streamed prose, or one tool invocation with its eventual
@@ -625,4 +626,68 @@ export function chatMessageToPlainText(message: ChatMessage): string {
   const ledger = toolLedger(message.blocks);
   if (!ledger) return text;
   return text ? `${text}\n\n${ledger}` : ledger;
+}
+
+/** Fixed per-tool-call overhead the wire adds around what's counted
+ * explicitly below: the assistant message's `tool_calls` entry (its `id`,
+ * the `{"type":"function","function":{...}}` envelope) plus the `tool`
+ * message that answers it (`role`, `tool_call_id`). Small, but there are
+ * dozens of these in a research turn. */
+const TOOL_CALL_WIRE_OVERHEAD_CHARS = 60;
+
+/** Serialized length of a settled tool call's result, as the backend
+ * writes it into the turn's `history` — `serde_json::to_string` over the
+ * very same tagged structure this block carries (see
+ * `services::llm_chat::run_tool_loop`), so stringifying it here measures
+ * approximately the real payload rather than a proxy for it. Cosmetic-grade
+ * parsing like `toolCallPaths`: a value that somehow won't serialize
+ * contributes nothing rather than throwing inside a render. */
+function toolResultWireLength(result: ToolResult): number {
+  try {
+    return JSON.stringify(result)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Token estimate for the context-usage ring only — *not* a wire
+ * projection (that's `chatMessageToPlainText`, which both the replay in
+ * `sendMessage` and the compaction trigger depend on; neither may use
+ * this).
+ *
+ * The split it exists for: a tool call's arguments and its JSON result
+ * live in the backend's per-turn `history` and are resent to the provider
+ * on every subsequent round of *that* turn — thousands of tokens after a
+ * `readFile`/`semanticSearch` — but they are gone by the next turn, where
+ * `wireMessages` replays the turn as prose plus `toolLedger`. So only the
+ * message still in flight is measured in full; a settled one is measured
+ * as what will actually be resent. Counting tool payloads for every past
+ * turn instead would pile up tens of thousands of tokens the request no
+ * longer contains.
+ *
+ * Known, accepted imprecision (it's a progress indicator, and
+ * `estimateTokenCount`'s ~4 chars/token is itself only a rule of thumb):
+ * `listFiles` reaches the model as an ASCII tree (`render_file_tree`), not
+ * as the JSON measured here; a denied `askUser`/`requestArtifact` collapses
+ * to a short Russian line on the backend. Both over-count, mildly. */
+export function estimateMessageContextTokens(message: ChatMessage): number {
+  if (message.role === "user") return estimateTokenCount(message.content);
+  if (!message.streaming) return estimateTokenCount(chatMessageToPlainText(message));
+
+  let chars = flattenBlocksToText(message.blocks).length;
+  for (const block of message.blocks) {
+    if (block.type === "reasoning") {
+      // Deliberately absent from `flattenBlocksToText` (it is never
+      // replayed across turns) but present in the in-turn history.
+      chars += block.content.length;
+      continue;
+    }
+    if (block.type !== "toolCall") continue;
+    chars += block.name.length + block.argumentsJson.length + TOOL_CALL_WIRE_OVERHEAD_CHARS;
+    // A `running`/`pendingApproval` call has sent its arguments and
+    // nothing else yet — there is no result in the history to count.
+    if (block.status === "done" && block.result) chars += toolResultWireLength(block.result);
+    else if (block.status === "error") chars += (block.errorMessage ?? "").length;
+  }
+  return estimateTokensFromChars(chars);
 }

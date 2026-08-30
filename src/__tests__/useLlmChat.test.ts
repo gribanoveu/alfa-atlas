@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import * as actualLlm from "../lib/llm";
 import * as actualAiTools from "../lib/aiTools";
 import type { ChatMessage } from "../lib/chatBlocks";
-import type { ChatStreamOutcome, PendingApproval, PendingToolCall, ToolCallDecision } from "../lib/llm";
+import type { ChatStreamOutcome, ChatUsage, PendingApproval, PendingToolCall, ToolCallDecision } from "../lib/llm";
 
 // --- backend doubles -------------------------------------------------------
 
@@ -15,6 +15,7 @@ let steeringListeners: Listener<{ text: string }>[] = [];
 let toolCallDeltaListeners: Listener<{ id: string; name: string; arguments: string }>[] = [];
 let toolCallListeners: Listener<{ id: string; name: string; arguments: string }>[] = [];
 let toolResultListeners: Listener<{ id: string; result: unknown; error: string | null }>[] = [];
+let contextUsageListeners: Listener<ChatUsage>[] = [];
 
 /** Outcomes handed back by `streamLlmChat`, then `streamLlmChatResume`. */
 let outcomes: ChatStreamOutcome[] = [];
@@ -90,6 +91,12 @@ mock.module("../lib/llm", () => ({
     toolResultListeners.push(cb);
     return () => {
       toolResultListeners = toolResultListeners.filter((l) => l !== cb);
+    };
+  },
+  listenLlmContextUsage: async (cb: Listener<ChatUsage>) => {
+    contextUsageListeners.push(cb);
+    return () => {
+      contextUsageListeners = contextUsageListeners.filter((l) => l !== cb);
     };
   },
 }));
@@ -200,6 +207,7 @@ beforeEach(() => {
   toolCallDeltaListeners = [];
   toolCallListeners = [];
   toolResultListeners = [];
+  contextUsageListeners = [];
   outcomes = [];
   streamThrows = null;
   streamCalls = [];
@@ -877,5 +885,64 @@ describe("useLlmChat — the todo checklist", () => {
     // Persisted right away: a button pressed between turns has no other way
     // to survive a reload.
     expect(cbs.onTurnSettled).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useLlmChat — the context ring", () => {
+  test("a tool result grows the estimate while the turn is still running", async () => {
+    deferStream = true;
+    const { result } = render();
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("вопрос");
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      for (const l of [...toolCallListeners]) l({ id: "t1", name: "readFile", arguments: "{}" });
+    });
+    const beforeResult = result.current.contextTokens;
+
+    await act(async () => {
+      for (const l of [...toolResultListeners]) {
+        l({ id: "t1", result: { tool: "file", result: { content: "x".repeat(8000) } }, error: null });
+      }
+    });
+
+    // The backend keeps that payload in the turn's history and resends it on
+    // every later round — the ring has to move, not wait for the turn to end.
+    expect(result.current.contextTokens).toBeGreaterThan(beforeResult + 1500);
+
+    await act(async () => {
+      pendingStream[0]?.(done("готово"));
+      await sent;
+    });
+  });
+
+  test("a mid-turn usage report is a floor the estimate cannot undercut", async () => {
+    deferStream = true;
+    const { result } = render();
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("вопрос");
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      for (const l of [...contextUsageListeners]) {
+        l({ promptTokens: 890_000, completionTokens: 10_000, totalTokens: 900_000 });
+      }
+    });
+    expect(result.current.contextTokens).toBe(900_000);
+
+    // Settled with no usage of its own: the provider's mid-turn number was
+    // about *that* turn's rounds and must not linger as a floor afterwards.
+    await act(async () => {
+      pendingStream[0]?.(done("готово"));
+      await sent;
+    });
+    expect(result.current.contextTokens).toBeLessThan(900_000);
   });
 });

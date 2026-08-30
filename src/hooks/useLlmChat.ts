@@ -36,6 +36,7 @@ import {
   appendToolCallBlock,
   applyToolCallDelta,
   chatMessageToPlainText,
+  estimateMessageContextTokens,
   correctTrailingReasoning,
   correctTrailingText,
   markRunningToolCallsAsInterrupted,
@@ -75,6 +76,7 @@ import {
   cancelLlmChat,
   listenLlmChatDelta,
   listenLlmChatReasoningDelta,
+  listenLlmContextUsage,
   listenLlmSteeringApplied,
   listenLlmToolCall,
   listenLlmToolCallDelta,
@@ -84,6 +86,7 @@ import {
   streamLlmChatResume,
   steerLlmChat,
   type ChatStreamOutcome,
+  type ChatUsage,
   type LlmMessage,
   type AskUserAnswerPayload,
   type PendingApproval,
@@ -159,6 +162,15 @@ export function useLlmChat(
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [sending, setSending] = useState(false);
   const [pendingSteers, setPendingSteers] = useState<string[]>([]);
+
+  /** The provider's own token count for the most recent finished LLM round
+   * of the turn currently in flight — see `contextTokens`. Cleared at the
+   * start of every turn so a previous turn's number can never inflate the
+   * next one; no chat-switch reset is needed because
+   * `AssistantConversation` is rendered with `key={currentChatId}`, so this
+   * whole hook remounts. `null` for the whole turn on a provider that
+   * doesn't report usage. */
+  const [liveUsage, setLiveUsage] = useState<ChatUsage | null>(null);
 
   // Sound toggles live in refs so `collectDecisions` (empty deps — one
   // stable Promise factory for the panel's lifetime) always reads the
@@ -646,6 +658,27 @@ export function useLlmChat(
     };
   }, [setActivePlanId, setTodos]);
 
+  // Fires at each LLM round boundary of an in-flight turn, on providers
+  // that report usage — the authoritative context size as of that round.
+  // Unlike `llm:rate-limit-changed` (same trigger, no payload, feeds the
+  // status-bar chip) this one carries the counts, so `contextTokens` below
+  // can pin itself to the provider's number mid-turn instead of coasting on
+  // its character estimate until the turn ends.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenLlmContextUsage((usage) => {
+      setLiveUsage(usage);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Context-window usage so far. Every request resends the *entire* message
   // history, so a completed turn's `usage.totalTokens` (prompt + completion,
   // as the provider itself counted it) already is the authoritative total
@@ -654,7 +687,16 @@ export function useLlmChat(
   // or the still-streaming reply) fall back to `estimateTokenCount`. Before
   // any turn has completed (a fresh conversation, or a provider that never
   // reports usage), the whole thing is the character-count estimate, same
-  // as before. Expressed as a `forEach` scan (not `reduce`-then-reindex)
+  // as before.
+  //
+  // The tail uses `estimateMessageContextTokens`, not the wire projection:
+  // while a turn is in flight its tool arguments and JSON results really
+  // are in the request (the backend resends its whole per-turn `history`
+  // each round), so the ring climbs during a long tool sequence instead of
+  // sitting still until the turn ends. `liveUsage` below then pins it to
+  // the provider's own number at each round boundary.
+  //
+  // Expressed as a `forEach` scan (not `reduce`-then-reindex)
   // since `usage` only exists on the assistant arm of `ChatMessage`'s
   // discriminated union — carrying the found value along with the index in
   // one pass avoids re-narrowing the role a second time.
@@ -684,14 +726,30 @@ export function useLlmChat(
             toolDefinitions,
             docsRootRelativeToRepo,
           ),
-        ) + messages.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0)
+        ) + messages.reduce((sum, m) => sum + estimateMessageContextTokens(m), 0)
       );
     }
     const tail = messages
       .slice(lastUsageIndex + 1)
-      .reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
+      .reduce((sum, m) => sum + estimateMessageContextTokens(m), 0);
     return lastUsageTotal + tail;
   }, [messages, accessMode, conversationMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
+
+  /** What the ring actually shows. While a turn is in flight, the last
+   * round's reported `totalTokens` is a floor the estimate above may not
+   * undercut — it counts things no client-side projection sees (the tool
+   * *schemas* on every request, the ephemeral system blocks `wireMessages`
+   * appends, the model's own tokenizer). `Math.max` rather than a straight
+   * override because that usage predates any tool result appended since the
+   * round it came from, which only the estimate covers.
+   *
+   * Gated on `sending`: once the turn settles, its assistant message
+   * carries the final `usage` and anchors `contextTokens` itself — a
+   * surviving `liveUsage` from that turn would then double as a floor under
+   * the *next* one, which is exactly the staleness `setLiveUsage(null)` at
+   * turn start guards against. */
+  const displayedContextTokens =
+    sending && liveUsage ? Math.max(contextTokens, liveUsage.totalTokens) : contextTokens;
 
   /** Drives the pending-approval resume loop starting from `initialOutcome`
    * — shared by a live turn (`runTurn`, starting from a fresh
@@ -894,6 +952,7 @@ export function useLlmChat(
     ) => {
       if (!providerId) return;
       setSending(true);
+      setLiveUsage(null);
       const turnStartedAt = Date.now();
       turnModeRef.current = accessMode;
       turnToolTallyRef.current.clear();
@@ -1159,6 +1218,7 @@ export function useLlmChat(
     coldResumedRef.current = true;
     const assistantId = last.id;
     setSending(true);
+    setLiveUsage(null);
     // Only covers time since this app restart, not the turn's true original
     // start (lost across the restart) — see `durationMs`'s doc comment on
     // `ChatMessage`.
@@ -1260,7 +1320,7 @@ export function useLlmChat(
     sendMessage,
     steerChat,
     retryWithCompaction,
-    contextTokens,
+    contextTokens: displayedContextTokens,
     todos,
     clearTodos,
     activePlanId,
