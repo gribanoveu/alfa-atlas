@@ -1,6 +1,6 @@
 [package]
 name = "alfa-atlas"
-version = "0.3.1"
+version = "0.4.0"
 description = "Alfa Atlas"
 authors = ["Evgenii Gribanov"]
 edition = "2021"
