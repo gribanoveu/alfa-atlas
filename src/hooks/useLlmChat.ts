@@ -45,8 +45,10 @@ import {
   type ChatMessage,
 } from "../lib/chatBlocks";
 import {
+  COMPACTION_RUNNING_NOTICE_TEXT,
   describeMessageForCompaction,
   formatCompactionNoticeText,
+  insertMessageBefore,
   isCacheValid,
   isContextLengthError,
   planCompaction,
@@ -942,13 +944,20 @@ export function useLlmChat(
    * `opts.planExecutionStart` marks the canned «Начать» send: planning
    * transcript is dropped from the *wire* (UI chat stays) and a planning-era
    * compaction cache is discarded so GOAL/DECISIONS cannot leak rejected
-   * hypotheses into execution. */
+   * hypotheses into execution.
+   *
+   * `opts.userMessageId` is where the compaction notice gets spliced in —
+   * right above the user turn that triggered the pass. Passed explicitly
+   * rather than derived from `priorTurns.length` because the two callers
+   * hand `setMessages` different arrays (`sendMessage` has just appended a
+   * user message plus an assistant placeholder; `retryWithCompaction` has
+   * removed a failed one), so no single index works for both. */
   const runTurn = useCallback(
     async (
       userText: string,
       assistantId: string,
       priorTurns: ChatMessage[],
-      opts: { aggressiveCompaction: boolean; planExecutionStart?: boolean },
+      opts: { aggressiveCompaction: boolean; planExecutionStart?: boolean; userMessageId: string },
     ) => {
       if (!providerId) return;
       setSending(true);
@@ -984,11 +993,33 @@ export function useLlmChat(
         ) + scoped.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
 
       if (opts.aggressiveCompaction || shouldCompact(scopedTokens, contextLimit, scoped)) {
+        // Identifies the notice across the three `setMessages` calls below —
+        // declared out here so the `catch` can retract a card whose
+        // summarization then failed, without having to know how far the
+        // `try` got.
+        let noticeId: string | null = null;
         try {
           const compaction = planCompaction(scoped, compactionCacheRef.current, keepLast, activeFilePath);
           if (compaction) {
             const excerpt = compaction.toSummarize.map(describeMessageForCompaction).join("\n\n");
             const prompt = buildHistoryCompactionPrompt(compactionCacheRef.current?.summaryText ?? null, excerpt);
+            // Placed *before* the await, not after it: summarization is a
+            // whole extra LLM round trip in front of the user's actual
+            // request, and without this the wait shows up as nothing but a
+            // longer-than-usual thinking indicator.
+            noticeId = crypto.randomUUID();
+            const runningNotice: ChatMessage = {
+              id: noticeId,
+              role: "assistant",
+              blocks: [{ type: "text", id: crypto.randomUUID(), content: COMPACTION_RUNNING_NOTICE_TEXT }],
+              // Never `true`: the streaming placeholder is the only message
+              // `updateLastAssistantBlocks` may ever touch, and this one
+              // sits above it in the array.
+              streaming: false,
+              isCompactionNotice: true,
+              compactionRunning: true,
+            };
+            setMessages((prev) => insertMessageBefore(prev, opts.userMessageId, runningNotice));
             const response = await llmChatOnce(providerId, [{ role: "user", content: prompt, toolCallId: null }]);
             const summaryText = response.content?.trim();
             if (summaryText) {
@@ -1003,8 +1034,11 @@ export function useLlmChat(
               const fromOrdinal = real.findIndex((m) => m.id === compaction.toSummarize[0]!.id) + 1;
               const toOrdinal = real.findIndex((m) => m.id === compaction.toSummarize[compaction.toSummarize.length - 1]!.id) + 1;
               compactionCacheRef.current = { summaryText, boundaryMessageId: compaction.newBoundaryId };
-              const noticeMsg: ChatMessage = {
-                id: crypto.randomUUID(),
+              // Settles the card already on screen in place — same id, same
+              // position above the user turn — rather than appending a
+              // second message, so it reads as one event resolving.
+              const settledNotice: ChatMessage = {
+                id: noticeId,
                 role: "assistant",
                 blocks: [
                   { type: "text", id: crypto.randomUUID(), content: formatCompactionNoticeText(fromOrdinal, toOrdinal) },
@@ -1012,7 +1046,12 @@ export function useLlmChat(
                 streaming: false,
                 isCompactionNotice: true,
               };
-              setMessages((prev) => [...prev, noticeMsg]);
+              setMessages((prev) => prev.map((m) => (m.id === noticeId ? settledNotice : m)));
+            } else {
+              // The summarizer answered with nothing usable: no cache was
+              // written, so no history is actually folded away and the card
+              // would be claiming an event that didn't happen.
+              setMessages((prev) => prev.filter((m) => m.id !== noticeId));
             }
           }
         } catch (e) {
@@ -1020,6 +1059,9 @@ export function useLlmChat(
           // summarization call — if history really is too large to send as
           // it stands, `isContextLengthError`'s reactive net below (via a
           // later `retryWithCompaction`) is the backstop, not this pass.
+          // The card goes with it: the pass leaving no trace is exactly
+          // what happened.
+          setMessages((prev) => prev.filter((m) => m.id !== noticeId));
           console.error("Не удалось сжать историю чата", e);
         }
       }
@@ -1260,6 +1302,7 @@ export function useLlmChat(
       await runTurn(trimmed, assistantId, priorTurns, {
         aggressiveCompaction: false,
         planExecutionStart: opts?.planExecutionStart === true,
+        userMessageId: userMsg.id,
       });
     },
     [providerId, sending, messages, runTurn],
@@ -1294,6 +1337,7 @@ export function useLlmChat(
       void runTurn(userMsgToRetry.content, newAssistantId, priorTurns, {
         aggressiveCompaction: true,
         planExecutionStart: userMsgToRetry.isPlanExecutionStart === true,
+        userMessageId: userMsgToRetry.id,
       });
     },
     [providerId, sending, messages, runTurn],

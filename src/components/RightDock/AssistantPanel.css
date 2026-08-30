@@ -1392,6 +1392,31 @@
   line-height: 1.4;
 }
 
+/* The same notice while its summarizer round trip is still in flight —
+   a card, not the pill, since it has a pause to account for rather than a
+   finished event to annotate. Geometry copied from `.assistant-plan-card`
+   (whose `-header`/`-eyebrow`/`-title`/`-overview` children it reuses
+   verbatim, same as `AssistantVisualCard`), but with a neutral border
+   instead of the accent mix: this is the app's own bookkeeping, not
+   something the model produced. */
+
+.assistant-compaction-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text-1);
+  transition: opacity 0.15s ease;
+}
+
+.assistant-compaction-card.is-running {
+  opacity: 0.85;
+}
+
 
 /* =========================================================
    Streaming indicator

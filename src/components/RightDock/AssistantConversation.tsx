@@ -30,6 +30,7 @@ import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AssistantArtifactCard } from "./AssistantArtifactCard";
 import { AssistantAskUserCard } from "./AssistantAskUserCard";
+import { AssistantCompactionNotice } from "./AssistantCompactionNotice";
 import { AssistantReasoningBlock, AssistantThinkingIndicator } from "./AssistantReasoningBlock";
 import { AssistantSteerBlock } from "./AssistantSteerBlock";
 import { AssistantSuggestionChip } from "./AssistantSuggestionChip";
@@ -1023,11 +1024,7 @@ export function AssistantConversation({
         ) : (
           messages.map((m) => {
             if (m.role === "assistant" && m.isCompactionNotice) {
-              return (
-                <div key={m.id} className="assistant-chat-compaction-notice">
-                  <span>{m.blocks[0]?.type === "text" ? m.blocks[0].content : ""}</span>
-                </div>
-              );
+              return <AssistantCompactionNotice key={m.id} message={m} />;
             }
             const failed = m.role === "assistant" && Boolean(m.failed);
             const stopped = m.role === "assistant" && Boolean(m.cancelled);

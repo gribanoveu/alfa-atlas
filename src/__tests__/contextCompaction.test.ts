@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   describeMessageForCompaction,
   formatCompactionNoticeText,
+  insertMessageBefore,
   isCacheValid,
   isCompactionNotice,
   isContextLengthError,
@@ -207,5 +208,31 @@ describe("isContextLengthError", () => {
 
   test("does not match an unrelated HTTP error", () => {
     expect(isContextLengthError("http status 500: internal server error")).toBe(false);
+  });
+});
+
+describe("insertMessageBefore", () => {
+  const notice = assistantMsg("notice", "История сжата");
+
+  test("splices the notice above the anchor message", () => {
+    const messages = [userMsg("u1", "первое"), assistantMsg("a1", "ответ"), userMsg("u2", "второе")];
+    const next = insertMessageBefore(messages, "u2", notice);
+    expect(next.map((m) => m.id)).toEqual(["u1", "a1", "notice", "u2"]);
+  });
+
+  test("appends when the anchor id is not in the list", () => {
+    const messages = [userMsg("u1", "первое")];
+    const next = insertMessageBefore(messages, "missing", notice);
+    expect(next.map((m) => m.id)).toEqual(["u1", "notice"]);
+  });
+
+  test("handles an empty list", () => {
+    expect(insertMessageBefore([], "u1", notice).map((m) => m.id)).toEqual(["notice"]);
+  });
+
+  test("leaves the input array untouched", () => {
+    const messages = [userMsg("u1", "первое")];
+    insertMessageBefore(messages, "u1", notice);
+    expect(messages.map((m) => m.id)).toEqual(["u1"]);
   });
 });

@@ -150,6 +150,30 @@ export function formatCompactionNoticeText(fromOrdinal: number, toOrdinal: numbe
     : `История сжата (сообщения ${fromOrdinal}–${toOrdinal} свёрнуты в резюме)`;
 }
 
+/** What a compaction notice carries while its pass is still in flight (see
+ * `compactionRunning` on `ChatMessage`). It lives in the message's text
+ * block, not only in the card's markup, so the settled "pill" rendering
+ * stays readable for anything that reads such a message as plain text —
+ * `chatExport`, say — rather than showing an empty bubble. */
+export const COMPACTION_RUNNING_NOTICE_TEXT = "Сжимаю историю…";
+
+/** Splices `message` in immediately before the message with `beforeId`,
+ * appending it instead when that id isn't present. The compaction notice
+ * describes folding away *older* history, so it belongs above the user turn
+ * that triggered the pass — not at the end of the array, after the reply
+ * still streaming in. Appending on a miss is defense in depth (the callers
+ * pass an id they just inserted themselves): a notice in a slightly odd
+ * place beats losing the only sign that compaction happened. */
+export function insertMessageBefore(
+  messages: ChatMessage[],
+  beforeId: string,
+  message: ChatMessage,
+): ChatMessage[] {
+  const index = messages.findIndex((m) => m.id === beforeId);
+  if (index === -1) return [...messages, message];
+  return [...messages.slice(0, index), message, ...messages.slice(index)];
+}
+
 const CONTEXT_LENGTH_ERROR_PATTERN =
   /context.length|context_length_exceeded|maximum context length|too many tokens|prompt is too long/i;
 

@@ -168,6 +168,18 @@ export type ChatMessage =
        * conversation itself). Persists via the normal `chat_store` path —
        * no backend changes needed since it's just another JSON message. */
       isCompactionNotice?: boolean;
+      /** Set on an `isCompactionNotice` message only while its pass is still
+       * in flight — the marker is already in the transcript (so the wait for
+       * the summarizer is visible as a card instead of an unexplained pause
+       * before the reply starts), but `llmChatOnce` hasn't answered yet.
+       * Absence means the pass settled, which is also how every notice
+       * persisted before this field existed reads.
+       *
+       * Never reaches `chat_store`: the only save points are `runTurn`'s
+       * `finally` (`onTurnSettled`) and the pause checkpoint, and the
+       * compaction pass always resolves — success, empty summary, or the
+       * `catch` — before either can run. */
+      compactionRunning?: boolean;
       /** Set alongside `failed`/`errorMessage` when `isContextLengthError`
        * matches the raw error text — drives the "Сжать историю и
        * повторить" retry action in `AssistantConversation` (see

@@ -27,6 +27,11 @@ let steerCalls: string[] = [];
 let autoApprovedTools: string[] = [];
 let setAutoApprovedCalls: Array<[string, boolean]> = [];
 let onceResponse = "сводка";
+/** Same idea as `deferStream`, for the compaction summarizer — the only way
+ * to observe the notice card while its pass is still in flight. */
+let deferOnce = false;
+let pendingOnce: Array<(r: { content: string | null }) => void> = [];
+let onceThrows: string | null = null;
 /** When set, `streamLlmChat` hangs until the test resolves it — the only way
  * to observe the in-flight reply while live events arrive. */
 let deferStream = false;
@@ -56,7 +61,11 @@ mock.module("../lib/llm", () => ({
   steerLlmChat: async (text: string) => {
     steerCalls.push(text);
   },
-  llmChatOnce: async () => ({ content: onceResponse, toolCalls: [], usage: null }),
+  llmChatOnce: () => {
+    if (onceThrows) return Promise.reject(onceThrows);
+    if (deferOnce) return new Promise((resolve) => pendingOnce.push(resolve));
+    return Promise.resolve({ content: onceResponse, toolCalls: [], usage: null });
+  },
   listenLlmChatDelta: async (cb: Listener<{ delta: string }>) => {
     deltaListeners.push(cb);
     return () => {
@@ -155,6 +164,7 @@ type Callbacks = {
 function render(
   over: {
     providerId?: string | null;
+    contextLimit?: number | null;
     initialMessages?: ChatMessage[];
     initialPendingResume?: PendingApproval | null;
   } = {},
@@ -163,7 +173,7 @@ function render(
   const hook = renderHook(() =>
     useLlmChat(
       over.providerId === undefined ? "openai" : over.providerId,
-      null,
+      over.contextLimit ?? null,
       "docsOnly" as never,
       "agent" as never,
       null,
@@ -209,6 +219,9 @@ beforeEach(() => {
   toolResultListeners = [];
   contextUsageListeners = [];
   outcomes = [];
+  deferOnce = false;
+  pendingOnce = [];
+  onceThrows = null;
   streamThrows = null;
   streamCalls = [];
   resumeCalls = [];
@@ -944,5 +957,90 @@ describe("useLlmChat — the context ring", () => {
       await sent;
     });
     expect(result.current.contextTokens).toBeLessThan(900_000);
+  });
+});
+
+describe("useLlmChat — the compaction notice", () => {
+  /** Long enough that `planCompaction` has something to fold: the retry path
+   * keeps the last 6 real messages, so 8 leaves two to summarize. */
+  function longHistory(): ChatMessage[] {
+    return Array.from({ length: 8 }, (_, i) =>
+      i % 2 === 0
+        ? ({ id: `u${i}`, role: "user", content: `реплика ${i}` } as ChatMessage)
+        : ({
+            id: `a${i}`,
+            role: "assistant",
+            blocks: [{ type: "text", id: `b${i}`, content: `ответ ${i}` }],
+            streaming: false,
+          } as ChatMessage),
+    );
+  }
+
+  /** Drives a turn to a context-length failure, then kicks off the retry —
+   * the one path that compacts unconditionally, so the test doesn't have to
+   * manufacture enough tokens to cross `shouldCompact`'s ratio. */
+  async function failThenRetry(result: { current: ReturnType<typeof useLlmChat> }) {
+    streamThrows = "This model's maximum context length is 128000 tokens";
+    await act(async () => {
+      await result.current.sendMessage("мой вопрос");
+    });
+    const failedId = lastAssistant(result.current.messages)!.id;
+    streamThrows = null;
+    outcomes = [done("вышло")];
+    await act(async () => {
+      result.current.retryWithCompaction(failedId);
+      // Lets the pass reach its `await llmChatOnce` (and, when that call
+      // isn't deferred, settle) inside `act` — the notice's insertion is a
+      // state update, not a synchronous return value.
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  function noticeIndex(messages: ChatMessage[]) {
+    return messages.findIndex((m) => m.role === "assistant" && m.isCompactionNotice);
+  }
+
+  test("a card is shown while summarizing, above the user turn that triggered it", async () => {
+    const { result } = render({ initialMessages: longHistory() });
+    deferOnce = true;
+    await failThenRetry(result);
+
+    await waitFor(() => expect(noticeIndex(result.current.messages)).toBeGreaterThan(-1));
+    const at = noticeIndex(result.current.messages);
+    const notice = result.current.messages[at]!;
+    expect(notice).toMatchObject({ compactionRunning: true, streaming: false });
+    expect(textOf(notice)).toBe("Сжимаю историю…");
+    // The point of the placement: it describes folding away *older* history,
+    // so it sits above the question, not after the reply.
+    expect(result.current.messages[at + 1]).toMatchObject({ role: "user", content: "мой вопрос" });
+
+    await act(async () => {
+      pendingOnce.shift()!({ content: "сводка" });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    await waitFor(() => expect(result.current.messages[at]?.compactionRunning).toBeUndefined());
+    // Settled in place — one event resolving, not a second message.
+    expect(noticeIndex(result.current.messages)).toBe(at);
+    expect(result.current.messages.filter((m) => m.role === "assistant" && m.isCompactionNotice)).toHaveLength(1);
+    expect(textOf(result.current.messages[at])).toStartWith("История сжата");
+  });
+
+  test("a failed summarization leaves no notice behind", async () => {
+    const { result } = render({ initialMessages: longHistory() });
+    onceThrows = "provider unreachable";
+    await failThenRetry(result);
+
+    await waitFor(() => expect(textOf(lastAssistant(result.current.messages))).toBe("вышло"));
+    expect(noticeIndex(result.current.messages)).toBe(-1);
+  });
+
+  test("an empty summary leaves no notice behind either", async () => {
+    const { result } = render({ initialMessages: longHistory() });
+    onceResponse = "   ";
+    await failThenRetry(result);
+
+    await waitFor(() => expect(textOf(lastAssistant(result.current.messages))).toBe("вышло"));
+    expect(noticeIndex(result.current.messages)).toBe(-1);
   });
 });
