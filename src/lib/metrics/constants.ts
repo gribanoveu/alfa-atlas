@@ -19,6 +19,18 @@ export const DIMENSION_SLOT = {
    * "platform" and carries "web" for every event.
    */
   os: "4",
+  /**
+   * Set in Rust, not here — a session id is meaningless outside the
+   * running process. Listed so the registry stays complete.
+   */
+  sessionId: "5",
+  /**
+   * Which LLM provider a turn ran against. Only ever a *system* provider
+   * id from the bundled manifest: a user-configured provider is reported
+   * as "custom", enforced in Rust so no call site can leak the name
+   * someone typed (it has been seen to contain internal hostnames).
+   */
+  providerId: "6",
 } as const;
 
 /** Category prefix, so every Alfa Atlas event is greppable in the warehouse. */

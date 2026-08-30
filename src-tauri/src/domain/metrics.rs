@@ -78,6 +78,17 @@ pub const SLOT_OS: &str = "4";
 /// be stitched into a funnel (opened a project → asked the assistant →
 /// committed). Without it every event is an unconnected point.
 pub const SLOT_SESSION_ID: &str = "5";
+/// Which LLM provider a turn ran against. Cross-cutting: the same value
+/// slices assistant turns, tool runs, failures and setup events alike.
+///
+/// Only ever holds a **system** provider id from the bundled manifest.
+/// A user-configured provider is reported as `custom` — its id is a name
+/// the user typed and can carry an internal hostname or their own name.
+/// See `services::metrics::sanitize_dimensions`.
+pub const SLOT_PROVIDER: &str = "6";
+
+/// Stand-in reported for any provider that is not in the bundled manifest.
+pub const PROVIDER_CUSTOM: &str = "custom";
 
 /// A single struct event. Mirrors `Metric` + resolved `dimensionsMapping`
 /// from the kit: the frontend does the `{reportId: 'abc'} + {reportId:

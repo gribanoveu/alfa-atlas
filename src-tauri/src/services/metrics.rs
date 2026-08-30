@@ -13,8 +13,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::domain::metrics::{
-    MetricEvent, MetricsConfig, MetricsError, MetricsState, SLOT_APP_VERSION, SLOT_INSTALL_ID,
-    SLOT_OS, SLOT_SESSION_ID,
+    MetricEvent, MetricsConfig, MetricsError, MetricsState, PROVIDER_CUSTOM, SLOT_APP_VERSION,
+    SLOT_INSTALL_ID, SLOT_OS, SLOT_PROVIDER, SLOT_SESSION_ID,
 };
 use crate::infra::{metrics_queue, metrics_store, snowplow_client};
 use crate::services::metrics_session;
@@ -49,11 +49,29 @@ fn base_dimensions(install_id: &str) -> BTreeMap<String, String> {
     ])
 }
 
+/// Replaces any dimension value that could carry something identifying
+/// with a safe stand-in, at the boundary rather than at the call site.
+///
+/// Today that is slot 6: a provider id is free text the user typed when
+/// they configured their own endpoint, and has been seen in the wild to
+/// contain internal hostnames. Only ids that exist in the bundled manifest
+/// are real names; everything else becomes `custom`. Enforcing it here
+/// means no call site — present or future, frontend or Rust — can leak one
+/// by forgetting.
+fn sanitize_dimensions(dimensions: &mut BTreeMap<String, String>) {
+    if let Some(provider) = dimensions.get(SLOT_PROVIDER) {
+        if crate::infra::llm_provider_manifest::find_system_provider(provider).is_none() {
+            dimensions.insert(SLOT_PROVIDER.to_string(), PROVIDER_CUSTOM.to_string());
+        }
+    }
+}
+
 /// Merges the base slots in without letting them be overwritten: a call
 /// site that accidentally reuses slot 2 must not be able to replace the
 /// install id with something else.
 fn with_base_dimensions(mut event: MetricEvent, install_id: &str) -> MetricEvent {
     let mut dimensions = event.dimensions;
+    sanitize_dimensions(&mut dimensions);
     dimensions.extend(base_dimensions(install_id));
     event.dimensions = dimensions;
     event
@@ -421,6 +439,34 @@ mod tests {
     }
 
     #[test]
+    fn a_user_configured_provider_name_never_leaves_the_machine() {
+        let event = MetricEvent {
+            dimensions: BTreeMap::from([(
+                SLOT_PROVIDER.to_string(),
+                "eugene-llm.internal.corp".to_string(),
+            )]),
+            ..app_start_event()
+        };
+        let event = with_base_dimensions(event, "install-id");
+        assert_eq!(event.dimensions[SLOT_PROVIDER], PROVIDER_CUSTOM);
+    }
+
+    #[test]
+    fn a_bundled_provider_is_reported_under_its_real_id() {
+        let known = crate::infra::llm_provider_manifest::system_providers()
+            .first()
+            .expect("this build ships at least one system provider")
+            .id
+            .clone();
+        let event = MetricEvent {
+            dimensions: BTreeMap::from([(SLOT_PROVIDER.to_string(), known.clone())]),
+            ..app_start_event()
+        };
+        let event = with_base_dimensions(event, "install-id");
+        assert_eq!(event.dimensions[SLOT_PROVIDER], known);
+    }
+
+    #[test]
     fn a_call_site_cannot_overwrite_a_base_slot() {
         let hijacked = MetricEvent {
             dimensions: BTreeMap::from([(SLOT_INSTALL_ID.to_string(), "spoofed".to_string())]),
@@ -480,6 +526,52 @@ mod tests {
                 "nothing may be dropped when the collector never confirmed"
             );
         });
+    }
+
+    /// Opt-in: pushes one event of every wave-2 shape through the real
+    /// queue to the real collector, so the payload — including slot 6 —
+    /// is validated against what actually accepts it.
+    /// `cargo test --lib -- --ignored --nocapture live_assistant`
+    #[test]
+    #[ignore]
+    fn live_assistant_events_are_accepted() {
+        let config = MetricsConfig::resolve().expect("a metrics section");
+        let provider = crate::infra::llm_provider_manifest::system_providers()
+            .first()
+            .expect("a system provider")
+            .id
+            .clone();
+
+        let shapes: Vec<(&str, &str, Option<String>, Option<f64>, String)> = vec![
+            ("Settle -> Turn", "done", Some("docsOnly".into()), Some(12.0), provider.clone()),
+            ("Fail -> Turn", "rateLimit", None, None, provider.clone()),
+            ("Decide -> Tool calls", "approved", None, Some(3.0), provider.clone()),
+            ("Run -> Tool", "ok", Some("readFile".into()), Some(30.0), provider.clone()),
+            ("Compact -> Context", "auto", None, Some(8.0), provider.clone()),
+            ("Switch -> Access mode", "user", Some("fullRepo".into()), None, provider.clone()),
+            ("Switch -> Access mode", "assistant-granted", Some("fullRepo".into()), None, provider.clone()),
+            ("Switch -> Access mode", "assistant-denied", Some("fullRepo".into()), None, provider.clone()),
+            ("Switch -> Conversation mode", "assistant-denied", Some("agent".into()), None, provider.clone()),
+            // A user-configured provider must arrive as `custom`.
+            ("Settle -> Turn", "error", None, Some(1.0), "eugene-llm.internal".into()),
+        ];
+
+        for (action, label, property, value, provider_id) in shapes {
+            let event = MetricEvent {
+                category: "ALFA-ATLAS > Assistant".to_string(),
+                action: action.to_string(),
+                label: label.to_string(),
+                property,
+                value,
+                dimensions: BTreeMap::from([(SLOT_PROVIDER.to_string(), provider_id)]),
+            };
+            enqueue_event(&config, event).expect("enqueue");
+        }
+
+        match flush() {
+            Ok(n) => println!("collector accepted {n} assistant event(s)"),
+            Err(e) => panic!("flush failed: {e}"),
+        }
     }
 
     /// Opt-in end-to-end check of the real queue against the real

@@ -52,6 +52,24 @@ import {
   shouldCompact,
   type CompactionCache,
 } from "../lib/contextCompaction";
+import { trackMetric } from "../lib/metrics";
+import { classifyLlmError } from "../lib/metrics/classifyLlmError";
+import { METRICS } from "../data/metricsCatalog";
+
+/** Reads the `mode` a `requestModeSwitch` call is asking for. Cosmetic-grade
+ * parsing, like `chatBlocks.toolCallPaths`: arguments that don't parse
+ * contribute `unknown` rather than throwing, and the value is checked
+ * against the closed set so a malformed one can never widen the metric's
+ * vocabulary. */
+function requestedConversationMode(argumentsJson: string): string {
+  try {
+    const parsed: unknown = JSON.parse(argumentsJson);
+    const mode = (parsed as { mode?: unknown } | null)?.mode;
+    return mode === "agent" || mode === "plan" || mode === "question" ? mode : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 import {
   cancelLlmChat,
   listenLlmChatDelta,
@@ -270,12 +288,57 @@ export function useLlmChat(
   // if that remount guarantee is ever weakened later.
   const compactionCacheRef = useRef<CompactionCache | null>(null);
 
+  /** `collectDecisions` is deliberately dependency-free (it must not be
+   * re-created mid-round), so the provider is read through a ref. */
+  const providerIdRef = useRef<string | null>(providerId);
+  providerIdRef.current = providerId;
+
+  /** Reports every mode the assistant asked for in this approval round,
+   * together with the user's answer. Emitted here rather than where the
+   * switch is finally applied, because this is the only place that knows
+   * both what was asked and whether it was granted — a denied request
+   * never reaches the apply path at all, and counting only applied
+   * switches would silently drop every refusal. */
+  const reportModeRequests = useCallback(
+    (calls: PendingToolCall[], approvedIds: Set<string>) => {
+      for (const call of calls) {
+        const isAccess = call.name === "requestFullRepoAccess";
+        const isConversation = call.name === "requestModeSwitch";
+        if (!isAccess && !isConversation) continue;
+
+        void trackMetric(
+          isAccess
+            ? METRICS.ASSISTANT.SWITCH_ACCESS_MODE
+            : METRICS.ASSISTANT.SWITCH_CONVERSATION_MODE,
+          { providerId: providerIdRef.current ?? undefined },
+          {
+            label: approvedIds.has(call.id) ? "assistant-granted" : "assistant-denied",
+            property: isAccess ? "fullRepo" : requestedConversationMode(call.arguments),
+          },
+        );
+      }
+    },
+    [],
+  );
+
+
+  // Per-turn tool tallies, kept in refs rather than derived from message
+  // state at settle time: the counts must be exact and read synchronously,
+  // and a React state updater can run twice under StrictMode.
+  /** Tool call id → tool name, so a result event can name its own call. */
+  const toolNamesRef = useRef<Map<string, string>>(new Map());
+  /** `"<tool>|ok"` / `"<tool>|error"` → how many such calls this turn made. */
+  const turnToolTallyRef = useRef<Map<string, number>>(new Map());
+  /** Access mode the in-flight turn was sent with, for its settle event. */
+  const turnModeRef = useRef<AiAccessMode | null>(null);
+
   /** Shows every call in `calls` inline in the transcript as a
    * `"pendingApproval"` block. Resolves once every call has a decision —
    * Approve/Deny (with timeout) for mutating/mode tools, or Submit/Skip
    * (no timeout) for the `PAUSE_ONLY_TOOLS`, which collect something from
    * the user rather than sanctioning a side effect. */
-  const collectDecisions = useCallback((calls: PendingToolCall[]): Promise<ToolCallDecision[]> => {
+  const collectDecisions = useCallback(
+    (calls: PendingToolCall[]): Promise<ToolCallDecision[]> => {
     return new Promise((resolve) => {
       type Entry = { approved: boolean; answer?: AskUserAnswerPayload; artifactId?: string };
       const decided = new Map<string, Entry>();
@@ -290,17 +353,37 @@ export function useLlmChat(
       const finalizeIfDone = () => {
         if (decided.size !== calls.length) return;
         activeApprovalRef.current = null;
-        resolve(
-          calls.map((c) => {
-            const entry = decided.get(c.id);
-            return {
-              id: c.id,
-              approved: entry?.approved ?? false,
-              ...(entry?.answer ? { answer: entry.answer } : {}),
-              ...(entry?.artifactId ? { artifactId: entry.artifactId } : {}),
-            };
-          }),
+        const decisions = calls.map((c) => {
+          const entry = decided.get(c.id);
+          return {
+            id: c.id,
+            approved: entry?.approved ?? false,
+            ...(entry?.answer ? { answer: entry.answer } : {}),
+            ...(entry?.artifactId ? { artifactId: entry.artifactId } : {}),
+          };
+        });
+        // One event per approval round rather than per call: a round can
+        // hold a dozen, and the question ("do people let the assistant
+        // act") is answered at round granularity.
+        const approved = decisions.filter((d) => d.approved).length;
+        reportModeRequests(
+          calls,
+          new Set(decisions.filter((d) => d.approved).map((d) => d.id)),
         );
+        void trackMetric(
+          METRICS.ASSISTANT.DECIDE_TOOLS,
+          { providerId: providerIdRef.current ?? undefined },
+          {
+            label:
+              approved === decisions.length
+                ? "approved"
+                : approved === 0
+                  ? "denied"
+                  : "mixed",
+            value: decisions.length,
+          },
+        );
+        resolve(decisions);
       };
 
       const decide = (
@@ -365,8 +448,10 @@ export function useLlmChat(
       if (needAnswerSoundEnabledRef.current && calls.some((c) => PAUSE_ONLY_TOOLS.has(c.name))) {
         playNeedAnswerSound();
       }
-    });
-  }, []);
+      });
+    },
+    [reportModeRequests],
+  );
 
   /** Passed down to `AssistantToolApprovalGroup`'s Approve/Deny buttons. */
   const decideToolCall = useCallback((id: string, approved: boolean, trust: boolean) => {
@@ -486,6 +571,7 @@ export function useLlmChat(
     let cancelled = false;
     void listenLlmToolCall(({ id, name, arguments: argumentsJson }) => {
       const autoApproved = autoApprovedIdsRef.current.has(id);
+      toolNamesRef.current.set(id, name);
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) =>
           appendToolCallBlock(blocks, { id, name, argumentsJson, autoApproved }),
@@ -507,6 +593,12 @@ export function useLlmChat(
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenLlmToolResult(({ id, result, error: toolError }) => {
+      const toolName = toolNamesRef.current.get(id);
+      if (toolName) {
+        const key = `${toolName}|${toolError ? "error" : "ok"}`;
+        turnToolTallyRef.current.set(key, (turnToolTallyRef.current.get(key) ?? 0) + 1);
+        toolNamesRef.current.delete(id);
+      }
       if (result?.tool === "planCreated" || result?.tool === "planUpdated") {
         setActivePlanId(result.result.planId);
       } else if (result?.tool === "todoWritten" || result?.tool === "todoUpdated") {
@@ -639,6 +731,40 @@ export function useLlmChat(
     [providerId, activeFilePath, conversationMode, collectDecisions, setTodos, onTurnPaused],
   );
 
+  /** Reports the turn's outcome and its tool usage, then clears the
+   * per-turn tallies. One `Settle -> Turn` per turn whatever happened, so
+   * a success rate is a count over `label`; tool usage is folded to one
+   * event per tool per outcome, so a thirty-call turn costs a handful of
+   * events rather than thirty. */
+  const reportTurnSettled = useCallback(
+    (outcome: "done" | "cancelled" | "error", turnStartedAt: number) => {
+      const seconds = Math.round((Date.now() - turnStartedAt) / 1000);
+      const provider = providerId ?? undefined;
+
+      void trackMetric(
+        METRICS.ASSISTANT.SETTLE_TURN,
+        { providerId: provider },
+        {
+          label: outcome,
+          property: turnModeRef.current ?? undefined,
+          value: seconds,
+        },
+      );
+
+      for (const [key, count] of turnToolTallyRef.current) {
+        const [tool, status] = key.split("|");
+        void trackMetric(
+          METRICS.ASSISTANT.RUN_TOOL,
+          { providerId: provider },
+          { label: status, property: tool, value: count },
+        );
+      }
+      turnToolTallyRef.current.clear();
+      toolNamesRef.current.clear();
+    },
+    [providerId],
+  );
+
   /** Applies a `"done"`/`"cancelled"` outcome's authoritative final text to
    * the in-flight assistant message — shared by `runTurn` and the
    * cold-hydrate effect below, same as `runPendingLoop`. */
@@ -679,8 +805,9 @@ export function useLlmChat(
       if (!stoppedByUser && taskDoneSoundEnabledRef.current) {
         playTaskDoneSound();
       }
+      reportTurnSettled(stoppedByUser ? "cancelled" : "done", turnStartedAt);
     },
-    [setTodos],
+    [setTodos, reportTurnSettled],
   );
 
   /** Marks the in-flight assistant message as failed — shared by `runTurn`
@@ -707,7 +834,15 @@ export function useLlmChat(
           : m,
       ),
     );
-  }, []);
+    // The class, never the provider's own error text — that is free-form
+    // and can carry a prompt excerpt or an internal URL.
+    void trackMetric(
+      METRICS.ASSISTANT.FAIL_TURN,
+      { providerId: providerId ?? undefined },
+      { label: classifyLlmError(message) },
+    );
+    reportTurnSettled("error", turnStartedAt);
+  }, [providerId, reportTurnSettled]);
 
   /** Runs one full turn: an optional proactive history-compaction pass,
    * building `wireMessages` from `priorTurns` (replaying the cached
@@ -735,6 +870,9 @@ export function useLlmChat(
       if (!providerId) return;
       setSending(true);
       const turnStartedAt = Date.now();
+      turnModeRef.current = accessMode;
+      turnToolTallyRef.current.clear();
+      toolNamesRef.current.clear();
 
       const real = realMessages(priorTurns);
       const scoped = sliceMessagesForPlanExecution(real, opts.planExecutionStart === true);
@@ -770,6 +908,14 @@ export function useLlmChat(
             const response = await llmChatOnce(providerId, [{ role: "user", content: prompt, toolCallId: null }]);
             const summaryText = response.content?.trim();
             if (summaryText) {
+              void trackMetric(
+                METRICS.ASSISTANT.COMPACT_CONTEXT,
+                { providerId: providerId ?? undefined },
+                {
+                  label: opts.aggressiveCompaction ? "retry" : "auto",
+                  value: compaction.toSummarize.length,
+                },
+              );
               const fromOrdinal = real.findIndex((m) => m.id === compaction.toSummarize[0]!.id) + 1;
               const toOrdinal = real.findIndex((m) => m.id === compaction.toSummarize[compaction.toSummarize.length - 1]!.id) + 1;
               compactionCacheRef.current = { summaryText, boundaryMessageId: compaction.newBoundaryId };

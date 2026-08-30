@@ -41,6 +41,8 @@ import { AssistantVisualCard, isVisualToolBlock } from "./AssistantVisualCard";
 import { openVisualTab } from "../../lib/visuals";
 import { TodoProgressWidget } from "./TodoProgressWidget";
 import { PlanProgressWidget } from "./PlanProgressWidget";
+import { trackMetric } from "../../lib/metrics";
+import { METRICS } from "../../data/metricsCatalog";
 
 const ACCESS_MODE_OPTIONS: { value: AiAccessMode; label: string; Icon: LucideIcon }[] = [
   { value: "docsOnly", label: "Документация", Icon: FileText },
@@ -1142,10 +1144,32 @@ export function AssistantConversation({
         ) : null}
       </div>
       <div className="assistant-model-bar">
-        <ChatModeSelect mode={conversationMode} onChange={onConversationModeChange} disabled={sending} />
+        <ChatModeSelect
+          mode={conversationMode}
+          onChange={(next) => {
+            // Reported here, at the control itself, rather than inside
+            // `onConversationModeChange` — that callback is also how an
+            // assistant-requested switch gets applied, and the two must
+            // not be conflated. The assistant's side is reported from
+            // `useLlmChat`, where the user's answer is known.
+            void trackMetric(
+              METRICS.ASSISTANT.SWITCH_CONVERSATION_MODE,
+              undefined,
+              { label: "user", property: next },
+            );
+            onConversationModeChange(next);
+          }}
+          disabled={sending}
+        />
         <AccessModeToggle
           mode={accessMode}
-          onChange={onAccessModeChange}
+          onChange={(next) => {
+            void trackMetric(METRICS.ASSISTANT.SWITCH_ACCESS_MODE, undefined, {
+              label: "user",
+              property: next,
+            });
+            onAccessModeChange(next);
+          }}
           disabled={sending || accessModeBusy}
         />
         <div className="clone-select assistant-model-select" ref={modelSelectRef}>

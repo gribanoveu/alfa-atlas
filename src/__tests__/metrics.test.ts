@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { mapDimensions } from "../lib/metrics/mapDimensions";
 import { DIMENSION_SLOT, ORGANIZATION_DIMENSION_SLOT } from "../lib/metrics/constants";
 import { METRICS } from "../data/metricsCatalog";
+import { classifyLlmError } from "../lib/metrics/classifyLlmError";
 
 let invoked: Array<{ cmd: string; args: unknown }> = [];
 let invokeThrows: string | null = null;
@@ -55,11 +56,28 @@ describe("mapDimensions", () => {
   });
 });
 
+const ALL_EVENTS = [...Object.values(METRICS.APP), ...Object.values(METRICS.ASSISTANT)];
+
 describe("metrics catalog", () => {
   test("no event claims the slot reserved for organizationId", () => {
-    for (const event of Object.values(METRICS.APP)) {
+    for (const event of ALL_EVENTS) {
       const slots = Object.values(event.dimensionsMapping ?? {});
       expect(slots).not.toContain(ORGANIZATION_DIMENSION_SLOT);
+    }
+  });
+
+  test("every event maps only to slots in the registry", () => {
+    const registered = new Set<string>(Object.values(DIMENSION_SLOT));
+    for (const event of ALL_EVENTS) {
+      for (const slot of Object.values(event.dimensionsMapping ?? {})) {
+        expect(registered).toContain(slot);
+      }
+    }
+  });
+
+  test("every assistant event is sliceable by provider", () => {
+    for (const event of Object.values(METRICS.ASSISTANT)) {
+      expect(event.dimensionsMapping?.providerId).toBe(DIMENSION_SLOT.providerId);
     }
   });
 
@@ -74,6 +92,40 @@ describe("metrics catalog", () => {
   test("every registered slot is distinct", () => {
     const slots = Object.values(DIMENSION_SLOT);
     expect(new Set(slots).size).toBe(slots.length);
+  });
+});
+
+describe("classifyLlmError", () => {
+  test.each([
+    ["Rate limit exceeded, retry in 30s", "rateLimit"],
+    ["HTTP 429 Too Many Requests", "rateLimit"],
+    ["This model's maximum context length is 8192 tokens", "contextLength"],
+    ["http status 401: invalid api key", "auth"],
+    ["Connection timed out after 30000ms", "network"],
+    ["tls handshake failed: certificate expired", "network"],
+    ["http status 500: internal server error", "provider"],
+    ["something nobody has seen before", "unknown"],
+  ])("%s → %s", (message, expected) => {
+    expect(classifyLlmError(message)).toBe(expected);
+  });
+
+  test("a rate limit is not mistaken for a generic provider error", () => {
+    expect(classifyLlmError("http status 429: rate limit")).toBe("rateLimit");
+  });
+
+  test("returns a member of the closed set for any input", () => {
+    const allowed = [
+      "rateLimit", "contextLength", "auth", "network", "cancelled", "provider", "unknown",
+    ];
+    for (const message of ["", "/Users/eugene/secret.adoc not found", "стоп"]) {
+      expect(allowed).toContain(classifyLlmError(message));
+    }
+  });
+
+  test("never returns any part of the original message", () => {
+    const leaky =
+      "failed calling https://llm.internal.corp/v1 for user eugene: /Users/eugene/doc.adoc";
+    expect(leaky).not.toContain(classifyLlmError(leaky));
   });
 });
 
@@ -127,6 +179,73 @@ describe("trackMetric", () => {
     for (const forbidden of ["/Users", "/home", "C:\\", ".git", "@", "http"]) {
       expect(sent).not.toContain(forbidden);
     }
+  });
+
+  test("a failed turn sends the error class, never the provider's text", async () => {
+    const raw = "http status 500 at https://llm.internal.corp/v1 for /Users/eugene/doc.adoc";
+    await trackMetric(
+      METRICS.ASSISTANT.FAIL_TURN,
+      { providerId: "alfagen" },
+      { label: classifyLlmError(raw) },
+    );
+
+    const sent = JSON.stringify(invoked[0].args);
+    expect(sent).toContain("provider");
+    for (const forbidden of ["/Users", "internal.corp", "http", "doc.adoc"]) {
+      expect(sent).not.toContain(forbidden);
+    }
+  });
+
+  test("tool usage is reported per tool with a count, not per call", async () => {
+    await trackMetric(
+      METRICS.ASSISTANT.RUN_TOOL,
+      { providerId: "alfagen" },
+      { label: "ok", property: "readFile", value: 30 },
+    );
+
+    expect(invoked).toHaveLength(1);
+    expect(invoked[0].args).toEqual({
+      event: {
+        category: "ALFA-ATLAS > Assistant",
+        action: "Run -> Tool",
+        label: "ok",
+        property: "readFile",
+        value: 30,
+        dimensions: { "6": "alfagen" },
+      },
+    });
+  });
+
+  test.each([
+    ["user", "fullRepo"],
+    ["assistant-granted", "fullRepo"],
+    ["assistant-denied", "fullRepo"],
+  ])("an access-mode switch records %s", async (origin, mode) => {
+    await trackMetric(METRICS.ASSISTANT.SWITCH_ACCESS_MODE, undefined, {
+      label: origin,
+      property: mode,
+    });
+
+    expect(invoked[0].args).toEqual({
+      event: {
+        category: "ALFA-ATLAS > Assistant",
+        action: "Switch -> Access mode",
+        label: origin,
+        property: mode,
+        value: null,
+        dimensions: {},
+      },
+    });
+  });
+
+  test("a denied request is distinguishable from one never made", async () => {
+    await trackMetric(METRICS.ASSISTANT.SWITCH_CONVERSATION_MODE, undefined, {
+      label: "assistant-denied",
+      property: "agent",
+    });
+    const event = (invoked[0].args as { event: { label: string; property: string } }).event;
+    expect(event.label).toBe("assistant-denied");
+    expect(event.property).toBe("agent");
   });
 
   test("never rejects, so a metrics failure cannot break the caller's flow", async () => {
