@@ -27,6 +27,7 @@ pub mod llm_rate_limit;
 pub mod llm_session;
 pub mod memory_log;
 pub mod memory_pipeline;
+pub mod metrics;
 pub mod openapi;
 pub mod plans;
 pub mod project_layout;

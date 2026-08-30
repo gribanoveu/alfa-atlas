@@ -11,6 +11,7 @@ pub mod layout;
 pub mod llm;
 pub mod memory_log;
 pub mod memory_pipeline;
+pub mod metrics;
 pub mod onboarding;
 pub mod openapi;
 pub mod plans;

@@ -157,6 +157,21 @@ pub fn run() {
             app.manage(Arc::new(SteeringQueue::default()));
             app.manage(Arc::new(services::memory_pipeline::MemoryExtractGuard::new()));
 
+            // Fire-and-forget: the install event is reported at most once
+            // per profile, and a failure (typically: launched off the
+            // corporate network) must neither delay startup nor surface to
+            // the user. An unconfirmed send leaves the state flag unset, so
+            // the next launch simply tries again.
+            tauri::async_runtime::spawn(async {
+                match tauri::async_runtime::spawn_blocking(services::metrics::report_install_once)
+                    .await
+                {
+                    Ok(Err(e)) => eprintln!("metrics: install report failed: {e}"),
+                    Err(e) => eprintln!("metrics: install report task failed: {e}"),
+                    Ok(Ok(_)) => {}
+                }
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -261,6 +276,9 @@ pub fn run() {
             commands::prefs::get_general_prefs,
             commands::prefs::set_general_prefs,
             commands::prefs::get_settings_paths,
+            commands::metrics::metrics_status,
+            commands::metrics::metrics_set_enabled,
+            commands::metrics::metrics_track,
             commands::onboarding::get_onboarding_state,
             commands::onboarding::mark_onboarding_completed,
             commands::workspace_index::build_index,

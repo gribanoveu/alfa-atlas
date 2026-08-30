@@ -27,6 +27,7 @@ use std::sync::LazyLock;
 
 use crate::domain::embeddings::EmbeddingPreset;
 use crate::domain::llm::LlmProviderPreset;
+use crate::domain::metrics::MetricsPreset;
 use crate::domain::llm_rate_limit::RateLimitPreset;
 use serde::Deserialize;
 
@@ -45,6 +46,12 @@ struct SystemProvidersManifest {
     /// clears `llm`.
     #[serde(default)]
     rate_limits: Vec<RateLimitPreset>,
+    /// Alfa Metrics collector, appIds and trust root. Same rebrand story
+    /// as `llm`: a fork edits this section instead of any `.rs` file, and
+    /// deleting it outright is a valid manifest — that is how a fork ships
+    /// with no telemetry at all.
+    #[serde(default)]
+    metrics: Option<MetricsPreset>,
 }
 
 static PARSED: LazyLock<SystemProvidersManifest> = LazyLock::new(|| {
@@ -60,6 +67,12 @@ pub fn system_providers() -> &'static [LlmProviderPreset] {
 
 pub fn find_system_provider(id: &str) -> Option<&'static LlmProviderPreset> {
     PARSED.llm.iter().find(|preset| preset.id == id)
+}
+
+/// `None` when the manifest ships no `metrics` section — metrics are then
+/// disabled build-wide and nothing is ever sent.
+pub fn metrics_preset() -> Option<&'static MetricsPreset> {
+    PARSED.metrics.as_ref()
 }
 
 pub fn rate_limit_presets() -> &'static [RateLimitPreset] {
@@ -133,6 +146,43 @@ mod tests {
         );
     }
 
+    /// The metrics collector chains up to the Russian Trusted Root CA,
+    /// which is absent from the WebPki roots ureq bundles — an agent
+    /// without this cert fails the handshake with `UnknownIssuer`.
+    /// Round-tripped through `build_agent` (not just asserted non-empty)
+    /// so a corrupting edit fails a test instead of silently shipping an
+    /// unparseable PEM.
+    #[test]
+    fn bundled_manifest_metrics_trust_cert_is_present_and_parses() {
+        let pem = metrics_preset()
+            .expect("this build ships a metrics section")
+            .trusted_cert_pem
+            .as_deref()
+            .expect("metrics ships with a trusted cert");
+        assert!(pem.contains("BEGIN CERTIFICATE"));
+        assert!(
+            crate::infra::http_agent::build_agent(Some(pem)).is_ok(),
+            "bundled metrics trust cert must be valid, parseable PEM"
+        );
+    }
+
+    #[test]
+    fn bundled_manifest_metrics_keeps_dev_and_release_apart() {
+        let preset = metrics_preset().expect("this build ships a metrics section");
+        assert_ne!(
+            preset.app_id, preset.dev_app_id,
+            "appId is the only thing separating dev traffic from real usage"
+        );
+    }
+
+    /// The production collector is deliberately out of scope: everything
+    /// posts to one endpoint and is told apart by appId.
+    #[test]
+    fn bundled_manifest_metrics_does_not_target_the_production_collector() {
+        let preset = metrics_preset().expect("this build ships a metrics section");
+        assert_eq!(preset.domain, "testjmb.alfabank.ru");
+    }
+
     #[test]
     fn find_system_provider_is_none_for_an_unknown_id() {
         assert!(find_system_provider("does-not-exist").is_none());
@@ -147,6 +197,10 @@ mod tests {
             serde_yaml::from_str("llm: []\nembedding: {}\n").unwrap();
         assert!(manifest.llm.is_empty());
         assert!(manifest.rate_limits.is_empty());
+        assert!(
+            manifest.metrics.is_none(),
+            "a manifest with no metrics section must parse — that is how a fork ships without telemetry"
+        );
     }
 
     #[test]
