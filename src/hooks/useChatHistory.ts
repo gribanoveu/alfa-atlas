@@ -174,6 +174,8 @@ export function useChatHistory(repoRoot: string | null) {
     (messages: ChatMessage[], todos: Task[], activePlanId: string | null = null) => {
       if (!repoRoot || !currentChatId || messages.length === 0) return;
       const title = deriveChatTitle(messages);
+      setCurrentMessages(messages);
+      setCurrentTodos(todos);
       setCurrentActivePlanId(activePlanId);
       setCurrentPendingResume(null);
       void saveChat(repoRoot, currentChatId, title, messages, todos, activePlanId, null)
@@ -199,6 +201,8 @@ export function useChatHistory(repoRoot: string | null) {
     (messages: ChatMessage[], todos: Task[], activePlanId: string | null, pendingResume: PendingApproval) => {
       if (!repoRoot || !currentChatId || messages.length === 0) return;
       const title = deriveChatTitle(messages);
+      setCurrentMessages(messages);
+      setCurrentTodos(todos);
       setCurrentActivePlanId(activePlanId);
       setCurrentPendingResume(pendingResume);
       void saveChat(repoRoot, currentChatId, title, messages, todos, activePlanId, pendingResume)

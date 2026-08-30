@@ -253,14 +253,30 @@ describe("useChatHistory — saving", () => {
     const { result } = renderHook(() => useChatHistory("/repo"));
     await waitFor(() => expect(result.current.currentChatId).toBe("a"));
 
+    const turn = [msg("вопрос"), msg("ответ")];
     await act(async () => {
-      result.current.saveTurn([msg("вопрос")], []);
+      result.current.saveTurn(turn, []);
       await Promise.resolve();
     });
 
     expect(saved).toHaveLength(1);
     expect(saved[0]?.pendingResume).toBeNull();
+    expect(result.current.currentMessages).toEqual(turn);
     await waitFor(() => expect(extractCalls).toEqual(["a"]));
+  });
+
+  test("a settled turn on a fresh chat updates currentMessages for export", async () => {
+    const { result } = renderHook(() => useChatHistory("/repo"));
+    await waitFor(() => expect(result.current.currentChatId).not.toBeNull());
+    expect(result.current.currentMessages).toEqual([]);
+
+    const turn = [msg("первый вопрос"), msg("первый ответ")];
+    await act(async () => {
+      result.current.saveTurn(turn, []);
+      await Promise.resolve();
+    });
+
+    expect(result.current.currentMessages).toEqual(turn);
   });
 
   test("an empty transcript is not saved", async () => {
@@ -287,6 +303,7 @@ describe("useChatHistory — saving", () => {
 
     expect(saved[0]?.pendingResume).toMatchObject({ round: 1 });
     expect(result.current.currentPendingResume).toMatchObject({ round: 1 });
+    expect(result.current.currentMessages).toEqual([msg("вопрос")]);
     expect(extractCalls).toEqual([]);
   });
 
