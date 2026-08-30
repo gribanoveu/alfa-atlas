@@ -14,7 +14,9 @@
 //! Provider resolution and the resident provider cache live next door in
 //! `services::llm_session`.
 
-use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -27,7 +29,7 @@ use crate::domain::llm::{
     ChatStreamResult,
     ChatStreamOutcome, ChatStreamReasoning, LlmMessage, LlmProvider, LlmRole, LlmSettings,
     LlmToolCall, LlmToolDefinition, PendingApproval, PendingToolCall, ToolCallDecision,
-    SteeringAppliedEvent, ToolCallEvent, ToolResultEvent, STEERING_PREFIX,
+    SteeringAppliedEvent, SteeringNote, SteeringSource, ToolCallEvent, ToolResultEvent,
 };
 use crate::domain::paths;
 use crate::domain::repo_index::FileId;
@@ -68,6 +70,89 @@ fn resolve_active_file(scope: &ToolScope, active_file_path: Option<String>) -> O
 /// `SemanticSearch`-heavy sequence now cuts off around 10 calls instead of
 /// 20.
 const MAX_TOOL_BUDGET: u32 = 250;
+
+/// The note the missing-diagram backstop pushes (see the
+/// `needs_diagram_nudge` branch in `run_tool_loop`). Russian, like
+/// `STEERING_PREFIX` and the tool-result strings around it, so the model
+/// doesn't switch languages mid-turn. Deliberately names no wire tool —
+/// the system prompt forbids those in user-facing text, and this note sits
+/// close enough to the model's own prose to leak. Equally deliberately, it
+/// leaves the model a way out: a false-positive trigger should cost one
+/// short round, not a diagram nobody wanted.
+const MISSING_DIAGRAM_NOTE: &str = "Пользователь просил схему или диаграмму, но за этот ход ты ни разу не вызвал инструмент рисования — значит, карточки со схемой в чате нет, что бы ни было написано в тексте ответа. Нарисуй схему сейчас, опираясь на уже прочитанный код. Не пересказывай ответ заново: только вызов инструмента и, если нужно, одна-две фразы. Если схема здесь действительно не нужна, коротко скажи об этом вместо рисования.";
+
+/// Word stems that make a request a drawing request. Matched against the
+/// last user message, lowercased. Stems rather than whole words because
+/// Russian inflects: «нарисуй», «нарисовать», «диаграмму», «схемой».
+const DIAGRAM_REQUEST_STEMS: &[&str] =
+    &["нарису", "нарисов", "начерти", "диаграмм", "схем", "визуализ", "diagram"];
+
+/// Whether the turn's originating request asked for a picture. Reads the
+/// last `User` message rather than taking a parameter so both entry points
+/// (`stream` and `stream_resume`) get the same answer without threading a
+/// flag through the resumable checkpoint — on a resume the user's message
+/// is still the last `User` role in `history`, everything after it being
+/// assistant/tool turns.
+/// Whether a `visualize` call already happened earlier in this turn.
+///
+/// `run_tool_loop` is re-entered from scratch on every resume, so without
+/// this a turn that drew its diagram and *then* paused on a confirmation
+/// gate would come back with the flag cleared and be nudged for a card it
+/// already has. Presence of the call is enough — a `visualize` that failed
+/// leaves a visible error card, so the user is not left holding a
+/// reference to nothing either way.
+fn history_has_a_visualize_call(history: &[LlmMessage]) -> bool {
+    history
+        .iter()
+        .flat_map(|m| m.tool_calls.iter())
+        .any(|call| call.name == "visualize")
+}
+
+fn last_user_message_asks_for_a_diagram(history: &[LlmMessage]) -> bool {
+    history
+        .iter()
+        .rev()
+        .find(|m| m.role == LlmRole::User)
+        .and_then(|m| m.content.as_deref())
+        .map(|text| {
+            let lowered = text.to_lowercase();
+            DIAGRAM_REQUEST_STEMS.iter().any(|stem| lowered.contains(stem))
+        })
+        .unwrap_or(false)
+}
+
+/// What the model reads instead of a file it already has verbatim, earlier
+/// in this same turn's history.
+const REPEAT_READ_NOTE: &str =
+    "Этот файл уже прочитан в этом ходе, в том же диапазоне, и с тех пор не изменился — результат выше в переписке, повторно он не приводится.";
+
+/// Replaces the body of a `readFile` result the model has already been
+/// given, byte for byte, earlier in this turn.
+///
+/// Not a correctness fix — a re-read is legitimate, and after a
+/// `writeFile`/`editFile` it is required. It is a context fix: in the
+/// transcript that prompted this, one service file was read three times and
+/// two more twice, each time resending the whole file on every subsequent
+/// round of the turn. Keyed on the raw arguments so a different line range
+/// is a different read, and gated on a content hash so an edited file comes
+/// back in full.
+fn dedupe_repeat_read(
+    seen: &mut HashMap<String, u64>,
+    call: &LlmToolCall,
+    outcome: &Result<ToolResult, String>,
+    content: String,
+) -> String {
+    let Ok(ToolResult::File { content: file, .. }) = outcome else {
+        return content;
+    };
+    let mut hasher = DefaultHasher::new();
+    file.hash(&mut hasher);
+    let hash = hasher.finish();
+    match seen.insert(call.arguments.clone(), hash) {
+        Some(previous) if previous == hash => REPEAT_READ_NOTE.to_string(),
+        _ => content,
+    }
+}
 
 /// One round's cost against `MAX_TOOL_BUDGET` — the sum of
 /// `ToolName::loop_weight` over every call the round contains (a round can
@@ -159,6 +244,15 @@ fn run_tool_loop(
     mut resume: Option<(Vec<LlmToolCall>, Vec<ToolCallDecision>)>,
     mut todos: Vec<Task>,
 ) -> Result<ChatStreamOutcome, String> {
+    // Computed once, before the loop can append anything of its own: the
+    // nudge below is itself a `User` message mentioning «диаграмма», so
+    // recomputing per round would make it self-triggering.
+    let diagram_requested = last_user_message_asks_for_a_diagram(&history);
+    let mut visualize_ok = history_has_a_visualize_call(&history);
+    let mut diagram_nudge_sent = false;
+    // Arguments of every `readFile` this turn → hash of what came back.
+    let mut reads_this_turn: HashMap<String, u64> = HashMap::new();
+
     loop {
         // Checkpoint 1 — see this function's doc comment for exactly which
         // "stop" scenarios this catches. Placed before the iteration-limit
@@ -192,7 +286,7 @@ fn run_tool_loop(
                 budget_used += round_cost(&calls);
                 (calls, decisions)
             } else {
-                let notes: Vec<String> = ctx
+                let notes: Vec<SteeringNote> = ctx
                     .steering
                     .lock()
                     .map_err(|_| "steering queue lock poisoned".to_string())?
@@ -201,11 +295,18 @@ fn run_tool_loop(
                 for note in notes {
                     history.push(LlmMessage {
                         role: LlmRole::User,
-                        content: Some(format!("{STEERING_PREFIX}{note}")),
+                        content: Some(note.prefixed()),
                         tool_call_id: None,
                         tool_calls: vec![],
                     });
-                    (ctx.events)(ChatEvent::SteeringApplied(SteeringAppliedEvent { text: note }));
+                    // Only a note the user actually typed becomes a steer
+                    // block in the transcript — an app-authored one (a
+                    // failed diagram render) is not something they said.
+                    if note.source == SteeringSource::User {
+                        (ctx.events)(
+                            ChatEvent::SteeringApplied(SteeringAppliedEvent { text: note.text }),
+                        );
+                    }
                 }
                 let request = ChatRequest {
                     messages: history.clone(),
@@ -257,7 +358,15 @@ fn run_tool_loop(
                         .lock()
                         .map_err(|_| "steering queue lock poisoned".to_string())?
                         .is_empty();
-                    if !has_pending_steering {
+                    // The missing-diagram backstop. A model that was asked
+                    // to draw and answered in prose alone routinely claims
+                    // «схема выше» about a card that does not exist — the
+                    // user's side of that is an answer referring to nothing.
+                    // One extra round, once per turn, charged to the same
+                    // budget as any other.
+                    let needs_diagram_nudge =
+                        diagram_requested && !visualize_ok && !diagram_nudge_sent;
+                    if !has_pending_steering && !needs_diagram_nudge {
                         return Ok(ChatStreamOutcome::Done(ChatDone { result, todos }));
                     }
                     history.push(LlmMessage {
@@ -266,6 +375,15 @@ fn run_tool_loop(
                         tool_call_id: None,
                         tool_calls: vec![],
                     });
+                    if needs_diagram_nudge {
+                        diagram_nudge_sent = true;
+                        history.push(LlmMessage {
+                            role: LlmRole::User,
+                            content: Some(SteeringNote::system(MISSING_DIAGRAM_NOTE).prefixed()),
+                            tool_call_id: None,
+                            tool_calls: vec![],
+                        });
+                    }
                     continue;
                 }
 
@@ -460,6 +578,11 @@ fn run_tool_loop(
                 Ok(ToolResult::TodoWritten(list)) | Ok(ToolResult::TodoUpdated(list)) => {
                     todos = list.clone();
                 }
+                // What the missing-diagram backstop below keys off: a card
+                // actually exists in the transcript for this turn.
+                Ok(ToolResult::VisualShown { .. }) => {
+                    visualize_ok = true;
+                }
                 _ => {}
             }
 
@@ -497,6 +620,7 @@ fn run_tool_loop(
                 Err(e) if e == "denied by user" => "Отклонено пользователем".to_string(),
                 Err(e) => format!("Ошибка: {e}"),
             };
+            let content = dedupe_repeat_read(&mut reads_this_turn, call, &outcome, content);
             history.push(LlmMessage {
                 role: LlmRole::Tool,
                 content: Some(content),
@@ -679,7 +803,9 @@ mod tests {
     // --- `run_tool_loop` ---
 
     use crate::domain::ai_access::{default_allowed_tools, AiAccessMode};
-    use crate::domain::llm::{ChatResponse, ChatStreamResult, ChatUsage, LlmError, LlmModelInfo};
+    use crate::domain::llm::{
+        ChatResponse, ChatStreamResult, ChatUsage, LlmError, LlmModelInfo, STEERING_PREFIX,
+    };
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicU64, AtomicUsize};
     use std::sync::Mutex;
@@ -766,7 +892,7 @@ mod tests {
             self.requests.lock().unwrap().push(_request);
             if let Some((target, queue, text)) = &self.steer_after_call {
                 if call == *target {
-                    queue.lock().unwrap().push(text.clone());
+                    queue.lock().unwrap().push(SteeringNote::user(text.clone()));
                 }
             }
             let next = self.rounds.lock().unwrap().pop_front();
@@ -822,12 +948,43 @@ mod tests {
         run_with_steering(provider, root, events, cancel_flag, &steering)
     }
 
+    /// `run`, but with the turn's originating user message present — what
+    /// the missing-diagram backstop reads. The other helpers start from an
+    /// empty history, which is why none of the existing tests trip it.
+    fn run_asking(
+        provider: &dyn LlmProvider,
+        root: &std::path::Path,
+        events: &ChatEventSink,
+        cancel_flag: &ChatCancelFlag,
+        user_message: &str,
+    ) -> Result<ChatStreamOutcome, String> {
+        let steering = SteeringQueue::default();
+        let history = vec![LlmMessage {
+            role: LlmRole::User,
+            content: Some(user_message.to_string()),
+            tool_call_id: None,
+            tool_calls: vec![],
+        }];
+        run_with_steering_and_history(provider, root, events, cancel_flag, &steering, history)
+    }
+
     fn run_with_steering(
         provider: &dyn LlmProvider,
         root: &std::path::Path,
         events: &ChatEventSink,
         cancel_flag: &ChatCancelFlag,
         steering: &SteeringQueue,
+    ) -> Result<ChatStreamOutcome, String> {
+        run_with_steering_and_history(provider, root, events, cancel_flag, steering, Vec::new())
+    }
+
+    fn run_with_steering_and_history(
+        provider: &dyn LlmProvider,
+        root: &std::path::Path,
+        events: &ChatEventSink,
+        cancel_flag: &ChatCancelFlag,
+        steering: &SteeringQueue,
+        history: Vec<LlmMessage>,
     ) -> Result<ChatStreamOutcome, String> {
         let scope = ToolScope::new(
             root,
@@ -848,7 +1005,7 @@ mod tests {
             steering,
             conversation_mode: ConversationMode::Agent,
         };
-        run_tool_loop(&ctx, scope, Vec::new(), Vec::new(), 0, 0, None, Vec::new())
+        run_tool_loop(&ctx, scope, Vec::new(), history, 0, 0, None, Vec::new())
     }
 
     /// `run`, re-entered on a paused round — the shape
@@ -969,6 +1126,176 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_same_file_read_twice_in_one_turn_is_not_resent() {
+        let root = fixture_repo("repeat-read");
+        let args = r#"{"path":"intro.adoc"}"#;
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![tool_call("c1", "readFile", args)]),
+            round("", vec![tool_call("c2", "readFile", args)]),
+            round("Готово.", vec![]),
+        ]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        // First read: the file itself. Second: a note pointing at it.
+        assert!(provider.tool_reply("c1").contains("= Intro"));
+        assert_eq!(provider.tool_reply("c2"), REPEAT_READ_NOTE);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_different_range_of_the_same_file_is_a_different_read() {
+        let root = fixture_repo("repeat-read-range");
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![tool_call("c1", "readFile", r#"{"path":"intro.adoc"}"#)]),
+            round(
+                "",
+                vec![tool_call("c2", "readFile", r#"{"path":"intro.adoc","startLine":1,"endLine":1}"#)],
+            ),
+            round("Готово.", vec![]),
+        ]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        assert!(provider.tool_reply("c2").contains("= Intro"));
+        assert_ne!(provider.tool_reply("c2"), REPEAT_READ_NOTE);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The failure this backstop exists for: the model was asked to draw,
+    /// answered in prose alone, and (in the transcript that prompted this)
+    /// told the user «схема выше» about a card that was never created.
+    #[test]
+    fn a_diagram_request_answered_in_prose_gets_one_nudge_round() {
+        let root = fixture_repo("diagram-nudge");
+        let provider = ScriptedProvider::new(vec![
+            round("Схема выше.", vec![]),
+            round("Готово, схема нарисована.", vec![]),
+        ]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome =
+            run_asking(&provider, &root, &events, &cancel, "нарисуй диаграмму потока").unwrap();
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
+        let requests = provider.requests.lock().unwrap();
+        // Exactly one extra round: the flag makes the backstop fire once,
+        // so the second prose-only answer settles the turn.
+        assert_eq!(requests.len(), 2);
+        let note = SteeringNote::system(MISSING_DIAGRAM_NOTE).prefixed();
+        assert!(!requests[0].messages.iter().any(|m| m.content.as_deref() == Some(&note)));
+        assert!(requests[1]
+            .messages
+            .iter()
+            .any(|m| m.role == LlmRole::User && m.content.as_deref() == Some(&note)));
+        // An app-authored note is not something the analyst said, so it
+        // must not surface as a steer block in the transcript.
+        assert!(!seen
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, ChatEvent::SteeringApplied(_))));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_turn_that_actually_drew_a_diagram_is_not_nudged() {
+        let root = fixture_repo("diagram-drawn");
+        let provider = ScriptedProvider::new(vec![
+            round(
+                "",
+                vec![tool_call(
+                    "c1",
+                    "visualize",
+                    r#"{"kind":"diagram","title":"Поток","format":"mermaid","source":"flowchart TD\n  a-->b"}"#,
+                )],
+            ),
+            round("Схема выше.", vec![]),
+        ]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome =
+            run_asking(&provider, &root, &events, &cancel, "нарисуй диаграмму потока").unwrap();
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let note = SteeringNote::system(MISSING_DIAGRAM_NOTE).prefixed();
+        assert!(!requests
+            .iter()
+            .flat_map(|r| r.messages.iter())
+            .any(|m| m.content.as_deref() == Some(&note)));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_diagram_drawn_before_a_pause_survives_the_resume() {
+        // `run_tool_loop` starts over on every resume, so the flag has to
+        // be recoverable from history — otherwise a turn that drew, then
+        // paused on a write, gets nudged for a card it already has.
+        let history = vec![LlmMessage {
+            role: LlmRole::Assistant,
+            content: None,
+            tool_call_id: None,
+            tool_calls: vec![tool_call("c1", "visualize", "{}")],
+        }];
+        assert!(history_has_a_visualize_call(&history));
+        assert!(!history_has_a_visualize_call(&[]));
+    }
+
+    #[test]
+    fn a_request_that_never_asked_for_a_picture_is_not_nudged() {
+        let root = fixture_repo("diagram-unasked");
+        let provider = ScriptedProvider::new(vec![round("Работает так: ...", vec![])]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome = run_asking(
+            &provider,
+            &root,
+            &events,
+            &cancel,
+            "объясни, как работает отправка на подпись",
+        )
+        .unwrap();
+
+        assert!(matches!(outcome, ChatStreamOutcome::Done(_)));
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn diagram_request_detection_reads_the_last_user_message() {
+        let ask = |text: &str| {
+            last_user_message_asks_for_a_diagram(&[LlmMessage {
+                role: LlmRole::User,
+                content: Some(text.to_string()),
+                tool_call_id: None,
+                tool_calls: vec![],
+            }])
+        };
+        assert!(ask("нарисуй диаграмму"));
+        assert!(ask("Покажи Схему получения пина"));
+        assert!(ask("начерти это"));
+        assert!(ask("draw a sequence diagram"));
+        assert!(!ask("объясни, как это работает"));
+        // No user message at all (the state every other test here starts
+        // from) must never trigger it.
+        assert!(!last_user_message_asks_for_a_diagram(&[]));
     }
 
     #[test]

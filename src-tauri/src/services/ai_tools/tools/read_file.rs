@@ -6,8 +6,10 @@
 
 use std::fs;
 
-use crate::domain::ai_tools::{ReadFileArgs, ToolError, ToolScope};
+use crate::domain::ai_tools::{OutlineEntry, ReadFileArgs, ToolError, ToolResult, ToolScope};
 use crate::domain::llm::LlmToolDefinition;
+use crate::domain::repo_index::{detect_language, SymbolKind};
+use crate::infra::language_indexers::default_indexers;
 
 use super::super::resolve::resolve_existing_path;
 
@@ -19,6 +21,53 @@ pub(super) struct FileSlice {
     pub(super) start_line: u32,
     pub(super) end_line: u32,
     pub(super) total_lines: u32,
+}
+
+fn kind_name(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Class => "class",
+        SymbolKind::Interface => "interface",
+        SymbolKind::Enum => "enum",
+        SymbolKind::Method => "method",
+        SymbolKind::Field => "field",
+        SymbolKind::Section => "section",
+    }
+}
+
+/// `readFile` with `outline: true` — the file's shape instead of its text.
+///
+/// Indexes the one file on demand through its `LanguageIndexer` rather than
+/// reading `RepositoryIndex`: the outline must work on a project whose
+/// embeddings were never configured or synced, and a single file is cheap
+/// to index. A language with no registered indexer returns no entries
+/// rather than an error — `totalLines` alone already tells the caller what
+/// a plain read would cost.
+pub(super) fn outline(scope: &ToolScope, args: &ReadFileArgs) -> Result<ToolResult, ToolError> {
+    let canonical = resolve_existing_path(scope, &args.path)?;
+    if !canonical.is_file() {
+        return Err(ToolError::NotAFile(args.path.clone()));
+    }
+    let content = fs::read_to_string(&canonical).map_err(ToolError::Io)?;
+    let total_lines = content.lines().count() as u32;
+
+    let entries = detect_language(&args.path)
+        .and_then(|language| default_indexers().remove(&language))
+        .map(|indexer| {
+            indexer
+                .index(&content)
+                .symbols
+                .into_iter()
+                .map(|symbol| OutlineEntry {
+                    name: symbol.name,
+                    kind: kind_name(symbol.kind).to_string(),
+                    start_line: symbol.start_line,
+                    end_line: symbol.end_line,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(ToolResult::FileOutline { path: args.path.clone(), entries, total_lines })
 }
 
 pub(super) fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<FileSlice, ToolError> {
@@ -65,7 +114,7 @@ pub(super) fn slice_lines(content: String, start_line: Option<u32>, end_line: Op
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "readFile".to_string(),
-        description: "Read the text content of one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known — especially paths from semanticSearch/grep results. For \"how does X work\" questions: after search, read at most 2–3 files first — the matching .adoc (if any) and the owning implementation (*Service / handler named by the doc or operation), not mappers, DTOs, or sibling services until the algorithm is incomplete. Prefer a line range for a large file when only part of it is relevant. Paths returned by grep/semanticSearch, and paths constructed from listFiles entries (excluding the tree's display-only root label), are already correctly rooted — pass them here as-is, with no manual prefix added or stripped."
+        description: "Read one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known — especially paths from semanticSearch/grep results. For \"how does X work\" questions: after search, read at most 2–3 files first — the matching .adoc (if any) and the owning implementation (*Service / handler named by the doc or operation), not mappers, DTOs, or sibling services until the algorithm is incomplete. Prefer a line range for a large file when only part of it is relevant. Paths returned by grep/semanticSearch, and paths constructed from listFiles entries (excluding the tree's display-only root label), are already correctly rooted — pass them here as-is, with no manual prefix added or stripped."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -83,6 +132,10 @@ pub(super) fn definition() -> LlmToolDefinition {
                     "type": ["integer", "null"],
                     "minimum": 1,
                     "description": "1-indexed last line to return (inclusive). Omit or null to read through the end of the file. Out-of-range values are clamped, not rejected."
+                },
+                "outline": {
+                    "type": ["boolean", "null"],
+                    "description": "When true, return the file's structure — its classes/methods/headings with the lines each spans — instead of its text, plus the file's total line count. Use it on a large file you only partly need: read the outline, then read the one range that matters, instead of guessing line numbers or pulling the whole file in. Ignores startLine/endLine."
                 }
             },
             "required": ["path"]
@@ -95,8 +148,9 @@ mod tests {
     use std::fs;
 
     use crate::domain::ai_access::AiAccessMode;
-    use crate::domain::ai_tools::{ToolError, ToolResult, ToolScope};
+    use crate::domain::ai_tools::{ReadFileArgs, ToolCall, ToolError, ToolResult, ToolScope};
     use crate::services::ai_tools::testing::*;
+    use crate::services::ai_tools::{EmbeddingDeps, execute_tool};
 
     #[test]
     fn read_file_inside_docs_root_succeeds_in_docs_only() {
@@ -105,6 +159,72 @@ mod tests {
 
         let content = read(&scope, "intro.adoc").unwrap();
         assert_eq!(content, "= Intro\n");
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn outline_returns_structure_and_line_counts_instead_of_text() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            docs.join("guide.adoc"),
+            "= Guide\n\n== Первый раздел\n\ntext\n\n== Второй раздел\n\nmore\n",
+        )
+        .unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let result = execute_tool(
+            &scope,
+            ToolCall::ReadFile(ReadFileArgs {
+                path: "guide.adoc".to_string(),
+                start_line: None,
+                end_line: None,
+                outline: Some(true),
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::FileOutline { path, entries, total_lines } => {
+                assert_eq!(path, "guide.adoc");
+                assert_eq!(total_lines, 9);
+                assert!(!entries.is_empty(), "expected AsciiDoc sections");
+                assert!(entries.iter().any(|e| e.name.contains("Первый раздел")));
+                // A range the caller can hand straight back to `readFile`.
+                assert!(entries.iter().all(|e| e.start_line >= 1 && e.end_line >= e.start_line));
+            }
+            other => panic!("expected FileOutline, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn outline_of_a_language_with_no_indexer_still_reports_the_size() {
+        let (repo, docs) = fixture_repo();
+        fs::write(docs.join("notes.txt"), "one\ntwo\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let result = execute_tool(
+            &scope,
+            ToolCall::ReadFile(ReadFileArgs {
+                path: "notes.txt".to_string(),
+                start_line: None,
+                end_line: None,
+                outline: Some(true),
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::FileOutline { entries, total_lines, .. } => {
+                assert!(entries.is_empty());
+                assert_eq!(total_lines, 2);
+            }
+            other => panic!("expected FileOutline, got {other:?}"),
+        }
+
         fs::remove_dir_all(&repo).ok();
     }
 

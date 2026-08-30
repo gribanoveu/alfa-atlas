@@ -266,6 +266,18 @@ export type GrepMatch = {
   path: string;
   line: number;
   text: string;
+  /** Present only when the call asked for `contextLines` — the backend
+   *  omits both arrays when empty. */
+  before?: string[];
+  after?: string[];
+};
+
+/** One entry of a `readFile` outline — mirrors `domain::ai_tools::OutlineEntry`. */
+export type OutlineEntry = {
+  name: string;
+  kind: string;
+  startLine: number;
+  endLine: number;
 };
 
 /** One resolved template from `getAsciidocTemplates` — mirrors
@@ -283,6 +295,7 @@ export type AsciidocTemplateEntry = {
 // file (there is no line 1 to claim).
 export type ToolResult =
   | { tool: "file"; result: { content: string; startLine: number; endLine: number; totalLines: number } }
+  | { tool: "fileOutline"; result: { path: string; entries: OutlineEntry[]; totalLines: number } }
   | { tool: "fileList"; result: ToolFileEntry[] }
   | { tool: "semanticSearchResults"; result: ToolMatch[] | SemanticSearchPayload }
   | { tool: "grepResults"; result: { matches: GrepMatch[]; truncated: boolean } }

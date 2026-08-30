@@ -116,6 +116,9 @@ pub fn execute_tool(
         return Err(ToolError::NotAllowed(call.name()));
     }
     match call {
+        ToolCall::ReadFile(args) if args.outline.unwrap_or(false) => {
+            read_file::outline(scope, &args)
+        }
         ToolCall::ReadFile(args) => {
             read_file::read_file(scope, args).map(|slice| ToolResult::File {
                 content: slice.content,
@@ -261,11 +264,12 @@ mod tests {
             path: "intro.adoc".to_string(),
             start_line: None,
             end_line: None,
+            outline: None,
         });
         let json = serde_json::to_string(&call).unwrap();
         assert_eq!(
             json,
-            r#"{"tool":"readFile","args":{"path":"intro.adoc","startLine":null,"endLine":null}}"#
+            r#"{"tool":"readFile","args":{"path":"intro.adoc","startLine":null,"endLine":null,"outline":null}}"#
         );
         let round_tripped: ToolCall = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, call);

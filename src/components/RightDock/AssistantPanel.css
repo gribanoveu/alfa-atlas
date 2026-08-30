@@ -2351,6 +2351,34 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   padding-top: 2px;
 }
 
+/* The diagram drawn inside the `visualize` card. Deliberately a preview,
+   not the viewer: no pan/zoom (the tab has both), just enough to show that
+   the diagram exists and is the right one — and to make a source that
+   doesn't parse visible where it is produced instead of one click away. */
+.assistant-visual-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  max-height: 320px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+}
+
+.assistant-visual-preview.is-loading {
+  min-height: 64px;
+  color: var(--text-2);
+}
+
+/* Fit the rendered SVG to the card's width — Mermaid emits its own
+   width/height, which would otherwise push the chat column sideways. */
+.assistant-visual-preview > svg {
+  max-width: 100%;
+  height: auto;
+}
+
 
 /* =========================================================
    Spinner

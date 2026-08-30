@@ -15,6 +15,10 @@ const MAX_GREP_RESULTS: usize = 200;
 const MAX_GREP_FILE_BYTES: u64 = 1_048_576;
 const GREP_BINARY_SNIFF_BYTES: usize = 8_192;
 const GREP_LINE_MAX_CHARS: usize = 300;
+/// Ceiling on `GrepArgs::context_lines`. Enough to see what a hit sits
+/// inside (a signature, the branch around it) without turning a search into
+/// a file dump the caller never asked for.
+const MAX_GREP_CONTEXT_LINES: usize = 5;
 
 /// Search under an already-resolved root (docs root for the UI; `ToolScope.root`
 /// for the AI tool). Paths in results are relative to `root`, `/`-separated.
@@ -38,6 +42,8 @@ pub fn search_under_root(
         _ => None,
     };
 
+    let context_lines = args.context_lines.unwrap_or(0).min(MAX_GREP_CONTEXT_LINES);
+
     let target = resolve_search_target(root, args.path.as_deref())?;
     let mut matches = Vec::new();
     let mut truncated = false;
@@ -51,6 +57,7 @@ pub fn search_under_root(
                 &re,
                 glob.as_ref(),
                 max_results,
+                context_lines,
                 &mut matches,
             );
         }
@@ -67,6 +74,7 @@ pub fn search_under_root(
                     &re,
                     glob.as_ref(),
                     max_results,
+                    context_lines,
                     &mut matches,
                 );
                 if hit {
@@ -138,6 +146,7 @@ fn grep_one_file(
     re: &regex::Regex,
     glob: Option<&globset::GlobMatcher>,
     max_results: usize,
+    context_lines: usize,
     matches: &mut Vec<GrepMatch>,
 ) -> bool {
     if let Some(matcher) = glob {
@@ -161,17 +170,38 @@ fn grep_one_file(
     let Ok(content) = String::from_utf8(bytes) else {
         return false;
     };
-    for (idx, line) in content.lines().enumerate() {
+    // Collected once so context can look backwards; the no-context case
+    // reads the same slice forwards and pays only the `Vec` of borrows.
+    let lines: Vec<&str> = content.lines().collect();
+    for (idx, line) in lines.iter().enumerate() {
         if !re.is_match(line) {
             continue;
         }
+        // The cap counts *hits*, not lines: context is part of one hit, so
+        // asking for context never silently returns fewer results.
         if matches.len() >= max_results {
             return true;
         }
+        let (before, after) = if context_lines == 0 {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                lines[idx.saturating_sub(context_lines)..idx]
+                    .iter()
+                    .map(|l| truncate_grep_line(l))
+                    .collect(),
+                lines[(idx + 1).min(lines.len())..(idx + 1 + context_lines).min(lines.len())]
+                    .iter()
+                    .map(|l| truncate_grep_line(l))
+                    .collect(),
+            )
+        };
         matches.push(GrepMatch {
             path: rel.to_string(),
             line: (idx + 1) as u32,
             text: truncate_grep_line(line),
+            before,
+            after,
         });
     }
     false
@@ -220,6 +250,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             },
         )
         .unwrap();
@@ -244,6 +275,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             },
         )
         .unwrap_err();
@@ -271,6 +303,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: Some(3),
+                context_lines: None,
             },
         )
         .unwrap();
@@ -294,6 +327,7 @@ mod tests {
                 glob: Some("*.adoc".to_string()),
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             },
         )
         .unwrap();
@@ -317,6 +351,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             },
         )
         .unwrap();
@@ -338,6 +373,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             },
         )
         .unwrap_err();

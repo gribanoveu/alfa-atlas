@@ -29,7 +29,7 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "grep".to_string(),
         description:
-            "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Secondary tool — do not use as the first search step; call semanticSearch first for discovery. Use grep only when semanticSearch is insufficient: you need every call site of a symbol, every occurrence of a literal string, or a regex pattern across files, and you already know what to match. Not for conceptual or exploratory search. Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Honors .gitignore; skips binary and oversized files. `path` may be a file (a semanticSearch hit is valid) or a subdirectory; omit it to search the whole root. Returned paths are already relative to the same root readFile uses — pass them to readFile unchanged."
+            "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Secondary tool — do not use as the first search step; call semanticSearch first for discovery. Use grep only when semanticSearch is insufficient: you need every call site of a symbol, every occurrence of a literal string, or a regex pattern across files, and you already know what to match. Not for conceptual or exploratory search. Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Set `contextLines` (1-5) when you need to see what a hit sits inside — a signature, the surrounding branch — instead of spending a `readFile` round trip per hit. Honors .gitignore; skips binary and oversized files. `path` may be a file (a semanticSearch hit is valid) or a subdirectory; omit it to search the whole root. Returned paths are already relative to the same root readFile uses — pass them to readFile unchanged."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -54,6 +54,11 @@ pub(super) fn definition() -> LlmToolDefinition {
                     "type": ["integer", "null"],
                     "minimum": 1,
                     "description": "Max number of line hits to return, default 50, capped at 200."
+                },
+                "contextLines": {
+                    "type": ["integer", "null"],
+                    "minimum": 0,
+                    "description": "Lines of surrounding context returned with each hit, capped at 5. Default 0 (the matching line alone). The cap on results counts hits, not lines, so asking for context never costs you matches."
                 }
             },
             "required": ["pattern"]
@@ -71,6 +76,44 @@ mod tests {
     use crate::services::ai_tools::{EmbeddingDeps, execute_tool};
 
     #[test]
+    fn context_lines_come_back_with_the_hit_instead_of_a_follow_up_read() {
+        let (repo, docs) = fixture_repo();
+        fs::write(
+            docs.join("guide.adoc"),
+            "= Guide\nбыло\ncall Needle.here()\nстало\nконец\n",
+        )
+        .unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+
+        let result = execute_tool(
+            &scope,
+            ToolCall::Grep(GrepArgs {
+                pattern: "Needle".to_string(),
+                path: None,
+                glob: None,
+                case_insensitive: None,
+                max_results: None,
+                // Deliberately over the cap: it clamps rather than erroring,
+                // same as `maxResults`.
+                context_lines: Some(99),
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap();
+        match result {
+            ToolResult::GrepResults { matches, .. } => {
+                assert_eq!(matches.len(), 1);
+                assert_eq!(matches[0].before, vec!["= Guide", "было"]);
+                assert_eq!(matches[0].after, vec!["стало", "конец"]);
+            }
+            other => panic!("expected GrepResults, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
     fn grep_finds_line_hits_under_docs_root_and_rejects_invalid_regex() {
         let (repo, docs) = fixture_repo();
         fs::write(docs.join("guide.adoc"), "= Guide\ncall Needle.here()\nmore\n").unwrap();
@@ -85,6 +128,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             }),
             &EmbeddingDeps::empty(),
             &[],
@@ -109,6 +153,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             }),
             &EmbeddingDeps::empty(),
             &[],
@@ -137,6 +182,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: Some(3),
+                context_lines: None,
             }),
             &EmbeddingDeps::empty(),
             &[],
@@ -169,6 +215,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             }),
             &EmbeddingDeps::empty(),
             &[],
@@ -192,6 +239,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             }),
             &EmbeddingDeps::empty(),
             &[],
@@ -223,6 +271,7 @@ mod tests {
                 glob: None,
                 case_insensitive: None,
                 max_results: None,
+                context_lines: None,
             }),
             &EmbeddingDeps::empty(),
             &[],

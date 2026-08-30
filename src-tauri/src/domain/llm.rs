@@ -606,6 +606,49 @@ pub struct ChatStreamReasoning {
 pub const STEERING_PREFIX: &str =
     "[Уточнение от пользователя, не новое задание — учти в текущей работе]: ";
 
+/// Prefix for a note the *app* queued rather than the user typing it (see
+/// `SteeringSource::System`). Deliberately different wording from
+/// `STEERING_PREFIX`: the model must not attribute a render failure or a
+/// missing-diagram nudge to the analyst, or it starts apologizing to them
+/// for something they never said.
+pub const SYSTEM_NOTE_PREFIX: &str =
+    "[Служебное сообщение приложения, не реплика пользователя — исправь и продолжай]: ";
+
+/// Who authored a queued note. The distinction is not cosmetic: a `User`
+/// note is echoed back to the UI as a steer block and prefixed as a
+/// clarification, a `System` note is neither — it is the app talking to the
+/// model about its own output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SteeringSource {
+    User,
+    System,
+}
+
+/// One entry in `services::llm_session::SteeringQueue`.
+#[derive(Debug, Clone)]
+pub struct SteeringNote {
+    pub text: String,
+    pub source: SteeringSource,
+}
+
+impl SteeringNote {
+    pub fn user(text: impl Into<String>) -> Self {
+        Self { text: text.into(), source: SteeringSource::User }
+    }
+
+    pub fn system(text: impl Into<String>) -> Self {
+        Self { text: text.into(), source: SteeringSource::System }
+    }
+
+    /// The exact string that goes into the model's history.
+    pub fn prefixed(&self) -> String {
+        match self.source {
+            SteeringSource::User => format!("{STEERING_PREFIX}{}", self.text),
+            SteeringSource::System => format!("{SYSTEM_NOTE_PREFIX}{}", self.text),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SteeringAppliedEvent {

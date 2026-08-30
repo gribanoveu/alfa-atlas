@@ -24,6 +24,7 @@ import {
 import type { AssistantSuggestion } from "../../lib/assistantSuggestions";
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, Task } from "../../lib/aiTools";
 import { groupBlocksForRender, lastBlockShowsLiveProgress, searchIsDegraded, type ChatMessage } from "../../lib/chatBlocks";
+import { noteLlmChat } from "../../lib/llm";
 import type { LlmProviderConfig, PendingApproval, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
@@ -283,6 +284,29 @@ function formatTokenCount(n: number): string {
   return String(n);
 }
 
+/** The ring's tooltip. Two numbers, named, because they answer different
+ *  questions and routinely disagree: the ring itself estimates what the
+ *  *next* request will carry (the same basis the compaction trigger uses,
+ *  so the ring predicts when compaction fires), while the provider's own
+ *  count is of a request that already went out — for a turn that read
+ *  several files that one is far larger, since a settled turn is replayed
+ *  as prose plus a path ledger rather than its tool payloads. Naming them
+ *  is what stops the difference from reading as silent compaction. */
+function contextUsageTitle(
+  contextTokens: number,
+  contextLimit: number,
+  lastRequestTokens: number | null,
+  sending: boolean,
+): string {
+  const ru = (n: number) => n.toLocaleString("ru-RU");
+  const head = sending
+    ? `Запрос сейчас: ~${ru(contextTokens)} из ${ru(contextLimit)} токенов`
+    : `Следующий запрос: ~${ru(contextTokens)} из ${ru(contextLimit)} токенов`;
+  return lastRequestTokens === null
+    ? head
+    : `${head}\nПоследний отправленный запрос: ${ru(lastRequestTokens)}`;
+}
+
 // Geometry for the context-usage ring (see `.assistant-context-ring` in
 // AssistantPanel.css) — an SVG circle's stroke-dasharray/-dashoffset trick,
 // not a library: the fill circle's dash length equals the full
@@ -469,6 +493,7 @@ export function AssistantConversation({
     retryWithCompaction,
     stopChat,
     contextTokens,
+    lastRequestTokens,
     decideToolCall,
     answerAskUser,
     answerArtifact,
@@ -1092,7 +1117,18 @@ export function AssistantConversation({
                           <AssistantVisualCard
                             key={item.block.id}
                             block={item.block}
+                            turnActive={m.streaming === true}
                             onOpenVisual={openVisualTab}
+                            onRenderError={(note) => void noteLlmChat(note)}
+                            onRedraw={(request) => {
+                              // While the turn runs this is a steer (it
+                              // lands in the round already in flight);
+                              // afterwards it has to be a real message,
+                              // since the steering queue is cleared when a
+                              // fresh turn starts.
+                              if (sending) void steerChat(request);
+                              else void sendMessage(request);
+                            }}
                           />
                         ) : (
                           <AssistantToolCallBlock key={item.block.id} block={item.block} />
@@ -1232,7 +1268,7 @@ export function AssistantConversation({
         {contextLimit !== null ? (
           <div
             className={`assistant-context-bar${contextUsageRatio !== null && contextUsageRatio >= CONTEXT_NEAR_LIMIT_RATIO ? " near-limit" : ""}`}
-            title={`Оценка использования контекста: ~${contextTokens.toLocaleString("ru-RU")} из ${contextLimit.toLocaleString("ru-RU")} токенов`}
+            title={contextUsageTitle(contextTokens, contextLimit, lastRequestTokens, sending)}
           >
             <svg className="assistant-context-ring" width="20" height="20" viewBox="0 0 20 20" aria-hidden>
               <circle className="assistant-context-ring-track" cx="10" cy="10" r={CONTEXT_RING_RADIUS} />

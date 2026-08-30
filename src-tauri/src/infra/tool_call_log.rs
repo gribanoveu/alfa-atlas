@@ -326,6 +326,16 @@ pub fn redact_result(result: &ToolResult) -> serde_json::Value {
                 for m in matches {
                     if let Some(m) = m.as_object_mut() {
                         m.insert("text".to_string(), redacted());
+                        // Context lines are file content just as much as the
+                        // matching line is — redacting only `text` would put
+                        // the surrounding source straight into the log.
+                        for key in ["before", "after"] {
+                            if let Some(lines) = m.get_mut(key).and_then(|v| v.as_array_mut()) {
+                                for line in lines {
+                                    *line = redacted();
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -479,7 +489,9 @@ mod tests {
 
     #[test]
     fn redact_args_passes_read_file_through_unchanged() {
-        let call = ToolCall::ReadFile(ReadFileArgs { path: "a.adoc".to_string(), start_line: None, end_line: None });
+        let call = ToolCall::ReadFile(ReadFileArgs { path: "a.adoc".to_string(), start_line: None, end_line: None,
+    outline: None,
+});
         let redacted = redact_args(&call);
         assert_eq!(redacted["args"]["path"], "a.adoc");
     }
@@ -493,13 +505,21 @@ mod tests {
     }
 
     #[test]
-    fn redact_result_strips_grep_match_text() {
+    fn redact_result_strips_grep_match_text_including_context_lines() {
         let result = ToolResult::GrepResults {
-            matches: vec![crate::domain::ai_tools::GrepMatch { path: "a.adoc".to_string(), line: 1, text: "SECRET".to_string() }],
+            matches: vec![crate::domain::ai_tools::GrepMatch {
+                path: "a.adoc".to_string(),
+                line: 1,
+                text: "SECRET".to_string(),
+                before: vec!["ALSO SECRET".to_string()],
+                after: vec!["SECRET TOO".to_string()],
+            }],
             truncated: false,
         };
         let redacted = redact_result(&result);
         assert_eq!(redacted["result"]["matches"][0]["text"], "<redacted>");
+        assert_eq!(redacted["result"]["matches"][0]["before"][0], "<redacted>");
+        assert_eq!(redacted["result"]["matches"][0]["after"][0], "<redacted>");
         assert_eq!(redacted["result"]["matches"][0]["path"], "a.adoc");
     }
 
@@ -584,7 +604,9 @@ mod tests {
 
     #[test]
     fn tool_label_matches_the_wire_tag() {
-        let call = ToolCall::ReadFile(ReadFileArgs { path: "a.adoc".to_string(), start_line: None, end_line: None });
+        let call = ToolCall::ReadFile(ReadFileArgs { path: "a.adoc".to_string(), start_line: None, end_line: None,
+    outline: None,
+});
         assert_eq!(tool_label(&call), "readFile");
     }
 }

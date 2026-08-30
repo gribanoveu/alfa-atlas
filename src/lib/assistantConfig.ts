@@ -4,6 +4,7 @@ import type { ChatMessage, ToolCallBlock } from "./chatBlocks";
 import type { SpecsRepoInfo } from "./openapi";
 import type { ArtifactSummary } from "./artifacts";
 import { describeHttpRequest } from "./httpRequestSpec";
+import { estimateTokenCount } from "./tokens";
 import type { PlanRecord, PlanTodo, PlanTodoStatus } from "./plans";
 
 /** Central place for the assistant chat panel's tunable constants — system
@@ -49,7 +50,32 @@ const VISUALIZE_HINT = `## Explaining with a diagram
 
 Reach for a diagram whenever a picture would make the answer easier to understand than prose alone — a flow through the code, an architecture, a sequence of calls, a state machine, how modules or entities relate. Do not wait for the user to say «нарисуй» / «диаграмма»: if the explanation is about structure or motion, draw it. Call \`visualize\` once, then explain in a few sentences. Do not draw boxes and arrows out of text characters, and do not paste the diagram source into your reply; the chat shows a card the user opens in a tab. Base the diagram on code you actually read.
 
-Do not diagram everything. Skip it for a short factual answer, a yes/no, a single path or file name, a wording tweak, or a list the user can scan as text. One focused diagram beats several decorative ones.`;
+Do not diagram everything. Skip it for a short factual answer, a yes/no, a single path or file name, a wording tweak, or a list the user can scan as text. One focused diagram beats several decorative ones.
+
+**Never claim a diagram you did not draw in this turn.** «Схема выше», «диаграмма готова», «на схеме видно» are only true after a \`visualize\` call succeeded *in the current turn* — the card is created by that call and by nothing else. If your answer promises a picture, make the call before writing that sentence. If you decided not to draw, say what you found in words and do not refer to a schema at all.
+
+Do not describe the diagram's appearance — colours, highlighted blocks, «жёлтая нота», «синий блок», frames. The app renders it in the reader's own theme, so those words describe something they are not looking at. Point at what the diagram *says* instead («ответ модуля подписи отбрасывается»), and keep the accompanying text to a few sentences or 3–5 bullets: the card carries the structure, the prose only adds what a picture cannot.`;
+
+/** What the tool schemas cost, on **every** request.
+ *
+ * They are not part of the system prompt and not part of any message, so
+ * nothing else in the token accounting sees them — and they are not small:
+ * measured against a real debug log, the 24 advertised tools serialize to
+ * ~37 800 characters, about 9 500 tokens, resent verbatim with every single
+ * request. Leaving them out made the estimate run a stable ~36% under the
+ * provider's own `promptTokens`; counting them brings the same
+ * characters-per-token rule to within a few percent.
+ *
+ * Serializing the definitions is deliberate rather than a stored constant:
+ * the advertised set changes with access mode, conversation mode and the
+ * project's allowlist, so the cost has to follow whatever is actually being
+ * sent. Slightly under the wire form, which wraps each entry in
+ * `{"type":"function","function":{…}}` — about 40 characters per tool,
+ * inside the noise of the estimate itself. */
+export function estimateToolSchemaTokens(toolDefinitions: LlmToolDefinition[]): number {
+  if (toolDefinitions.length === 0) return 0;
+  return estimateTokenCount(JSON.stringify(toolDefinitions));
+}
 
 // System prompt for the assistant embedded in Alfa Atlas. Built by a
 // function rather than a plain const so the date/timezone context line is
@@ -308,6 +334,11 @@ Prefer \`get\`/\`create\`/\`update\`/\`delete\` + noun from the question in Pasc
 2. From results, \`readFile\` at most **2–3** files in the first pass: (a) the matching \`.adoc\` / operation folder doc if present, (b) the **implementation** service/handler that owns the algorithm (\`*Service.java\` named in the doc or clearly matching the operation — not a similarly named sibling). Optionally the controller if the service path is unclear.
 3. Do **not** open mappers, DTOs, helpers, or sibling services until the algorithm is incomplete after those reads.
 4. Answer once the implementation (and doc, if present) establish the flow — search hits alone are not enough.
+5. A large file you only partly need: read it with \`outline: true\` first, then read the one range that matters — do not guess line numbers or pull the whole file in.
+
+**Tests are evidence.** When a claim is about behaviour — what a method returns, which field ends up where, what happens on an error path — the owning test (\`*Test.java\`, \`*Spec\`, a fixture) states it directly and is cheaper to read than reconstructing it from the implementation. Look for one before writing that a behaviour «следует из кода», and especially before reporting a discrepancy between code and documentation: a test either confirms it or shows you misread the code.
+
+**Generated clients before "нельзя проверить".** A DTO or client that is not in the repository is usually generated from a spec that is: search \`*.yaml\`/\`*.json\` under the resources tree, or a \`build/generated\` directory, before writing that something could not be verified. Say a fact is unverifiable only after looking for its source, not because the type's own file is absent.
 
 **When \`listFiles\` vs search:** use \`listFiles\` when you need directory shape (scaffold check, "what's in this folder", filename patterns). Skip it when the question is about logic/content and \`semanticSearch\` already surfaced paths.
 
@@ -1048,8 +1079,13 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
     // cosmetic status text.
   }
   switch (name) {
-    case "readFile":
-      return typeof args.path === "string" ? `Читает файл: ${basename(args.path)}…` : "Читает файл…";
+    case "readFile": {
+      const name = typeof args.path === "string" ? basename(args.path) : null;
+      if (args.outline === true) {
+        return name ? `Смотрит структуру: ${name}…` : "Смотрит структуру файла…";
+      }
+      return name ? `Читает файл: ${name}…` : "Читает файл…";
+    }
     case "listFiles":
       return typeof args.path === "string" ? `Просматривает: ${basename(args.path)}…` : "Просматривает файлы…";
     case "semanticSearch":
@@ -1199,6 +1235,11 @@ export function describeToolResult(
       return startLine === 1 && endLine === totalLines
         ? `Строк: ${totalLines}`
         : `Строки ${startLine}–${endLine} из ${totalLines}`;
+    }
+    case "fileOutline": {
+      const { entries, totalLines } = block.result.result;
+      if (entries.length === 0) return `Структура не распознана · строк: ${totalLines}`;
+      return `Структура: ${entries.length} · строк: ${totalLines}`;
     }
     case "fileList": {
       const entries = block.result.result;

@@ -18,6 +18,7 @@ import {
   buildHistoryCompactionPrompt,
   buildModeChangeNotice,
   buildSystemPromptForConversationMode,
+  estimateToolSchemaTokens,
   buildTodoContextBlock,
   buildMemoryContextBlock,
   sliceMessagesForPlanExecution,
@@ -709,33 +710,37 @@ export function useLlmChat(
   // to be visible at the point they're read, even though every hook call
   // here still runs top-to-bottom on each render regardless of declaration
   // order.
-  const contextTokens = useMemo(() => {
-    let lastUsageIndex = -1;
-    let lastUsageTotal: number | null = null;
-    messages.forEach((m, i) => {
-      if (m.role === "assistant" && m.usage) {
-        lastUsageIndex = i;
-        lastUsageTotal = m.usage.totalTokens;
-      }
-    });
-    if (lastUsageIndex === -1 || lastUsageTotal === null) {
-      return (
-        estimateTokenCount(
-          buildSystemPromptForConversationMode(
-            conversationMode,
-            accessMode,
-            specsRepoInfo,
-            toolDefinitions,
-            docsRootRelativeToRepo,
-          ),
-        ) + messages.reduce((sum, m) => sum + estimateMessageContextTokens(m), 0)
-      );
+  const contextTokens = useMemo(
+    () =>
+      estimateTokenCount(
+        buildSystemPromptForConversationMode(
+          conversationMode,
+          accessMode,
+          specsRepoInfo,
+          toolDefinitions,
+          docsRootRelativeToRepo,
+        ),
+      ) +
+      estimateToolSchemaTokens(toolDefinitions) +
+      messages.reduce((sum, m) => sum + estimateMessageContextTokens(m), 0),
+    [messages, accessMode, conversationMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo],
+  );
+
+  /** The provider's own `totalTokens` for the last turn that reported any —
+   * shown in the ring's tooltip, deliberately *not* folded into the number
+   * itself. It measures the request that already went out, which for a
+   * tool-heavy turn is much larger than the next one: the backend replays a
+   * settled turn as prose plus a path ledger, so its `readFile`/`grep`
+   * payloads are gone. Anchoring the ring on it made the number drop
+   * between turns for a reason unrelated to the conversation — real, but
+   * indistinguishable from something having been silently compacted. */
+  const lastRequestTokens = useMemo(() => {
+    let last: number | null = null;
+    for (const m of messages) {
+      if (m.role === "assistant" && m.usage) last = m.usage.totalTokens;
     }
-    const tail = messages
-      .slice(lastUsageIndex + 1)
-      .reduce((sum, m) => sum + estimateMessageContextTokens(m), 0);
-    return lastUsageTotal + tail;
-  }, [messages, accessMode, conversationMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
+    return last;
+  }, [messages]);
 
   /** What the ring actually shows. While a turn is in flight, the last
    * round's reported `totalTokens` is a floor the estimate above may not
@@ -981,6 +986,9 @@ export function useLlmChat(
         ? CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES
         : CONTEXT_COMPACTION_KEEP_LAST_MESSAGES;
 
+      // Tool schemas ride on every request and are nowhere in the messages
+      // — omitting them ran this ~36% under the provider's own count, which
+      // is compaction firing that much later than the ratio intends.
       const scopedTokens =
         estimateTokenCount(
           buildSystemPromptForConversationMode(
@@ -990,7 +998,9 @@ export function useLlmChat(
             toolDefinitions,
             docsRootRelativeToRepo,
           ),
-        ) + scoped.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
+        ) +
+        estimateToolSchemaTokens(toolDefinitions) +
+        scoped.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
 
       if (opts.aggressiveCompaction || shouldCompact(scopedTokens, contextLimit, scoped)) {
         // Identifies the notice across the three `setMessages` calls below —
@@ -1365,6 +1375,7 @@ export function useLlmChat(
     steerChat,
     retryWithCompaction,
     contextTokens: displayedContextTokens,
+    lastRequestTokens,
     todos,
     clearTodos,
     activePlanId,

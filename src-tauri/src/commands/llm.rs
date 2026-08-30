@@ -45,7 +45,7 @@ use crate::domain::ai_tools::Task;
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::{
     ChatResponse, ChatStreamOutcome, LlmMessage, LlmModelInfo,
-    LlmProviderConfig, LlmSettings, ResolvedLlmProvider, ToolCallDecision,
+    LlmProviderConfig, LlmSettings, ResolvedLlmProvider, SteeringNote, ToolCallDecision,
 };
 use crate::domain::llm_rate_limit::RateLimitSnapshot;
 use crate::infra::llm_credentials_store;
@@ -132,14 +132,35 @@ pub fn llm_steer_chat(
     text: String,
     steering: State<'_, Arc<SteeringQueue>>,
 ) -> Result<(), String> {
-    let text = text.trim();
-    if text.is_empty() {
+    queue_note(SteeringNote::user(text.trim()), &steering)
+}
+
+/// Queues an *app-authored* note for the next fresh model round — today,
+/// a `visualize` card reporting that the diagram source the model just
+/// sent does not actually render. Unlike `llm_steer_chat` this never shows
+/// up in the transcript as something the analyst said.
+///
+/// Deliberately unconditional: if the turn has already finished, the note
+/// simply sits in the queue until `llm_chat::stream` clears it at the start
+/// of the next fresh turn. Callers that need the model to react after a
+/// turn ended must send a real message instead (the card's «Перерисовать»
+/// button).
+#[tauri::command]
+pub fn llm_note_chat(
+    text: String,
+    steering: State<'_, Arc<SteeringQueue>>,
+) -> Result<(), String> {
+    queue_note(SteeringNote::system(text.trim()), &steering)
+}
+
+fn queue_note(note: SteeringNote, steering: &State<'_, Arc<SteeringQueue>>) -> Result<(), String> {
+    if note.text.is_empty() {
         return Ok(());
     }
     steering
         .lock()
         .map_err(|_| "steering queue lock poisoned".to_string())?
-        .push(text.to_string());
+        .push(note);
     Ok(())
 }
 

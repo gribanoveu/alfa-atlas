@@ -421,7 +421,9 @@ mod tests {
             arguments: r#"{"path":"intro.adoc"}"#.to_string(),
         };
         let parsed = parse_tool_call(&call).unwrap();
-        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string(), start_line: None, end_line: None }));
+        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string(), start_line: None, end_line: None,
+    outline: None,
+}));
     }
 
     #[test]
@@ -475,6 +477,7 @@ mod tests {
                 path: "intro.adoc".to_string(),
                 start_line: Some(2),
                 end_line: Some(10),
+                outline: None,
             })
         );
     }
@@ -526,6 +529,7 @@ mod tests {
                 glob: Some("*.adoc".to_string()),
                 case_insensitive: Some(true),
                 max_results: Some(20),
+                context_lines: None,
             })
         );
     }
@@ -561,6 +565,7 @@ mod tests {
                     path: "AusnController.java".to_string(),
                     start_line: Some(1),
                     end_line: Some(90),
+                    outline: None,
                 }),
             ),
             (
@@ -572,6 +577,7 @@ mod tests {
                     glob: Some("*.java".to_string()),
                     case_insensitive: Some(true),
                     max_results: Some(20),
+                    context_lines: None,
                 }),
             ),
         ];
@@ -1077,7 +1083,9 @@ mod tests {
             arguments: r#"{"path":"intro.adoc"}garbage"#.to_string(),
         };
         let parsed = parse_tool_call(&call).unwrap();
-        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string(), start_line: None, end_line: None }));
+        assert_eq!(parsed, ToolCall::ReadFile(ReadFileArgs { path: "intro.adoc".to_string(), start_line: None, end_line: None,
+    outline: None,
+}));
     }
 
     #[test]

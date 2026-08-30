@@ -6,6 +6,7 @@ import {
   type MessageBlock,
 } from "../lib/chatBlocks";
 import { estimateTokenCount, estimateTokensFromChars } from "../lib/tokens";
+import { estimateToolSchemaTokens } from "../lib/assistantConfig";
 
 const FILE_BODY = "x".repeat(4000);
 
@@ -29,6 +30,30 @@ function turnWithFileRead(streaming: boolean): ChatMessage {
   ];
   return { id: "m1", role: "assistant", blocks, streaming };
 }
+
+describe("estimateToolSchemaTokens", () => {
+  test("is zero when no tools are advertised", () => {
+    expect(estimateToolSchemaTokens([])).toBe(0);
+  });
+
+  test("counts the schemas that ride on every request", () => {
+    // The real advertised set (24 tools) serializes to ~37 800 characters,
+    // about 9 300 tokens — measured off a provider debug log, where leaving
+    // it out ran the whole estimate a stable ~36% under the reported
+    // `promptTokens`. This fixture is the same order of magnitude.
+    const defs = Array.from({ length: 24 }, (_, i) => ({
+      name: `tool${i}`,
+      description: "x".repeat(800),
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    }));
+    const estimated = estimateToolSchemaTokens(defs);
+    expect(estimated).toBeGreaterThan(4000);
+    // Nothing but the definitions — a bigger advertised set costs more, a
+    // narrowed allowlist costs less, which is why this is computed rather
+    // than a stored constant.
+    expect(estimateToolSchemaTokens(defs.slice(0, 12))).toBeLessThan(estimated);
+  });
+});
 
 describe("estimateTokensFromChars", () => {
   test("matches estimateTokenCount on the same length", () => {

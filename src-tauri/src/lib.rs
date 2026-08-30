@@ -429,6 +429,7 @@ pub fn run() {
             commands::llm::llm_chat_stream_resume,
             commands::llm::llm_cancel_chat,
             commands::llm::llm_steer_chat,
+            commands::llm::llm_note_chat,
             commands::llm::llm_chat_once,
             commands::llm::llm_rate_limit_snapshot,
             commands::chat_history::chat_list,

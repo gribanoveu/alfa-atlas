@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Task } from "./aiTools";
+import { describeToolResult } from "./assistantConfig";
 import type { ChatMessage, MessageBlock } from "./chatBlocks";
 
 export type ChatExportFormat = "markdown" | "json";
@@ -41,12 +42,22 @@ function formatToolCallBlock(block: Extract<MessageBlock, { type: "toolCall" }>)
   } catch {
     // leave as raw string if it isn't valid JSON
   }
+  // The same one-line summary the chat shows under a settled call
+  // (`describeToolResult`), rather than an export-only second switch that
+  // would drift from it. Without this an export shows what the assistant
+  // asked for but never what came back — an `askUser` reads as an ignored
+  // question, and a diagram card is indistinguishable from a turn that drew
+  // nothing. Only for `done`: the status line already carries the reason
+  // for the other three states.
+  const resultLine =
+    block.status === "done" ? [`_Результат: ${describeToolResult(block)}_`] : [];
   return [
     `**Вызов инструмента: ${block.name}**`,
     "```json",
     prettyArgs,
     "```",
     `_Статус: ${toolCallStatusLabel(block)}_`,
+    ...resultLine,
   ].join("\n");
 }
 

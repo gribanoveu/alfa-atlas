@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::domain::llm::{
     ChatEvent, ChatEventSink, ChatRequest, ChatResponse, LlmMessage, LlmProvider, LlmSettings,
-    ResolvedLlmProvider,
+    ResolvedLlmProvider, SteeringNote,
 };
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
 use crate::services::{llm_config, llm_rate_limit};
@@ -40,10 +40,14 @@ pub type LlmProviderSlot = Mutex<Option<(ResolvedLlmProvider, Option<String>, Ar
 /// continuing once it reads `true`.
 pub type ChatCancelFlag = AtomicBool;
 
-/// User-authored notes waiting to be added to the next fresh model round.
-/// Like `ChatCancelFlag`, this is global because the app permits only one
-/// in-flight conversation at a time.
-pub type SteeringQueue = Mutex<Vec<String>>;
+/// Notes waiting to be added to the next fresh model round — user
+/// clarifications typed mid-turn, and the app's own notes about the
+/// model's output (`SteeringSource`). Like `ChatCancelFlag`, this is
+/// global because the app permits only one in-flight conversation at a
+/// time, and a fresh turn clears it (`llm_chat::stream`) — which is also
+/// what stops a `System` note queued after a turn already ended from
+/// leaking into the next one.
+pub type SteeringQueue = Mutex<Vec<SteeringNote>>;
 
 pub fn ensure_provider(
     slot: &LlmProviderSlot,

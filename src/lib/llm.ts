@@ -432,6 +432,16 @@ export function steerLlmChat(text: string): Promise<void> {
   return invoke("llm_steer_chat", { text });
 }
 
+/** Same queue as `steerLlmChat`, but for a note the *app* wrote rather than
+ * the user — today, a `visualize` card reporting that the diagram source
+ * does not render. It never appears in the transcript as something the user
+ * said, and it is silently dropped if no turn is running (the backend
+ * clears the queue when the next turn starts), so callers that need the
+ * model to react after a turn ended must send a real message instead. */
+export function noteLlmChat(text: string): Promise<void> {
+  return invoke("llm_note_chat", { text });
+}
+
 /** Fires once per non-empty text chunk while a `streamLlmChat()` call is in
  * flight. */
 export function listenLlmChatDelta(

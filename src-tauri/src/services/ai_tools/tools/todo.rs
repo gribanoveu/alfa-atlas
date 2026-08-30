@@ -40,7 +40,10 @@ pub(super) fn todo_update(todos: &[Task], args: TodoUpdateArgs) -> Result<Vec<Ta
     let task = updated
         .iter_mut()
         .find(|t| t.id == args.id)
-        .ok_or_else(|| ToolError::TaskNotFound(args.id.clone()))?;
+        .ok_or_else(|| ToolError::TaskNotFound {
+            id: args.id.clone(),
+            available: Some(todos.iter().map(|t| t.id.clone()).collect()),
+        })?;
     task.status = args.status.into();
     if let Some(note) = args.note {
         task.note = Some(note);
@@ -233,7 +236,21 @@ mod tests {
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
         let list = todo_write(&scope, &[], &["A"]).unwrap();
         let err = todo_update(&scope, &list, "t99", TodoUpdateStatus::Completed, None).unwrap_err();
-        assert!(matches!(err, ToolError::TaskNotFound(id) if id == "t99"));
+        assert!(matches!(&err, ToolError::TaskNotFound { id, .. } if id == "t99"));
+        // The message has to name the way out — a bare "no task with id"
+        // is a dead end the model just abandons.
+        assert!(err.to_string().contains("current ids: t1"), "got {err}");
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn todo_update_on_an_empty_checklist_says_to_write_one_first() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        // Exactly what happened in the transcript: `op: "update", id: "t1"`
+        // with nothing ever written.
+        let err = todo_update(&scope, &[], "t1", TodoUpdateStatus::Completed, None).unwrap_err();
+        assert!(err.to_string().contains("the checklist is empty"), "got {err}");
         fs::remove_dir_all(&repo).ok();
     }
 }

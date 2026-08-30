@@ -47,6 +47,25 @@ pub struct ReadFileArgs {
     /// 1-indexed, inclusive. `None` means "through the end of the file".
     #[serde(default, deserialize_with = "flexible_args::opt_u32")]
     pub end_line: Option<u32>,
+    /// When true, return the file's structure (named symbols / headings
+    /// with their line ranges) instead of its text — see
+    /// `ToolResult::FileOutline`. Overrides `start_line`/`end_line`, which
+    /// describe a slice of content there is none of in this mode.
+    #[serde(default, deserialize_with = "flexible_args::opt_bool")]
+    pub outline: Option<bool>,
+}
+
+/// One entry in a `ToolResult::FileOutline` — a symbol or heading, with the
+/// lines it spans so the caller can turn it straight into a `readFile`
+/// range.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutlineEntry {
+    pub name: String,
+    /// `SymbolKind`, lowercased — `class`, `method`, `section`, ….
+    pub kind: String,
+    pub start_line: u32,
+    pub end_line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,6 +107,13 @@ pub struct GrepArgs {
     /// (see `services::docs_search`).
     #[serde(default, deserialize_with = "flexible_args::opt_usize")]
     pub max_results: Option<usize>,
+    /// Lines of surrounding context to return with each hit, clamped to
+    /// `MAX_GREP_CONTEXT_LINES`. `None`/`0` → the matching line alone,
+    /// which is what the user-facing `docs_search` IPC always sends. Exists
+    /// for the model: without it, every «what does this line actually do»
+    /// costs a follow-up `readFile` round trip.
+    #[serde(default, deserialize_with = "flexible_args::opt_usize")]
+    pub context_lines: Option<usize>,
 }
 
 /// One line hit from `grep` — deliberately not `Deserialize` (serialize
@@ -102,6 +128,14 @@ pub struct GrepMatch {
     pub line: u32,
     /// The matching line's text (possibly truncated for payload size).
     pub text: String,
+    /// Lines immediately before the hit, oldest first — only when
+    /// `GrepArgs::context_lines` asked for them. Skipped in the payload
+    /// when empty, so a plain search's wire shape is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before: Vec<String>,
+    /// Lines immediately after the hit, in file order. Same as `before`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -803,6 +837,16 @@ pub enum ToolResult {
         end_line: u32,
         total_lines: u32,
     },
+    /// Settled `readFile` with `outline: true` — the file's shape rather
+    /// than its text. `entries` is empty for a file whose language has no
+    /// indexer (or that genuinely declares nothing), which is information
+    /// too: `totalLines` still says how big a plain read would be.
+    #[serde(rename_all = "camelCase")]
+    FileOutline {
+        path: String,
+        entries: Vec<OutlineEntry>,
+        total_lines: u32,
+    },
     FileList(Vec<ToolFileEntry>),
     /// Settled `semanticSearch` — matches plus weak-search `meta`.
     SemanticSearchResults(SemanticSearchPayload),
@@ -1084,9 +1128,18 @@ pub enum ToolError {
     },
     /// A `todo update` naming an `id` that doesn't exist in the current
     /// list — most likely a stale/hallucinated id from earlier in the
-    /// conversation.
-    #[error("no task with id: {0}")]
-    TaskNotFound(String),
+    /// conversation, or (the case that actually happened) a checklist the
+    /// model never created before trying to complete a task on it.
+    ///
+    /// `available` is `Some` when the caller knows the whole list, so the
+    /// message can name the way out instead of leaving a dead end; `None`
+    /// where it doesn't (the plan-todo path), which must not be reported as
+    /// "the checklist is empty".
+    #[error("{}", task_not_found_message(id, available))]
+    TaskNotFound {
+        id: String,
+        available: Option<Vec<String>>,
+    },
     /// A git read (`gitDiff`/`gitBlame`) failed — wraps `GitError` as a
     /// string so the model sees a useful message without pulling git
     /// types into the tool boundary.
@@ -1118,11 +1171,25 @@ impl From<crate::domain::agent_skills::SkillError> for ToolError {
     }
 }
 
+/// A tool error the model can act on: what it asked for, and what it can
+/// legally ask for instead.
+fn task_not_found_message(id: &str, available: &Option<Vec<String>>) -> String {
+    match available {
+        Some(ids) if ids.is_empty() => format!(
+            "no task with id: {id} — the checklist is empty, create tasks with op \"write\" before updating one"
+        ),
+        Some(ids) => format!("no task with id: {id} — current ids: {}", ids.join(", ")),
+        None => format!("no task with id: {id}"),
+    }
+}
+
 impl From<crate::domain::plan::PlanError> for ToolError {
     fn from(err: crate::domain::plan::PlanError) -> Self {
         match err {
             crate::domain::plan::PlanError::NotFound(id) => ToolError::NotFound(format!("plan:{id}")),
-            crate::domain::plan::PlanError::TodoNotFound(id) => ToolError::TaskNotFound(id),
+            crate::domain::plan::PlanError::TodoNotFound(id) => {
+                ToolError::TaskNotFound { id, available: None }
+            }
             other => ToolError::Plan(other.to_string()),
         }
     }
