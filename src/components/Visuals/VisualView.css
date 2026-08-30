@@ -21,7 +21,11 @@
 .visual-view-heading {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+
+  /* Same eyebrow-over-title spacing as the assistant panel's cards — 3px
+     let the uppercase label crowd the title instead of reading as a
+     caption above it, and the title here is larger than theirs. */
+  gap: 6px;
   min-width: 0;
   flex: 1;
 }

@@ -2059,7 +2059,11 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
 .assistant-ask-user-card-header {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+
+  /* Matches `.assistant-artifact-card-heading` — 2px let the uppercase
+     eyebrow crowd the title, so the label read as part of it rather than
+     as a caption above it. */
+  gap: 6px;
 }
 
 .assistant-ask-user-card-eyebrow {
@@ -2299,7 +2303,11 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
 .assistant-plan-card-header {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+
+  /* Matches `.assistant-artifact-card-heading` — 2px let the uppercase
+     eyebrow crowd the title, so the label read as part of it rather than
+     as a caption above it. */
+  gap: 6px;
 }
 
 .assistant-plan-card-eyebrow {
