@@ -986,6 +986,7 @@
    ========================================================= */
 
 .assistant-chat-message.user {
+  position: relative;
   align-self: flex-end;
   max-width: 85%;
   margin: 6px 0 10px;
@@ -995,6 +996,49 @@
   color: #fff;
   line-height: 1.6;
   white-space: pre-wrap;
+}
+
+/* Copy-the-prompt button, parked in the gap under the bubble so it never
+   reflows the message text. Revealed on hover/focus only — it is a rare
+   action (re-sending a prompt in a fresh chat), not part of reading. */
+.assistant-chat-user-copy {
+  position: absolute;
+  right: 2px;
+  bottom: -22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.assistant-chat-message.user:hover .assistant-chat-user-copy,
+.assistant-chat-user-copy:focus-visible,
+.assistant-chat-user-copy.copied {
+  opacity: 1;
+}
+
+.assistant-chat-user-copy:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.assistant-chat-user-copy.copied {
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-chat-user-copy {
+    transition: none;
+  }
 }
 
 

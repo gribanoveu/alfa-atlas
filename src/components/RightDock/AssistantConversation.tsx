@@ -36,6 +36,7 @@ import { AssistantSuggestionChip } from "./AssistantSuggestionChip";
 import { AssistantSuggestionModal } from "./AssistantSuggestionModal";
 import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
+import { AssistantUserMessage } from "./AssistantUserMessage";
 import { AssistantPlanCard, isPlanToolBlock } from "./AssistantPlanCard";
 import { AssistantVisualCard, isVisualToolBlock } from "./AssistantVisualCard";
 import { openVisualTab } from "../../lib/visuals";
@@ -1125,7 +1126,7 @@ export function AssistantConversation({
                     </div>
                   )
                 ) : (
-                  m.content
+                  <AssistantUserMessage content={m.content} />
                 )}
               </div>
             );
