@@ -52,8 +52,11 @@ export function parentFolderName(path: string): string | null {
   return segments.length > 0 ? (segments[segments.length - 1] ?? null) : null;
 }
 
-/** True when the file is `{folderName}/{folderName}.adoc` (REST method doc). */
-export function isMethodDescriptionFile(ctx: EditorActionContext): boolean {
+/** True when the file is `{folderName}/{folderName}.adoc` (REST method doc).
+ * Takes only the two fields it reads (not a whole `EditorActionContext`) so
+ * callers that know just a path — e.g. `buildSuggestionContext` in
+ * `assistantSuggestions.ts` — can reuse it. */
+export function isMethodDescriptionFile(ctx: { path: string; basename: string }): boolean {
   const stem = adocStem(ctx.basename);
   const folder = parentFolderName(ctx.path);
   if (!stem || !folder) return false;

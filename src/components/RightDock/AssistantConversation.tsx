@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ArrowDown, ChevronUp, Clock3, FileText, FolderGit2, Send, Sparkles, Square, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import { formatElapsedDuration } from "../../hooks/useElapsedSeconds";
 import {
-  ASSISTANT_SUGGESTIONS,
   AUTO_MODEL_LABEL,
   AUTO_MODEL_VALUE,
   CHAT_INPUT_ROWS,
@@ -12,7 +11,17 @@ import {
   CONTEXT_NEAR_LIMIT_RATIO,
   PLAN_EXECUTION_START_TEXT,
 } from "../../lib/assistantConfig";
-import type { AssistantSuggestion } from "../../lib/assistantConfig";
+import {
+  ASSISTANT_SUGGESTIONS,
+  buildSuggestionContext,
+  needsAccessUpgrade,
+  needsSuggestionForm,
+  prefillValues,
+  renderSuggestionText,
+  suggestionsForMode,
+  visibleSuggestions,
+} from "../../lib/assistantSuggestions";
+import type { AssistantSuggestion } from "../../lib/assistantSuggestions";
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, Task } from "../../lib/aiTools";
 import { groupBlocksForRender, searchIsDegraded, type ChatMessage } from "../../lib/chatBlocks";
 import type { LlmProviderConfig, PendingApproval, ResolvedLlmProvider } from "../../lib/llm";
@@ -23,6 +32,8 @@ import { AssistantArtifactCard } from "./AssistantArtifactCard";
 import { AssistantAskUserCard } from "./AssistantAskUserCard";
 import { AssistantReasoningBlock } from "./AssistantReasoningBlock";
 import { AssistantSteerBlock } from "./AssistantSteerBlock";
+import { AssistantSuggestionChip } from "./AssistantSuggestionChip";
+import { AssistantSuggestionModal } from "./AssistantSuggestionModal";
 import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import { AssistantPlanCard, isPlanToolBlock } from "./AssistantPlanCard";
@@ -36,21 +47,34 @@ const ACCESS_MODE_OPTIONS: { value: AiAccessMode; label: string; Icon: LucideIco
   { value: "fullRepo", label: "Весь репозиторий", Icon: FolderGit2 },
 ];
 
-const CHAT_MODE_OPTIONS: { value: ConversationMode; label: string; title: string }[] = [
+/** `title` is the short capability phrase used as a tooltip on the mode chips
+ * and in the composer's mode dropdown; `greeting` is the full sentence the
+ * empty state shows under «Привет! Я Атлас», which changes with the mode —
+ * its opening also says what kind of input the mode expects (a task, a
+ * question), so the two halves of the placeholder don't repeat each other. */
+const CHAT_MODE_OPTIONS: {
+  value: ConversationMode;
+  label: string;
+  title: string;
+  greeting: string;
+}[] = [
   {
     value: "agent",
     label: "Агент",
     title: "смогу исследовать репозиторий и вносить изменения в документацию",
+    greeting: "Расскажите, что нужно сделать — изучу проект и внесу правки в документацию.",
   },
   {
     value: "plan",
     label: "План",
     title: "смогу составлять план будущих работ без правок в документацию",
+    greeting: "Опишите задачу — изучу проект и составлю план работ, не меняя файлы.",
   },
   {
     value: "question",
     label: "Вопрос",
     title: "смогу отвечать на точечные вопросы не внося изменений в документацию",
+    greeting: "Спросите о проекте — разберусь и отвечу, не меняя файлы.",
   },
 ];
 
@@ -319,6 +343,12 @@ type AssistantConversationProps = {
    * when nothing's open — forwarded into `useLlmChat` so `SemanticSearch`
    * can boost results related to whatever the user is looking at. */
   activeFilePath: string | null;
+  /** Whether the repository has uncommitted changes to *tracked* files
+   * (`hasTrackedGitChanges` on App's always-live `useGitPanel` status).
+   * Only feeds `appliesTo` on the suggestion chips — untracked files are
+   * deliberately excluded, since `gitDiff` (what the «Проверить мои правки»
+   * suggestion relies on) can't show them either. */
+  hasUncommittedChanges: boolean;
   /** Fires once a `writeFile`/`editFile`/`deleteFile`/`createDirectory`/
    * `deleteDirectory` tool call actually lands on disk (its block settles
    * to `"done"`) — `tool`/`path` mirror the settled call so the caller can
@@ -407,6 +437,7 @@ export function AssistantConversation({
   docsRoot,
   repoRoot,
   activeFilePath,
+  hasUncommittedChanges,
   onFileWritten,
   onFileMoved,
   refreshAccessMode,
@@ -636,9 +667,54 @@ export function AssistantConversation({
   // suggestion `text` values are meant to be appended to rather than sent
   // verbatim.
   const [activeSuggestion, setActiveSuggestion] = useState<AssistantSuggestion | null>(null);
-  const followUpSuggestions = activeSuggestion?.followUps;
+  // The suggestion whose input form is open, if any — a click on a chip that
+  // declares `inputs` (or needs a repo-access upgrade) opens the form instead
+  // of filling the composer straight away.
+  const [formSuggestion, setFormSuggestion] = useState<AssistantSuggestion | null>(null);
+  // Every value the user has typed into a suggestion form this chat, keyed by
+  // `SuggestionInput.key` — lets a follow-up reuse e.g. the method name from
+  // the first step instead of asking for it again.
+  const [rememberedValues, setRememberedValues] = useState<Record<string, string>>({});
+  // The chip the pointer/focus is on — its `hint` fills the description line
+  // under the chip row, mirroring how the mode chips above describe the
+  // hovered mode.
+  const [hoveredSuggestion, setHoveredSuggestion] = useState<AssistantSuggestion | null>(null);
+  const suggestionCtx = useMemo(
+    () => buildSuggestionContext({ conversationMode, activeFilePath, hasUncommittedChanges }),
+    [conversationMode, activeFilePath, hasUncommittedChanges],
+  );
+  // Each mode gets its own starting tasks — Plan mode offers plans, not
+  // edits — so switching the mode chips above swaps this row.
+  //
+  // Every mode's row is computed (and rendered) rather than just the active
+  // one: they are stacked in a single grid cell so the block keeps the
+  // height of the tallest. The placeholder column is centred vertically, so
+  // a row that grew by one chip would otherwise shove the mode chips —
+  // the very thing the user just clicked — upward out from under the cursor.
+  const suggestionsByMode = useMemo(
+    () =>
+      CHAT_MODE_OPTIONS.map((option) => ({
+        mode: option.value,
+        items: suggestionsForMode(ASSISTANT_SUGGESTIONS, {
+          ...suggestionCtx,
+          conversationMode: option.value,
+        }),
+      })),
+    [suggestionCtx],
+  );
+  const hasAnySuggestion = suggestionsByMode.some((group) => group.items.length > 0);
+  // The hint line describes a chip in the row above it; when the row is
+  // swapped out (mode change) the old hint would otherwise linger under
+  // chips it has nothing to do with.
+  useEffect(() => {
+    setHoveredSuggestion(null);
+  }, [conversationMode]);
+  const followUpSuggestions = useMemo(
+    () => visibleSuggestions(activeSuggestion?.followUps ?? [], suggestionCtx),
+    [activeSuggestion, suggestionCtx],
+  );
   const showFollowUpBar =
-    followUpSuggestionsEnabled && messages.length > 0 && Boolean(followUpSuggestions?.length);
+    followUpSuggestionsEnabled && messages.length > 0 && followUpSuggestions.length > 0;
 
   // Shown while the last search in this chat ran without its semantic tier
   // — the assistant keeps working, but on a narrower search than usual, and
@@ -806,8 +882,22 @@ export function AssistantConversation({
     void updateProviderConfig(providerId, { model: value === AUTO_MODEL_VALUE ? null : value });
   };
 
-  const handleSuggestionClick = (suggestion: AssistantSuggestion) => {
-    setDraft(suggestion.text);
+  // Fills the composer from a suggestion, applying whatever the suggestion
+  // declares it needs. Never sends: the user reads the finished prompt and
+  // presses Enter themselves, which also means the access-mode round trip
+  // below has settled long before the turn actually leaves.
+  const applySuggestion = (suggestion: AssistantSuggestion, values: Record<string, string>) => {
+    if (suggestion.mode && suggestion.mode !== conversationMode) {
+      // Silent: the mode chips right above the suggestions show the result.
+      onConversationModeChange(suggestion.mode);
+    }
+    if (needsAccessUpgrade(suggestion, accessMode)) {
+      // Only ever reached through the form's explicit «Включить доступ и
+      // вставить» button — see `handleSuggestionClick`.
+      onAccessModeChange("fullRepo");
+    }
+    setRememberedValues((prev) => ({ ...prev, ...values }));
+    setDraft(renderSuggestionText(suggestion, values));
     setActiveSuggestion(suggestion);
     requestAnimationFrame(() => {
       const el = chatInputRef.current;
@@ -815,6 +905,20 @@ export function AssistantConversation({
       el.focus();
       el.setSelectionRange(el.value.length, el.value.length);
     });
+  };
+
+  const handleSuggestionClick = (suggestion: AssistantSuggestion) => {
+    if (needsSuggestionForm(suggestion, accessMode)) {
+      setFormSuggestion(suggestion);
+      return;
+    }
+    applySuggestion(suggestion, {});
+  };
+
+  const handleSuggestionFormSubmit = (values: Record<string, string>) => {
+    if (!formSuggestion) return;
+    applySuggestion(formSuggestion, values);
+    setFormSuggestion(null);
   };
 
   const handleSend = () => {
@@ -844,8 +948,6 @@ export function AssistantConversation({
     void sendMessage(combined);
   };
 
-  const activeMode = CHAT_MODE_OPTIONS.find((o) => o.value === conversationMode);
-
   return (
     <>
       <TodoProgressWidget tasks={todos} onClearAll={sending ? undefined : clearTodos} />
@@ -855,44 +957,63 @@ export function AssistantConversation({
           <div className="assistant-chat-placeholder">
             <Sparkles className="assistant-chat-placeholder-icon" size={20} strokeWidth={1.5} aria-hidden />
             <p className="assistant-chat-placeholder-title">Привет! Я Атлас</p>
-            <p className="assistant-chat-placeholder-desc">
-              Расскажите, что нужно — разберусь в проекте и помогу с документацией.
-            </p>
-
-            <div className="assistant-chat-placeholder-modes">
-              <div className="assistant-chat-mode-chips" role="group" aria-label="Режим ассистента">
-                {CHAT_MODE_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    className={`assistant-chat-mode-chip${conversationMode === option.value ? " is-active" : ""}`}
-                    title={option.title}
-                    aria-pressed={conversationMode === option.value}
-                    disabled={sending}
-                    onClick={() => onConversationModeChange(option.value)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              <p className="assistant-chat-mode-desc">{activeMode?.title}</p>
+            <div className="assistant-chat-stack is-inline">
+              {CHAT_MODE_OPTIONS.map((option) => (
+                <p
+                  key={option.value}
+                  className="assistant-chat-placeholder-desc"
+                  data-inactive={option.value === conversationMode ? undefined : "true"}
+                  aria-hidden={option.value === conversationMode ? undefined : true}
+                >
+                  {option.greeting}
+                </p>
+              ))}
             </div>
 
-            <div className="assistant-chat-placeholder-suggestions">
-              <p className="assistant-chat-placeholder-suggestions-label">Шаблоны задач</p>
-              <div className="assistant-chat-suggestions">
-                {ASSISTANT_SUGGESTIONS.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    className="assistant-suggestion-chip"
-                    onClick={() => handleSuggestionClick(s)}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
+            <div className="assistant-chat-mode-chips" role="group" aria-label="Режим ассистента">
+              {CHAT_MODE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`assistant-chat-mode-chip${conversationMode === option.value ? " is-active" : ""}`}
+                  title={option.title}
+                  aria-pressed={conversationMode === option.value}
+                  disabled={sending}
+                  onClick={() => onConversationModeChange(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
+
+            {hasAnySuggestion ? (
+              <div className="assistant-chat-placeholder-suggestions">
+                <p className="assistant-chat-placeholder-suggestions-label">Шаблоны задач</p>
+                <div className="assistant-chat-stack">
+                  {suggestionsByMode.map(({ mode, items }) => (
+                    <div
+                      key={mode}
+                      className="assistant-chat-suggestions"
+                      data-inactive={mode === conversationMode ? undefined : "true"}
+                      aria-hidden={mode === conversationMode ? undefined : true}
+                    >
+                      {items.map((s) => (
+                        <AssistantSuggestionChip
+                          key={s.id}
+                          suggestion={s}
+                          className="assistant-suggestion-chip"
+                          onClick={() => handleSuggestionClick(s)}
+                          onHoverChange={setHoveredSuggestion}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                </div>
+                {/* Reserved height, so pointing at a chip doesn't shift the
+                    row it is in — the placeholder column is centred. */}
+                <p className="assistant-chat-suggestion-desc">{hoveredSuggestion?.hint ?? ""}</p>
+              </div>
+            ) : null}
           </div>
         ) : (
           messages.map((m) => {
@@ -1115,20 +1236,18 @@ export function AssistantConversation({
           </span>
         </div>
       ) : null}
-      {showFollowUpBar && followUpSuggestions ? (
+      {showFollowUpBar ? (
         <div className="assistant-followup-bar" role="group" aria-label="Похожие предложения">
           <Sparkles className="assistant-followup-bar-icon" size={12} strokeWidth={1.75} aria-hidden />
           <div className="assistant-followup-bar-chips">
             {followUpSuggestions.map((s) => (
-              <button
+              <AssistantSuggestionChip
                 key={s.id}
-                type="button"
+                suggestion={s}
                 className="assistant-followup-chip"
                 disabled={sending}
                 onClick={() => handleSuggestionClick(s)}
-              >
-                {s.label}
-              </button>
+              />
             ))}
           </div>
           <button
@@ -1248,6 +1367,15 @@ export function AssistantConversation({
           </div>
         </div>
       </div>
+      {formSuggestion ? (
+        <AssistantSuggestionModal
+          suggestion={formSuggestion}
+          initialValues={prefillValues(formSuggestion, rememberedValues)}
+          accessMode={accessMode}
+          onCancel={() => setFormSuggestion(null)}
+          onSubmit={handleSuggestionFormSubmit}
+        />
+      ) : null}
     </>
   );
 }

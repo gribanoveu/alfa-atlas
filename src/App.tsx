@@ -26,6 +26,7 @@ import { StatusBar } from "./components/StatusBar/StatusBar";
 import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
+import { hasTrackedGitChanges } from "./lib/git";
 import { friendlyGitError } from "./lib/gitErrors";
 import { useBranches } from "./hooks/useBranches";
 import { useGitStash } from "./hooks/useGitStash";
@@ -974,6 +975,7 @@ function App() {
               onFileMoved: assistant.onFileMoved,
               repoRoot: project.repoRoot,
               activeFilePath: editor.activeTab?.path ?? null,
+              hasUncommittedChanges: hasTrackedGitChanges(git.status),
             }}
             chatInsertRequest={chatInsertRequest}
             onChatInsertHandled={assistant.onChatInsertHandled}

@@ -144,6 +144,7 @@ type RightDockProps = {
     onFileMoved: (info: { from: string; to: string; updatedFiles: UpdatedReference[] }) => void;
     repoRoot: string | null;
     activeFilePath: string | null;
+    hasUncommittedChanges: boolean;
   } | null;
   gitActionLog?: {
     entries: GitActionLogEntry[];
@@ -327,6 +328,7 @@ export function RightDock({
               onFileMoved={assistant.onFileMoved}
               repoRoot={assistant.repoRoot}
               activeFilePath={assistant.activeFilePath}
+              hasUncommittedChanges={assistant.hasUncommittedChanges}
               chatInsertRequest={chatInsertRequest ?? null}
               onChatInsertHandled={onChatInsertHandled}
               assistantSendRequest={assistantSendRequest ?? null}

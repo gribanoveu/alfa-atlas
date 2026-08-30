@@ -54,6 +54,10 @@ type AssistantPanelProps = {
    * when nothing's open — forwarded to `AssistantConversation` so
    * `SemanticSearch` can boost results related to it. */
   activeFilePath: string | null;
+  /** Repository has uncommitted changes to tracked files — forwarded to
+   * `AssistantConversation`, where it decides whether the «Проверить мои
+   * правки» suggestion chip is relevant enough to show. */
+  hasUncommittedChanges: boolean;
   /** «Добавить в чат» из редактора — запрос на вставку выделенного фрагмента
    * в черновик ввода чата. Приход нового id закрывает открытый архив (иначе
    * диалог не смонтирован и вставка была бы потеряна); саму вставку
@@ -116,6 +120,7 @@ export function AssistantPanel({
   onFileMoved,
   repoRoot,
   activeFilePath,
+  hasUncommittedChanges,
   chatInsertRequest,
   onChatInsertHandled,
   assistantSendRequest,
@@ -366,6 +371,7 @@ export function AssistantPanel({
                 docsRoot={docsRoot}
                 repoRoot={repoRoot ?? ""}
                 activeFilePath={activeFilePath}
+                hasUncommittedChanges={hasUncommittedChanges}
                 onFileWritten={onFileWritten}
                 onFileMoved={onFileMoved}
                 refreshAccessMode={refreshAccessMode}
