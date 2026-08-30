@@ -90,6 +90,7 @@ mod tests {
                 install_id: Some("fixed-id".to_string()),
                 install_reported_at: Some(42),
                 enabled: false,
+                open_session: None,
             };
             save(&state).unwrap();
             assert_eq!(load().unwrap(), state);

@@ -13,8 +13,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::domain::metrics::{
-    MetricEvent, MetricsConfig, MetricsError, MetricsState, PROVIDER_CUSTOM, SLOT_APP_VERSION,
-    SLOT_INSTALL_ID, SLOT_OS, SLOT_PROVIDER, SLOT_SESSION_ID,
+    MetricEvent, MetricsConfig, MetricsError, MetricsState, OpenSession, PROVIDER_CUSTOM,
+    SLOT_APP_VERSION, SLOT_INSTALL_ID, SLOT_OS, SLOT_PROVIDER, SLOT_SESSION_ID,
 };
 use crate::infra::{metrics_queue, metrics_store, snowplow_client};
 use crate::services::metrics_session;
@@ -98,11 +98,17 @@ pub fn app_start_event() -> MetricEvent {
 /// Both are whole seconds, not minutes: a large share of desktop sessions
 /// are short, and rounding those to a minute would erase the difference
 /// between "opened and immediately closed" and "worked for a while".
-pub fn session_end_event(active_seconds: f64, total_seconds: f64) -> MetricEvent {
+///
+/// `label` distinguishes a session that ended through a real exit from one
+/// recovered from a checkpoint after the app was killed. Keeping them
+/// apart matters: a recovered session's active time is only accurate to
+/// the last checkpoint, and treating the two as identical would quietly
+/// bias every average downward.
+pub fn session_end_event(active_seconds: f64, total_seconds: f64, clean: bool) -> MetricEvent {
     MetricEvent {
         category: APP_CATEGORY.to_string(),
         action: "End -> Session".to_string(),
-        label: "Session ended".to_string(),
+        label: if clean { "clean" } else { "unclean" }.to_string(),
         property: Some(format!("{}", total_seconds.round())),
         value: Some(active_seconds.round()),
         dimensions: BTreeMap::new(),
@@ -275,6 +281,89 @@ where
     state.install_reported_at = Some(snowplow_client::unix_millis());
     metrics_store::save(&state)?;
     Ok(true)
+}
+
+/// Minimum advance in active seconds before a checkpoint is rewritten.
+/// An app sitting unfocused accrues no active time and therefore writes
+/// nothing at all — the checkpoint costs a small file write only while
+/// someone is actually working.
+const CHECKPOINT_MIN_ADVANCE_SECS: f64 = 30.0;
+
+/// Records the in-progress run's active time on disk.
+///
+/// Deliberately a **local write, not a send**. Reporting usage time on a
+/// timer would mean many events per session where one suffices; the event
+/// still goes out exactly once, at the end. What this buys is that "the
+/// end" survives the app being killed instead of closed.
+pub fn checkpoint_session(session_id: &str, active_secs: f64, now_ms: i64) -> Result<(), MetricsError> {
+    let mut state = metrics_store::load()?;
+    if !state.enabled {
+        return Ok(());
+    }
+
+    if let Some(open) = &state.open_session {
+        if open.session_id == session_id && active_secs - open.active_secs < CHECKPOINT_MIN_ADVANCE_SECS
+        {
+            return Ok(());
+        }
+    }
+
+    let started_ms = state
+        .open_session
+        .as_ref()
+        .filter(|open| open.session_id == session_id)
+        .map(|open| open.started_ms)
+        .unwrap_or(now_ms);
+
+    state.open_session = Some(OpenSession {
+        session_id: session_id.to_string(),
+        started_ms,
+        active_secs,
+        last_seen_ms: now_ms,
+    });
+    metrics_store::save(&state)?;
+    Ok(())
+}
+
+/// Emits the session-end event for a run that never got to record one, and
+/// clears the checkpoint. Called at startup: a leftover `open_session`
+/// means the previous run was killed rather than closed.
+///
+/// Returns whether such a session was recovered.
+pub fn recover_unfinished_session() -> Result<bool, MetricsError> {
+    let mut state = metrics_store::load()?;
+    let Some(open) = state.open_session.take() else {
+        return Ok(false);
+    };
+    metrics_store::save(&state)?;
+
+    if !state.enabled {
+        return Ok(false);
+    }
+
+    // Wall-clock length is measured to the last checkpoint, not to now:
+    // the app may have been dead for days before the next launch.
+    //
+    // Floored at the active time. With a single checkpoint written,
+    // `last_seen_ms` equals `started_ms` and the raw span is zero — which
+    // would ship a session reporting more focused time than elapsed time,
+    // an impossibility that reads as corrupt data downstream.
+    let span = ((open.last_seen_ms - open.started_ms).max(0) as f64) / 1000.0;
+    let total = span.max(open.active_secs);
+    track_deferred(session_end_event(open.active_secs, total, false))?;
+    Ok(true)
+}
+
+/// Clears the checkpoint after a clean exit has been recorded, so the next
+/// launch doesn't report the same run a second time as unclean.
+pub fn clear_open_session() -> Result<(), MetricsError> {
+    let mut state = metrics_store::load()?;
+    if state.open_session.is_none() {
+        return Ok(());
+    }
+    state.open_session = None;
+    metrics_store::save(&state)?;
+    Ok(())
 }
 
 pub fn set_enabled(enabled: bool) -> Result<MetricsState, MetricsError> {
@@ -467,6 +556,110 @@ mod tests {
     }
 
     #[test]
+    fn a_session_killed_before_it_could_exit_is_still_reported() {
+        with_temp_home(|| {
+            checkpoint_session("run-1", 120.0, 1_000_000).unwrap();
+            // No clean exit — the process simply went away.
+
+            assert!(recover_unfinished_session().unwrap());
+
+            let batch = metrics_queue::take_batch().unwrap();
+            let event = &batch[0].1;
+            assert_eq!(event["se_ac"], "End -> Session");
+            assert_eq!(
+                event["se_la"], "unclean",
+                "a recovered session must be distinguishable from a clean exit"
+            );
+            assert_eq!(event["se_va"], "120");
+        });
+    }
+
+    #[test]
+    fn a_recovered_session_never_reports_more_active_time_than_elapsed_time() {
+        with_temp_home(|| {
+            // One checkpoint only: `last_seen_ms` == `started_ms`, so the
+            // raw wall-clock span is zero.
+            checkpoint_session("run-1", 58.0, 1_000_000).unwrap();
+            recover_unfinished_session().unwrap();
+
+            let batch = metrics_queue::take_batch().unwrap();
+            let event = &batch[0].1;
+            let active: f64 = event["se_va"].as_str().unwrap().parse().unwrap();
+            let total: f64 = event["se_pr"].as_str().unwrap().parse().unwrap();
+            assert!(
+                total >= active,
+                "elapsed ({total}) must never be less than focused ({active})"
+            );
+        });
+    }
+
+    #[test]
+    fn a_recovered_session_is_reported_only_once() {
+        with_temp_home(|| {
+            checkpoint_session("run-1", 60.0, 1_000_000).unwrap();
+            assert!(recover_unfinished_session().unwrap());
+            assert!(
+                !recover_unfinished_session().unwrap(),
+                "the checkpoint must be consumed, not replayed on every launch"
+            );
+            assert_eq!(metrics_queue::pending_count().unwrap(), 1);
+        });
+    }
+
+    #[test]
+    fn a_clean_exit_leaves_nothing_for_the_next_launch_to_recover() {
+        with_temp_home(|| {
+            checkpoint_session("run-1", 60.0, 1_000_000).unwrap();
+            clear_open_session().unwrap();
+
+            assert!(!recover_unfinished_session().unwrap());
+            assert_eq!(
+                metrics_queue::pending_count().unwrap(),
+                0,
+                "a run that exited cleanly must not also be counted as unclean"
+            );
+        });
+    }
+
+    #[test]
+    fn a_checkpoint_is_not_rewritten_until_active_time_actually_advances() {
+        with_temp_home(|| {
+            checkpoint_session("run-1", 60.0, 1_000_000).unwrap();
+            // An unfocused app accrues no active time — nothing to write.
+            checkpoint_session("run-1", 61.0, 1_060_000).unwrap();
+
+            let open = metrics_store::load().unwrap().open_session.unwrap();
+            assert_eq!(open.active_secs, 60.0);
+            assert_eq!(open.last_seen_ms, 1_000_000);
+
+            checkpoint_session("run-1", 95.0, 1_120_000).unwrap();
+            let open = metrics_store::load().unwrap().open_session.unwrap();
+            assert_eq!(open.active_secs, 95.0);
+        });
+    }
+
+    #[test]
+    fn a_checkpoint_keeps_the_original_start_time_across_rewrites() {
+        with_temp_home(|| {
+            checkpoint_session("run-1", 60.0, 1_000_000).unwrap();
+            checkpoint_session("run-1", 200.0, 2_000_000).unwrap();
+
+            let open = metrics_store::load().unwrap().open_session.unwrap();
+            assert_eq!(open.started_ms, 1_000_000, "the run began once");
+            assert_eq!(open.last_seen_ms, 2_000_000);
+        });
+    }
+
+    #[test]
+    fn no_checkpoint_is_written_while_metrics_are_disabled() {
+        with_temp_home(|| {
+            set_enabled(false).unwrap();
+            checkpoint_session("run-1", 120.0, 1_000_000).unwrap();
+            assert!(metrics_store::load().unwrap().open_session.is_none());
+        });
+    }
+
+    #[test]
     fn a_call_site_cannot_overwrite_a_base_slot() {
         let hijacked = MetricEvent {
             dimensions: BTreeMap::from([(SLOT_INSTALL_ID.to_string(), "spoofed".to_string())]),
@@ -478,7 +671,7 @@ mod tests {
 
     #[test]
     fn session_end_reports_active_time_as_the_value_and_total_alongside() {
-        let event = session_end_event(42.4, 900.0);
+        let event = session_end_event(42.4, 900.0, true);
         assert_eq!(
             event.value,
             Some(42.0),
@@ -489,7 +682,7 @@ mod tests {
 
     #[test]
     fn a_short_session_does_not_round_away_to_nothing() {
-        assert_eq!(session_end_event(20.0, 20.0).value, Some(20.0));
+        assert_eq!(session_end_event(20.0, 20.0, true).value, Some(20.0));
     }
 
     #[test]
@@ -516,7 +709,7 @@ mod tests {
     fn a_failed_flush_keeps_every_event_for_the_next_attempt() {
         with_temp_home(|| {
             enqueue_event(&config(), app_start_event()).unwrap();
-            enqueue_event(&config(), session_end_event(10.0, 30.0)).unwrap();
+            enqueue_event(&config(), session_end_event(10.0, 30.0, true)).unwrap();
 
             let spy = SpyPoster::new(false);
             assert!(flush_with(&config(), spy.poster()).is_err());
@@ -604,7 +797,7 @@ mod tests {
                 *posts.borrow_mut() += 1;
                 // Mid-flight arrival, exactly as a frontend event would.
                 if *posts.borrow() == 1 {
-                    enqueue_event(&config(), session_end_event(1.0, 2.0)).unwrap();
+                    enqueue_event(&config(), session_end_event(1.0, 2.0, true)).unwrap();
                 }
                 Ok(())
             };
@@ -622,7 +815,7 @@ mod tests {
     fn a_flush_posts_the_whole_backlog_as_one_batch() {
         with_temp_home(|| {
             enqueue_event(&config(), app_start_event()).unwrap();
-            enqueue_event(&config(), session_end_event(5.0, 12.0)).unwrap();
+            enqueue_event(&config(), session_end_event(5.0, 12.0, true)).unwrap();
             enqueue_event(&config(), app_start_event()).unwrap();
 
             let spy = SpyPoster::new(true);

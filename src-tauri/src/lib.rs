@@ -43,9 +43,14 @@ fn record_session_end() {
         return;
     };
     if let Err(e) = services::metrics::track_deferred(services::metrics::session_end_event(
-        active, total,
+        active, total, true,
     )) {
         eprintln!("metrics: session end not recorded: {e}");
+    }
+    // The run is accounted for; drop its checkpoint so the next launch
+    // doesn't report it a second time as an unclean exit.
+    if let Err(e) = services::metrics::clear_open_session() {
+        eprintln!("metrics: session checkpoint not cleared: {e}");
     }
 }
 
@@ -113,6 +118,11 @@ fn persist_window_state(window: &Window) {
 
     let _ = window_settings::save_window_state(state);
 }
+
+/// How often the in-progress session's active time is written to disk.
+/// The upper bound on what a crash can lose, traded against how often a
+/// small file is rewritten while someone is working.
+const SESSION_CHECKPOINT_INTERVAL_SECS: u64 = 60;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -185,11 +195,46 @@ pub fn run() {
                     if let Err(e) = services::metrics::report_install_once() {
                         eprintln!("metrics: install report failed: {e}");
                     }
+                    // A checkpoint left behind means the previous run was
+                    // killed rather than closed — report it now, before
+                    // this run overwrites the slot.
+                    if let Err(e) = services::metrics::recover_unfinished_session() {
+                        eprintln!("metrics: unfinished session not recovered: {e}");
+                    }
                     if let Err(e) = services::metrics::track(services::metrics::app_start_event()) {
                         eprintln!("metrics: app start not recorded: {e}");
                     }
                 })
                 .await;
+            });
+
+            // Checkpoints this run's active time to disk — a local write,
+            // never a send. Usage time is still reported once, at the end;
+            // this only ensures "the end" exists even when the process is
+            // killed. Writes nothing while the window is unfocused, since
+            // active time isn't advancing then.
+            tauri::async_runtime::spawn(async {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(
+                        SESSION_CHECKPOINT_INTERVAL_SECS,
+                    ))
+                    .await;
+                    let _ = tauri::async_runtime::spawn_blocking(|| {
+                        let active = services::metrics_session::active_secs();
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        if let Err(e) = services::metrics::checkpoint_session(
+                            services::metrics_session::id(),
+                            active,
+                            now,
+                        ) {
+                            eprintln!("metrics: session checkpoint failed: {e}");
+                        }
+                    })
+                    .await;
+                }
             });
 
             Ok(())

@@ -173,6 +173,26 @@ pub struct MetricsState {
     pub install_reported_at: Option<i64>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// The run currently in progress, checkpointed to disk so a session
+    /// that never exits cleanly is still reported. `None` between runs.
+    #[serde(default)]
+    pub open_session: Option<OpenSession>,
+}
+
+/// A run in progress. Written locally roughly once a minute while the app
+/// is actually being used — **not** sent anywhere on that cadence. The
+/// event still goes out once, at the end; this only makes sure "the end"
+/// survives the app being killed rather than closed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenSession {
+    pub session_id: String,
+    pub started_ms: i64,
+    /// Seconds the window had focus as of the last checkpoint.
+    pub active_secs: f64,
+    /// When that checkpoint was taken — stands in for the exit time when
+    /// the app never got to record one.
+    pub last_seen_ms: i64,
 }
 
 fn default_enabled() -> bool {
@@ -185,6 +205,7 @@ impl Default for MetricsState {
             install_id: None,
             install_reported_at: None,
             enabled: default_enabled(),
+            open_session: None,
         }
     }
 }
@@ -299,6 +320,7 @@ mod tests {
             install_id: Some("id".to_string()),
             install_reported_at: Some(1_756_400_000_000),
             enabled: false,
+            open_session: None,
         };
         let json = serde_json::to_string(&state).unwrap();
         assert!(json.contains("installReportedAt"), "unexpected json: {json}");
