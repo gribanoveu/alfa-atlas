@@ -152,14 +152,15 @@ struct ModelsListDatum {
 struct StreamDelta {
     #[serde(default)]
     content: Option<String>,
-    /// A reasoning-capable model's "thinking" text, sent ahead of `content`
-    /// on the same wire shape by providers like DeepSeek's reasoner models —
-    /// no separate opt-in on the request is needed, it's just present or
-    /// absent per-provider/per-model. Absent (not just `null`) on every
-    /// other provider, hence `#[serde(default)]` rather than a required
-    /// field.
-    #[serde(default)]
+    /// DeepSeek / Qwen / many OpenRouter reasoners.
+    #[serde(default, deserialize_with = "deserialize_reasoning_text")]
     reasoning_content: Option<String>,
+    /// OpenAI o-series proxies, Groq, some OpenRouter models.
+    #[serde(default, deserialize_with = "deserialize_reasoning_text")]
+    reasoning: Option<String>,
+    /// Anthropic-compatible and Gemini-via-OpenAI proxies.
+    #[serde(default, deserialize_with = "deserialize_reasoning_text")]
+    thinking: Option<String>,
     // `#[serde(default)]` alone only covers a *missing* key — many
     // OpenAI-compatible servers, once `tools` is present on the request,
     // explicitly send `"tool_calls":null` on a content-only delta chunk
@@ -169,6 +170,16 @@ struct StreamDelta {
     // missing key.
     #[serde(default, deserialize_with = "deserialize_null_default")]
     tool_calls: Vec<StreamToolCallDelta>,
+}
+
+impl StreamDelta {
+    /// First non-empty thinking field, in the order providers actually use.
+    /// A chunk never meaningfully carries more than one of these.
+    fn reasoning_text(&self) -> Option<String> {
+        [&self.reasoning_content, &self.reasoning, &self.thinking]
+            .into_iter()
+            .find_map(|s| s.clone())
+    }
 }
 
 /// Treats an explicit JSON `null` the same as a missing key — plain
@@ -182,6 +193,44 @@ where
     T: Default + Deserialize<'de>,
 {
     Ok(Option::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// Accepts a JSON string, `null`, or `{content|text: "..."}` — OpenAI-
+/// compatible proxies disagree on the thinking-field shape, and rejecting
+/// the object form used to drop the whole SSE chunk (and with it any
+/// `tool_calls` on the same line).
+fn deserialize_reasoning_text<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|v| match v {
+        Value::Null => None,
+        Value::String(s) if s.is_empty() => None,
+        Value::String(s) => Some(s),
+        Value::Object(map) => map
+            .get("content")
+            .or_else(|| map.get("text"))
+            .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        _ => None,
+    }))
+}
+
+/// Tool-call `arguments` are a JSON *string* on the OpenAI wire, but some
+/// proxies send a parsed object. Fold the object back into a string so
+/// the accumulator (and the frontend) still see one growing blob.
+fn deserialize_optional_arguments<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|v| match v {
+        Value::Null => None,
+        Value::String(s) => Some(s),
+        other => Some(other.to_string()),
+    }))
 }
 
 /// One fragment of a streamed tool call. OpenAI sends `id`/`function.name`
@@ -203,7 +252,7 @@ struct StreamToolCallDelta {
 struct StreamToolCallFunctionDelta {
     #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_arguments")]
     arguments: Option<String>,
 }
 
@@ -294,7 +343,14 @@ fn parse_sse_line(line: &str) -> Result<SseLine, LlmError> {
         serde_json::from_str(data).map_err(|e| LlmError::Provider(e.to_string()))?;
     let usage = chunk.usage.map(ChatUsage::from);
     let (delta, reasoning, tool_calls) = match chunk.choices.into_iter().next() {
-        Some(choice) => (choice.delta.content, choice.delta.reasoning_content, choice.delta.tool_calls),
+        Some(choice) => {
+            // A role-only first chunk often carries `"content":""` — treating
+            // that as a real delta used to open an empty text block, which
+            // hid both the typing dots and the "Модель думает…" card.
+            let reasoning = choice.delta.reasoning_text();
+            let content = choice.delta.content.filter(|s| !s.is_empty());
+            (content, reasoning, choice.delta.tool_calls)
+        }
         None => (None, None, Vec::new()),
     };
     Ok(SseLine::Chunk { delta, reasoning, usage, tool_calls })
@@ -364,6 +420,25 @@ impl ToolCallAccumulator {
             .into_iter()
             .map(|(_, e)| LlmToolCall { id: e.id, name: e.name, arguments: e.arguments })
             .collect()
+    }
+
+    /// Live snapshots of every call that has an `id`, a `name`, or any
+    /// arguments. An id-less fragment uses `pending:{index}` so the
+    /// frontend can still open a tool-call block (AlfaGen and several
+    /// other proxies withhold `id` until the last fragment — skipping
+    /// those used to look like a hung stream).
+    fn snapshots(&self) -> impl Iterator<Item = (String, &str, &str)> {
+        self.entries.iter().filter_map(|(index, e)| {
+            if e.id.is_empty() && e.name.is_empty() && e.arguments.is_empty() {
+                return None;
+            }
+            let id = if e.id.is_empty() {
+                format!("pending:{index}")
+            } else {
+                e.id.clone()
+            };
+            Some((id, e.name.as_str(), e.arguments.as_str()))
+        })
     }
 }
 
@@ -457,7 +532,8 @@ impl LlmProvider for OpenAiCompatibleProvider {
     /// surfaces on the working wire shape. Deltas are discarded here; only
     /// the final accumulated text/`tool_calls` matter to these callers.
     fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
-        let result = self.chat_stream(request, &|_delta| {}, &|_reasoning| {}, &|| false)?;
+        let result =
+            self.chat_stream(request, &|_delta| {}, &|_reasoning| {}, &|_, _, _| {}, &|| false)?;
         Ok(ChatResponse {
             content: if result.text.is_empty() {
                 None
@@ -474,6 +550,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         request: ChatRequest,
         on_delta: &dyn Fn(&str),
         on_reasoning: &dyn Fn(&str),
+        on_tool_call_delta: &dyn Fn(&str, &str, &str),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError> {
         let body = self.build_body(&request, true);
@@ -525,7 +602,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
                     if chunk_usage.is_some() {
                         usage = chunk_usage;
                     }
-                    tool_calls_acc.ingest(tool_calls);
+                    if !tool_calls.is_empty() {
+                        tool_calls_acc.ingest(tool_calls);
+                        for (id, name, arguments) in tool_calls_acc.snapshots() {
+                            on_tool_call_delta(&id, name, arguments);
+                        }
+                    }
                 }
                 SseLine::Ignore => {}
                 SseLine::Done => break,
@@ -915,6 +997,79 @@ mod tests {
         assert_eq!(calls[0].id, "call_1");
         assert_eq!(calls[0].name, "readFile");
         assert_eq!(calls[0].arguments, r#"{"path":"a.md"}"#);
+    }
+
+    #[test]
+    fn tool_call_accumulator_snapshots_use_pending_id_until_the_real_one_arrives() {
+        let mut acc = ToolCallAccumulator::default();
+        acc.ingest(vec![StreamToolCallDelta {
+            index: Some(0),
+            id: None,
+            function: Some(StreamToolCallFunctionDelta {
+                name: Some("visualize".to_string()),
+                arguments: Some("{".to_string()),
+            }),
+        }]);
+        let pending: Vec<_> = acc.snapshots().collect();
+        assert_eq!(pending, vec![("pending:0".to_string(), "visualize", "{")]);
+
+        acc.ingest(vec![StreamToolCallDelta {
+            index: Some(0),
+            id: Some("call_1".to_string()),
+            function: Some(StreamToolCallFunctionDelta {
+                name: None,
+                arguments: Some(r#""source":"a""#.to_string()),
+            }),
+        }]);
+        let first: Vec<_> = acc.snapshots().collect();
+        assert_eq!(first, vec![("call_1".to_string(), "visualize", r#"{"source":"a""#)]);
+
+        acc.ingest(vec![StreamToolCallDelta {
+            index: Some(0),
+            id: None,
+            function: Some(StreamToolCallFunctionDelta {
+                name: None,
+                arguments: Some("}".to_string()),
+            }),
+        }]);
+        let second: Vec<_> = acc.snapshots().collect();
+        assert_eq!(second, vec![("call_1".to_string(), "visualize", r#"{"source":"a"}"#)]);
+    }
+
+    #[test]
+    fn parse_sse_line_reads_reasoning_and_thinking_aliases() {
+        let reasoning = r#"data: {"choices":[{"delta":{"reasoning":" план"}}]}"#;
+        let SseLine::Chunk { reasoning: r, .. } = parse_sse_line(reasoning).unwrap() else {
+            panic!("expected a Chunk");
+        };
+        assert_eq!(r.as_deref(), Some(" план"));
+
+        let thinking = r#"data: {"choices":[{"delta":{"thinking":{"content":" шаг"}}}]}"#;
+        let SseLine::Chunk { reasoning: t, .. } = parse_sse_line(thinking).unwrap() else {
+            panic!("expected a Chunk");
+        };
+        assert_eq!(t.as_deref(), Some(" шаг"));
+    }
+
+    #[test]
+    fn parse_sse_line_ignores_empty_content_so_it_does_not_look_like_prose() {
+        let line = r#"data: {"choices":[{"delta":{"role":"assistant","content":""}}]}"#;
+        assert_eq!(
+            parse_sse_line(line).unwrap(),
+            SseLine::Chunk { delta: None, reasoning: None, usage: None, tool_calls: vec![] }
+        );
+    }
+
+    #[test]
+    fn parse_sse_line_accepts_tool_call_arguments_as_an_object() {
+        let line = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"visualize","arguments":{"kind":"diagram"}}}]}}]}"#;
+        let SseLine::Chunk { tool_calls, .. } = parse_sse_line(line).unwrap() else {
+            panic!("expected a Chunk");
+        };
+        assert_eq!(
+            tool_calls[0].function.as_ref().and_then(|f| f.arguments.as_deref()),
+            Some(r#"{"kind":"diagram"}"#)
+        );
     }
 
     #[test]

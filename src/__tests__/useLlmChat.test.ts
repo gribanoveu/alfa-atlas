@@ -12,6 +12,7 @@ type Listener<T> = (payload: T) => void;
 let deltaListeners: Listener<{ delta: string }>[] = [];
 let reasoningListeners: Listener<{ delta: string }>[] = [];
 let steeringListeners: Listener<{ text: string }>[] = [];
+let toolCallDeltaListeners: Listener<{ id: string; name: string; arguments: string }>[] = [];
 let toolCallListeners: Listener<{ id: string; name: string; arguments: string }>[] = [];
 let toolResultListeners: Listener<{ id: string; result: unknown; error: string | null }>[] = [];
 
@@ -71,6 +72,12 @@ mock.module("../lib/llm", () => ({
     steeringListeners.push(cb);
     return () => {
       steeringListeners = steeringListeners.filter((l) => l !== cb);
+    };
+  },
+  listenLlmToolCallDelta: async (cb: Listener<{ id: string; name: string; arguments: string }>) => {
+    toolCallDeltaListeners.push(cb);
+    return () => {
+      toolCallDeltaListeners = toolCallDeltaListeners.filter((l) => l !== cb);
     };
   },
   listenLlmToolCall: async (cb: Listener<{ id: string; name: string; arguments: string }>) => {
@@ -190,6 +197,7 @@ beforeEach(() => {
   deltaListeners = [];
   reasoningListeners = [];
   steeringListeners = [];
+  toolCallDeltaListeners = [];
   toolCallListeners = [];
   toolResultListeners = [];
   outcomes = [];
@@ -300,6 +308,50 @@ describe("useLlmChat — live events", () => {
     // record of what the assistant actually did.
     expect(block).toMatchObject({ name: "readFile" });
     expect((block as { status: string }).status).not.toBe("running");
+
+    await act(async () => {
+      pendingStream[0]?.(done(""));
+      await sent;
+    });
+  });
+
+  test("a tool-call argument stream opens the block before execution starts", async () => {
+    deferStream = true;
+    const { result } = render();
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("нарисуй схему");
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      for (const l of [...toolCallDeltaListeners]) {
+        l({ id: "v1", name: "visualize", arguments: '{"title":"Оплата","source":"flow' });
+      }
+    });
+    let block = lastAssistant(result.current.messages)?.blocks.find((b) => b.type === "toolCall");
+    expect(block).toMatchObject({
+      name: "visualize",
+      status: "running",
+      argumentsJson: '{"title":"Оплата","source":"flow',
+    });
+
+    await act(async () => {
+      for (const l of [...toolCallDeltaListeners]) {
+        l({ id: "v1", name: "visualize", arguments: '{"title":"Оплата","source":"flowchart TD"}' });
+      }
+    });
+    block = lastAssistant(result.current.messages)?.blocks.find((b) => b.type === "toolCall");
+    expect(block).toMatchObject({ argumentsJson: '{"title":"Оплата","source":"flowchart TD"}' });
+
+    await act(async () => {
+      for (const l of [...toolCallListeners]) {
+        l({ id: "v1", name: "visualize", arguments: '{"title":"Оплата","source":"flowchart TD"}' });
+      }
+    });
+    const blocks = lastAssistant(result.current.messages)?.blocks.filter((b) => b.type === "toolCall") ?? [];
+    expect(blocks).toHaveLength(1);
 
     await act(async () => {
       pendingStream[0]?.(done(""));

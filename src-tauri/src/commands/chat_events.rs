@@ -30,6 +30,14 @@ pub const CHAT_STREAM_REASONING_EVENT: &str = "llm:chat-stream-reasoning-delta";
 /// Fires when queued user guidance is added to the history of a fresh round.
 pub const STEERING_APPLIED_EVENT: &str = "llm:steering-applied";
 
+/// Fires while a tool call's arguments are still arriving on the SSE
+/// stream — same payload as `TOOL_CALL_EVENT`, but the JSON may be
+/// incomplete. Lets the UI show the call (and, for `visualize`, the
+/// diagram source being written) instead of a silent hang. Always followed
+/// later by `TOOL_CALL_EVENT` with the same `id`, unless the turn is
+/// cancelled first.
+pub const TOOL_CALL_DELTA_EVENT: &str = "llm:tool-call-delta";
+
 /// Fires immediately before executing one tool call in a `llm_chat_stream`
 /// round — before, not after, so the UI can show e.g. "reading
 /// docs/x.adoc…" while the (possibly slow — `SemanticSearch` can hit an
@@ -50,7 +58,7 @@ pub const TOOL_RESULT_EVENT: &str = "llm:tool-result";
 pub const RATE_LIMIT_CHANGED_EVENT: &str = "llm:rate-limit-changed";
 
 /// Turns `services::llm_chat`'s framework-free reports into real Tauri
-/// events. This is the only place any of the five `llm:*` events above is
+/// events. This is the only place any of the `llm:*` events above is
 /// emitted — the chat loop itself has no `AppHandle` and no idea a UI is
 /// listening.
 pub fn chat_event_sink(app: &AppHandle) -> ChatEventSink {
@@ -60,6 +68,7 @@ pub fn chat_event_sink(app: &AppHandle) -> ChatEventSink {
             ChatEvent::Delta(p) => app.emit(CHAT_STREAM_DELTA_EVENT, p),
             ChatEvent::Reasoning(p) => app.emit(CHAT_STREAM_REASONING_EVENT, p),
             ChatEvent::SteeringApplied(p) => app.emit(STEERING_APPLIED_EVENT, p),
+            ChatEvent::ToolCallDelta(p) => app.emit(TOOL_CALL_DELTA_EVENT, p),
             ChatEvent::ToolCall(p) => app.emit(TOOL_CALL_EVENT, p),
             ChatEvent::ToolResult(p) => app.emit(TOOL_RESULT_EVENT, p),
             ChatEvent::RateLimitChanged => app.emit(RATE_LIMIT_CHANGED_EVENT, ()),

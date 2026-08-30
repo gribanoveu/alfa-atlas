@@ -34,6 +34,7 @@ import {
   appendReasoningDeltaToBlocks,
   appendSteerBlock,
   appendToolCallBlock,
+  applyToolCallDelta,
   chatMessageToPlainText,
   correctTrailingReasoning,
   correctTrailingText,
@@ -76,6 +77,7 @@ import {
   listenLlmChatReasoningDelta,
   listenLlmSteeringApplied,
   listenLlmToolCall,
+  listenLlmToolCallDelta,
   listenLlmToolResult,
   llmChatOnce,
   streamLlmChat,
@@ -563,9 +565,32 @@ export function useLlmChat(
     };
   }, []);
 
+  // Fires while the model is still writing a tool call's arguments — the
+  // visualize/writeFile source can take many seconds, and without this the
+  // transcript sits empty as if the connection had died. Same `id` as the
+  // later `listenLlmToolCall` / `listenLlmToolResult` pair.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenLlmToolCallDelta(({ id, name, arguments: argumentsJson }) => {
+      if (name) toolNamesRef.current.set(id, name);
+      setMessages((prev) =>
+        updateLastAssistantBlocks(prev, (blocks) => applyToolCallDelta(blocks, { id, name, argumentsJson })),
+      );
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Fires just before the backend executes each tool call — pushes a new
   // permanent "running" block onto the in-flight assistant message (closing
-  // off whatever text preceded it).
+  // off whatever text preceded it), or transitions the block that
+  // `listenLlmToolCallDelta` already opened.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;

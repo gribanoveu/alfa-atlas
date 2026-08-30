@@ -1488,6 +1488,15 @@
   color: var(--text-0);
 }
 
+.assistant-reasoning-header-static {
+  cursor: default;
+}
+
+.assistant-reasoning-header-static:hover {
+  background: transparent;
+  color: var(--text-2);
+}
+
 .assistant-reasoning-chevron,
 .assistant-reasoning-icon {
   flex: none;
@@ -2235,6 +2244,12 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   font-weight: 600;
   line-height: 1.35;
   color: var(--text-0);
+}
+
+.assistant-plan-card-title-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .assistant-plan-card-overview {

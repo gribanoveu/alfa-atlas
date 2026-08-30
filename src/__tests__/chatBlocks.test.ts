@@ -3,12 +3,15 @@ import {
   appendDeltaToBlocks,
   appendReasoningDeltaToBlocks,
   appendSteerBlock,
+  appendPendingApprovalBlock,
   appendToolCallBlock,
+  applyToolCallDelta,
   chatMessageToPlainText,
   correctTrailingReasoning,
   correctTrailingText,
   flattenBlocksToText,
   groupBlocksForRender,
+  lastBlockShowsLiveProgress,
   markRunningToolCallsAsInterrupted,
   searchIsDegraded,
   toolLedger,
@@ -70,6 +73,85 @@ describe("appendReasoningDeltaToBlocks", () => {
   });
 });
 
+describe("applyToolCallDelta", () => {
+  test("opens a running block when the id is new", () => {
+    const blocks = applyToolCallDelta([], {
+      id: "call_1",
+      name: "visualize",
+      argumentsJson: '{"title":"',
+    });
+    expect(blocks).toEqual([
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: "visualize",
+        argumentsJson: '{"title":"',
+        status: "running",
+      },
+    ]);
+  });
+
+  test("rebands a pending:index block onto the real id when it arrives", () => {
+    const pending = applyToolCallDelta([], {
+      id: "pending:0",
+      name: "visualize",
+      argumentsJson: '{"source":"flow',
+    });
+    const named = applyToolCallDelta(pending, {
+      id: "call_1",
+      name: "visualize",
+      argumentsJson: '{"source":"flowchart"}',
+    });
+    expect(named).toHaveLength(1);
+    expect(named[0]).toMatchObject({ id: "call_1", argumentsJson: '{"source":"flowchart"}' });
+  });
+
+  test("grows arguments on the existing block without changing its status", () => {
+    const pending = appendPendingApprovalBlock([], {
+      id: "call_1",
+      name: "visualize",
+      argumentsJson: "{}",
+      approvalGroupId: "g1",
+    });
+    const grown = applyToolCallDelta(pending, {
+      id: "call_1",
+      name: "visualize",
+      argumentsJson: '{"source":"flowchart"}',
+    });
+    expect(grown).toHaveLength(1);
+    expect(grown[0]).toMatchObject({
+      status: "pendingApproval",
+      argumentsJson: '{"source":"flowchart"}',
+      approvalGroupId: "g1",
+    });
+  });
+});
+
+describe("lastBlockShowsLiveProgress", () => {
+  test("false on an empty transcript or after a settled tool call", () => {
+    expect(lastBlockShowsLiveProgress([])).toBe(false);
+    expect(
+      lastBlockShowsLiveProgress([
+        { type: "toolCall", id: "c1", name: "readFile", argumentsJson: "{}", status: "done" },
+      ]),
+    ).toBe(false);
+  });
+
+  test("true while text, reasoning, or a running tool is the tail", () => {
+    expect(lastBlockShowsLiveProgress([{ type: "text", id: "t", content: "…" }])).toBe(true);
+    expect(lastBlockShowsLiveProgress([{ type: "reasoning", id: "r", content: "план" }])).toBe(true);
+    expect(
+      lastBlockShowsLiveProgress([
+        { type: "toolCall", id: "c1", name: "visualize", argumentsJson: "{}", status: "running" },
+      ]),
+    ).toBe(true);
+  });
+
+  test("an empty text block does not count as progress", () => {
+    expect(lastBlockShowsLiveProgress([{ type: "text", id: "t", content: "" }])).toBe(false);
+  });
+});
+
 describe("appendToolCallBlock", () => {
   test("always appends a new running block, regardless of trailing block type", () => {
     const withText = appendToolCallBlock(
@@ -88,6 +170,62 @@ describe("appendToolCallBlock", () => {
     const fromEmpty = appendToolCallBlock([], { id: "call_2", name: "readFile", argumentsJson: "{}" });
     expect(fromEmpty).toHaveLength(1);
     expect(fromEmpty[0].type).toBe("toolCall");
+  });
+
+  test("overwrites arguments on a block that streamed in first", () => {
+    const streamed = applyToolCallDelta([], {
+      id: "call_1",
+      name: "visualize",
+      argumentsJson: '{"source":"flow',
+    });
+    const started = appendToolCallBlock(streamed, {
+      id: "call_1",
+      name: "visualize",
+      argumentsJson: '{"source":"flowchart TD"}',
+    });
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({
+      status: "running",
+      argumentsJson: '{"source":"flowchart TD"}',
+    });
+  });
+
+  test("rebands a pending:index stream block onto the real execution id", () => {
+    const streamed = applyToolCallDelta([], {
+      id: "pending:0",
+      name: "visualize",
+      argumentsJson: '{"source":"flow',
+    });
+    const started = appendToolCallBlock(streamed, {
+      id: "call_1",
+      name: "visualize",
+      argumentsJson: '{"source":"flowchart TD"}',
+    });
+    expect(started).toHaveLength(1);
+    expect(started[0]).toMatchObject({ id: "call_1", status: "running" });
+  });
+});
+
+describe("appendPendingApprovalBlock", () => {
+  test("transitions a streamed-in running block instead of duplicating it", () => {
+    const streamed = applyToolCallDelta([], {
+      id: "call_1",
+      name: "writeFile",
+      argumentsJson: '{"path":"a.md"}',
+    });
+    const paused = appendPendingApprovalBlock(streamed, {
+      id: "call_1",
+      name: "writeFile",
+      argumentsJson: '{"path":"a.md"}',
+      deadlineAt: 1,
+      approvalGroupId: "g1",
+    });
+    expect(paused).toHaveLength(1);
+    expect(paused[0]).toMatchObject({
+      status: "pendingApproval",
+      deadlineAt: 1,
+      approvalGroupId: "g1",
+    });
   });
 });
 

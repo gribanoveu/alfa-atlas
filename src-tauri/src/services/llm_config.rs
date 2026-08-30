@@ -215,6 +215,7 @@ mod tests {
             _request: ChatRequest,
             _on_delta: &dyn Fn(&str),
             _on_reasoning: &dyn Fn(&str),
+            _on_tool_call_delta: &dyn Fn(&str, &str, &str),
             _cancelled: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             unimplemented!("not exercised by these tests")

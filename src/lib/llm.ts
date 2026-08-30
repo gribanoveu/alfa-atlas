@@ -469,6 +469,18 @@ export type LlmToolCallEvent = {
   arguments: string;
 };
 
+/** Fires while a tool call's arguments are still arriving on the SSE
+ * stream — same payload as `listenLlmToolCall`, but `arguments` may be
+ * incomplete JSON. The UI upserts a running block immediately so a long
+ * `visualize`/`writeFile` argument stream does not look like a hang.
+ * Always followed later by `listenLlmToolCall` with the same `id`, unless
+ * the turn is cancelled first. */
+export function listenLlmToolCallDelta(
+  onDelta: (payload: LlmToolCallEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<LlmToolCallEvent>("llm:tool-call-delta", (event) => onDelta(event.payload));
+}
+
 /** Fires immediately before the backend executes one tool call while a
  * `streamLlmChat()` call is in flight — lets the UI show e.g. "Reading
  * docs/x.adoc…" while the (possibly slow) tool execution is actually

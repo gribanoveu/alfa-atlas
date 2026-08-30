@@ -559,6 +559,14 @@ pub trait LlmProvider: Send + Sync {
     /// never both meaningfully at once. Most providers never call this at
     /// all, which is fine: it's simply never invoked.
     ///
+    /// `on_tool_call_delta` is the same kind of callback for a streamed
+    /// tool call: `(id, name, arguments)` after each SSE chunk that grew a
+    /// call which already has an `id`. Arguments are the accumulation so
+    /// far, not the fragment — a long `visualize`/`writeFile` payload
+    /// otherwise sits invisible until the stream ends, which looks like a
+    /// hung connection. Callers that only want the finished `tool_calls`
+    /// (the `chat()` wrapper, scripted tests) pass a no-op.
+    ///
     /// `cancelled` is polled between SSE chunks (see the implementation's
     /// own doc comment for exactly where) so a user-initiated stop
     /// (`commands::llm::llm_cancel_chat`) takes effect within roughly one
@@ -577,6 +585,7 @@ pub trait LlmProvider: Send + Sync {
         request: ChatRequest,
         on_delta: &dyn Fn(&str),
         on_reasoning: &dyn Fn(&str),
+        on_tool_call_delta: &dyn Fn(&str, &str, &str),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<ChatStreamResult, LlmError>;
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError>;
@@ -646,6 +655,11 @@ pub enum ChatEvent {
     Delta(ChatStreamDelta),
     Reasoning(ChatStreamReasoning),
     SteeringApplied(SteeringAppliedEvent),
+    /// Fired while a tool call's `arguments` are still arriving on the
+    /// SSE stream — same payload shape as `ToolCall`, but the JSON may be
+    /// incomplete. Always followed later by `ToolCall` (execution starting)
+    /// with the same `id`, unless the turn is cancelled first.
+    ToolCallDelta(ToolCallEvent),
     /// Fired just before a tool executes; always followed by exactly one
     /// `ToolResult` carrying the same `id`. The frontend pairs them by that
     /// id (see `chatBlocks.ts`), so the order is a contract, not an
@@ -661,8 +675,9 @@ pub enum ChatEvent {
 /// that report through it never learn what is on the other side, and
 /// `commands::chat_events` is the only implementation that turns them into
 /// Tauri events. `Arc<dyn Fn>` rather than a generic bound because the sink
-/// is moved into the `on_delta`/`on_reasoning` closures handed to
-/// `LlmProvider::chat_stream`, which outlive the call that installed them.
+/// is moved into the `on_delta` / `on_reasoning` / `on_tool_call_delta`
+/// closures handed to `LlmProvider::chat_stream`, which outlive the call
+/// that installed them.
 pub type ChatEventSink = Arc<dyn Fn(ChatEvent) + Send + Sync>;
 
 #[cfg(test)]

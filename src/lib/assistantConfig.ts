@@ -47,7 +47,9 @@ Specialized workflows (writing or filling REST/Thrift method documentation, Open
  *  against writing prose — a choice the tool list alone doesn't frame. */
 const VISUALIZE_HINT = `## Explaining with a diagram
 
-When the user asks how something works — a flow through the code, an architecture, a sequence of calls, a state machine, relationships between entities — answer with a diagram: call \`visualize\` once with the diagram, then explain in a few sentences. Do not draw boxes and arrows out of text characters in your prose, and do not paste the diagram source into your reply; the chat shows a card the user opens in a tab. Base the diagram on code you actually read. A short question with a one-sentence answer does not need one.`;
+Reach for a diagram whenever a picture would make the answer easier to understand than prose alone — a flow through the code, an architecture, a sequence of calls, a state machine, how modules or entities relate. Do not wait for the user to say «нарисуй» / «диаграмма»: if the explanation is about structure or motion, draw it. Call \`visualize\` once, then explain in a few sentences. Do not draw boxes and arrows out of text characters, and do not paste the diagram source into your reply; the chat shows a card the user opens in a tab. Base the diagram on code you actually read.
+
+Do not diagram everything. Skip it for a short factual answer, a yes/no, a single path or file name, a wording tweak, or a list the user can scan as text. One focused diagram beats several decorative ones.`;
 
 // System prompt for the assistant embedded in Alfa Atlas. Built by a
 // function rather than a plain const so the date/timezone context line is

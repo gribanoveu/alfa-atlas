@@ -223,8 +223,17 @@ fn run_tool_loop(
                         delta: delta.to_string(),
                     }));
                 };
+                let on_tool_call_delta = |id: &str, name: &str, arguments: &str| {
+                    (ctx.events)(ChatEvent::ToolCallDelta(ToolCallEvent {
+                        id: id.to_string(),
+                        name: name.to_string(),
+                        arguments: arguments.to_string(),
+                    }));
+                };
                 let cancelled = || ctx.cancel_flag.load(Ordering::SeqCst);
-                let raw_result = ctx.provider.chat_stream(request, &on_delta, &on_reasoning, &cancelled);
+                let raw_result = ctx
+                    .provider
+                    .chat_stream(request, &on_delta, &on_reasoning, &on_tool_call_delta, &cancelled);
                 llm_debug_log::log_response(ctx.settings.debug_logging, ctx.provider_id, round, &raw_result);
                 let result = raw_result.map_err(|e| e.to_string())?;
                 if let Some(usage) = result.usage {
@@ -749,6 +758,7 @@ mod tests {
             _request: ChatRequest,
             on_delta: &dyn Fn(&str),
             _on_reasoning: &dyn Fn(&str),
+            _on_tool_call_delta: &dyn Fn(&str, &str, &str),
             _cancelled: &dyn Fn() -> bool,
         ) -> Result<ChatStreamResult, LlmError> {
             let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;

@@ -21,6 +21,22 @@ type AssistantReasoningBlockProps = {
  * actual answer never touches it, so a block the user already opened stays
  * open (just its header stops shimmering and its label changes), instead of
  * springing shut under them. */
+/** Shown while a stream is in flight but nothing is growing yet — empty
+ * first round, or the gap after a settled tool call before the next
+ * tokens. Same chrome as a live reasoning block so every provider, not
+ * just ones that send `reasoning_content`, has a visible "thinking" card. */
+export function AssistantThinkingIndicator() {
+  return (
+    <div className="assistant-reasoning assistant-reasoning-thinking" role="status" aria-label="Модель думает…">
+      <div className="assistant-reasoning-header assistant-reasoning-header-static">
+        <Brain className="assistant-reasoning-icon" size={13} aria-hidden />
+        <span className="assistant-reasoning-label">Модель думает…</span>
+        <AssistantElapsedTimer running className="assistant-reasoning-elapsed" />
+      </div>
+    </div>
+  );
+}
+
 export function AssistantReasoningBlock({ block, thinking }: AssistantReasoningBlockProps) {
   const [expanded, setExpanded] = useState(false);
   // Captured once: a block restored from persisted history starts with

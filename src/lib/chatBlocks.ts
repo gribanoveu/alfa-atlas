@@ -76,6 +76,48 @@ export type ToolCallBlock = {
 
 export type MessageBlock = TextBlock | ToolCallBlock | ReasoningBlock | SteerBlock;
 
+/** True when the trailing block already tells the user the model is busy
+ * (growing prose, visible reasoning, or a tool still in flight). False
+ * after a settled tool call / empty transcript — that's when the chat
+ * must show "Модель думает…", for every provider, not only those that
+ * send `reasoning_content`. */
+export function lastBlockShowsLiveProgress(blocks: MessageBlock[]): boolean {
+  const last = blocks[blocks.length - 1];
+  if (!last) return false;
+  switch (last.type) {
+    case "text":
+    case "reasoning":
+      return last.content !== "";
+    case "toolCall":
+      return last.status === "running" || last.status === "pendingApproval";
+    case "steer":
+      return false;
+  }
+}
+
+/** A provider that withholds `id` until the last fragment is keyed as
+ * `pending:{index}` while arguments stream — see
+ * `ToolCallAccumulator::snapshots`. */
+const PENDING_TOOL_ID = /^pending:(\d+)$/;
+
+function findToolCallBlockIndex(
+  blocks: MessageBlock[],
+  call: { id: string; name?: string },
+): number {
+  const byId = blocks.findIndex((b) => b.type === "toolCall" && b.id === call.id);
+  if (byId !== -1) return byId;
+  if (PENDING_TOOL_ID.test(call.id)) return -1;
+  const pending = blocks
+    .map((b, i) => ({ b, i }))
+    .filter(
+      ({ b }) =>
+        b.type === "toolCall" &&
+        PENDING_TOOL_ID.test(b.id) &&
+        (call.name === undefined || call.name === "" || b.name === call.name || b.name === ""),
+    );
+  return pending.length === 1 ? pending[0]!.i : -1;
+}
+
 /** A user turn stays a plain string — only an assistant turn's shape
  * changes, from flat `content` to an ordered `blocks` array. A
  * discriminated union on `role` (not an optional `content`/`blocks` pair)
@@ -169,24 +211,71 @@ export function appendReasoningDeltaToBlocks(blocks: MessageBlock[], delta: stri
   return [...blocks, { type: "reasoning", id: crypto.randomUUID(), content: delta }];
 }
 
+/** A `TOOL_CALL_DELTA_EVENT` while the model is still writing a call's
+ * arguments — same upsert-by-`id` as `appendToolCallBlock`, but it leaves
+ * `status` alone on an existing block (a later pending-approval card, or
+ * the eventual `TOOL_CALL_EVENT`, owns those transitions). A brand-new
+ * id opens a `"running"` block so the transcript shows the call the moment
+ * its `id`/`name` arrive, instead of sitting silent while a long
+ * `visualize` source streams in. */
+export function applyToolCallDelta(
+  blocks: MessageBlock[],
+  call: { id: string; name: string; argumentsJson: string },
+): MessageBlock[] {
+  const existingIndex = findToolCallBlockIndex(blocks, call);
+  if (existingIndex !== -1) {
+    return blocks.map((b, i) =>
+      i === existingIndex && b.type === "toolCall"
+        ? {
+            ...b,
+            id: call.id.startsWith("pending:") ? b.id : call.id,
+            name: call.name !== "" ? call.name : b.name,
+            argumentsJson: call.argumentsJson,
+          }
+        : b,
+    );
+  }
+  return [
+    ...blocks,
+    {
+      type: "toolCall",
+      id: call.id,
+      name: call.name,
+      argumentsJson: call.argumentsJson,
+      status: "running",
+    },
+  ];
+}
+
 /** A `TOOL_CALL_EVENT` normally pushes a brand-new `toolCall` block — this
  * is what closes off any open text block (the next delta, if any, sees a
  * trailing `toolCall` block and starts fresh per `appendDeltaToBlocks`).
- * The one exception: a call that was shown inline as a `"pendingApproval"`
- * card (`appendPendingApprovalBlock`) already has a block with this exact
- * `id` — the round paused to show it before executing anything, and this
- * event is that same call now actually starting, not a second one, so the
- * existing block transitions in place (dropping `deadlineAt`, the timer is
- * moot once execution has begun) instead of duplicating. */
+ * The one exception: a call that was already shown — either as a
+ * `"pendingApproval"` card (`appendPendingApprovalBlock`) or as a live
+ * argument-stream block (`applyToolCallDelta`) — already has a block with
+ * this exact `id`. This event is that same call now actually starting, not
+ * a second one, so the existing block transitions in place (dropping
+ * `deadlineAt`, the timer is moot once execution has begun) instead of
+ * duplicating. Final `argumentsJson` overwrites whatever the stream had
+ * accumulated, in case a delta was dropped. */
 export function appendToolCallBlock(
   blocks: MessageBlock[],
   call: { id: string; name: string; argumentsJson: string; autoApproved?: boolean },
 ): MessageBlock[] {
-  const existingIndex = blocks.findIndex((b) => b.type === "toolCall" && b.id === call.id);
+  const existingIndex = findToolCallBlockIndex(blocks, call);
   if (existingIndex !== -1) {
     return blocks.map((b, i) =>
       i === existingIndex && b.type === "toolCall"
-        ? { ...b, status: "running", autoApproved: call.autoApproved, deadlineAt: undefined, approvalGroupId: undefined }
+        ? {
+            ...b,
+            id: call.id,
+            name: call.name !== "" ? call.name : b.name,
+            argumentsJson: call.argumentsJson,
+            status: "running",
+            autoApproved: call.autoApproved,
+            deadlineAt: undefined,
+            approvalGroupId: undefined,
+          }
         : b,
     );
   }
@@ -224,18 +313,20 @@ export function appendPendingApprovalBlock(
     approvalGroupId: string;
   },
 ): MessageBlock[] {
-  return [
-    ...blocks,
-    {
-      type: "toolCall",
-      id: call.id,
-      name: call.name,
-      argumentsJson: call.argumentsJson,
-      status: "pendingApproval",
-      deadlineAt: call.deadlineAt,
-      approvalGroupId: call.approvalGroupId,
-    },
-  ];
+  const existingIndex = findToolCallBlockIndex(blocks, call);
+  const next: ToolCallBlock = {
+    type: "toolCall",
+    id: call.id,
+    name: call.name,
+    argumentsJson: call.argumentsJson,
+    status: "pendingApproval",
+    deadlineAt: call.deadlineAt,
+    approvalGroupId: call.approvalGroupId,
+  };
+  if (existingIndex !== -1) {
+    return blocks.map((b, i) => (i === existingIndex ? next : b));
+  }
+  return [...blocks, next];
 }
 
 /** A `TOOL_RESULT_EVENT` finds the block by `id` (searching the whole
@@ -248,8 +339,9 @@ export function settleToolCallBlock(
   blocks: MessageBlock[],
   outcome: { id: string; result: ToolResult | null; error: string | null },
 ): MessageBlock[] {
-  return blocks.map((b): MessageBlock => {
-    if (b.type !== "toolCall" || b.id !== outcome.id) return b;
+  const existingIndex = findToolCallBlockIndex(blocks, { id: outcome.id });
+  return blocks.map((b, i): MessageBlock => {
+    if (b.type !== "toolCall" || (b.id !== outcome.id && i !== existingIndex)) return b;
     return outcome.result !== null
       ? { ...b, status: "done", result: outcome.result }
       : { ...b, status: "error", errorMessage: outcome.error ?? "Неизвестная ошибка" };

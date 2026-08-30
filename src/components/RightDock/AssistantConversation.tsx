@@ -23,14 +23,14 @@ import {
 } from "../../lib/assistantSuggestions";
 import type { AssistantSuggestion } from "../../lib/assistantSuggestions";
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, Task } from "../../lib/aiTools";
-import { groupBlocksForRender, searchIsDegraded, type ChatMessage } from "../../lib/chatBlocks";
+import { groupBlocksForRender, lastBlockShowsLiveProgress, searchIsDegraded, type ChatMessage } from "../../lib/chatBlocks";
 import type { LlmProviderConfig, PendingApproval, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { AssistantArtifactCard } from "./AssistantArtifactCard";
 import { AssistantAskUserCard } from "./AssistantAskUserCard";
-import { AssistantReasoningBlock } from "./AssistantReasoningBlock";
+import { AssistantReasoningBlock, AssistantThinkingIndicator } from "./AssistantReasoningBlock";
 import { AssistantSteerBlock } from "./AssistantSteerBlock";
 import { AssistantSuggestionChip } from "./AssistantSuggestionChip";
 import { AssistantSuggestionModal } from "./AssistantSuggestionModal";
@@ -1035,11 +1035,7 @@ export function AssistantConversation({
               >
                 {m.role === "assistant" ? (
                   m.blocks.length === 0 && m.streaming ? (
-                    <span className="assistant-chat-typing" aria-label="Ассистент печатает…">
-                      <span />
-                      <span />
-                      <span />
-                    </span>
+                    <AssistantThinkingIndicator />
                   ) : (
                     <div className="assistant-chat-blocks">
                       {groupBlocksForRender(m.blocks).map((item, i, arr) =>
@@ -1102,6 +1098,9 @@ export function AssistantConversation({
                           <AssistantToolCallBlock key={item.block.id} block={item.block} />
                         ),
                       )}
+                      {m.streaming && !lastBlockShowsLiveProgress(m.blocks) ? (
+                        <AssistantThinkingIndicator />
+                      ) : null}
                       {stopped ? <div className="assistant-chat-cancelled-note">Остановлено пользователем</div> : null}
                       {failed ? (
                         <div className="assistant-chat-error-card">

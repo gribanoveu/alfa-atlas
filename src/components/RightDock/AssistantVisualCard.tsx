@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
 import { visualFromBlock, type Visual } from "../../lib/visuals";
 
@@ -28,7 +29,10 @@ export function AssistantVisualCard({
       <div className="assistant-plan-card is-running">
         <div className="assistant-plan-card-header">
           <span className="assistant-plan-card-eyebrow">Визуализация</span>
-          <div className="assistant-plan-card-title">Рисую схему…</div>
+          <div className="assistant-plan-card-title assistant-plan-card-title-live">
+            <Loader2 className="assistant-chat-tool-spinner" size={14} aria-hidden />
+            Рисую схему…
+          </div>
         </div>
       </div>
     );
