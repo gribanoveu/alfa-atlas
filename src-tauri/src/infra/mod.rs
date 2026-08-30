@@ -21,6 +21,7 @@ pub mod llm_credentials_store;
 pub mod llm_debug_log;
 pub mod llm_provider_manifest;
 pub mod llm_providers;
+pub mod metrics_queue;
 pub mod metrics_store;
 pub mod onboarding_store;
 pub mod optmem_store;

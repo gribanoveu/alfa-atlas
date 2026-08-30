@@ -99,6 +99,36 @@ describe("trackMetric", () => {
     });
   });
 
+  test("overrides fill the per-occurrence parts without touching slots", async () => {
+    await trackMetric(METRICS.APP.OPEN_PROJECT, undefined, {
+      label: "git",
+      property: "recent",
+    });
+
+    expect(invoked[0].args).toEqual({
+      event: {
+        category: "ALFA-ATLAS > App",
+        action: "Open -> Project",
+        label: "git",
+        property: "recent",
+        value: null,
+        dimensions: {},
+      },
+    });
+  });
+
+  test("a project open carries no path, name or other identifying string", async () => {
+    await trackMetric(METRICS.APP.OPEN_PROJECT, undefined, {
+      label: "plain",
+      property: "dialog",
+    });
+
+    const sent = JSON.stringify(invoked[0].args);
+    for (const forbidden of ["/Users", "/home", "C:\\", ".git", "@", "http"]) {
+      expect(sent).not.toContain(forbidden);
+    }
+  });
+
   test("never rejects, so a metrics failure cannot break the caller's flow", async () => {
     invokeThrows = "collector unreachable";
     await expect(trackMetric(METRICS.APP.INSTALL)).resolves.toBeUndefined();

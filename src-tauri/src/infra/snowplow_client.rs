@@ -24,7 +24,7 @@ use crate::infra::http_agent::build_agent;
 /// `llm_providers::openai_compatible::ERROR_BODY_MAX_CHARS`.
 const ERROR_BODY_MAX_CHARS: usize = 500;
 
-fn unix_millis() -> i64 {
+pub fn unix_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -39,7 +39,20 @@ fn unix_millis() -> i64 {
 ///
 /// Split out from `send` so the payload can be asserted in tests without
 /// touching the network.
-pub fn build_payload(
+/// Wraps already-built event field maps in the tracker-protocol envelope.
+/// Takes a slice because the envelope is an array: a queue flush posts
+/// everything pending in one request rather than one request per event.
+pub fn wrap_payload(events: &[Value]) -> Value {
+    json!({
+        "schema": PAYLOAD_DATA_SCHEMA,
+        "data": events,
+    })
+}
+
+/// One struct event as the flat, string-typed field map the protocol
+/// wants. Separate from `wrap_payload` so a queued event can be built now
+/// and sent later, alongside others.
+pub fn build_event_fields(
     config: &MetricsConfig,
     event: &MetricEvent,
     install_id: &str,
@@ -86,10 +99,19 @@ pub fn build_payload(
         fields.insert("co".to_string(), contexts.to_string());
     }
 
-    json!({
-        "schema": PAYLOAD_DATA_SCHEMA,
-        "data": [fields],
-    })
+    json!(fields)
+}
+
+/// Convenience for a single event — the install report's path.
+pub fn build_payload(
+    config: &MetricsConfig,
+    event: &MetricEvent,
+    install_id: &str,
+    event_id: &str,
+    device_timestamp_ms: i64,
+) -> Value {
+    let fields = build_event_fields(config, event, install_id, event_id, device_timestamp_ms);
+    wrap_payload(&[fields])
 }
 
 /// POSTs one event and blocks until the collector answers. Blocking on
@@ -113,6 +135,11 @@ pub fn send(
         &Uuid::new_v4().to_string(),
         unix_millis(),
     );
+    post_payload(config, &payload)
+}
+
+/// POSTs an already-built envelope. Same blocking contract as `send`.
+pub fn post_payload(config: &MetricsConfig, payload: &Value) -> Result<(), MetricsError> {
     let url = format!("{}/com.snowplowanalytics.snowplow/tp2", config.collector_base);
 
     // The collector's chain roots in a CA that is absent from the
@@ -125,7 +152,7 @@ pub fn send(
     let mut response = agent
         .post(&url)
         .header("Content-Type", "application/json; charset=UTF-8")
-        .send_json(&payload)
+        .send_json(payload)
         .map_err(|e| MetricsError::Transport(e.to_string()))?;
 
     let status = response.status();

@@ -11,6 +11,8 @@ import {
   type ProbeResult,
 } from "../lib/project";
 import { toMessage } from "../lib/errors";
+import { trackMetric } from "../lib/metrics";
+import { METRICS, type ProjectOpenSource } from "../data/metricsCatalog";
 
 export type PendingOpen = ProbeResult;
 
@@ -21,19 +23,32 @@ export function useProject() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pendingOpen, setPendingOpen] = useState<PendingOpen | null>(null);
+  /** How the pending open started, so the confirm path reports the same source. */
+  const [pendingSource, setPendingSource] = useState<ProjectOpenSource>("dialog");
 
-  const applyOpened = useCallback(async (root: string, docs: string) => {
-    setRepoRoot(root);
-    setDocsRoot(docs);
-    setError(null);
-    setPendingOpen(null);
-    try {
-      const branch = await getGitBranch(root);
-      setBranchName(branch);
-    } catch {
-      setBranchName(null);
-    }
-  }, []);
+  const applyOpened = useCallback(
+    async (root: string, docs: string, source: ProjectOpenSource) => {
+      setRepoRoot(root);
+      setDocsRoot(docs);
+      setError(null);
+      setPendingOpen(null);
+      let isRepo = false;
+      try {
+        const branch = await getGitBranch(root);
+        setBranchName(branch);
+        isRepo = branch !== null;
+      } catch {
+        setBranchName(null);
+      }
+      // Only whether it is a repository and how it was opened — never the
+      // path or the repository's name.
+      void trackMetric(METRICS.APP.OPEN_PROJECT, undefined, {
+        label: isRepo ? "git" : "plain",
+        property: source,
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -42,7 +57,7 @@ export function useProject() {
         const project = await getProject();
         if (cancelled) return;
         if (project) {
-          await applyOpened(project.root, project.docsRoot);
+          await applyOpened(project.root, project.docsRoot, "restore");
           return;
         }
 
@@ -53,7 +68,7 @@ export function useProject() {
         if (cancelled) return;
         if (!probe.needsConfirm && probe.docsRoot) {
           const opened = await openCachedProject(probe.root);
-          if (!cancelled) await applyOpened(opened.root, opened.docsRoot);
+          if (!cancelled) await applyOpened(opened.root, opened.docsRoot, "restore");
         } else {
           setPendingOpen(probe);
         }
@@ -73,13 +88,14 @@ export function useProject() {
   }, [applyOpened]);
 
   const beginOpenPath = useCallback(
-    async (path: string) => {
+    async (path: string, source: ProjectOpenSource = "recent") => {
       const probe = await probeOpenPath(path);
       if (!probe.needsConfirm && probe.docsRoot) {
         const opened = await openCachedProject(probe.root);
-        await applyOpened(opened.root, opened.docsRoot);
+        await applyOpened(opened.root, opened.docsRoot, source);
         return opened;
       }
+      setPendingSource(source);
       setPendingOpen(probe);
       return null;
     },
@@ -90,10 +106,10 @@ export function useProject() {
     async (docsRootPath: string) => {
       if (!pendingOpen) return null;
       const opened = await openProject(pendingOpen.root, docsRootPath);
-      await applyOpened(opened.root, opened.docsRoot);
+      await applyOpened(opened.root, opened.docsRoot, pendingSource);
       return opened;
     },
-    [applyOpened, pendingOpen],
+    [applyOpened, pendingOpen, pendingSource],
   );
 
   const cancelPendingOpen = useCallback(() => {
@@ -101,9 +117,13 @@ export function useProject() {
   }, []);
 
   /** Accept a pre-computed ProbeResult (e.g. from a clone) and show the confirm modal. */
-  const submitProbe = useCallback((probe: PendingOpen) => {
-    setPendingOpen(probe);
-  }, []);
+  const submitProbe = useCallback(
+    (probe: PendingOpen, source: ProjectOpenSource = "clone") => {
+      setPendingSource(source);
+      setPendingOpen(probe);
+    },
+    [],
+  );
 
   const openFolderDialog = useCallback(async () => {
     const selected = await open({
@@ -114,7 +134,7 @@ export function useProject() {
     if (selected === null || Array.isArray(selected)) {
       return null;
     }
-    return beginOpenPath(selected);
+    return beginOpenPath(selected, "dialog");
   }, [beginOpenPath]);
 
   const closeProject = useCallback(async () => {

@@ -29,7 +29,24 @@ fn greet(name: &str) -> String {
 
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
+    record_session_end();
     app.exit(0);
+}
+
+/// Writes the session-length event straight to the metrics queue, without
+/// attempting to send it: the process is about to go away, so a network
+/// round trip would either delay the exit or be cut off mid-flight. The
+/// next launch's flush carries it out. `take_end_secs` returns `Some` only
+/// once, so the several shutdown paths can all call this safely.
+fn record_session_end() {
+    let Some((active, total)) = services::metrics_session::take_end_secs() else {
+        return;
+    };
+    if let Err(e) = services::metrics::track_deferred(services::metrics::session_end_event(
+        active, total,
+    )) {
+        eprintln!("metrics: session end not recorded: {e}");
+    }
 }
 
 fn apply_window_state(window: &tauri::WebviewWindow, state: WindowState) {
@@ -157,19 +174,22 @@ pub fn run() {
             app.manage(Arc::new(SteeringQueue::default()));
             app.manage(Arc::new(services::memory_pipeline::MemoryExtractGuard::new()));
 
-            // Fire-and-forget: the install event is reported at most once
-            // per profile, and a failure (typically: launched off the
-            // corporate network) must neither delay startup nor surface to
-            // the user. An unconfirmed send leaves the state flag unset, so
-            // the next launch simply tries again.
+            // Fire-and-forget: metrics must neither delay startup nor
+            // surface to the user. The install report runs first (it is
+            // sent directly and its exactly-once flag depends on a
+            // confirmed delivery), then the launch is recorded and the
+            // queue drained — which also carries out anything that was
+            // stranded by an earlier offline session.
             tauri::async_runtime::spawn(async {
-                match tauri::async_runtime::spawn_blocking(services::metrics::report_install_once)
-                    .await
-                {
-                    Ok(Err(e)) => eprintln!("metrics: install report failed: {e}"),
-                    Err(e) => eprintln!("metrics: install report task failed: {e}"),
-                    Ok(Ok(_)) => {}
-                }
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    if let Err(e) = services::metrics::report_install_once() {
+                        eprintln!("metrics: install report failed: {e}");
+                    }
+                    if let Err(e) = services::metrics::track(services::metrics::app_start_event()) {
+                        eprintln!("metrics: app start not recorded: {e}");
+                    }
+                })
+                .await;
             });
 
             Ok(())
@@ -180,6 +200,15 @@ pub fn run() {
                 | WindowEvent::Moved(_)
                 | WindowEvent::CloseRequested { .. } => {
                     persist_window_state(window);
+                    if matches!(event, WindowEvent::CloseRequested { .. }) {
+                        record_session_end();
+                    }
+                }
+                // Drives the session's "active" clock: what counts as use
+                // is time the window had focus, not time the process was
+                // alive behind someone's browser.
+                WindowEvent::Focused(focused) => {
+                    services::metrics_session::set_focused(*focused);
                 }
                 _ => {}
             }

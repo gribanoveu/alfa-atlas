@@ -73,6 +73,11 @@ pub const SLOT_APP_VERSION: &str = "3";
 /// tracker protocol's own `p` field already means "platform" and carries
 /// `web` for every event.
 pub const SLOT_OS: &str = "4";
+/// One app launch. Random per run, never persisted — it says nothing new
+/// about the user beyond the install id, but it lets events from one run
+/// be stitched into a funnel (opened a project → asked the assistant →
+/// committed). Without it every event is an unconnected point.
+pub const SLOT_SESSION_ID: &str = "5";
 
 /// A single struct event. Mirrors `Metric` + resolved `dimensionsMapping`
 /// from the kit: the frontend does the `{reportId: 'abc'} + {reportId:
@@ -242,11 +247,19 @@ mod tests {
         );
     }
 
+    /// Deliberately not an exact-value assertion on the appId — that is a
+    /// config knob owned by `system_providers.yaml`, and pinning its
+    /// literal here turns a legitimate rename into a broken build. What
+    /// must hold is that a debug binary resolves to the *dev* id and never
+    /// to the production collector.
     #[test]
     fn resolve_uses_the_bundled_preset_and_the_dev_appid_in_debug() {
+        let preset =
+            crate::infra::llm_provider_manifest::metrics_preset().expect("a metrics section");
         // The test binary is a debug build, so this must be the dev branch.
         let config = MetricsConfig::resolve().expect("this build ships a metrics section");
-        assert_eq!(config.app_id, "alfa-atlas-ui_dev");
+        assert_eq!(config.app_id, preset.dev_app_id);
+        assert_ne!(config.app_id, preset.app_id);
         assert!(
             !config.collector_base.contains("metrics.alfabank.ru"),
             "the production collector is deliberately not used: {}",

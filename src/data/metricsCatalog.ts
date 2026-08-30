@@ -10,6 +10,9 @@ export const EventCategory = {
   app: `${CATEGORY_PREFIX} > App`,
 } as const;
 
+/** Where a project open came from. Closed list — goes into `property`. */
+export type ProjectOpenSource = "restore" | "recent" | "dialog" | "clone";
+
 export const METRICS = {
   APP: {
     /**
@@ -27,6 +30,17 @@ export const METRICS = {
         appVersion: DIMENSION_SLOT.appVersion,
         os: DIMENSION_SLOT.os,
       },
+    } satisfies Metric,
+    /**
+     * A project was opened. `label` says whether it is a git repository,
+     * `property` how the user got there. Neither the path nor the
+     * repository name is ever sent — see the privacy checklist in
+     * METRICS.md.
+     */
+    OPEN_PROJECT: {
+      category: EventCategory.app,
+      action: "Open -> Project",
+      label: "Project opened",
     } satisfies Metric,
   },
 } as const;

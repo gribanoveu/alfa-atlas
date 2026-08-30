@@ -28,6 +28,7 @@ pub mod llm_session;
 pub mod memory_log;
 pub mod memory_pipeline;
 pub mod metrics;
+pub mod metrics_session;
 pub mod openapi;
 pub mod plans;
 pub mod project_layout;
