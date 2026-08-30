@@ -1,6 +1,6 @@
 import type { AiAccessMode, ConversationMode } from "./aiTools";
 import { basename } from "./assistantConfig";
-import { REQUEST_FROM_CURL_PROMPT_PREFIX, isMethodDescriptionFile } from "./editorContextActions";
+import { REQUEST_FROM_CURL_PROMPT_PREFIX, isMethodDescriptionFile, parentFolderName } from "./editorContextActions";
 
 // Suggestion chips shown in the assistant panel's empty-state placeholder
 // (`AssistantConversation`) and, once a branch is picked, in the follow-up
@@ -27,7 +27,8 @@ import { REQUEST_FROM_CURL_PROMPT_PREFIX, isMethodDescriptionFile } from "./edit
 //   are deliberately exempt — see `suggestionsForMode`.
 // - `appliesTo` hides a suggestion where it makes no sense (nothing open, no
 //   uncommitted changes), so the panel stays a short relevant list rather than
-//   a static menu people stop reading.
+//   a static menu people stop reading. Agent-mode chips split into universal
+//   ones (no open tab) and file-context ones (open tab) — never both at once.
 //
 // `followUps` makes this a (recursive, arbitrarily-deep) tree rather than a
 // flat list: once the user picks a branch and sends that first message,
@@ -69,9 +70,10 @@ export interface SuggestionContext {
 
 export interface AssistantSuggestion {
   id: string;
-  /** Imperative and short — this is the chip's own text. */
+  /** Short label for the chip itself. */
   label: string;
-  /** One line under the chip row: what happens after the click. */
+  /** Shown under the chip row on hover — 2–3 sentences: what you provide,
+   * what the assistant does, and what you get (especially in Plan/Question). */
   hint?: string;
   /** Prompt template; `{{key}}` placeholders are filled from `inputs`. */
   text: string;
@@ -136,15 +138,25 @@ export function renderSuggestionText(
 
 /** Seeds a form from values the user already gave earlier in the same branch,
  * matched by `key` — so «Описание запроса из curl» after «Документация на
- * новый метод» doesn't ask for the method name a second time. */
+ * новый метод» doesn't ask for the method name a second time. When the
+ * suggestion asks for a `method`, the parent folder of the open file is
+ * offered when it looks like a REST method description. */
 export function prefillValues(
   suggestion: AssistantSuggestion,
   remembered: Record<string, string>,
+  activeFilePath: string | null = null,
 ): Record<string, string> {
   const seeded: Record<string, string> = {};
   for (const input of suggestion.inputs ?? []) {
-    const value = remembered[input.key];
-    if (value) seeded[input.key] = value;
+    const rememberedValue = remembered[input.key];
+    if (rememberedValue) {
+      seeded[input.key] = rememberedValue;
+      continue;
+    }
+    if (input.key === "method" && activeFilePath) {
+      const folder = parentFolderName(activeFilePath);
+      if (folder) seeded[input.key] = folder;
+    }
   }
   return seeded;
 }
@@ -203,7 +215,9 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   {
     id: "new-method-doc",
     label: "Документация на новый метод",
-    hint: "Создаёт папку с заготовками .adoc и диаграммой",
+    hint:
+      "По названию метода создаст папку с каркасом REST-документации: .adoc, request, response и .puml. " +
+      "Содержимое не заполняет — только структура и пустые секции.",
     writes: true,
     mode: "agent",
     access: "docsOnly",
@@ -284,7 +298,9 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   {
     id: "update-section",
     label: "Обновить раздел",
-    hint: "Переписывает раздел открытого файла под новое поведение",
+    hint:
+      "Вы описываете, что изменилось в API или поведении. Ассистент точечно правит открытый файл " +
+      "и в конце показывает diff.",
     writes: true,
     mode: "agent",
     access: "docsOnly",
@@ -310,7 +326,9 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   {
     id: "describe-algorithm",
     label: "Описать алгоритм работы",
-    hint: "Расписывает шаги метода по реализации в коде",
+    hint:
+      "По коду заполнит раздел «Алгоритм работы» в открытом описании метода: шаги, вызовы сервисов, " +
+      "условия ошибок. Пишет только то, что есть в реализации.",
     writes: true,
     mode: "agent",
     access: "fullRepo",
@@ -329,7 +347,9 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   {
     id: "describe-errors",
     label: "Описать ошибки метода",
-    hint: "Собирает сводную таблицу ошибок по коду",
+    hint:
+      "По коду соберёт сводную таблицу ошибок в открытом .adoc метода. HTTP-коды, type, code и тексты — " +
+      "дословно из кода, без выдуманных значений.",
     writes: true,
     mode: "agent",
     access: "fullRepo",
@@ -346,23 +366,17 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   },
 
   {
-    id: "format-to-standard",
+    id: "format-open-file",
     label: "Оформить по стандарту",
-    hint: "Приводит открытый файл к принятому оформлению",
+    hint:
+      "Приведёт открытый .adoc к принятому в проекте оформлению: заголовки, таблицы, формулировки. " +
+      "Смысл не меняет — только стиль.",
     writes: true,
     mode: "agent",
     access: "docsOnly",
     appliesTo: (ctx) => Boolean(ctx.activeFilePath),
-    inputs: [
-      {
-        key: "scope",
-        label: "Что оформить",
-        placeholder: "весь файл или название раздела",
-        required: true,
-      },
-    ],
     text:
-      "Приведи к принятому в проекте оформлению: {{scope}} — в открытом файле. " +
+      "Приведи открытый файл к принятому в проекте оформлению. " +
       "Ориентируйся на то, как оформлены соседние документы: уровни заголовков, " +
       "оформление таблиц, подписи и включения, единый стиль формулировок и терминов.\n" +
       "Смысл не меняй: это правка оформления, а не содержания. Если по ходу заметишь " +
@@ -370,59 +384,69 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
       "В конце покажи diff.",
   },
 
-  // ---- План: только исследование и `createPlan`, выполняет потом Агент ----
-
   {
-    id: "plan-jira-task",
-    label: "План по задаче",
-    hint: "Раскладывает постановку на шаги по документации",
-    writes: false,
-    mode: "plan",
+    id: "format-to-standard",
+    label: "Оформить по стандарту",
+    hint:
+      "По названию метода найдёт папку документации и приведёт все её .adoc к единому оформлению. " +
+      "Смысл не меняет — только стиль.",
+    writes: true,
+    mode: "agent",
     access: "docsOnly",
+    appliesTo: (ctx) => !ctx.activeFilePath,
     inputs: [
       {
-        key: "task",
-        label: "Задача",
-        placeholder: "номер задачи и постановка — можно скопировать целиком",
+        key: "method",
+        label: "Название метода",
+        placeholder: "createSignOperationV2",
         required: true,
-        multiline: true,
       },
     ],
     text:
-      "Разложи задачу на шаги по документации:\n\n{{task}}\n\n" +
-      "Сначала найди, что по этой теме уже написано, и только потом планируй. " +
-      "Каждый шаг — один файл или один раздел, с путём и с тем, что в нём сделать.\n" +
-      "Отдельно перечисли, чего в постановке не хватает, чтобы работу можно было " +
-      "довести до конца без догадок. Ничего не правь.",
+      "Приведи документацию метода {{method}} к принятому в проекте оформлению. " +
+      "Найди папку метода в разделе документации и пройди по её .adoc-файлам. " +
+      "Ориентируйся на то, как оформлены соседние документы: уровни заголовков, " +
+      "оформление таблиц, подписи и включения, единый стиль формулировок и терминов.\n" +
+      "Смысл не меняй: это правка оформления, а не содержания. Если по ходу заметишь " +
+      "фактическую ошибку — не исправляй её молча, вынеси отдельным списком.\n" +
+      "В конце покажи diff по каждому изменённому файлу.",
   },
+
+  // ---- План: только исследование и `createPlan`, выполняет потом Агент ----
 
   {
     id: "plan-feature-docs",
-    label: "План документирования фичи",
-    hint: "Изучит код и составит план: что завести и что обновить",
+    label: "План по фиче",
+    hint:
+      "Вы называете фичу словами. Ассистент найдёт её в коде, сверит с .adoc и составит пошаговый план: " +
+      "что завести, что обновить и в каком порядке. Файлы не трогает — выполнение потом, в режиме Агент.",
     writes: false,
     mode: "plan",
     access: "fullRepo",
     inputs: [
       {
         key: "feature",
-        label: "Фича",
+        label: "Какую фичу документировать",
         placeholder: "отправка документов на подпись",
         required: true,
       },
     ],
     text:
-      "Составь план документирования фичи: {{feature}}. Сначала разберись по коду, " +
-      "как она устроена, и посмотри, что о ней уже написано.\n" +
-      "В плане: какие документы завести и какие обновить (с путями), в каком порядке, " +
-      "и что нужно уточнить у команды до начала работы.\n" +
-      "Шаги должны быть выполнимыми по одному. Ничего не меняй — только план.",
+      "Пользователь хочет документировать фичу: {{feature}}.\n" +
+      "Сначала по коду определи, о какой фиче речь (конкретные классы, эндпоинты, сценарии), " +
+      "и посмотри, что о ней уже написано в .adoc.\n" +
+      "Составь план документирования: какие файлы или разделы завести, какие обновить " +
+      "(с путями), в каком порядке, и что нужно уточнить у команды до начала работы.\n" +
+      "Шаги должны быть выполнимыми по одному. Ничего не правь и не создавай — только план; " +
+      "выполнение потом в режиме Агент.",
   },
 
   {
     id: "plan-api-change",
     label: "План правок под изменение API",
-    hint: "Оценит, какие разделы задеты, и разложит работу по шагам",
+    hint:
+      "Вы описываете изменение API. Ассистент найдёт все затронутые .adoc и разложит правки по шагам — " +
+      "файл за файлом. Сам ничего не правит.",
     writes: false,
     mode: "plan",
     access: "docsOnly",
@@ -447,7 +471,9 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   {
     id: "plan-cleanup",
     label: "План приведения раздела в порядок",
-    hint: "Обходит раздел и предлагает порядок работ",
+    hint:
+      "По пути или названию раздела обойдёт документацию и составит план: пробелы, расхождения, " +
+      "битые ссылки. Только план — без правок.",
     writes: false,
     mode: "plan",
     access: "docsOnly",
@@ -472,7 +498,9 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   {
     id: "find-gaps",
     label: "Найти пробелы",
-    hint: "Только чтение: список мест, где не хватает описания",
+    hint:
+      "Просмотрит документацию и вернёт 3–5 самых существенных пробелов: пустые секции, недописанные методы, " +
+      "битые include. Файлы не меняет.",
     writes: false,
     mode: "question",
     access: "docsOnly",
@@ -509,7 +537,9 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   {
     id: "sync-with-code",
     label: "Сверить с кодом",
-    hint: "Только чтение: список расхождений документации и реализации",
+    hint:
+      "Вы указываете метод или раздел. Ассистент сравнит .adoc с кодом и вернёт таблицу расхождений — " +
+      "источник истины код. Без правок.",
     writes: false,
     mode: "question",
     access: "fullRepo",
@@ -532,7 +562,9 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   {
     id: "explain-feature",
     label: "Объяснить фичу",
-    hint: "Разбор по коду, со ссылками на файлы",
+    hint:
+      "Вы называете фичу. Ассистент разберёт поток по коду со ссылками на файлы и функции и отметит " +
+      "расхождения с документацией. Без правок.",
     writes: false,
     mode: "question",
     access: "fullRepo",
@@ -572,7 +604,9 @@ export const ASSISTANT_SUGGESTIONS: AssistantSuggestion[] = [
   {
     id: "review-doc-changes",
     label: "Проверить мои правки",
-    hint: "Ревью незакоммиченных изменений в документации",
+    hint:
+      "Посмотрит ваши незакоммиченные правки в документации: стиль, рассинхрон таблиц, битые ссылки. " +
+      "Список замечаний — ассистент сам не правит.",
     writes: false,
     mode: "question",
     access: "docsOnly",

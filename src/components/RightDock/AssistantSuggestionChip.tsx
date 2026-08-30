@@ -19,14 +19,18 @@ export function AssistantSuggestionChip({
   onClick: () => void;
   onHoverChange?: (suggestion: AssistantSuggestion | null) => void;
 }) {
-  const title = [suggestion.hint, suggestion.writes ? "правит файлы" : "только чтение"]
-    .filter(Boolean)
-    .join(" · ");
+  // When the panel renders the hint in a dedicated row below (`onHoverChange`),
+  // skip the native `title` tooltip — it duplicates the text and covers it.
+  const title = onHoverChange
+    ? undefined
+    : [suggestion.hint, suggestion.writes ? "правит файлы" : "только чтение"]
+        .filter(Boolean)
+        .join(" · ");
   return (
     <button
       type="button"
       className={className}
-      title={title}
+      {...(title ? { title } : {})}
       disabled={disabled}
       onClick={onClick}
       onMouseEnter={() => onHoverChange?.(suggestion)}

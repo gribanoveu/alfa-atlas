@@ -119,15 +119,19 @@ describe("renderSuggestionText", () => {
 });
 
 describe("visibleSuggestions", () => {
-  test("«Обновить раздел» needs an open file", () => {
+  test("«Обновить раздел» and «Оформить по стандарту» (открытый файл) need an open tab", () => {
     const withoutFile = visibleSuggestions(ASSISTANT_SUGGESTIONS, NO_CONTEXT).map((s) => s.id);
     expect(withoutFile).not.toContain("update-section");
+    expect(withoutFile).not.toContain("format-open-file");
+    expect(withoutFile).toContain("format-to-standard");
 
     const withFile = visibleSuggestions(ASSISTANT_SUGGESTIONS, {
       ...NO_CONTEXT,
-      activeFilePath: "operations/createSignOperation/createSignOperation.adoc",
+      activeFilePath: "operations/createSignOperation/request.adoc",
     }).map((s) => s.id);
     expect(withFile).toContain("update-section");
+    expect(withFile).toContain("format-open-file");
+    expect(withFile).not.toContain("format-to-standard");
   });
 
   test("«Проверить мои правки» needs uncommitted changes", () => {
@@ -146,7 +150,7 @@ describe("visibleSuggestions", () => {
     const ids = visibleSuggestions(ASSISTANT_SUGGESTIONS, NO_CONTEXT).map((s) => s.id);
     expect(ids).toEqual([
       "new-method-doc",
-      "plan-jira-task",
+      "format-to-standard",
       "plan-feature-docs",
       "plan-api-change",
       "plan-cleanup",
@@ -164,13 +168,13 @@ describe("suggestionsForMode", () => {
       "update-section",
       "describe-algorithm",
       "describe-errors",
-      "format-to-standard",
+      "format-open-file",
     ]);
     expect(
       suggestionsForMode(ASSISTANT_SUGGESTIONS, { ...EVERYTHING, conversationMode: "plan" }).map(
         (s) => s.id,
       ),
-    ).toEqual(["plan-jira-task", "plan-feature-docs", "plan-api-change", "plan-cleanup"]);
+    ).toEqual(["plan-feature-docs", "plan-api-change", "plan-cleanup"]);
     expect(
       suggestionsForMode(ASSISTANT_SUGGESTIONS, {
         ...EVERYTHING,
@@ -189,14 +193,21 @@ describe("suggestionsForMode", () => {
     }
   });
 
-  test("stacks with appliesTo", () => {
+  test("agent mode offers universal tasks without a file; file tasks when a tab is open", () => {
     expect(
       suggestionsForMode(ASSISTANT_SUGGESTIONS, {
-        ...EVERYTHING,
-        activeFilePath: null,
-        isMethodDoc: false,
+        ...NO_CONTEXT,
+        conversationMode: "agent",
       }).map((s) => s.id),
-    ).toEqual(["new-method-doc"]);
+    ).toEqual(["new-method-doc", "format-to-standard"]);
+
+    expect(
+      suggestionsForMode(ASSISTANT_SUGGESTIONS, {
+        ...NO_CONTEXT,
+        conversationMode: "agent",
+        activeFilePath: "operations/createSignOperation/request.adoc",
+      }).map((s) => s.id),
+    ).toEqual(["new-method-doc", "update-section", "format-open-file"]);
   });
 
   test("the method-only suggestions need a method description open", () => {
@@ -210,6 +221,8 @@ describe("suggestionsForMode", () => {
     expect(onRequestAdoc).not.toContain("describe-algorithm");
     expect(onRequestAdoc).not.toContain("describe-errors");
     expect(onRequestAdoc).toContain("update-section");
+    expect(onRequestAdoc).toContain("format-open-file");
+    expect(onRequestAdoc).not.toContain("format-to-standard");
   });
 
   test("Plan mode never offers a suggestion that writes files", () => {
@@ -279,6 +292,15 @@ describe("prefillValues", () => {
   test("a suggestion without inputs is seeded with nothing", () => {
     const leaf = ALL.find((s) => s.id === "new-method-doc.response-example")!;
     expect(prefillValues(leaf, { method: "x" })).toEqual({});
+  });
+
+  test("prefills method from the parent folder of the open file", () => {
+    const format = ALL.find((s) => s.id === "format-to-standard")!;
+    expect(
+      prefillValues(format, {}, "operations/createSignOperation/request.adoc"),
+    ).toEqual({
+      method: "createSignOperation",
+    });
   });
 });
 

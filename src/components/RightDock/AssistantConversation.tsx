@@ -1014,7 +1014,9 @@ export function AssistantConversation({
                 </div>
                 {/* Reserved height, so pointing at a chip doesn't shift the
                     row it is in — the placeholder column is centred. */}
-                <p className="assistant-chat-suggestion-desc">{hoveredSuggestion?.hint ?? ""}</p>
+                <p className="assistant-chat-suggestion-desc" aria-live="polite">
+                  {hoveredSuggestion?.hint ?? "\u00a0"}
+                </p>
               </div>
             ) : null}
           </div>
@@ -1394,7 +1396,7 @@ export function AssistantConversation({
       {formSuggestion ? (
         <AssistantSuggestionModal
           suggestion={formSuggestion}
-          initialValues={prefillValues(formSuggestion, rememberedValues)}
+          initialValues={prefillValues(formSuggestion, rememberedValues, activeFilePath)}
           accessMode={accessMode}
           onCancel={() => setFormSuggestion(null)}
           onSubmit={handleSuggestionFormSubmit}

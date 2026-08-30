@@ -789,6 +789,7 @@
   margin-top: 4px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
 
 .assistant-chat-placeholder-suggestions-label {
@@ -865,14 +866,15 @@
   opacity: 1;
 }
 
-/* Fixed height: the hovered chip's hint appears here, and the placeholder
-   column is vertically centred — without a reserved height, pointing at a
-   chip would shift the whole block (chips included) out from under the
-   pointer. Two lines is what the longest hint wraps to at this width. */
+/* Fixed height: hints are 2–3 sentences; the placeholder column is vertically
+   centred, so a box that grows on hover would shove chips upward. Reserve
+   four lines at full panel width — enough for the longest hint without clipping. */
 .assistant-chat-suggestion-desc {
   margin: 0;
-  min-height: calc(var(--font-ui-sm) * 0.95 * 1.4 * 2);
-  max-width: 34ch;
+  width: 100%;
+  height: 5.6em;
+  min-height: 5.6em;
+  flex-shrink: 0;
   font-size: calc(var(--font-ui-sm) * 0.95);
   line-height: 1.4;
   color: var(--text-2);
