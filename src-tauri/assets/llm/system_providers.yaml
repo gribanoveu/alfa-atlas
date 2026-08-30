@@ -75,28 +75,11 @@ embedding:
     -----END CERTIFICATE-----
 
 metrics:
-  # Alfa Metrics (Snowplow). A fork rebrands or disables metrics by editing
-  # this section — no `.rs` file needs touching. See METRICS.md.
-  # One collector for every build. Release and debug builds are told apart
-  # by appId alone, so dev traffic stays filterable without a second
-  # endpoint. Production `metrics.alfabank.ru` is deliberately not used.
-  appId: alfa-atlas-ui
-  devAppId: alfa-atlas-ui_dev
+  appId: alfa-atlas-ide
+  devAppId: alfa-atlas-ide_dev
   domain: testjmb.alfabank.ru
   metricsType: corp
-  platform: web
-  # The collector chains up to the Russian Trusted Root CA (Минцифры),
-  # captured from the endpoint's own handshake
-  # (`openssl s_client -connect testjmb.alfabank.ru:443 -showcerts`,
-  # certificate index 2 — the self-signed root the server also sends).
-  # That root is not in the Mozilla/WebPki bundle ureq ships with, which is
-  # why an unconfigured agent fails with `UnknownIssuer` while `curl`
-  # succeeds off the OS trust store. Bundling it here rather than relying
-  # on the machine's store means metrics work the same on a Windows or
-  # Linux box where nobody installed it.
-  # SHA-256: D2:6D:2D:02:31:B7:C3:9F:92:CC:73:85:12:BA:54:10:
-  #          35:19:E4:40:5D:68:B5:BD:70:3E:97:88:CA:8E:CF:31
-  # Valid until 2032-02-27.
+  platform: app
   trustedCertPem: |
     -----BEGIN CERTIFICATE-----
     MIIFwjCCA6qgAwIBAgICEAAwDQYJKoZIhvcNAQELBQAwcDELMAkGA1UEBhMCUlUx
