@@ -21,13 +21,13 @@ export type TextBlock = {
 };
 
 /** A reasoning-capable model's "thinking" text (`reasoning_content` on the
- * wire), streamed ahead of the model's actual answer. Always closed off by
- * whatever follows it — the first `content` delta after some
- * `reasoning_content` opens a fresh `TextBlock` rather than extending this
- * one (see `appendDeltaToBlocks`), so "is this block still growing" is never
- * stored on the block itself: it's derived the same way a trailing
- * `TextBlock`'s own streaming cursor is, from the block's position (last in
- * the array) plus the message's own `streaming` flag — see
+ * wire), usually streamed ahead of the model's actual answer — though some
+ * providers interleave the two chunk by chunk, in which case this block and
+ * the `TextBlock` below it grow side by side. Closed off by the round's next
+ * tool call (or the end of the turn), not by the first `content` delta, so
+ * "is this block still growing" is never stored on the block itself: it's
+ * derived the same way a `TextBlock`'s own streaming cursor is, from
+ * `openStreamingBlockIds` plus the message's own `streaming` flag — see
  * `AssistantConversation`. */
 export type ReasoningBlock = {
   type: "reasoning";
@@ -80,7 +80,7 @@ export type MessageBlock = TextBlock | ToolCallBlock | ReasoningBlock | SteerBlo
 /** True when the transcript already tells the user the model is busy
  * (growing prose, visible reasoning, or a tool still in flight). False
  * after a settled tool call / empty transcript — that's when the chat
- * must show "Модель думает…", for every provider, not only those that
+ * must show its thinking card, for every provider, not only those that
  * send `reasoning_content`.
  *
  * Asks `openStreamingBlockIds` rather than looking only at the array's last
@@ -212,7 +212,7 @@ export type ChatMessage =
  * within one round instead of finishing all the thinking first — matching
  * only the trailing block there opened a brand-new block on every single
  * chunk, shredding one answer into hundreds of ~9-character blocks with a
- * "Модель думает…" card flickering between each pair. Both streams now grow
+ * thinking card flickering between each pair. Both streams now grow
  * in place, in whatever order they were opened. */
 function findOpenBlockIndex(blocks: MessageBlock[], type: "text" | "reasoning"): number {
   for (let i = blocks.length - 1; i >= 0; i--) {
@@ -307,7 +307,7 @@ export function mergeInterleavedStreamBlocksInMessages(messages: ChatMessage[]):
 
 /** Ids of the blocks the model may still be writing into right now — this
  * round's open text and/or reasoning block. `AssistantConversation` uses it
- * for the streaming cursor and the shimmering "Модель думает…" label:
+ * for the streaming cursor and the shimmering thinking label:
  * position alone ("is it the last block") can't tell, since an interleaving
  * provider leaves the reasoning block sitting *above* a text block both are
  * still growing. Callers still gate on the message's own `streaming` flag —

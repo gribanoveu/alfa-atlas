@@ -1491,7 +1491,7 @@
 
 
 /* =========================================================
-   Reasoning block ("Модель думает…" / "Ход рассуждений")
+   Reasoning block (a rotating THINKING_PHRASES label / "Ход рассуждений")
    — same collapsed-by-default container as a tool call, see
    AssistantReasoningBlock.
    ========================================================= */
