@@ -10,11 +10,28 @@
   padding: 32px 24px;
 }
 
+/* Онбординг-карточки живут в отдельной колонке справа, чтобы не сдвигать
+ * список недавних проектов. На узком окне колонка переносится под него. */
+.welcome-layout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 32px;
+}
+
 .welcome-inner {
   width: min(520px, 100%);
   display: flex;
   flex-direction: column;
   gap: 28px;
+}
+
+.welcome-side {
+  width: min(240px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .welcome-brand {

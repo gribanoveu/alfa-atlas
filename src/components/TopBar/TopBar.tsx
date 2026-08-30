@@ -58,6 +58,8 @@ type TopBarProps = {
   openStandardsSettingsSignal?: number;
   /** Bump this (e.g. `n => n + 1`) to open Settings on the "llm" tab. */
   openLlmSettingsSignal?: number;
+  /** Bump this (e.g. `n => n + 1`) to open Settings on the "credentials" tab. */
+  openCredentialsSettingsSignal?: number;
 };
 
 export function TopBar({
@@ -95,6 +97,7 @@ export function TopBar({
   onCloneProject,
   openStandardsSettingsSignal,
   openLlmSettingsSignal,
+  openCredentialsSettingsSignal,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
   const [cloneOpen, setCloneOpen] = useState(false);
@@ -118,6 +121,7 @@ export function TopBar({
   const repoChipRef = useRef<HTMLDivElement>(null);
   const standardsSignalRef = useRef(openStandardsSettingsSignal);
   const llmSignalRef = useRef(openLlmSettingsSignal);
+  const credentialsSignalRef = useRef(openCredentialsSettingsSignal);
 
   useEffect(() => {
     if (
@@ -139,6 +143,18 @@ export function TopBar({
     setSettingsInitialSection("llm");
     setSettingsOpen(true);
   }, [openLlmSettingsSignal]);
+
+  useEffect(() => {
+    if (
+      openCredentialsSettingsSignal === undefined ||
+      openCredentialsSettingsSignal === credentialsSignalRef.current
+    ) {
+      return;
+    }
+    credentialsSignalRef.current = openCredentialsSettingsSignal;
+    setSettingsInitialSection("credentials");
+    setSettingsOpen(true);
+  }, [openCredentialsSettingsSignal]);
 
   const onAction = useCallback(
     (action: MenuActionId) => {

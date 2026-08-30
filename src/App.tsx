@@ -463,6 +463,7 @@ function App() {
   );
   const [standardsSettingsSignal, setStandardsSettingsSignal] = useState(0);
   const [llmSettingsSignal, setLlmSettingsSignal] = useState(0);
+  const [credentialsSettingsSignal, setCredentialsSettingsSignal] = useState(0);
 
 
 
@@ -682,6 +683,7 @@ function App() {
         }}
         openStandardsSettingsSignal={standardsSettingsSignal}
         openLlmSettingsSignal={llmSettingsSignal}
+        openCredentialsSettingsSignal={credentialsSettingsSignal}
       />
       <div className="workspace">
         <div className={mainClassName}>
@@ -875,6 +877,9 @@ function App() {
               onCloneProject={async (cloned) => {
                 project.submitProbe(cloned);
               }}
+              onOpenSettings={() => setCredentialsSettingsSignal((n) => n + 1)}
+              onOpenGitKeySettings={() => setCredentialsSettingsSignal((n) => n + 1)}
+              onOpenLlmKeySettings={() => setLlmSettingsSignal((n) => n + 1)}
               error={project.ready ? (folderError ?? project.error) : null}
             />
           )}
