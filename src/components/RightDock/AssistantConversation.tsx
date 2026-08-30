@@ -23,7 +23,7 @@ import {
 } from "../../lib/assistantSuggestions";
 import type { AssistantSuggestion } from "../../lib/assistantSuggestions";
 import type { AiAccessMode, ConversationMode, LlmToolDefinition, Task } from "../../lib/aiTools";
-import { groupBlocksForRender, lastBlockShowsLiveProgress, searchIsDegraded, type ChatMessage } from "../../lib/chatBlocks";
+import { groupBlocksForRender, lastBlockShowsLiveProgress, openStreamingBlockIds, searchIsDegraded, type ChatMessage } from "../../lib/chatBlocks";
 import { noteLlmChat } from "../../lib/llm";
 import type { LlmProviderConfig, PendingApproval, ResolvedLlmProvider } from "../../lib/llm";
 import type { SpecsRepoInfo } from "../../lib/openapi";
@@ -315,6 +315,10 @@ function contextUsageTitle(
 // CSS to make that the start point).
 const CONTEXT_RING_RADIUS = 8;
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
+
+/** Shared, never-mutated stand-in for a finished message's (empty) set of
+ * live blocks — avoids allocating a `Set` per message on every render. */
+const EMPTY_LIVE_BLOCK_IDS: ReadonlySet<string> = new Set<string>();
 
 type AssistantConversationProps = {
   /** The chat this instance owns — the parent (`AssistantPanel`) is
@@ -1053,6 +1057,12 @@ export function AssistantConversation({
             }
             const failed = m.role === "assistant" && Boolean(m.failed);
             const stopped = m.role === "assistant" && Boolean(m.cancelled);
+            // Which blocks the model may still be writing into — not simply
+            // "the last one": a provider that interleaves reasoning with its
+            // answer leaves both blocks open at once, the reasoning one above.
+            const liveBlockIds = m.role === "assistant" && m.streaming
+              ? openStreamingBlockIds(m.blocks)
+              : EMPTY_LIVE_BLOCK_IDS;
             return (
               <div
                 key={m.id}
@@ -1063,7 +1073,7 @@ export function AssistantConversation({
                     <AssistantThinkingIndicator />
                   ) : (
                     <div className="assistant-chat-blocks">
-                      {groupBlocksForRender(m.blocks).map((item, i, arr) =>
+                      {groupBlocksForRender(m.blocks).map((item) =>
                         item.kind === "artifactGroup" ? (
                           <AssistantArtifactCard
                             key={item.blocks[0]!.id}
@@ -1091,13 +1101,13 @@ export function AssistantConversation({
                           <AssistantReasoningBlock
                             key={item.block.id}
                             block={item.block}
-                            thinking={Boolean(m.streaming) && i === arr.length - 1}
+                            thinking={liveBlockIds.has(item.block.id)}
                           />
                         ) : item.block.type === "text" ? (
                           <AssistantMarkdown
                             key={item.block.id}
                             content={item.block.content}
-                            streaming={Boolean(m.streaming) && i === arr.length - 1}
+                            streaming={liveBlockIds.has(item.block.id)}
                           />
                         ) : item.block.type === "steer" ? (
                           <AssistantSteerBlock key={item.block.id} block={item.block} />

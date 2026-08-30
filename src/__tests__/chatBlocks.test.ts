@@ -13,6 +13,8 @@ import {
   groupBlocksForRender,
   lastBlockShowsLiveProgress,
   markRunningToolCallsAsInterrupted,
+  mergeInterleavedStreamBlocks,
+  openStreamingBlockIds,
   searchIsDegraded,
   toolLedger,
   settleToolCallBlock,
@@ -64,12 +66,103 @@ describe("appendReasoningDeltaToBlocks", () => {
     expect(second[0]).toMatchObject({ type: "reasoning", content: "Let me think" });
   });
 
-  test("a subsequent text delta closes the reasoning block off and opens a new text block", () => {
+  test("a subsequent text delta opens a new text block below the reasoning one", () => {
     const reasoning = appendReasoningDeltaToBlocks([], "thinking...");
     const withText = appendDeltaToBlocks(reasoning, "the answer");
     expect(withText).toHaveLength(2);
     expect(withText[0]).toMatchObject({ type: "reasoning", content: "thinking..." });
     expect(withText[1]).toMatchObject({ type: "text", content: "the answer" });
+  });
+});
+
+describe("interleaved reasoning and text deltas", () => {
+  // Some providers don't finish thinking before answering — they alternate
+  // `reasoning_content` and `content` chunk by chunk. Matching only the
+  // trailing block used to open a brand-new block per chunk, shredding one
+  // answer into hundreds of tiny blocks with a "thinking" card between each.
+  test("keep growing two blocks, not one per chunk", () => {
+    let blocks: MessageBlock[] = [];
+    for (const [reasoning, text] of [
+      ["Let me ", "Сейчас "],
+      ["check the ", "проверю "],
+      ["standards.", "документацию."],
+    ] as const) {
+      blocks = appendReasoningDeltaToBlocks(blocks, reasoning);
+      blocks = appendDeltaToBlocks(blocks, text);
+    }
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toMatchObject({ type: "reasoning", content: "Let me check the standards." });
+    expect(blocks[1]).toMatchObject({ type: "text", content: "Сейчас проверю документацию." });
+  });
+
+  test("both blocks count as live progress, so no extra thinking card appears", () => {
+    const blocks = appendDeltaToBlocks(appendReasoningDeltaToBlocks([], "hmm"), "answer");
+    expect(lastBlockShowsLiveProgress(blocks)).toBe(true);
+    expect(openStreamingBlockIds(blocks).size).toBe(2);
+  });
+
+  test("a tool call closes both streams — the next deltas open fresh blocks", () => {
+    const toolCall: ToolCallBlock = {
+      type: "toolCall",
+      id: "call_1",
+      name: "readFile",
+      argumentsJson: "{}",
+      status: "done",
+    };
+    const before = appendDeltaToBlocks(appendReasoningDeltaToBlocks([], "hmm"), "prose");
+    const after = appendReasoningDeltaToBlocks(appendDeltaToBlocks([...before, toolCall], "more"), "again");
+    expect(after.map((b) => b.type)).toEqual(["reasoning", "text", "toolCall", "text", "reasoning"]);
+    expect(openStreamingBlockIds(after)).toEqual(new Set([after[3]!.id, after[4]!.id]));
+  });
+
+  test("mergeInterleavedStreamBlocks folds a shredded stored message back together", () => {
+    const toolCall: ToolCallBlock = {
+      type: "toolCall",
+      id: "call_1",
+      name: "readFile",
+      argumentsJson: "{}",
+      status: "done",
+    };
+    const shredded: MessageBlock[] = [
+      { type: "reasoning", id: "r1", content: "Let me " },
+      { type: "text", id: "t1", content: "Сейчас " },
+      { type: "reasoning", id: "r2", content: "check." },
+      { type: "text", id: "t2", content: "проверю." },
+      toolCall,
+      { type: "text", id: "t3", content: "Гото" },
+      { type: "reasoning", id: "r3", content: "done" },
+      { type: "text", id: "t4", content: "во." },
+    ];
+    const merged = mergeInterleavedStreamBlocks(shredded);
+    expect(merged).toEqual([
+      { type: "reasoning", id: "r1", content: "Let me check." },
+      { type: "text", id: "t1", content: "Сейчас проверю." },
+      toolCall,
+      { type: "text", id: "t3", content: "Готово." },
+      { type: "reasoning", id: "r3", content: "done" },
+    ]);
+  });
+
+  test("mergeInterleavedStreamBlocks returns an untouched conversation as-is", () => {
+    const blocks: MessageBlock[] = [
+      { type: "reasoning", id: "r1", content: "thinking" },
+      { type: "text", id: "t1", content: "the answer" },
+    ];
+    expect(mergeInterleavedStreamBlocks(blocks)).toBe(blocks);
+  });
+
+  test("correctTrailingText fixes up the round's open text block, not just a trailing one", () => {
+    const blocks = appendReasoningDeltaToBlocks(appendDeltaToBlocks([], "partia"), "still thinking");
+    const corrected = correctTrailingText(blocks, "partial answer, made whole");
+    expect(corrected).toHaveLength(2);
+    expect(corrected[0]).toMatchObject({ type: "text", content: "partial answer, made whole" });
+  });
+
+  test("correctTrailingReasoning fixes up the round's open reasoning block", () => {
+    const blocks = appendDeltaToBlocks(appendReasoningDeltaToBlocks([], "partia"), "the answer");
+    const corrected = correctTrailingReasoning(blocks, "partial thought, made whole");
+    expect(corrected).toHaveLength(2);
+    expect(corrected[0]).toMatchObject({ type: "reasoning", content: "partial thought, made whole" });
   });
 });
 

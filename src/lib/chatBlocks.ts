@@ -77,23 +77,25 @@ export type ToolCallBlock = {
 
 export type MessageBlock = TextBlock | ToolCallBlock | ReasoningBlock | SteerBlock;
 
-/** True when the trailing block already tells the user the model is busy
+/** True when the transcript already tells the user the model is busy
  * (growing prose, visible reasoning, or a tool still in flight). False
  * after a settled tool call / empty transcript — that's when the chat
  * must show "Модель думает…", for every provider, not only those that
- * send `reasoning_content`. */
+ * send `reasoning_content`.
+ *
+ * Asks `openStreamingBlockIds` rather than looking only at the array's last
+ * block: with an interleaving provider the open reasoning block can sit
+ * above an open text block, and both are live. */
 export function lastBlockShowsLiveProgress(blocks: MessageBlock[]): boolean {
   const last = blocks[blocks.length - 1];
   if (!last) return false;
-  switch (last.type) {
-    case "text":
-    case "reasoning":
-      return last.content !== "";
-    case "toolCall":
-      return last.status === "running" || last.status === "pendingApproval";
-    case "steer":
-      return false;
+  const open = openStreamingBlockIds(blocks);
+  if (open.size > 0) {
+    return blocks.some(
+      (b) => open.has(b.id) && (b.type === "text" || b.type === "reasoning") && b.content !== "",
+    );
   }
+  return last.type === "toolCall" && (last.status === "running" || last.status === "pendingApproval");
 }
 
 /** A provider that withholds `id` until the last fragment is keyed as
@@ -197,31 +199,126 @@ export type ChatMessage =
 
 // ---- Pure block-transition rules -------------------------------------
 
-/** A `CHAT_STREAM_DELTA_EVENT` either extends the still-open trailing text
- * block, or opens a fresh one if the message has no blocks yet or its last
- * block is a tool call (closed off by definition — a tool call always ends
- * whatever text preceded it). */
-export function appendDeltaToBlocks(blocks: MessageBlock[], delta: string): MessageBlock[] {
-  const last = blocks[blocks.length - 1];
-  if (last && last.type === "text") {
-    return [...blocks.slice(0, -1), { ...last, content: last.content + delta }];
+/** Index of the block the current round is still streaming `type` into, or
+ * `-1` when the round hasn't opened one yet.
+ *
+ * Scans backwards and stops at the first `toolCall`/`steer` block: those are
+ * round boundaries (a tool call ends the prose that preceded it, a steer note
+ * is injected as a fresh round starts), so anything before one belongs to an
+ * already-closed round and must never be reopened.
+ *
+ * Crucially it does *not* stop at a block of the other streaming type. Some
+ * providers interleave `reasoning_content` and `content` chunk by chunk
+ * within one round instead of finishing all the thinking first — matching
+ * only the trailing block there opened a brand-new block on every single
+ * chunk, shredding one answer into hundreds of ~9-character blocks with a
+ * "Модель думает…" card flickering between each pair. Both streams now grow
+ * in place, in whatever order they were opened. */
+function findOpenBlockIndex(blocks: MessageBlock[], type: "text" | "reasoning"): number {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]!;
+    if (block.type === type) return i;
+    if (block.type === "toolCall" || block.type === "steer") return -1;
   }
-  return [...blocks, { type: "text", id: crypto.randomUUID(), content: delta }];
+  return -1;
 }
 
-/** A `CHAT_STREAM_REASONING_EVENT` either extends the still-open trailing
- * reasoning block, or opens a fresh one — same shape as `appendDeltaToBlocks`,
- * for a reasoning-capable model's "thinking" text instead of its answer.
- * Once a `content` delta arrives, `appendDeltaToBlocks` won't find a
- * trailing `"text"` block here and opens a new one instead of extending
- * this one — that's what closes a reasoning block off, no explicit
- * transition needed on this side. */
-export function appendReasoningDeltaToBlocks(blocks: MessageBlock[], delta: string): MessageBlock[] {
-  const last = blocks[blocks.length - 1];
-  if (last && last.type === "reasoning") {
-    return [...blocks.slice(0, -1), { ...last, content: last.content + delta }];
+function appendToOpenBlock(
+  blocks: MessageBlock[],
+  type: "text" | "reasoning",
+  delta: string,
+): MessageBlock[] {
+  const index = findOpenBlockIndex(blocks, type);
+  if (index !== -1) {
+    return blocks.map((b, i) =>
+      i === index && (b.type === "text" || b.type === "reasoning")
+        ? { ...b, content: b.content + delta }
+        : b,
+    );
   }
-  return [...blocks, { type: "reasoning", id: crypto.randomUUID(), content: delta }];
+  return [...blocks, { type, id: crypto.randomUUID(), content: delta }];
+}
+
+/** A `CHAT_STREAM_DELTA_EVENT` either extends this round's still-open text
+ * block, or opens a fresh one if the round hasn't produced any prose yet
+ * (see `findOpenBlockIndex` for what "this round" means). */
+export function appendDeltaToBlocks(blocks: MessageBlock[], delta: string): MessageBlock[] {
+  return appendToOpenBlock(blocks, "text", delta);
+}
+
+/** A `CHAT_STREAM_REASONING_EVENT` either extends this round's still-open
+ * reasoning block, or opens a fresh one — same shape as
+ * `appendDeltaToBlocks`, for a reasoning-capable model's "thinking" text
+ * instead of its answer. A reasoning block is closed off by the next tool
+ * call (or the end of the turn), not by the first `content` delta — a
+ * provider that interleaves the two keeps filling this same block. */
+export function appendReasoningDeltaToBlocks(blocks: MessageBlock[], delta: string): MessageBlock[] {
+  return appendToOpenBlock(blocks, "reasoning", delta);
+}
+
+/** Repairs a persisted message whose rounds were split into many one-chunk
+ * text/reasoning blocks, by re-running the block-transition rules above
+ * over it: within one round (delimited by `toolCall`/`steer` blocks, see
+ * `findOpenBlockIndex`) every text block is folded into the round's first
+ * one and every reasoning block into the round's first one, in order and
+ * with no separator — the split happened mid-word, so anything but plain
+ * concatenation would corrupt the text.
+ *
+ * Applied when loading a chat from the store (`loadChatMessages`), so
+ * conversations recorded before `appendDeltaToBlocks` tolerated interleaved
+ * streams render as prose again instead of hundreds of stuttering cards —
+ * and, just as importantly, replay into later requests as one coherent
+ * message rather than as `flattenBlocksToText`'s `\n\n`-joined confetti.
+ * Returns the input array unchanged when there was nothing to merge. */
+export function mergeInterleavedStreamBlocks(blocks: MessageBlock[]): MessageBlock[] {
+  const result: MessageBlock[] = [];
+  let openText = -1;
+  let openReasoning = -1;
+  let merged = false;
+  for (const block of blocks) {
+    if (block.type === "toolCall" || block.type === "steer") {
+      openText = -1;
+      openReasoning = -1;
+      result.push(block);
+      continue;
+    }
+    const openIndex = block.type === "text" ? openText : openReasoning;
+    if (openIndex !== -1) {
+      const open = result[openIndex] as TextBlock | ReasoningBlock;
+      result[openIndex] = { ...open, content: open.content + block.content };
+      merged = true;
+      continue;
+    }
+    if (block.type === "text") openText = result.length;
+    else openReasoning = result.length;
+    result.push(block);
+  }
+  return merged ? result : blocks;
+}
+
+/** `mergeInterleavedStreamBlocks` over a whole loaded conversation. */
+export function mergeInterleavedStreamBlocksInMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((m) => {
+    if (m.role !== "assistant") return m;
+    const blocks = mergeInterleavedStreamBlocks(m.blocks);
+    return blocks === m.blocks ? m : { ...m, blocks };
+  });
+}
+
+/** Ids of the blocks the model may still be writing into right now — this
+ * round's open text and/or reasoning block. `AssistantConversation` uses it
+ * for the streaming cursor and the shimmering "Модель думает…" label:
+ * position alone ("is it the last block") can't tell, since an interleaving
+ * provider leaves the reasoning block sitting *above* a text block both are
+ * still growing. Callers still gate on the message's own `streaming` flag —
+ * this says which blocks are open, not whether a turn is in flight. */
+export function openStreamingBlockIds(blocks: MessageBlock[]): Set<string> {
+  const ids = new Set<string>();
+  for (const type of ["text", "reasoning"] as const) {
+    const index = findOpenBlockIndex(blocks, type);
+    if (index !== -1) ids.add(blocks[index]!.id);
+  }
+  return ids;
 }
 
 /** A `TOOL_CALL_DELTA_EVENT` while the model is still writing a call's
@@ -372,9 +469,9 @@ export function settleToolCallBlock(
  * trailing text block is appended instead of overwriting anything; an empty
  * `text` in that situation is a no-op. */
 export function correctTrailingText(blocks: MessageBlock[], text: string): MessageBlock[] {
-  const last = blocks[blocks.length - 1];
-  if (last && last.type === "text") {
-    return [...blocks.slice(0, -1), { ...last, content: text }];
+  const index = findOpenBlockIndex(blocks, "text");
+  if (index !== -1) {
+    return blocks.map((b, i) => (i === index && b.type === "text" ? { ...b, content: text } : b));
   }
   return text !== "" ? [...blocks, { type: "text", id: crypto.randomUUID(), content: text }] : blocks;
 }
@@ -386,12 +483,16 @@ export function correctTrailingText(blocks: MessageBlock[], text: string): Messa
  * trailing one isn't a reasoning block: reasoning always precedes the
  * answer it led to, so a reasoning block can't correctly be tacked onto the
  * *end* of blocks that already moved on to text/tool-calls; if every
- * `CHAT_STREAM_REASONING_EVENT` for a round was somehow dropped, that
+ * `CHAT_STREAM_REASONING_EVENT` for a round was somehow dropped (or the
+ * provider interleaved its thinking with the answer, leaving a text block
+ * sitting after it), that
  * round's reasoning is simply lost, same tradeoff this codebase already
  * accepts for earlier, non-trailing blocks elsewhere. */
 export function correctTrailingReasoning(blocks: MessageBlock[], reasoning: string): MessageBlock[] {
-  const last = blocks[blocks.length - 1];
-  return last && last.type === "reasoning" ? [...blocks.slice(0, -1), { ...last, content: reasoning }] : blocks;
+  const index = findOpenBlockIndex(blocks, "reasoning");
+  return index === -1
+    ? blocks
+    : blocks.map((b, i) => (i === index && b.type === "reasoning" ? { ...b, content: reasoning } : b));
 }
 
 /** Called when the overall `streamLlmChat()` promise rejects (hit

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Task } from "./aiTools";
-import type { ChatMessage } from "./chatBlocks";
+import { mergeInterleavedStreamBlocksInMessages, type ChatMessage } from "./chatBlocks";
 import type { PendingApproval } from "./llm";
 
 // Mirrors `domain::chat::ChatSummary` in `src-tauri/src/domain/chat.rs`
@@ -40,9 +40,16 @@ export type LoadedChat = {
 };
 
 /** One chat's full state — messages (save order) and its todo checklist —
- * in one round trip, since every caller needs both together. */
-export function loadChatMessages(chatId: string): Promise<LoadedChat> {
-  return invoke<LoadedChat>("chat_load_messages", { chatId });
+ * in one round trip, since every caller needs both together.
+ *
+ * Stored messages pass through `mergeInterleavedStreamBlocksInMessages` on
+ * the way out: conversations recorded before the block rules tolerated a
+ * provider interleaving `reasoning_content` with `content` have their prose
+ * shredded across one block per SSE chunk, which this folds back together.
+ * A no-op for everything else. */
+export async function loadChatMessages(chatId: string): Promise<LoadedChat> {
+  const loaded = await invoke<LoadedChat>("chat_load_messages", { chatId });
+  return { ...loaded, messages: mergeInterleavedStreamBlocksInMessages(loaded.messages) };
 }
 
 /** Upserts the chat row (title/todos/recency) and replaces its messages
