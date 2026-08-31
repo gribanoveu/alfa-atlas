@@ -294,7 +294,11 @@ fn display_relative(repo_root: &Path, p: &Path) -> String {
 /// has run, so a repo opened here without that build step is missing it —
 /// matched by suffix, independent of the `build/` prefix (which is just
 /// where the referring `$ref` happened to resolve it lexically).
-fn is_common_spec_fallback_path(path: &Path) -> bool {
+///
+/// Shared with `services::diagnostics`, which must stay in sync with the
+/// resolver: a `$ref` the resolver satisfies from the bundled copy must not
+/// also be reported as a broken include in the Problems panel.
+pub(crate) fn is_common_spec_fallback_path(path: &Path) -> bool {
     let mut tail: Vec<&str> = path
         .components()
         .rev()

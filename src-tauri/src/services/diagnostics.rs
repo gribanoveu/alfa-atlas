@@ -6,6 +6,7 @@
 //! xref it). Results are written back into the index via `set_diagnostics`.
 
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::domain::settings::ErrorLanguage;
 use crate::domain::workspace_index::{
@@ -13,7 +14,37 @@ use crate::domain::workspace_index::{
 };
 use crate::infra::settings_store;
 use crate::services::diagnostic_messages as msgs;
+use crate::services::openapi;
 use crate::services::workspace_index::WorkspaceIndex;
+
+/// The `GeneralPrefs` entries that affect one diagnostics pass. Read once per
+/// `run_all`/`run_for` call so a settings change applies on the next build.
+/// A read error silently falls back to the defaults — having diagnostics at
+/// all matters more than honouring the exact settings.
+#[derive(Clone, Copy)]
+struct DiagnosticsPrefs {
+    lang: ErrorLanguage,
+    /// Substitute the bundled copy of the common spec when the file is
+    /// missing. While this is on, a `$ref` to that build artifact is served
+    /// by the resolver (`openapi::Resolver::load_file`), so it is not a
+    /// broken reference here either.
+    openapi_ref_fallback: bool,
+}
+
+impl DiagnosticsPrefs {
+    fn load() -> Self {
+        let general = settings_store::load().map(|s| s.general).ok();
+        Self {
+            lang: general
+                .as_ref()
+                .map(|g| g.error_language)
+                .unwrap_or_default(),
+            openapi_ref_fallback: general
+                .map(|g| g.openapi_ref_fallback_enabled)
+                .unwrap_or(true),
+        }
+    }
+}
 
 /// Язык сообщений диагностик на этот проход. Читается из `GeneralPrefs` на
 /// каждом вызове `run_all`/`run_for`, чтобы смена настройки сразу применялась
@@ -27,22 +58,22 @@ pub(crate) fn current_error_language() -> ErrorLanguage {
 
 /// Recompute diagnostics for every document in the index.
 pub fn run_all(index: &WorkspaceIndex) {
-    let lang = current_error_language();
+    let prefs = DiagnosticsPrefs::load();
     let docs = index.documents_iter();
     for d in &docs {
-        let diags = diagnose_one_merged(index, &d.id, lang);
+        let diags = diagnose_one_merged(index, &d.id, prefs);
         index.set_diagnostics(&d.id, diags);
     }
 }
 
 /// Recompute diagnostics for `doc` and every document that depends on it.
 pub fn run_for(index: &WorkspaceIndex, doc: &DocumentId) {
-    let lang = current_error_language();
+    let prefs = DiagnosticsPrefs::load();
     let mut queue: Vec<DocumentId> = vec![doc.clone()];
     let mut seen: HashSet<DocumentId> = HashSet::new();
     seen.insert(doc.clone());
     while let Some(current) = queue.pop() {
-        let diags = diagnose_one_merged(index, &current, lang);
+        let diags = diagnose_one_merged(index, &current, prefs);
         index.set_diagnostics(&current, diags);
         for dep in index.dependents_of(&current) {
             if seen.insert(dep.clone()) {
@@ -57,8 +88,8 @@ pub fn run_for(index: &WorkspaceIndex, doc: &DocumentId) {
 /// `DetachedHeaderAttributes`. Both are computed from one document's own text,
 /// are orthogonal to include/xref/image checks, and must survive `run_all` at
 /// the end of an async build.
-fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId, lang: ErrorLanguage) -> Vec<Diagnostic> {
-    let mut diags = diagnose_one(index, doc, lang);
+fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId, prefs: DiagnosticsPrefs) -> Vec<Diagnostic> {
+    let mut diags = diagnose_one(index, doc, prefs);
     diags.extend(
         index
             .get_diagnostics_for(doc)
@@ -68,21 +99,29 @@ fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId, lang: ErrorLang
     diags
 }
 
-fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId, lang: ErrorLanguage) -> Vec<Diagnostic> {
+fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId, prefs: DiagnosticsPrefs) -> Vec<Diagnostic> {
+    let lang = prefs.lang;
     let mut out = Vec::new();
 
     // Missing include.
     for inc in index.find_includes(doc) {
-        if !index.document_exists_by_relative(&inc.path) {
-            out.push(Diagnostic {
-                kind: DiagnosticKind::MissingInclude,
-                message: msgs::missing_include(lang, &inc.path),
-                document: doc.clone(),
-                line: inc.line,
-                column: inc.column,
-                severity: Severity::Error,
-            });
+        if index.document_exists_by_relative(&inc.path) {
+            continue;
         }
+        // A common spec missing from disk is not a broken reference while the
+        // bundled-copy fallback is on: the bundler substitutes it.
+        if prefs.openapi_ref_fallback && openapi::is_common_spec_fallback_path(Path::new(&inc.path))
+        {
+            continue;
+        }
+        out.push(Diagnostic {
+            kind: DiagnosticKind::MissingInclude,
+            message: msgs::missing_include(lang, &inc.path),
+            document: doc.clone(),
+            line: inc.line,
+            column: inc.column,
+            severity: Severity::Error,
+        });
     }
 
     // Xref: missing document or missing anchor.
@@ -245,6 +284,55 @@ mod tests {
         let idx = Arc::new(WorkspaceIndex::new(ParserRegistry::new()));
         idx.build(root.to_path_buf()).unwrap();
         idx
+    }
+
+    /// Spec repo whose `specs/responses/all.yaml` `$ref`s the well-known
+    /// common-spec build artifact, without that artifact existing on disk —
+    /// a spec repo opened without a Gradle build having run.
+    fn repo_with_missing_common_spec_ref() -> PathBuf {
+        let root = temp_dir();
+        fs::create_dir_all(root.join("specs").join("responses")).unwrap();
+        fs::write(
+            root.join("specs").join("responses").join("all.yaml"),
+            "BadRequest:\n  $ref: ../../build/common/META-INF/specs/api.yaml#/components/responses/BadRequest\n",
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn missing_common_spec_ref_is_not_reported_when_fallback_enabled() {
+        let root = repo_with_missing_common_spec_ref();
+        let diags = settings_store::test_support::with_temp_home(|| {
+            // No settings file written: `openapi_ref_fallback_enabled`
+            // defaults to on.
+            build(&root).get_diagnostics()
+        });
+        assert!(
+            diags
+                .iter()
+                .all(|d| d.kind != DiagnosticKind::MissingInclude),
+            "expected no missing-include diagnostic, got {diags:?}"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn missing_common_spec_ref_is_reported_when_fallback_disabled() {
+        let root = repo_with_missing_common_spec_ref();
+        let diags = settings_store::test_support::with_temp_home(|| {
+            let mut settings = crate::domain::settings::AppSettings::default();
+            settings.general.openapi_ref_fallback_enabled = false;
+            settings_store::save(&settings).unwrap();
+            build(&root).get_diagnostics()
+        });
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::MissingInclude),
+            "expected a missing-include diagnostic, got {diags:?}"
+        );
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]
