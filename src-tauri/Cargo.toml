@@ -65,3 +65,12 @@ tauri-plugin-fs = "2"
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2.4.3"
 
+# На Windows libssh2-sys по умолчанию собирается с бэкендом WinCNG (см. его
+# build.rs: без фичи `openssl-on-win32` определяется LIBSSH2_WINCNG). WinCNG не
+# умеет ed25519, не читает ключи в формате OpenSSH и не поддерживает
+# `libssh2_userauth_publickey_frommemory` — а libgit2 крутит этот вызов в цикле
+# по EAGAIN, из-за чего clone по SSH зависал на фазе аутентификации навсегда.
+# Прямая зависимость с `openssl-on-win32` переводит вендоренную сборку на
+# OpenSSL — тот же бэкенд, что и на остальных платформах.
+[target.'cfg(windows)'.dependencies]
+libssh2-sys = { version = "0.3.2", features = ["openssl-on-win32", "vendored-openssl"] }

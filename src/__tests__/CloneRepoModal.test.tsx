@@ -15,7 +15,7 @@ mock.module("../hooks/useCloneRepo", () => ({
     pickDestination: async () => {},
     message: null,
     cloning,
-    progressLabel: null,
+    busyLabel: cloning ? "Клонирование…" : null,
     needsAuth: false,
     conflict: false,
     stalled: false,

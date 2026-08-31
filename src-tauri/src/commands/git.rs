@@ -1,4 +1,4 @@
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,16 +33,136 @@ const GIT_PROGRESS_EVENT: &str = "git://progress";
 /// throttle emissions to the UI so we don't flood the event channel.
 const GIT_PROGRESS_THROTTLE: Duration = Duration::from_millis(100);
 
+/// How long a network operation may stay silent — not a single progress event
+/// — before the command stops waiting for it.
+///
+/// This is not a cap on duration: a large clone emits events continuously and
+/// may run for as long as it needs. The threshold sits above the UI's own
+/// "server is not responding" hint (one minute) so the user gets to cancel
+/// first; the timeout is for the case where cancelling no longer works,
+/// because the thread is stuck inside a blocking libgit2 call and never
+/// reaches the callback where cancellation is checked.
+const NETWORK_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How often the watchdog wakes up to compare the silence against the threshold.
+const NETWORK_WATCHDOG_TICK: Duration = Duration::from_secs(5);
+
+/// What a timed-out network operation reports. What matters to the user is not
+/// that some timeout elapsed, but what to go and check.
+pub const NETWORK_TIMEOUT_MESSAGE: &str =
+    "Сервер не отвечает более двух минут — операция прервана. Проверьте доступ к хосту и VPN.";
+
+/// The last sign of life from a network operation: the worker thread stamps it
+/// on every libgit2 callback, and the watchdog reads how long the silence has
+/// lasted. `AtomicU64` rather than `Mutex<Instant>` because the write happens
+/// in a callback invoked from inside libgit2's C code, which is no place for a
+/// lock.
+struct ActivityClock {
+    start: Instant,
+    last_millis: AtomicU64,
+}
+
+impl ActivityClock {
+    fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            last_millis: AtomicU64::new(0),
+        }
+    }
+
+    fn touch(&self) {
+        self.last_millis
+            .store(self.start.elapsed().as_millis() as u64, Ordering::Relaxed);
+    }
+
+    fn idle_for(&self) -> Duration {
+        let last = Duration::from_millis(self.last_millis.load(Ordering::Relaxed));
+        self.start.elapsed().saturating_sub(last)
+    }
+}
+
+/// How waiting for a network operation ended.
+enum NetOpOutcome<T> {
+    /// The operation answered — with success or with a libgit2 failure.
+    Answered(Result<T, String>),
+    /// The operation went silent. The worker thread is still there: it cannot
+    /// be stopped from the outside, so it stays wedged until the app exits
+    /// while the command hands control back to the UI without it.
+    TimedOut,
+}
+
+impl<T> NetOpOutcome<T> {
+    fn or_timeout_error(self) -> Result<T, String> {
+        match self {
+            NetOpOutcome::Answered(result) => result,
+            NetOpOutcome::TimedOut => Err(NETWORK_TIMEOUT_MESSAGE.to_string()),
+        }
+    }
+}
+
+/// Runs a blocking network git operation with a progress emitter, and stops
+/// waiting for it once it has been silent for `NETWORK_IDLE_TIMEOUT`.
+///
+/// `Started`/`Finished` are emitted here rather than in every command: the UI
+/// clears its progress state on `Finished`, so the timeout path has to send it
+/// too — otherwise a frozen percentage stays on screen forever.
+async fn run_network_op<T, F>(op: &str, app: AppHandle, work: F) -> NetOpOutcome<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&mut dyn FnMut(GitProgressEvent)) -> Result<T, String> + Send + 'static,
+{
+    let activity = Arc::new(ActivityClock::new());
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+
+    let worker_op = op.to_string();
+    let worker_app = app.clone();
+    let worker_activity = Arc::clone(&activity);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut emit = progress_emitter(worker_app, worker_activity);
+        emit(GitProgressEvent::Started {
+            op: worker_op.clone(),
+        });
+        let result = work(&mut emit);
+        emit(GitProgressEvent::Finished { op: worker_op });
+        // The receiver may already have given up on the timeout, in which case
+        // there is simply nobody to send to — not an error.
+        let _ = tx.send(result);
+    });
+
+    loop {
+        match tokio::time::timeout(NETWORK_WATCHDOG_TICK, &mut rx).await {
+            Ok(Ok(result)) => return NetOpOutcome::Answered(result),
+            // The sender was dropped without answering: a panic in the worker.
+            Ok(Err(_)) => {
+                return NetOpOutcome::Answered(Err(format!(
+                    "операция git ({op}) завершилась аварийно"
+                )))
+            }
+            Err(_) if activity.idle_for() >= NETWORK_IDLE_TIMEOUT => {
+                let _ = app.emit(
+                    GIT_PROGRESS_EVENT,
+                    &GitProgressEvent::Finished { op: op.to_string() },
+                );
+                return NetOpOutcome::TimedOut;
+            }
+            Err(_) => {}
+        }
+    }
+}
+
 /// Builds a progress callback that forwards `GitProgressEvent`s to the
 /// frontend over `GIT_PROGRESS_EVENT`, throttled so only ~10/sec reach the
 /// UI regardless of how often libgit2 invokes the underlying callback.
 /// `Started`/`Finished` are one-off lifecycle markers rather than a
 /// high-frequency tick, so they always bypass the throttle.
-fn progress_emitter(app: AppHandle) -> impl FnMut(GitProgressEvent) {
+fn progress_emitter(app: AppHandle, activity: Arc<ActivityClock>) -> impl FnMut(GitProgressEvent) {
     let mut last = Instant::now()
         .checked_sub(GIT_PROGRESS_THROTTLE)
         .unwrap_or_else(Instant::now);
     move |event: GitProgressEvent| {
+        // Stamped before throttling: what the watchdog needs to know is that the
+        // operation is alive, even when this particular event never reaches the UI.
+        activity.touch();
         let now = Instant::now();
         // Phase transitions are one-off and few, and throttling them away
         // would hide exactly the information that makes a stall diagnosable.
@@ -138,15 +258,11 @@ pub fn git_move_unpushed_to_branch(
 
 #[tauri::command]
 pub async fn git_pull(repo_root: String, mode: PullMode, app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut emit = progress_emitter(app);
-        emit(GitProgressEvent::Started { op: "pull".to_string() });
-        let result = git_ops::pull(&repo_root, mode, Some(&mut emit)).map_err(|e| e.to_string());
-        emit(GitProgressEvent::Finished { op: "pull".to_string() });
-        result
+    run_network_op("pull", app, move |emit| {
+        git_ops::pull(&repo_root, mode, Some(emit)).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .or_timeout_error()
 }
 
 #[tauri::command]
@@ -196,15 +312,11 @@ pub async fn git_sync_status(repo_root: String) -> Result<GitSyncStatus, String>
 
 #[tauri::command]
 pub async fn git_push(repo_root: String, app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut emit = progress_emitter(app);
-        emit(GitProgressEvent::Started { op: "push".to_string() });
-        let result = git_ops::push(&repo_root, Some(&mut emit)).map_err(|e| e.to_string());
-        emit(GitProgressEvent::Finished { op: "push".to_string() });
-        result
+    run_network_op("push", app, move |emit| {
+        git_ops::push(&repo_root, Some(emit)).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .or_timeout_error()
 }
 
 #[tauri::command]
@@ -280,15 +392,11 @@ pub fn git_list_branches(repo_root: String) -> Result<Vec<GitBranchInfo>, String
 
 #[tauri::command]
 pub async fn git_fetch_branches(repo_root: String, app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut emit = progress_emitter(app);
-        emit(GitProgressEvent::Started { op: "fetch".to_string() });
-        let result = git_ops::fetch_branches(&repo_root, Some(&mut emit)).map_err(|e| e.to_string());
-        emit(GitProgressEvent::Finished { op: "fetch".to_string() });
-        result
+    run_network_op("fetch", app, move |emit| {
+        git_ops::fetch_branches(&repo_root, Some(emit)).map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .or_timeout_error()
 }
 
 #[tauri::command]
@@ -402,25 +510,16 @@ pub async fn git_clone(
     app: AppHandle,
 ) -> Result<ProbeResult, String> {
     let cancellations = Arc::clone(&cancellations);
-    tauri::async_runtime::spawn_blocking(move || {
+    let registry = Arc::clone(&cancellations);
+    let timed_out_id = clone_id.clone();
+
+    let outcome = run_network_op("clone", app, move |emit| {
         let cancel_id = clone_id.clone();
         let cancel_registry = Arc::clone(&cancellations);
         let is_cancelled = move || cancel_registry.is_cancelled(&cancel_id);
 
-        let mut emit = progress_emitter(app);
-        emit(GitProgressEvent::Started { op: "clone".to_string() });
+        let cloned = git_clone::clone_repository(&url, &destination, Some(emit), Some(&is_cancelled));
 
-        let cloned = git_clone::clone_repository(
-            &url,
-            &destination,
-            Some(&mut emit),
-            Some(&is_cancelled),
-        );
-
-        // The UI clears its progress state on `Finished`, so it has to be
-        // emitted on the failure path too — otherwise a failed clone leaves a
-        // stale percentage on screen.
-        emit(GitProgressEvent::Finished { op: "clone".to_string() });
         cancellations.clear(&clone_id);
         cloned?;
 
@@ -434,11 +533,23 @@ pub async fn git_clone(
         let repo_root = crate::infra::git_repo::discover_repo_root(&canonical);
         let repo_root_str = repo_root.to_string_lossy().into_owned();
 
-        crate::services::project_open::probe_open_path(&repo_root_str)
-            .map_err(|e| e.to_string())
+        crate::services::project_open::probe_open_path(&repo_root_str).map_err(|e| e.to_string())
     })
-    .await
-    .map_err(|e| e.to_string())?
+    .await;
+
+    match outcome {
+        NetOpOutcome::Answered(result) => result,
+        NetOpOutcome::TimedOut => {
+            // The thread is still inside a blocking call and may wake up long
+            // after we stopped waiting for it. The cancellation flag is what
+            // makes it drop the clone and remove the half-fetched directory
+            // then, instead of finishing it behind the back of a user who
+            // closed the dialog minutes ago. Nothing will ever clear this
+            // entry — the price of not being able to kill the thread.
+            registry.0.insert(timed_out_id, ());
+            Err(NETWORK_TIMEOUT_MESSAGE.to_string())
+        }
+    }
 }
 
 /// Asks an in-flight `git_clone` to stop. The clone thread notices at its next
@@ -464,5 +575,30 @@ mod tests {
     fn reject_if_full_sync_active_allows_checkout_when_idle() {
         let flag = FullSyncActiveSlot::new(false);
         assert!(reject_if_full_sync_active(&flag).is_ok());
+    }
+
+    #[test]
+    fn activity_clock_counts_silence_from_the_last_sign_of_life() {
+        let clock = ActivityClock::new();
+        std::thread::sleep(Duration::from_millis(30));
+        // Before the first stamp, the whole run counts as silence — otherwise an
+        // operation that never emitted anything would look alive.
+        assert!(clock.idle_for() >= Duration::from_millis(25));
+
+        clock.touch();
+        assert!(clock.idle_for() < Duration::from_millis(25));
+    }
+
+    #[test]
+    fn a_timed_out_operation_tells_the_user_what_to_check() {
+        let outcome: NetOpOutcome<()> = NetOpOutcome::TimedOut;
+        assert_eq!(outcome.or_timeout_error(), Err(NETWORK_TIMEOUT_MESSAGE.to_string()));
+    }
+
+    #[test]
+    fn an_answered_operation_passes_its_own_result_through() {
+        let failed: NetOpOutcome<()> = NetOpOutcome::Answered(Err("хост не найден".into()));
+        assert_eq!(failed.or_timeout_error(), Err("хост не найден".to_string()));
+        assert_eq!(NetOpOutcome::Answered(Ok(7)).or_timeout_error(), Ok(7));
     }
 }

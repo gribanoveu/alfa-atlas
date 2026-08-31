@@ -13,14 +13,12 @@ pub fn resolve_docs_root(
     repo_root: &Path,
     docs_root_relative: &str,
 ) -> Result<PathBuf, ProjectError> {
-    let repo_root = repo_root
-        .canonicalize()
-        .map_err(ProjectError::Canonicalize)?;
+    let repo_root = paths::canonicalize_plain(repo_root).map_err(ProjectError::Canonicalize)?;
     let joined = paths::join_relative(&repo_root, docs_root_relative)?;
     if !joined.is_dir() {
         return Err(ProjectError::NotADirectory(joined.display().to_string()));
     }
-    let docs = joined.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let docs = paths::canonicalize_plain(&joined).map_err(ProjectError::Canonicalize)?;
     if !docs.starts_with(&repo_root) {
         return Err(ProjectError::DocsOutsideRepo(docs.display().to_string()));
     }
@@ -43,9 +41,7 @@ pub fn probe_open_path(selected_path: &str) -> Result<ProbeResult, ProjectError>
     if !selected.is_dir() {
         return Err(ProjectError::NotADirectory(selected_path.to_string()));
     }
-    let selected = selected
-        .canonicalize()
-        .map_err(ProjectError::Canonicalize)?;
+    let selected = paths::canonicalize_plain(selected).map_err(ProjectError::Canonicalize)?;
 
     let repo_root = git_repo::discover_repo_root(&selected);
 
@@ -84,13 +80,13 @@ pub fn open_project(repo_root: &str, docs_root: &str) -> Result<OpenedProject, P
     if !repo.is_dir() {
         return Err(ProjectError::NotADirectory(repo_root.to_string()));
     }
-    let repo = repo.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let repo = paths::canonicalize_plain(repo).map_err(ProjectError::Canonicalize)?;
 
     let docs = Path::new(docs_root);
     if !docs.is_dir() {
         return Err(ProjectError::NotADirectory(docs_root.to_string()));
     }
-    let docs = docs.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let docs = paths::canonicalize_plain(docs).map_err(ProjectError::Canonicalize)?;
     if !docs.starts_with(&repo) {
         return Err(ProjectError::DocsOutsideRepo(docs.display().to_string()));
     }
@@ -114,7 +110,7 @@ pub fn open_cached_project(repo_root: &str) -> Result<OpenedProject, ProjectErro
     if !repo.is_dir() {
         return Err(ProjectError::NotADirectory(repo_root.to_string()));
     }
-    let repo = repo.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let repo = paths::canonicalize_plain(repo).map_err(ProjectError::Canonicalize)?;
     let docs = load_cached_docs(&repo)?.ok_or_else(|| {
         ProjectError::Message("project.json missing or docs root invalid".into())
     })?;
@@ -144,7 +140,7 @@ pub fn get_project() -> Result<Option<OpenedProject>, ProjectError> {
         return Ok(None);
     }
 
-    let repo = repo.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let repo = paths::canonicalize_plain(&repo).map_err(ProjectError::Canonicalize)?;
     let Some(docs) = load_cached_docs(&repo)? else {
         // Keep global root so UI can re-probe, but signal incomplete project.
         return Ok(None);
@@ -170,7 +166,7 @@ pub fn get_saved_repo_root() -> Result<Option<String>, ProjectError> {
         clear_global_root().map_err(|e| ProjectError::Message(e.to_string()))?;
         return Ok(None);
     }
-    let canonical = path.canonicalize().map_err(ProjectError::Canonicalize)?;
+    let canonical = paths::canonicalize_plain(&path).map_err(ProjectError::Canonicalize)?;
     Ok(Some(canonical.to_string_lossy().into_owned()))
 }
 
@@ -196,7 +192,7 @@ pub fn list_recent_projects() -> Result<Vec<RecentProject>, ProjectError> {
         if !p.is_dir() {
             continue;
         }
-        let canonical = match p.canonicalize() {
+        let canonical = match paths::canonicalize_plain(p) {
             Ok(c) => c,
             Err(_) => continue,
         };

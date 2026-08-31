@@ -37,13 +37,33 @@ export function useGitProgress() {
 
 /** Renders a progress event as a short label, e.g. "42%" or "1.2 МБ".
  * Returns null when there isn't enough information yet (no total known) —
- * callers should fall back to a static "in progress" label in that case. */
+ * callers should fall back to a static "in progress" label in that case.
+ * For a button caption prefer `formatGitBusyLabel`, which decides whether the
+ * detail can stand on its own. */
 const PHASE_LABELS: Record<GitPhase, string> = {
   connecting: "Подключение…",
   authenticating: "Аутентификация…",
   hostKey: "Проверка ключа хоста…",
   remote: "Сервер…",
 };
+
+/** Caption for the button that started a network operation: "Клонирование…"
+ * until there is something more specific to say, then the specific thing.
+ *
+ * Phase and checkout labels are full sentences of their own
+ * ("Аутентификация…", "Распаковка 3/10"), so they *replace* the verb —
+ * appending them produced "Клонирование… Аутентификация…", which reads as two
+ * operations at once and stacks up two ellipses. Transfer progress is a bare
+ * number with no words, so it keeps the verb: "Клонирование… 42%". */
+export function formatGitBusyLabel(
+  base: string,
+  event: GitProgressEvent | null,
+): string {
+  const detail = formatGitProgress(event);
+  if (!detail) return `${base}…`;
+  const speaksForItself = event?.kind === "phase" || event?.kind === "checkout";
+  return speaksForItself ? detail : `${base}… ${detail}`;
+}
 
 export function formatGitProgress(event: GitProgressEvent | null): string | null {
   if (!event) return null;

@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use super::project_config::ProjectError;
@@ -155,9 +156,28 @@ pub fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, ProjectErro
         if part == ".." {
             return Err(ProjectError::PathEscape(relative.to_string()));
         }
+        // A component Windows parses as a drive or UNC prefix (`C:`) makes
+        // `PathBuf::push` *replace* the whole path instead of extending it, so
+        // an absolute path from a caller silently left `root`:
+        // `join_relative(r"C:\repo\docs", r"C:\Windows\win.ini")` used to
+        // produce `C:Windows\win.ini`. On Linux the same input stays under the
+        // root, so this also makes the contract platform-independent. Only
+        // plain names may be appended.
+        if Path::new(part).components().next() != Some(Component::Normal(OsStr::new(part))) {
+            return Err(ProjectError::PathEscape(relative.to_string()));
+        }
         out.push(part);
     }
     Ok(out)
+}
+
+/// `canonicalize`, already in the form a path may leave this process in — no
+/// `\\?\` prefix. Every path that reaches the UI or a config file should come
+/// from here rather than from a bare `canonicalize()`; comparisons are not
+/// affected, because each "is this under that root" check canonicalizes both
+/// sides itself.
+pub fn canonicalize_plain(path: &Path) -> std::io::Result<PathBuf> {
+    path.canonicalize().map(strip_verbatim)
 }
 
 /// Strip the Windows extended-length (`\\?\`) prefix that `canonicalize`
@@ -207,6 +227,55 @@ mod tests {
     fn strip_verbatim_leaves_plain_paths_alone() {
         let plain = PathBuf::from(if cfg!(windows) { r"C:\repos\x" } else { "/repos/x" });
         assert_eq!(super::strip_verbatim(plain.clone()), plain);
+    }
+
+    #[test]
+    fn join_relative_appends_plain_components_from_either_separator() {
+        let root = PathBuf::from(if cfg!(windows) { r"C:\repo\docs" } else { "/repo/docs" });
+        let expected = root.join("api").join("index.adoc");
+        assert_eq!(join_relative(&root, "api/index.adoc").unwrap(), expected);
+        assert_eq!(join_relative(&root, r"api\index.adoc").unwrap(), expected);
+    }
+
+    #[test]
+    fn join_relative_rejects_a_drive_qualified_component() {
+        // On Windows `PathBuf::push("C:")` replaces the path being built, so
+        // without the guard an absolute argument escaped the root entirely —
+        // `C:\Windows\win.ini` came out as the drive-relative
+        // `C:Windows\win.ini`. Off Windows `C:` is an ordinary name and the
+        // result simply stays under the root, which the guard must not break.
+        let root = PathBuf::from(if cfg!(windows) { r"C:\repo\docs" } else { "/repo/docs" });
+        let joined = join_relative(&root, r"C:\Windows\win.ini");
+        if cfg!(windows) {
+            assert!(matches!(joined, Err(ProjectError::PathEscape(_))));
+            assert!(matches!(join_relative(&root, "C:"), Err(ProjectError::PathEscape(_))));
+        } else {
+            assert!(joined.unwrap().starts_with(&root));
+        }
+    }
+
+    #[test]
+    fn join_relative_treats_a_unc_looking_argument_as_relative() {
+        // Leading separators are skipped rather than rejected, so this stays
+        // inside the root instead of reaching a network share.
+        let root = PathBuf::from(if cfg!(windows) { r"C:\repo\docs" } else { "/repo/docs" });
+        let joined = join_relative(&root, r"\\server\share\file.txt").unwrap();
+        assert_eq!(joined, root.join("server").join("share").join("file.txt"));
+    }
+
+    #[test]
+    fn canonicalize_plain_hands_back_a_path_without_the_verbatim_prefix() {
+        let dir = temp_dir();
+        let plain = super::canonicalize_plain(&dir).unwrap();
+        assert!(
+            !plain.to_string_lossy().starts_with(r"\\?\"),
+            "canonicalize_plain leaked a verbatim prefix: {}",
+            plain.display()
+        );
+        // Still the same directory — stripping the prefix must not change
+        // which path this is.
+        assert_eq!(plain.canonicalize().unwrap(), dir.canonicalize().unwrap());
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(windows)]

@@ -5,7 +5,7 @@ import { gitClone, gitCloneCancel, type ProbeResult } from "../lib/git";
 import { checkPathExists } from "../lib/project";
 import { joinPath, parentPath } from "../lib/paths";
 import { getGeneralPrefs, setGeneralPrefs } from "../lib/prefs";
-import { formatGitProgress, useGitProgress } from "./useGitProgress";
+import { formatGitBusyLabel, useGitProgress } from "./useGitProgress";
 
 /** `git@host:group/repo.git` -> `repo`. Carried over verbatim from the
  * component — the parsing is load-bearing for the destination path. */
@@ -47,7 +47,11 @@ export function useCloneRepo(onOpened?: (project: ProbeResult) => unknown) {
 
   const repoName = useMemo(() => getRepoName(url), [url]);
   const destination = repoName ? joinPath(baseDir, repoName) : baseDir;
-  const progressLabel = cloning ? formatGitProgress(gitProgress.event) : null;
+  /** Caption for the submit button while the clone runs — already complete,
+   * so the component does not compose it with a verb of its own. */
+  const busyLabel = cloning
+    ? formatGitBusyLabel("Клонирование", gitProgress.event)
+    : null;
 
   /** A clone that produces no progress event at all is the failure mode this
    * whole flow exists to make legible — say so rather than spinning silently.
@@ -172,7 +176,7 @@ export function useCloneRepo(onOpened?: (project: ProbeResult) => unknown) {
     pickDestination,
     message,
     cloning,
-    progressLabel,
+    busyLabel,
     needsAuth,
     conflict,
     stalled,

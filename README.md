@@ -64,6 +64,17 @@ bun run tsc --noEmit
 cd src-tauri && cargo check
 ```
 
+### Windows: Strawberry Perl для сборки
+
+На Windows `libssh2` собирается с бэкендом OpenSSL (см. секцию
+`[target.'cfg(windows)'.dependencies]` в [src-tauri/Cargo.toml](./src-tauri/Cargo.toml)):
+бэкенд WinCNG, который берётся по умолчанию, не умеет ни ed25519, ни ключи в
+формате OpenSSH, и клон по SSH с ним зависает. OpenSSL собирается из исходников,
+а его `Configure` написан на Perl, поэтому локально нужен
+[Strawberry Perl](https://strawberryperl.com/) — msys-perl из Git for Windows не
+подходит (в нём нет `Locale::Maketext::Simple`). В CI он уже есть на
+`windows-latest`.
+
 ## Что умеет сейчас (кратко)
 
 - IDE-оболочка: top bar с меню, боковые и нижняя панели, status bar, Monaco-редактор

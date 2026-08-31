@@ -21,7 +21,7 @@ export function CloneRepoModal({
     pickDestination,
     message,
     cloning,
-    progressLabel,
+    busyLabel,
     needsAuth,
     conflict,
     stalled,
@@ -139,11 +139,7 @@ export function CloneRepoModal({
             onClick={() => void submit()}
             disabled={submitDisabled}
           >
-            {cloning
-              ? progressLabel
-                ? `Клонирование… ${progressLabel}`
-                : "Клонирование…"
-              : "Клонировать"}
+            {cloning ? busyLabel : "Клонировать"}
           </button>
         </div>
       </div>

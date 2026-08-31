@@ -83,6 +83,7 @@ dependencies = [
  "http",
  "ignore",
  "keyring",
+ "libssh2-sys",
  "moka",
  "notify",
  "pulldown-cmark",

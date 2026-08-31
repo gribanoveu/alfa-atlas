@@ -52,12 +52,11 @@ pub fn find_candidates(
     repo_root: &Path,
     scan_root: &Path,
 ) -> Result<Vec<DocsCandidate>, ProjectError> {
-    let repo_root = repo_root
-        .canonicalize()
-        .map_err(ProjectError::Canonicalize)?;
-    let scan_root = scan_root
-        .canonicalize()
-        .map_err(ProjectError::Canonicalize)?;
+    // Plain, not raw `canonicalize`: every candidate path is built from these
+    // two and travels to the UI as-is, where the raw form showed up as
+    // `\\?\C:\...\specs`.
+    let repo_root = paths::canonicalize_plain(repo_root).map_err(ProjectError::Canonicalize)?;
+    let scan_root = paths::canonicalize_plain(scan_root).map_err(ProjectError::Canonicalize)?;
 
     let mut stats: HashMap<PathBuf, DirStats> = HashMap::new();
 
@@ -308,6 +307,29 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("alfa-atlas-disc-{nanos}-{n}"));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn candidate_paths_are_free_of_the_windows_verbatim_prefix() {
+        // The reported symptom: the confirm dialog showed the docs root as
+        // `\\?\C:\Users\...\specs`, because candidates are built from a raw
+        // `canonicalize()` of the scan root.
+        let root = temp_dir();
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(docs.join("index.adoc"), "= Doc\n").unwrap();
+
+        let candidates = find_candidates(&root, &root).unwrap();
+        assert!(!candidates.is_empty());
+        for candidate in &candidates {
+            assert!(
+                !candidate.path.starts_with(r"\\?\"),
+                "candidate path leaked a verbatim prefix: {}",
+                candidate.path
+            );
+        }
+
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]

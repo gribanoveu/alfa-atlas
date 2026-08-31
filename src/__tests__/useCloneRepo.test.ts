@@ -47,7 +47,7 @@ mock.module("../lib/prefs", () => ({
 mock.module("@tauri-apps/plugin-dialog", () => ({ open: async () => pickResult }));
 mock.module("../hooks/useGitProgress", () => ({
   useGitProgress: () => ({ event: null, reset: () => {} }),
-  formatGitProgress: () => null,
+  formatGitBusyLabel: (base: string) => `${base}…`,
 }));
 
 const { useCloneRepo } = await import("../hooks/useCloneRepo");

@@ -1,5 +1,5 @@
 import type { GitCommitSummary } from "../../lib/git";
-import { formatGitProgress, useGitProgress } from "../../hooks/useGitProgress";
+import { formatGitBusyLabel, useGitProgress } from "../../hooks/useGitProgress";
 import { GitCommitList } from "./GitCommitList";
 import "../Welcome/CloneRepoModal.css";
 import "./PushConfirmModal.css";
@@ -36,7 +36,7 @@ export function PushConfirmModal({
   onOpenCommit,
 }: PushConfirmModalProps) {
   const gitProgress = useGitProgress();
-  const progressLabel = busy ? formatGitProgress(gitProgress.event) : null;
+  const busyLabel = busy ? formatGitBusyLabel("Отправка", gitProgress.event) : null;
   const message = hasUpstream
     ? `Будет отправлено ${ahead} ${commitWord(ahead)} из ветки «${branchName}» на сервер.`
     : `Ветка «${branchName}» ещё не отправлялась на сервер. Она будет создана в удалённом репозитории и привязана как upstream.`;
@@ -116,7 +116,7 @@ export function PushConfirmModal({
             }}
             autoFocus
           >
-            {busy ? (progressLabel ? `Отправка… ${progressLabel}` : "Отправка…") : "Отправить"}
+            {busy ? busyLabel : "Отправить"}
           </button>
         </div>
       </div>

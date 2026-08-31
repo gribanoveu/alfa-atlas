@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { GitCommitSummary, PullMode } from "../../lib/git";
-import { formatGitProgress, useGitProgress } from "../../hooks/useGitProgress";
+import { formatGitBusyLabel, useGitProgress } from "../../hooks/useGitProgress";
 import { GitCommitList } from "./GitCommitList";
 import "../Welcome/CloneRepoModal.css";
 import "./PullUpdateModal.css";
@@ -28,7 +28,7 @@ export function PullUpdateModal({
 }: PullUpdateModalProps) {
   const [mode, setMode] = useState<PullMode>("merge");
   const gitProgress = useGitProgress();
-  const progressLabel = busy ? formatGitProgress(gitProgress.event) : null;
+  const busyLabel = busy ? formatGitBusyLabel("Обновление", gitProgress.event) : null;
   const displayCount = commitsLoading ? behind : Math.max(behind, commits.length);
   const overflowCount =
     displayCount > commits.length ? displayCount - commits.length : 0;
@@ -128,7 +128,7 @@ export function PullUpdateModal({
                 onConfirm(mode);
               }}
             >
-              {busy ? (progressLabel ? `Обновление… ${progressLabel}` : "Обновление…") : "Обновить"}
+              {busy ? busyLabel : "Обновить"}
             </button>
           </div>
         </div>
