@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, State};
 
-use crate::commands::chat_events::chat_event_sink;
+use crate::commands::chat_events::{chat_event_sink, NO_CHAT_TURN};
 use crate::services::llm_session::LlmProviderSlot;
 use crate::services::memory_pipeline::{self, MemoryExtractGuard};
 
@@ -21,7 +21,7 @@ pub fn memory_extract_turn(
 ) -> Result<(), String> {
     let slot = llm_provider.inner().clone();
     let guard = guard.inner().clone();
-    let events = chat_event_sink(&app);
+    let events = chat_event_sink(&app, NO_CHAT_TURN.to_string());
     if !guard.try_start(&chat_id) {
         return Ok(());
     }

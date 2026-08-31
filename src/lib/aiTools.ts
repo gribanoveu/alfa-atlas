@@ -64,6 +64,10 @@ export type SemanticSearchMeta = {
    * only". A plain lexical search on a project with no index is *not*
    * degraded: this marks lost capability, not a cheap tier. */
   degraded: string | null;
+  /** Ranked hits dropped because they sit outside the documentation root.
+   * `0` in Full-repo mode, and absent (treated as `0`) in chats recorded
+   * before this field existed. */
+  hiddenByAccessBoundary?: number;
 };
 
 /** Mirrors `domain::ai_tools::SemanticSearchPayload`. */
@@ -104,6 +108,7 @@ export function normalizeSemanticSearchResult(
         // degradation reporting entirely — absence of the field is not
         // evidence the search was degraded.
         degraded: null,
+        hiddenByAccessBoundary: 0,
       },
     };
   }
@@ -310,7 +315,19 @@ export type ToolResult =
   | { tool: "directoryDeleted"; result: { path: string } }
   | { tool: "moved"; result: { from: string; to: string; updatedFiles: UpdatedReference[] } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } }
-  | { tool: "modeSwitchRequested"; result: { mode: ConversationMode; reason: string } }
+  | {
+      tool: "modeSwitchRequested";
+      /** `approved`/`appliesFrom` are optional only for chats persisted
+       * before they existed — the backend always sends both now, and the
+       * model reads them to know the switch actually happened (see
+       * `ToolResult::ModeSwitchRequested`). */
+      result: {
+        approved?: boolean;
+        mode: ConversationMode;
+        appliesFrom?: string;
+        reason: string;
+      };
+    }
   | {
       tool: "asciidocTemplates";
       result: { templates: AsciidocTemplateEntry[]; notFound: string[] };

@@ -27,9 +27,10 @@ pub enum ConversationMode {
 }
 
 /// Tools offered in every mode — pure read/inspection tools plus
-/// `RequestModeSwitch` / `AskUser`, which must always be reachable
-/// regardless of which mode the model is currently in (`AskUser` is the
-/// mid-turn clarifying-question pause; see `domain::ai_tools::AskUserArgs`).
+/// `RequestModeSwitch` / `AskUser` / `RequestFullRepoAccess`, which must
+/// always be reachable regardless of which mode the model is currently in
+/// (`AskUser` is the mid-turn clarifying-question pause; see
+/// `domain::ai_tools::AskUserArgs`).
 pub fn base_tools() -> HashSet<ToolName> {
     [
         ToolName::ListFiles,
@@ -40,6 +41,13 @@ pub fn base_tools() -> HashSet<ToolName> {
         ToolName::GitBlame,
         ToolName::Check,
         ToolName::RequestModeSwitch,
+        // Widening the *read* boundary is not a mode concern: a question
+        // about source code is still a question, and leaving this out of
+        // `Question` meant the only way out of Docs-only there was to ask
+        // for `Agent` — trading a read boundary for the whole mutation
+        // toolset, which is exactly backwards. Still user-approved per call
+        // (`ToolName::requires_confirmation`), in every mode.
+        ToolName::RequestFullRepoAccess,
         // Read-only lookup over a fixed catalog — useful in every mode:
         // Agent to actually draft with it, Plan to reference the exact
         // shape while planning a future edit, Question to answer "how do we
@@ -65,12 +73,12 @@ pub fn base_tools() -> HashSet<ToolName> {
 }
 
 /// Tools added on top of `base_tools` for one specific mode. `Plan` gets
-/// `RequestFullRepoAccess` (a wider *read* boundary helps ground a plan in
-/// real code, not just docs), plus `CreatePlan`/`UpdatePlan`/`ReadPlan` for
-/// the structured plan artifact — deliberately not `Todo` (the chat
-/// working-memory checklist) or `UpdatePlanTodo` (execution tracking, Agent
-/// only). `Question` gets nothing extra — the leanest tool set, for
-/// lightweight point answers.
+/// `CreatePlan`/`UpdatePlan`/`ReadPlan` for the structured plan artifact —
+/// deliberately not `Todo` (the chat working-memory checklist) or
+/// `UpdatePlanTodo` (execution tracking, Agent only). `Question` gets
+/// nothing extra — the leanest tool set, for lightweight point answers
+/// (`RequestFullRepoAccess` is in `base_tools`, so a question about source
+/// code no longer needs a mode switch to answer).
 pub fn extra_tools_for_mode(mode: ConversationMode) -> HashSet<ToolName> {
     match mode {
         ConversationMode::Agent => [
@@ -80,7 +88,6 @@ pub fn extra_tools_for_mode(mode: ConversationMode) -> HashSet<ToolName> {
             ToolName::CreateDirectory,
             ToolName::DeleteDirectory,
             ToolName::Move,
-            ToolName::RequestFullRepoAccess,
             ToolName::Todo,
             ToolName::ReadPlan,
             ToolName::UpdatePlanTodo,
@@ -89,7 +96,6 @@ pub fn extra_tools_for_mode(mode: ConversationMode) -> HashSet<ToolName> {
         .into_iter()
         .collect(),
         ConversationMode::Plan => [
-            ToolName::RequestFullRepoAccess,
             ToolName::CreatePlan,
             ToolName::UpdatePlan,
             ToolName::ReadPlan,
@@ -178,6 +184,34 @@ mod tests {
     fn request_mode_switch_is_reachable_from_every_mode() {
         for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Question] {
             assert!(mode_tools(mode).contains(&ToolName::RequestModeSwitch));
+        }
+    }
+
+    #[test]
+    fn request_full_repo_access_is_reachable_from_every_mode() {
+        // Question mode used to be the exception, which made "объясни по
+        // коду" unanswerable there without trading the read boundary for
+        // Agent's whole mutation toolset.
+        for mode in [ConversationMode::Agent, ConversationMode::Plan, ConversationMode::Question] {
+            assert!(mode_tools(mode).contains(&ToolName::RequestFullRepoAccess));
+        }
+    }
+
+    #[test]
+    fn question_mode_still_excludes_every_mutation_tool() {
+        let tools = mode_tools(ConversationMode::Question);
+        for mutating in [
+            ToolName::WriteFile,
+            ToolName::EditFile,
+            ToolName::DeleteFile,
+            ToolName::CreateDirectory,
+            ToolName::DeleteDirectory,
+            ToolName::Move,
+            ToolName::Todo,
+            ToolName::UpdatePlanTodo,
+            ToolName::CreatePlan,
+        ] {
+            assert!(!tools.contains(&mutating), "{mutating:?} should not be in Question mode");
         }
     }
 

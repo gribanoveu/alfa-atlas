@@ -24,6 +24,9 @@ import {
   sliceMessagesForPlanExecution,
   CONTEXT_COMPACTION_KEEP_LAST_MESSAGES,
   CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES,
+  APPROVAL_TIMED_OUT_ERROR,
+  isAutoApprovable,
+  NO_TIMEOUT_TOOLS,
   PAUSE_ONLY_TOOLS,
   TOOL_APPROVAL_TIMEOUT_MS,
 } from "../lib/assistantConfig";
@@ -31,6 +34,7 @@ import { toMessage } from "../lib/errors";
 import type { SpecsRepoInfo } from "../lib/openapi";
 import {
   appendDeltaToBlocks,
+  closeOpenBlocks,
   appendPendingApprovalBlock,
   appendReasoningDeltaToBlocks,
   appendSteerBlock,
@@ -80,6 +84,7 @@ import {
   listenLlmChatDelta,
   listenLlmChatReasoningDelta,
   listenLlmContextUsage,
+  listenLlmRoundStarted,
   listenLlmSteeringApplied,
   listenLlmToolCall,
   listenLlmToolCallDelta,
@@ -286,6 +291,27 @@ export function useLlmChat(
     denyAll: () => void;
   } | null>(null);
 
+  // The turn currently in flight, `null` when idle. Two jobs, both of them
+  // consequences of chat events being global rather than per-request:
+  //
+  // 1. Every `llm:*` listener below drops payloads stamped with a different
+  //    turn, so a straggler delta from a turn that was cancelled — or from
+  //    one running in parallel — cannot be appended to the message on
+  //    screen. Two turns overlapping used to interleave their tokens into
+  //    one block, character by character.
+  // 2. It is the re-entrancy guard itself: a ref, read and written
+  //    synchronously, where `sending` (React state) is only visible on the
+  //    next render and so lets two sends in the same tick both through.
+  const activeTurnIdRef = useRef<string | null>(null);
+
+  // Call ids the approval countdown denied on its own, so the settling
+  // `TOOL_RESULT_EVENT` can say *that* instead of the generic "Отклонено
+  // пользователем" — a user who was still reading the card never refused
+  // anything, and reading the transcript later as if they had is how a
+  // stalled turn becomes an unexplained one. Ids are never removed: a
+  // settled block keeps its text for the life of the chat.
+  const timedOutIdsRef = useRef<Set<string>>(new Set());
+
   // Which call ids the resume about to run auto-approved via
   // `trustedToolsRef` (as opposed to the user just having clicked Approve)
   // — read by the `listenLlmToolCall` effect below so the resulting block
@@ -351,9 +377,10 @@ export function useLlmChat(
 
   /** Shows every call in `calls` inline in the transcript as a
    * `"pendingApproval"` block. Resolves once every call has a decision —
-   * Approve/Deny (with timeout) for mutating/mode tools, or Submit/Skip
-   * (no timeout) for the `PAUSE_ONLY_TOOLS`, which collect something from
-   * the user rather than sanctioning a side effect. */
+   * Approve/Deny for mutating tools (with a timeout), Submit/Skip for the
+   * `PAUSE_ONLY_TOOLS`, which collect something from the user rather than
+   * sanctioning a side effect, and Approve/Deny with no deadline at all for
+   * the consent tools (see `NO_TIMEOUT_TOOLS`). */
   const collectDecisions = useCallback(
     (calls: PendingToolCall[]): Promise<ToolCallDecision[]> => {
     return new Promise((resolve) => {
@@ -408,16 +435,21 @@ export function useLlmChat(
         approved: boolean,
         trust: boolean,
         payload?: { answer?: AskUserAnswerPayload; artifactId?: string },
+        timedOut = false,
       ) => {
         if (decided.has(id) || !calls.some((c) => c.id === id)) return;
+        if (timedOut) timedOutIdsRef.current.add(id);
         decided.set(id, { approved, answer: payload?.answer, artifactId: payload?.artifactId });
         const timer = timers.get(id);
         if (timer !== undefined) clearTimeout(timer);
         if (trust && approved) {
           const call = calls.find((c) => c.id === id);
-          // Never auto-approvable — trust would skip the very card that is
-          // the point of these tools on every later turn.
-          if (call && !PAUSE_ONLY_TOOLS.has(call.name)) {
+          // Skipped for the pause-only and consent tools — trust would
+          // skip the very card that is the point of them, on every later
+          // turn and in every later chat of the project. The Rust side
+          // refuses to persist such a grant regardless (`ToolName::
+          // auto_approvable`); this keeps the in-memory set honest too.
+          if (call && isAutoApprovable(call.name)) {
             trustedToolsRef.current.add(call.name);
             void setToolAutoApproved(call.name, true);
           }
@@ -434,12 +466,14 @@ export function useLlmChat(
 
       // A pause-only call has no countdown: auto-denying a question the user
       // is still reading — or an artifact they are filling in another tab,
-      // which can take many minutes — would be absurd.
-      const approvalCalls = calls.filter((c) => !PAUSE_ONLY_TOOLS.has(c.name));
+      // which can take many minutes — would be absurd. Neither does a
+      // consent call: an auto-deny there is indistinguishable, to the model
+      // and to the user, from a refusal the user actually made.
+      const approvalCalls = calls.filter((c) => !NO_TIMEOUT_TOOLS.has(c.name));
       approvalCalls.forEach((c) => {
         timers.set(
           c.id,
-          setTimeout(() => decide(c.id, false, false), TOOL_APPROVAL_TIMEOUT_MS),
+          setTimeout(() => decide(c.id, false, false, undefined, true), TOOL_APPROVAL_TIMEOUT_MS),
         );
       });
 
@@ -453,7 +487,7 @@ export function useLlmChat(
               id: c.id,
               name: c.name,
               argumentsJson: c.arguments,
-              deadlineAt: PAUSE_ONLY_TOOLS.has(c.name) ? undefined : approvalDeadlineAt,
+              deadlineAt: NO_TIMEOUT_TOOLS.has(c.name) ? undefined : approvalDeadlineAt,
               approvalGroupId: groupId,
             });
           }, blocks),
@@ -528,8 +562,11 @@ export function useLlmChat(
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenLlmChatDelta(({ delta }) => {
-      setMessages((prev) => updateLastAssistantBlocks(prev, (blocks) => appendDeltaToBlocks(blocks, delta)));
+    void listenLlmChatDelta(({ turnId, delta }) => {
+      if (turnId !== activeTurnIdRef.current) return;
+      setMessages((prev) =>
+        updateLastAssistantBlocks(prev, (blocks) => appendDeltaToBlocks(blocks, delta), "text"),
+      );
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -543,7 +580,8 @@ export function useLlmChat(
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenLlmSteeringApplied(({ text }) => {
+    void listenLlmSteeringApplied(({ turnId, text }) => {
+      if (turnId !== activeTurnIdRef.current) return;
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) => appendSteerBlock(blocks, text)),
       );
@@ -561,6 +599,28 @@ export function useLlmChat(
     };
   }, []);
 
+  // Every model round of a turn announces itself here. Closing the open
+  // text/reasoning blocks is the whole handler: a round that ended in prose
+  // and was followed by another one (an app-authored note, or a steer the
+  // user typed mid-stream) used to have both answers concatenated into a
+  // single block, mid-sentence, permanently — including in the history
+  // replayed back to the model.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenLlmRoundStarted(({ turnId }) => {
+      if (turnId !== activeTurnIdRef.current) return;
+      setMessages((prev) => updateLastAssistantBlocks(prev, closeOpenBlocks));
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Live "thinking" deltas from a reasoning-capable model — same shape as
   // the token-delta effect above, just routed into a `reasoning` block
   // instead of `text`. Never fires for a provider/model that doesn't send
@@ -568,8 +628,11 @@ export function useLlmChat(
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenLlmChatReasoningDelta(({ delta }) => {
-      setMessages((prev) => updateLastAssistantBlocks(prev, (blocks) => appendReasoningDeltaToBlocks(blocks, delta)));
+    void listenLlmChatReasoningDelta(({ turnId, delta }) => {
+      if (turnId !== activeTurnIdRef.current) return;
+      setMessages((prev) =>
+        updateLastAssistantBlocks(prev, (blocks) => appendReasoningDeltaToBlocks(blocks, delta), "reasoning"),
+      );
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -587,7 +650,8 @@ export function useLlmChat(
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenLlmToolCallDelta(({ id, name, arguments: argumentsJson }) => {
+    void listenLlmToolCallDelta(({ turnId, id, name, arguments: argumentsJson }) => {
+      if (turnId !== activeTurnIdRef.current) return;
       if (name) toolNamesRef.current.set(id, name);
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) => applyToolCallDelta(blocks, { id, name, argumentsJson })),
@@ -609,7 +673,8 @@ export function useLlmChat(
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenLlmToolCall(({ id, name, arguments: argumentsJson }) => {
+    void listenLlmToolCall(({ turnId, id, name, arguments: argumentsJson }) => {
+      if (turnId !== activeTurnIdRef.current) return;
       const autoApproved = autoApprovedIdsRef.current.has(id);
       toolNamesRef.current.set(id, name);
       setMessages((prev) =>
@@ -632,7 +697,8 @@ export function useLlmChat(
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenLlmToolResult(({ id, result, error: toolError }) => {
+    void listenLlmToolResult(({ turnId, id, result, error: toolError }) => {
+      if (turnId !== activeTurnIdRef.current) return;
       const toolName = toolNamesRef.current.get(id);
       if (toolName) {
         const key = `${toolName}|${toolError ? "error" : "ok"}`;
@@ -648,8 +714,12 @@ export function useLlmChat(
         // still have several more tool calls left) to finish streaming.
         setTodos(result.result);
       }
+      const error =
+        toolError === "denied by user" && timedOutIdsRef.current.has(id)
+          ? APPROVAL_TIMED_OUT_ERROR
+          : toolError;
       setMessages((prev) =>
-        updateLastAssistantBlocks(prev, (blocks) => settleToolCallBlock(blocks, { id, result, error: toolError })),
+        updateLastAssistantBlocks(prev, (blocks) => settleToolCallBlock(blocks, { id, result, error })),
       );
     }).then((fn) => {
       if (cancelled) fn();
@@ -671,6 +741,7 @@ export function useLlmChat(
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenLlmContextUsage((usage) => {
+      if (usage.turnId !== activeTurnIdRef.current) return;
       setLiveUsage(usage);
     }).then((fn) => {
       if (cancelled) fn();
@@ -769,7 +840,7 @@ export function useLlmChat(
    * this "peek" one — so the turn survives a full app restart even if it's
    * still paused when that happens, not just a panel close. */
   const runPendingLoop = useCallback(
-    async (initialOutcome: ChatStreamOutcome): Promise<ChatStreamOutcome> => {
+    async (initialOutcome: ChatStreamOutcome, turnId: string): Promise<ChatStreamOutcome> => {
       if (!providerId) return initialOutcome;
       let outcome = initialOutcome;
       while (outcome.status === "pendingApproval") {
@@ -779,9 +850,11 @@ export function useLlmChat(
         const risky = calls.filter((c) => c.requiresConfirmation);
         const autoApprovedIds = new Set<string>();
         const needsDecision = risky.filter((c) => {
-          // A pause that collects something from the user must always
-          // surface — never skipped via "always allow" / session trust.
-          if (PAUSE_ONLY_TOOLS.has(c.name)) return true;
+          // A pause that collects something from the user, or that asks
+          // permission to widen what the assistant may do next, must always
+          // surface — never skipped via "always allow" / session trust,
+          // whatever a stale persisted grant says.
+          if (!isAutoApprovable(c.name)) return true;
           if (trustedToolsRef.current.has(c.name)) {
             autoApprovedIds.add(c.id);
             return false;
@@ -807,6 +880,7 @@ export function useLlmChat(
         autoApprovedIdsRef.current = autoApprovedIds;
         outcome = await streamLlmChatResume(
           providerId,
+          turnId,
           history,
           round,
           budgetUsed,
@@ -885,6 +959,7 @@ export function useLlmChat(
                     : corrected;
                 })(),
                 streaming: false,
+                liveKind: undefined,
                 usage: usage ?? undefined,
                 cancelled: stoppedByUser,
                 durationMs: Date.now() - turnStartedAt,
@@ -965,6 +1040,11 @@ export function useLlmChat(
       opts: { aggressiveCompaction: boolean; planExecutionStart?: boolean; userMessageId: string },
     ) => {
       if (!providerId) return;
+      // Claimed synchronously, before the first `await` — this is what
+      // makes the guard in `sendMessage`/`retryWithCompaction` real rather
+      // than best-effort (`sending` only becomes visible a render later).
+      const turnId = crypto.randomUUID();
+      activeTurnIdRef.current = turnId;
       setSending(true);
       setLiveUsage(null);
       const turnStartedAt = Date.now();
@@ -1215,12 +1295,23 @@ export function useLlmChat(
         // the trailing text block — see `correctTrailingText`'s doc comment
         // for why that's always the right (and only) block it can apply to.
         const outcome = await runPendingLoop(
-          await streamLlmChat(providerId, wireMessages, todoListRef.current, activeFilePath, conversationMode),
+          await streamLlmChat(
+            providerId,
+            turnId,
+            wireMessages,
+            todoListRef.current,
+            activeFilePath,
+            conversationMode,
+          ),
+          turnId,
         );
         settleOutcome(outcome, assistantId, turnStartedAt);
       } catch (e) {
         settleError(e, assistantId, turnStartedAt);
       } finally {
+        // Released before anything else: from here on, a straggler event
+        // from this turn belongs to no live turn and is dropped.
+        activeTurnIdRef.current = null;
         setSending(false);
         // Reads the true final state for this turn via a functional-update
         // "peek" — the `try`/`catch` block's own `setMessages` call and
@@ -1265,10 +1356,17 @@ export function useLlmChat(
   const coldResumedRef = useRef(false);
   useEffect(() => {
     if (!initialPendingResume || coldResumedRef.current || !providerId) return;
+    // A live turn started before this effect got to run owns the transcript
+    // — resuming on top of it would put two streams in one message.
+    if (activeTurnIdRef.current !== null) return;
     const last = initialMessages[initialMessages.length - 1];
     if (!last || last.role !== "assistant" || !last.streaming) return;
     coldResumedRef.current = true;
     const assistantId = last.id;
+    // A fresh id: the turn this continues belongs to a process that is gone,
+    // and nothing is still listening for its old one.
+    const turnId = crypto.randomUUID();
+    activeTurnIdRef.current = turnId;
     setSending(true);
     setLiveUsage(null);
     // Only covers time since this app restart, not the turn's true original
@@ -1277,11 +1375,15 @@ export function useLlmChat(
     const turnStartedAt = Date.now();
     void (async () => {
       try {
-        const outcome = await runPendingLoop({ status: "pendingApproval", value: initialPendingResume });
+        const outcome = await runPendingLoop(
+          { status: "pendingApproval", value: initialPendingResume },
+          turnId,
+        );
         settleOutcome(outcome, assistantId, turnStartedAt);
       } catch (e) {
         settleError(e, assistantId, turnStartedAt);
       } finally {
+        activeTurnIdRef.current = null;
         setSending(false);
         setMessages((prev) => {
           onTurnSettled(prev, todoListRef.current, activePlanIdRef.current);
@@ -1294,7 +1396,11 @@ export function useLlmChat(
   const sendMessage = useCallback(
     async (text: string, opts?: { planExecutionStart?: boolean }) => {
       const trimmed = text.trim();
-      if (!providerId || sending || !trimmed) return;
+      // `activeTurnIdRef` rather than `sending` alone: two sends dispatched
+      // in the same tick both read the same stale `sending`, and the second
+      // would append its own user message and assistant bubble on top of a
+      // turn already streaming into the first.
+      if (!providerId || sending || activeTurnIdRef.current !== null || !trimmed) return;
 
       const priorTurns = messages;
       const userMsg: ChatMessage = {
@@ -1331,7 +1437,7 @@ export function useLlmChat(
    * smaller regardless of what caused the original failure. */
   const retryWithCompaction = useCallback(
     (assistantMessageId: string) => {
-      if (!providerId || sending) return;
+      if (!providerId || sending || activeTurnIdRef.current !== null) return;
       const failedIndex = messages.findIndex((m) => m.id === assistantMessageId);
       const failedMsg = failedIndex === -1 ? undefined : messages[failedIndex];
       if (!failedMsg || failedMsg.role !== "assistant" || !failedMsg.failed) return;

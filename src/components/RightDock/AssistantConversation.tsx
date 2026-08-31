@@ -1063,6 +1063,12 @@ export function AssistantConversation({
             const liveBlockIds = m.role === "assistant" && m.streaming
               ? openStreamingBlockIds(m.blocks)
               : EMPTY_LIVE_BLOCK_IDS;
+            // "Open for more deltas" and "being written right now" are not
+            // the same thing: a reasoning block stays open for the whole
+            // round (providers may interleave), so without `liveKind` the
+            // thinking card shimmered — and its timer ran — for as long as
+            // the answer below it streamed.
+            const liveKind = m.role === "assistant" ? m.liveKind : undefined;
             return (
               <div
                 key={m.id}
@@ -1101,13 +1107,13 @@ export function AssistantConversation({
                           <AssistantReasoningBlock
                             key={item.block.id}
                             block={item.block}
-                            thinking={liveBlockIds.has(item.block.id)}
+                            thinking={liveBlockIds.has(item.block.id) && liveKind === "reasoning"}
                           />
                         ) : item.block.type === "text" ? (
                           <AssistantMarkdown
                             key={item.block.id}
                             content={item.block.content}
-                            streaming={liveBlockIds.has(item.block.id)}
+                            streaming={liveBlockIds.has(item.block.id) && liveKind !== "reasoning"}
                           />
                         ) : item.block.type === "steer" ? (
                           <AssistantSteerBlock key={item.block.id} block={item.block} />

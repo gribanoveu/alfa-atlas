@@ -7,7 +7,9 @@ import type { ChatStreamOutcome, ChatUsage, PendingApproval, PendingToolCall, To
 
 // --- backend doubles -------------------------------------------------------
 
-type Listener<T> = (payload: T) => void;
+/** Every `llm:*` payload carries the turn that emitted it; the hook drops
+ * anything stamped with a turn it is not currently running. */
+type Listener<T> = (payload: T & { turnId: string }) => void;
 
 let deltaListeners: Listener<{ delta: string }>[] = [];
 let reasoningListeners: Listener<{ delta: string }>[] = [];
@@ -16,6 +18,17 @@ let toolCallDeltaListeners: Listener<{ id: string; name: string; arguments: stri
 let toolCallListeners: Listener<{ id: string; name: string; arguments: string }>[] = [];
 let toolResultListeners: Listener<{ id: string; result: unknown; error: string | null }>[] = [];
 let contextUsageListeners: Listener<ChatUsage>[] = [];
+let roundStartedListeners: Listener<Record<string, never>>[] = [];
+
+/** The id the hook generated for the turn currently in flight — recorded
+ * from whichever backend call it was handed to. Test emissions are stamped
+ * with it, exactly as the real backend stamps its events. */
+let lastTurnId = "";
+
+/** Fires one backend event at every subscriber, stamped with the live turn. */
+function emit<T>(listeners: Listener<T>[], payload: T) {
+  for (const l of [...listeners]) l({ ...payload, turnId: lastTurnId });
+}
 
 /** Outcomes handed back by `streamLlmChat`, then `streamLlmChatResume`. */
 let outcomes: ChatStreamOutcome[] = [];
@@ -45,6 +58,7 @@ mock.module("../lib/llm", () => ({
   ...actualLlm,
   streamLlmChat: (...a: unknown[]) => {
     streamCalls.push(a);
+    lastTurnId = a[1] as string;
     if (streamThrows) return Promise.reject(streamThrows);
     if (deferStream) {
       return new Promise<ChatStreamOutcome>((resolve) => pendingStream.push(resolve));
@@ -53,6 +67,7 @@ mock.module("../lib/llm", () => ({
   },
   streamLlmChatResume: async (...a: unknown[]) => {
     resumeCalls.push(a);
+    lastTurnId = a[1] as string;
     return nextOutcome();
   },
   cancelLlmChat: async () => {
@@ -100,6 +115,12 @@ mock.module("../lib/llm", () => ({
     toolResultListeners.push(cb);
     return () => {
       toolResultListeners = toolResultListeners.filter((l) => l !== cb);
+    };
+  },
+  listenLlmRoundStarted: async (cb: Listener<Record<string, never>>) => {
+    roundStartedListeners.push(cb);
+    return () => {
+      roundStartedListeners = roundStartedListeners.filter((l) => l !== cb);
     };
   },
   listenLlmContextUsage: async (cb: Listener<ChatUsage>) => {
@@ -195,7 +216,7 @@ function render(
 
 async function emitDelta(text: string) {
   await act(async () => {
-    for (const l of [...deltaListeners]) l({ delta: text });
+    emit(deltaListeners, { delta: text });
   });
 }
 
@@ -218,6 +239,8 @@ beforeEach(() => {
   toolCallListeners = [];
   toolResultListeners = [];
   contextUsageListeners = [];
+  roundStartedListeners = [];
+  lastTurnId = "";
   outcomes = [];
   deferOnce = false;
   pendingOnce = [];
@@ -316,13 +339,13 @@ describe("useLlmChat — live events", () => {
     });
 
     await act(async () => {
-      for (const l of [...toolCallListeners]) l({ id: "t1", name: "readFile", arguments: "{}" });
+      emit(toolCallListeners, { id: "t1", name: "readFile", arguments: "{}" });
     });
     let block = lastAssistant(result.current.messages)?.blocks.find((b) => b.type === "toolCall");
     expect(block).toMatchObject({ name: "readFile", status: "running" });
 
     await act(async () => {
-      for (const l of [...toolResultListeners]) l({ id: "t1", result: { ok: true }, error: null });
+      emit(toolResultListeners, { id: "t1", result: { ok: true }, error: null });
     });
     block = lastAssistant(result.current.messages)?.blocks.find((b) => b.type === "toolCall");
     // The block is settled in place, never removed — the transcript keeps a
@@ -347,9 +370,7 @@ describe("useLlmChat — live events", () => {
     });
 
     await act(async () => {
-      for (const l of [...toolCallDeltaListeners]) {
-        l({ id: "v1", name: "visualize", arguments: '{"title":"Оплата","source":"flow' });
-      }
+      emit(toolCallDeltaListeners, { id: "v1", name: "visualize", arguments: '{"title":"Оплата","source":"flow' });
     });
     let block = lastAssistant(result.current.messages)?.blocks.find((b) => b.type === "toolCall");
     expect(block).toMatchObject({
@@ -359,17 +380,13 @@ describe("useLlmChat — live events", () => {
     });
 
     await act(async () => {
-      for (const l of [...toolCallDeltaListeners]) {
-        l({ id: "v1", name: "visualize", arguments: '{"title":"Оплата","source":"flowchart TD"}' });
-      }
+      emit(toolCallDeltaListeners, { id: "v1", name: "visualize", arguments: '{"title":"Оплата","source":"flowchart TD"}' });
     });
     block = lastAssistant(result.current.messages)?.blocks.find((b) => b.type === "toolCall");
     expect(block).toMatchObject({ argumentsJson: '{"title":"Оплата","source":"flowchart TD"}' });
 
     await act(async () => {
-      for (const l of [...toolCallListeners]) {
-        l({ id: "v1", name: "visualize", arguments: '{"title":"Оплата","source":"flowchart TD"}' });
-      }
+      emit(toolCallListeners, { id: "v1", name: "visualize", arguments: '{"title":"Оплата","source":"flowchart TD"}' });
     });
     const blocks = lastAssistant(result.current.messages)?.blocks.filter((b) => b.type === "toolCall") ?? [];
     expect(blocks).toHaveLength(1);
@@ -394,9 +411,7 @@ describe("useLlmChat — live events", () => {
     expect(result.current.pendingSteers).toEqual(["Проверь ru locale"]);
 
     await act(async () => {
-      for (const listener of [...steeringListeners]) {
-        listener({ text: "Проверь ru locale" });
-      }
+      emit(steeringListeners, { text: "Проверь ru locale" });
     });
 
     expect(result.current.pendingSteers).toEqual([]);
@@ -408,6 +423,133 @@ describe("useLlmChat — live events", () => {
       pendingStream[0]?.(done(""));
       await sent;
     });
+  });
+});
+
+describe("useLlmChat — turn isolation", () => {
+  test("a delta stamped with another turn is dropped", () => {
+    // These events are global. Before the id existed, two overlapping turns
+    // interleaved their tokens into one message, character by character.
+    deferStream = true;
+    return (async () => {
+      const { result } = render();
+      await act(async () => {
+        void result.current.sendMessage("вопрос");
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(deltaListeners.length).toBeGreaterThan(0));
+
+      await emitDelta("свой ход. ");
+      await act(async () => {
+        for (const l of [...deltaListeners]) l({ delta: "чужой ход", turnId: "someone-else" });
+      });
+
+      expect(textOf(lastAssistant(result.current.messages))).toBe("свой ход. ");
+
+      await act(async () => {
+        pendingStream.shift()?.(done("готово"));
+      });
+    })();
+  });
+
+  test("a straggler from a finished turn cannot write into the next message", async () => {
+    outcomes = [done("первый ответ")];
+    const { result } = render();
+    await waitFor(() => expect(deltaListeners.length).toBeGreaterThan(0));
+
+    await act(async () => {
+      await result.current.sendMessage("первый вопрос");
+    });
+    const staleTurnId = lastTurnId;
+
+    outcomes = [done("второй ответ")];
+    deferStream = true;
+    await act(async () => {
+      void result.current.sendMessage("второй вопрос");
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      for (const l of [...deltaListeners]) l({ delta: "хвост первого хода", turnId: staleTurnId });
+    });
+    expect(textOf(lastAssistant(result.current.messages))).toBe("");
+
+    await act(async () => {
+      pendingStream.shift()?.(done("второй ответ"));
+    });
+  });
+
+  test("a second send while a turn is in flight is refused", async () => {
+    deferStream = true;
+    const { result } = render();
+    await act(async () => {
+      void result.current.sendMessage("первый");
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      void result.current.sendMessage("второй");
+      await Promise.resolve();
+    });
+
+    // One turn, one user message — no second bubble, no second stream.
+    expect(streamCalls).toHaveLength(1);
+    expect(result.current.messages.filter((m) => m.role === "user")).toHaveLength(1);
+
+    await act(async () => {
+      pendingStream.shift()?.(done("готово"));
+    });
+  });
+
+  test("a round boundary closes the previous round's text block", async () => {
+    // Two rounds of prose with no tool call between them (a steer, or an
+    // app-authored note) used to be concatenated mid-sentence.
+    deferStream = true;
+    const { result } = render();
+    await act(async () => {
+      void result.current.sendMessage("вопрос");
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(roundStartedListeners.length).toBeGreaterThan(0));
+
+    await emitDelta("итог — HTTP 200.");
+    await act(async () => {
+      emit(roundStartedListeners, {} as Record<string, never>);
+    });
+    await emitDelta("Теперь доступ к коду есть");
+
+    const blocks = lastAssistant(result.current.messages)?.blocks ?? [];
+    const texts = blocks.filter((b) => b.type === "text").map((b) => (b as { content: string }).content);
+    expect(texts).toEqual(["итог — HTTP 200.", "Теперь доступ к коду есть"]);
+
+    await act(async () => {
+      pendingStream.shift()?.(done("готово"));
+    });
+  });
+
+  test("the reply stops counting as thinking once the answer starts", async () => {
+    // The reasoning block deliberately stays open (providers interleave), so
+    // "still thinking" has to come from the last delta, not from the blocks.
+    deferStream = true;
+    const { result } = render();
+    await act(async () => {
+      void result.current.sendMessage("вопрос");
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(reasoningListeners.length).toBeGreaterThan(0));
+
+    await act(async () => {
+      emit(reasoningListeners, { delta: "размышляю" });
+    });
+    expect(lastAssistant(result.current.messages)?.liveKind).toBe("reasoning");
+
+    await emitDelta("отвечаю");
+    expect(lastAssistant(result.current.messages)?.liveKind).toBe("text");
+
+    await act(async () => {
+      pendingStream.shift()?.(done("готово"));
+    });
+    expect(lastAssistant(result.current.messages)?.liveKind).toBeUndefined();
   });
 });
 
@@ -438,7 +580,7 @@ describe("useLlmChat — tool approval", () => {
     });
 
     expect(resumeCalls).toHaveLength(1);
-    const decisions = resumeCalls[0]?.[4] as ToolCallDecision[];
+    const decisions = resumeCalls[0]?.[5] as ToolCallDecision[];
     expect(decisions).toEqual([{ id: "c1", approved: true }]);
   });
 
@@ -458,7 +600,7 @@ describe("useLlmChat — tool approval", () => {
       await sent;
     });
 
-    expect((resumeCalls[0]?.[4] as ToolCallDecision[])[0]).toMatchObject({ approved: false });
+    expect((resumeCalls[0]?.[5] as ToolCallDecision[])[0]).toMatchObject({ approved: false });
     expect(textOf(lastAssistant(result.current.messages))).toBe("не стал удалять");
   });
 
@@ -475,7 +617,7 @@ describe("useLlmChat — tool approval", () => {
     });
 
     expect(cbs.onTurnPaused).not.toHaveBeenCalled();
-    expect((resumeCalls[0]?.[4] as ToolCallDecision[])[0]).toMatchObject({ approved: true });
+    expect((resumeCalls[0]?.[5] as ToolCallDecision[])[0]).toMatchObject({ approved: true });
   });
 
   test("approving with trust persists the choice for later chats", async () => {
@@ -517,7 +659,7 @@ describe("useLlmChat — tool approval", () => {
       await sent;
     });
 
-    const decisions = resumeCalls[0]?.[4] as ToolCallDecision[];
+    const decisions = resumeCalls[0]?.[5] as ToolCallDecision[];
     expect(decisions[0]).toMatchObject({ id: "c1", approved: true });
     // Answering is not the same as trusting.
     expect(setAutoApprovedCalls).toEqual([]);
@@ -545,7 +687,7 @@ describe("useLlmChat — tool approval", () => {
       await sent;
     });
 
-    const decisions = resumeCalls[0]?.[4] as ToolCallDecision[];
+    const decisions = resumeCalls[0]?.[5] as ToolCallDecision[];
     expect(decisions).toHaveLength(2);
   });
 
@@ -592,7 +734,7 @@ describe("useLlmChat — stopping", () => {
     expect(cancelCalls).toBe(1);
     // Every pending call is denied so the loop can proceed to the resume
     // that then hits the backend's own cancel checkpoint.
-    expect((resumeCalls[0]?.[4] as ToolCallDecision[])[0]).toMatchObject({ approved: false });
+    expect((resumeCalls[0]?.[5] as ToolCallDecision[])[0]).toMatchObject({ approved: false });
     expect(lastAssistant(result.current.messages)?.cancelled).toBe(true);
   });
 
@@ -693,8 +835,8 @@ describe("useLlmChat — resuming after a restart", () => {
 
     await waitFor(() => expect(resumeCalls).toHaveLength(1));
     // Resumed from exactly where it paused, not from round zero.
-    expect(resumeCalls[0]?.[2]).toBe(2);
-    expect(resumeCalls[0]?.[3]).toBe(3);
+    expect(resumeCalls[0]?.[3]).toBe(2);
+    expect(resumeCalls[0]?.[4]).toBe(3);
   });
 
   test("a restored chat whose last turn already settled is not resumed", async () => {
@@ -746,7 +888,7 @@ describe("useLlmChat — requestArtifact pauses", () => {
 
     // The backend loads the record from the store by this id — the decision
     // deliberately does not carry the artifact's contents.
-    const decisions = resumeCalls[0]![4] as Array<Record<string, unknown>>;
+    const decisions = resumeCalls[0]![5] as Array<Record<string, unknown>>;
     expect(decisions).toEqual([{ id: "a1", approved: true, artifactId: "artifact-42" }]);
   });
 
@@ -765,7 +907,7 @@ describe("useLlmChat — requestArtifact pauses", () => {
       await sent;
     });
 
-    const decisions = resumeCalls[0]![4] as Array<Record<string, unknown>>;
+    const decisions = resumeCalls[0]![5] as Array<Record<string, unknown>>;
     expect(decisions).toEqual([{ id: "a1", approved: false }]);
   });
 
@@ -836,6 +978,76 @@ describe("useLlmChat — requestArtifact pauses", () => {
       await sent;
     });
   });
+});
+
+describe("useLlmChat — consent tools", () => {
+  const pause = (name: string) =>
+    ({
+      status: "pendingApproval",
+      value: { history: [], round: 1, budgetUsed: 1, calls: [call("c1", name)], todos: [] },
+    }) as ChatStreamOutcome;
+
+  for (const tool of ["requestModeSwitch", "requestFullRepoAccess"]) {
+    test(`«разрешать всегда» never applies to ${tool}`, async () => {
+      // These two decide what the assistant may do *next* — the read
+      // boundary and the mode. Remembering the answer removes the only
+      // checkpoint they have.
+      outcomes = [pause(tool), done("готово")];
+      const { result } = render();
+
+      let sent!: Promise<void>;
+      await act(async () => {
+        sent = result.current.sendMessage("посмотри код");
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        result.current.decideToolCall("c1", true, true);
+        await sent;
+      });
+
+      expect(setAutoApprovedCalls).toEqual([]);
+      expect((resumeCalls[0]![5] as ToolCallDecision[])[0]).toMatchObject({ approved: true });
+    });
+
+    test(`${tool} has no auto-deny countdown`, async () => {
+      // An expired countdown reaches the model as a refusal the user never
+      // made — the exact failure this pair must never produce.
+      outcomes = [pause(tool), done("готово")];
+      const { result } = render();
+
+      await act(async () => {
+        void result.current.sendMessage("посмотри код");
+        await Promise.resolve();
+      });
+
+      const block = result.current.messages
+        .flatMap((m) => (m.role === "assistant" ? m.blocks : []))
+        .find((b) => b.type === "toolCall" && b.id === "c1");
+      expect(block!.type === "toolCall" && block!.deadlineAt).toBeUndefined();
+    });
+
+    test(`a persisted grant cannot skip the ${tool} card`, async () => {
+      // Projects that ticked "Разрешать всегда" while that was still
+      // possible keep the stale row; it must not silently auto-approve.
+      autoApprovedTools = [tool];
+      outcomes = [pause(tool), done("готово")];
+      const { result, cbs } = render();
+      await waitFor(() => expect(deltaListeners.length).toBeGreaterThan(0));
+
+      let sent!: Promise<void>;
+      await act(async () => {
+        sent = result.current.sendMessage("посмотри код");
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(cbs.onTurnPaused).toHaveBeenCalled());
+      await act(async () => {
+        result.current.decideToolCall("c1", true, false);
+        await sent;
+      });
+    });
+  }
 });
 
 describe("useLlmChat — the todo checklist", () => {
@@ -913,14 +1125,12 @@ describe("useLlmChat — the context ring", () => {
     });
 
     await act(async () => {
-      for (const l of [...toolCallListeners]) l({ id: "t1", name: "readFile", arguments: "{}" });
+      emit(toolCallListeners, { id: "t1", name: "readFile", arguments: "{}" });
     });
     const beforeResult = result.current.contextTokens;
 
     await act(async () => {
-      for (const l of [...toolResultListeners]) {
-        l({ id: "t1", result: { tool: "file", result: { content: "x".repeat(8000) } }, error: null });
-      }
+      emit(toolResultListeners, { id: "t1", result: { tool: "file", result: { content: "x".repeat(8000) } }, error: null });
     });
 
     // The backend keeps that payload in the turn's history and resends it on
@@ -944,9 +1154,7 @@ describe("useLlmChat — the context ring", () => {
     });
 
     await act(async () => {
-      for (const l of [...contextUsageListeners]) {
-        l({ promptTokens: 890_000, completionTokens: 10_000, totalTokens: 900_000 });
-      }
+      emit(contextUsageListeners, { promptTokens: 890_000, completionTokens: 10_000, totalTokens: 900_000 });
     });
     expect(result.current.contextTokens).toBe(900_000);
 

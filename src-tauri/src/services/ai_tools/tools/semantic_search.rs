@@ -27,11 +27,17 @@ pub(super) fn semantic_search(
 ) -> Result<SemanticSearchPayload, ToolError> {
     let top_k = args.top_k.unwrap_or(DEFAULT_TOP_K).clamp(1, MAX_TOP_K);
     let extracted_tokens = extract_search_tokens(&args.query);
+    // Ranked hits every tier dropped because they sit outside the
+    // documentation root — always 0 in Full-repo mode, where nothing is
+    // filtered. Reported in `meta` rather than swallowed: to the model an
+    // over-filtered search is indistinguishable from an empty repository,
+    // and it will happily tell the user the code does not exist.
+    let mut hidden = 0u32;
 
     // Exact-name / path-segment tier stays authoritative/unboosted — it's
     // already the cheapest, most-precise signal, not the "did you mean
     // something in the same file family" heuristic `related` below is.
-    let mut results = symbol_matches(&deps.repo_index, scope, &args.query, top_k);
+    let mut results = symbol_matches(&deps.repo_index, scope, &args.query, top_k, &mut hidden);
 
     let mut tiers_used = vec!["symbol".to_string()];
     let mut degraded: Option<String> = None;
@@ -54,7 +60,7 @@ pub(super) fn semantic_search(
 
         let tier = choose_tier(is_semantic_ready(deps), embedding_outage_active());
         let tier_results = match tier {
-            Tier::Semantic => match semantic_matches(scope, deps, &args.query, fetch_k) {
+            Tier::Semantic => match semantic_matches(scope, deps, &args.query, fetch_k, &mut hidden) {
                 Ok(hits) => {
                     tiers_used.push("semantic".to_string());
                     hits
@@ -70,17 +76,17 @@ pub(super) fn semantic_search(
                 Err(e) => {
                     degraded = Some(degraded_note(&DegradedReason::SemanticFailed(e.to_string())));
                     tiers_used.push("lexical".to_string());
-                    lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
+                    lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k, &mut hidden)
                 }
             },
             Tier::LexicalDuringOutage => {
                 degraded = Some(degraded_note(&DegradedReason::ProviderCoolingDown));
                 tiers_used.push("lexical".to_string());
-                lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
+                lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k, &mut hidden)
             }
             Tier::Lexical => {
                 tiers_used.push("lexical".to_string());
-                lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k)
+                lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k, &mut hidden)
             }
         };
 
@@ -119,6 +125,7 @@ pub(super) fn semantic_search(
             weak,
             hint,
             degraded,
+            hidden_by_access_boundary: hidden,
         },
     })
 }

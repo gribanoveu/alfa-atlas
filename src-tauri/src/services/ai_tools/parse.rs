@@ -16,6 +16,7 @@ use crate::domain::ai_tools::{
     TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolScope, UpdatePlanArgs,
     UpdatePlanTodoArgs, VisualizeArgs, WriteFileArgs,
 };
+use crate::domain::ai_access::AiAccessMode;
 use crate::domain::artifact::ArtifactKind;
 use crate::domain::llm::LlmToolCall;
 
@@ -359,10 +360,12 @@ fn humanize_serde_error(reason: &str) -> String {
         .replace("expected a map", "expected a JSON object")
 }
 
-/// Path-containment preflight for the chat tool loop — runs before
-/// `PendingApproval` so an impossible write (outside the documentation
-/// root) never shows a confirmation card. Returns `Ok(())` when the call
-/// has no docs-gated path or the path resolves under `docs_root`.
+/// Preflight for the chat tool loop — runs before `PendingApproval`, so a
+/// call that cannot possibly succeed never shows a confirmation card.
+/// Covers two cases: a write outside the documentation root, and a request
+/// to widen access that is already as wide as it goes. Returns `Ok(())`
+/// when the call has no docs-gated path (or the path resolves under
+/// `docs_root`) and nothing else makes it moot.
 pub fn preflight_tool_call(scope: &ToolScope, call: &LlmToolCall) -> Result<(), ToolError> {
     let parsed = parse_tool_call(call)?;
     match parsed {
@@ -389,6 +392,16 @@ pub fn preflight_tool_call(scope: &ToolScope, call: &LlmToolCall) -> Result<(), 
             if let Some(path) = args.path.as_deref() {
                 resolve_mutable_docs_path(scope, path)?;
             }
+        }
+        // Asking for access that is already granted is a no-op that used to
+        // cost a full approval card and then answer "успешно", which reads
+        // to the model as if something changed and invites a third attempt.
+        ToolCall::RequestFullRepoAccess(_) if scope.mode == AiAccessMode::FullRepo => {
+            return Err(ToolError::InvalidArguments {
+                tool: "requestFullRepoAccess".to_string(),
+                reason: "доступ к репозиторию уже расширен — читайте файлы напрямую, повторный запрос не нужен"
+                    .to_string(),
+            });
         }
         _ => {}
     }
@@ -679,6 +692,30 @@ mod tests {
             arguments: r#"{"path":"docs/guide.adoc","content":"= G\n"}"#.into(),
         };
         preflight_tool_call(&full_repo, &ok).unwrap();
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn preflight_rejects_a_second_access_request_once_access_is_already_full_repo() {
+        let (repo, docs) = fixture_repo();
+        let call = LlmToolCall {
+            id: "c1".into(),
+            name: "requestFullRepoAccess".into(),
+            arguments: r#"{"reason":"нужно посмотреть исходники"}"#.into(),
+        };
+
+        // Docs-only: a real request, it must reach the approval card.
+        let docs_only = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        preflight_tool_call(&docs_only, &call).unwrap();
+
+        // Already granted: rejected before any card is shown.
+        let full_repo = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+        let err = preflight_tool_call(&full_repo, &call).unwrap_err();
+        assert!(
+            matches!(&err, ToolError::InvalidArguments { tool, .. } if tool == "requestFullRepoAccess"),
+            "got {err:?}"
+        );
 
         fs::remove_dir_all(&repo).ok();
     }

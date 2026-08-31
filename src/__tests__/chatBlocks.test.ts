@@ -7,6 +7,7 @@ import {
   appendToolCallBlock,
   applyToolCallDelta,
   chatMessageToPlainText,
+  closeOpenBlocks,
   correctTrailingReasoning,
   correctTrailingText,
   flattenBlocksToText,
@@ -163,6 +164,68 @@ describe("interleaved reasoning and text deltas", () => {
     const corrected = correctTrailingReasoning(blocks, "partial thought, made whole");
     expect(corrected).toHaveLength(2);
     expect(corrected[0]).toMatchObject({ type: "reasoning", content: "partial thought, made whole" });
+  });
+});
+
+describe("round boundaries", () => {
+  test("a new round's prose opens its own block instead of extending the last one", () => {
+    // The exact defect: a round that ended in an answer, followed by another
+    // round (an app-authored note, or a steer typed mid-stream), used to
+    // produce "…итог — HTTP 200.Теперь доступ к коду есть" in one block.
+    const firstRound = appendDeltaToBlocks([], "…итог — HTTP 200.");
+    const closed = closeOpenBlocks(firstRound);
+    const secondRound = appendDeltaToBlocks(closed, "Теперь доступ к коду есть");
+
+    expect(secondRound.map((b) => b.type)).toEqual(["text", "text"]);
+    expect(secondRound[0]).toMatchObject({ content: "…итог — HTTP 200.", closed: true });
+    expect(secondRound[1]).toMatchObject({ content: "Теперь доступ к коду есть" });
+  });
+
+  test("it closes reasoning too, and nothing is live afterwards", () => {
+    const blocks = appendDeltaToBlocks(appendReasoningDeltaToBlocks([], "hmm"), "answer");
+    const closed = closeOpenBlocks(blocks);
+    expect(openStreamingBlockIds(closed).size).toBe(0);
+    expect(appendReasoningDeltaToBlocks(closed, "next round").map((b) => b.type)).toEqual([
+      "reasoning",
+      "text",
+      "reasoning",
+    ]);
+  });
+
+  test("closing twice changes nothing and keeps the same array", () => {
+    const closed = closeOpenBlocks(appendDeltaToBlocks([], "готово"));
+    expect(closeOpenBlocks(closed)).toBe(closed);
+    expect(closeOpenBlocks([])).toEqual([]);
+  });
+
+  test("correctTrailingText cannot reopen a closed block", () => {
+    // The final round's authoritative text belongs to the final round; with
+    // a closed earlier block it appends instead of overwriting the wrong one.
+    const closed = closeOpenBlocks(appendDeltaToBlocks([], "первый раунд"));
+    const corrected = correctTrailingText(closed, "второй раунд");
+    expect(corrected).toHaveLength(2);
+    expect(corrected[0]).toMatchObject({ content: "первый раунд", closed: true });
+    expect(corrected[1]).toMatchObject({ type: "text", content: "второй раунд" });
+  });
+
+  test("a stored transcript is not re-glued across a round boundary on load", () => {
+    const stored: MessageBlock[] = [
+      { type: "text", id: "t1", content: "первый раунд", closed: true },
+      { type: "text", id: "t2", content: "второй раунд" },
+    ];
+    expect(mergeInterleavedStreamBlocks(stored)).toBe(stored);
+  });
+
+  test("a shredded round still folds together up to its boundary", () => {
+    const stored: MessageBlock[] = [
+      { type: "text", id: "t1", content: "пер" },
+      { type: "text", id: "t2", content: "вый", closed: true },
+      { type: "text", id: "t3", content: "второй" },
+    ];
+    expect(mergeInterleavedStreamBlocks(stored)).toEqual([
+      { type: "text", id: "t1", content: "первый", closed: true },
+      { type: "text", id: "t3", content: "второй" },
+    ]);
   });
 });
 

@@ -18,6 +18,11 @@ export type TextBlock = {
   type: "text";
   id: string;
   content: string;
+  /** Set once the round that was writing this block has ended (see
+   * `closeOpenBlocks`), so a later round's deltas start a new block instead
+   * of being appended to this one. Absent on a block that is still open,
+   * and on every block recorded before round boundaries were reported. */
+  closed?: true;
 };
 
 /** A reasoning-capable model's "thinking" text (`reasoning_content` on the
@@ -33,6 +38,8 @@ export type ReasoningBlock = {
   type: "reasoning";
   id: string;
   content: string;
+  /** Same as `TextBlock["closed"]`. */
+  closed?: true;
 };
 
 export type SteerBlock = {
@@ -182,6 +189,18 @@ export type ChatMessage =
        * compaction pass always resolves — success, empty summary, or the
        * `catch` — before either can run. */
       compactionRunning?: boolean;
+      /** Which stream the most recent delta of this turn came from.
+       *
+       * Drives the "думает" shimmer, which cannot be read off the blocks
+       * alone: a reasoning block stays *open* for the whole round on
+       * purpose (some providers interleave `reasoning_content` with the
+       * answer chunk by chunk, and closing it on the first content delta
+       * shredded one answer into hundreds of blocks). Open is therefore not
+       * the same as live — without this the thinking card kept shimmering,
+       * and its timer kept running, for the entire time the answer streamed
+       * underneath it. Only meaningful while `streaming` is true.
+       */
+      liveKind?: "text" | "reasoning";
       /** Set alongside `failed`/`errorMessage` when `isContextLengthError`
        * matches the raw error text — drives the "Сжать историю и
        * повторить" retry action in `AssistantConversation` (see
@@ -205,7 +224,11 @@ export type ChatMessage =
  * Scans backwards and stops at the first `toolCall`/`steer` block: those are
  * round boundaries (a tool call ends the prose that preceded it, a steer note
  * is injected as a fresh round starts), so anything before one belongs to an
- * already-closed round and must never be reopened.
+ * already-closed round and must never be reopened. A block explicitly marked
+ * `closed` (by `closeOpenBlocks`, on the backend's round-started report) is
+ * skipped for the same reason — that is the boundary a round which simply
+ * ended in prose has, and without it two rounds' answers were concatenated
+ * mid-sentence.
  *
  * Crucially it does *not* stop at a block of the other streaming type. Some
  * providers interleave `reasoning_content` and `content` chunk by chunk
@@ -217,10 +240,29 @@ export type ChatMessage =
 function findOpenBlockIndex(blocks: MessageBlock[], type: "text" | "reasoning"): number {
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i]!;
-    if (block.type === type) return i;
+    if (block.type === type) return block.closed ? -1 : i;
     if (block.type === "toolCall" || block.type === "steer") return -1;
   }
   return -1;
+}
+
+/** Ends the current round's prose: whatever text/reasoning block is still
+ * open stops accepting deltas, so the next round opens its own.
+ *
+ * Called on `llm:round-started`. The other two boundaries (a tool call, a
+ * user steer) are visible in the block list itself and need no marker; a
+ * round that just ended in an answer and was followed by another round had
+ * none at all, which is the bug this closes. Returns the input unchanged
+ * when nothing was open, so React sees no new array. */
+export function closeOpenBlocks(blocks: MessageBlock[]): MessageBlock[] {
+  const openText = findOpenBlockIndex(blocks, "text");
+  const openReasoning = findOpenBlockIndex(blocks, "reasoning");
+  if (openText === -1 && openReasoning === -1) return blocks;
+  return blocks.map((b, i) =>
+    (i === openText || i === openReasoning) && (b.type === "text" || b.type === "reasoning")
+      ? { ...b, closed: true as const }
+      : b,
+  );
 }
 
 function appendToOpenBlock(
@@ -282,7 +324,22 @@ export function mergeInterleavedStreamBlocks(blocks: MessageBlock[]): MessageBlo
       result.push(block);
       continue;
     }
+    // A closed block ended a round of its own: folding the next round's
+    // answer into it would recreate, on load, exactly the concatenation
+    // `closeOpenBlocks` exists to prevent.
     const openIndex = block.type === "text" ? openText : openReasoning;
+    if (block.closed) {
+      if (openIndex !== -1) {
+        const open = result[openIndex] as TextBlock | ReasoningBlock;
+        result[openIndex] = { ...open, content: open.content + block.content, closed: true };
+        merged = true;
+      } else {
+        result.push(block);
+      }
+      if (block.type === "text") openText = -1;
+      else openReasoning = -1;
+      continue;
+    }
     if (openIndex !== -1) {
       const open = result[openIndex] as TextBlock | ReasoningBlock;
       result[openIndex] = { ...open, content: open.content + block.content };
@@ -525,14 +582,21 @@ export function markRunningToolCallsAsInterrupted(
 /** Shared guard for every live-event handler: only the trailing message,
  * and only while it's still marked `streaming`, is ever mutated — a
  * straggler event arriving after that turn already finalized (or before
- * any turn has started) is a no-op. */
+ * any turn has started) is a no-op.
+ *
+ * `liveKind` records which of the two streams this update came from, when
+ * it came from one — see `ChatMessage["liveKind"]`. */
 export function updateLastAssistantBlocks(
   messages: ChatMessage[],
   updater: (blocks: MessageBlock[]) => MessageBlock[],
+  liveKind?: "text" | "reasoning",
 ): ChatMessage[] {
   const last = messages[messages.length - 1];
   if (!last || last.role !== "assistant" || !last.streaming) return messages;
-  return [...messages.slice(0, -1), { ...last, blocks: updater(last.blocks) }];
+  return [
+    ...messages.slice(0, -1),
+    { ...last, blocks: updater(last.blocks), ...(liveKind ? { liveKind } : {}) },
+  ];
 }
 
 // ---- Grouping pending approvals for render -----------------------------

@@ -1,6 +1,6 @@
 import { ShieldOff } from "lucide-react";
 import { useToolPermissions } from "../../hooks/useToolPermissions";
-import { AUTO_APPROVABLE_TOOL_LABELS } from "../../lib/assistantConfig";
+import { AUTO_APPROVABLE_TOOL_LABELS, CONSENT_TOOL_LABELS } from "../../lib/assistantConfig";
 import "./PermissionsTab.css";
 
 /** Human-readable labels for tools in Settings → Permissions. Keys must
@@ -19,6 +19,7 @@ const PERMISSION_TOOL_LABELS: Record<string, string> = {
   requestArtifact: "Запрос артефакта у пользователя (requestArtifact)",
   artifact: "Чтение артефактов (artifact)",
   ...AUTO_APPROVABLE_TOOL_LABELS,
+  ...CONSENT_TOOL_LABELS,
   todo: "Список задач (todo)",
   createPlan: "Создание плана (createPlan)",
   updatePlan: "Обновление плана (updatePlan)",
@@ -115,7 +116,9 @@ export function PermissionsTab() {
           <ul className="permissions-list">
             {tools.map((tool) => (
               <li key={tool} className="permissions-item">
-                <span className="permissions-item-label">{AUTO_APPROVABLE_TOOL_LABELS[tool] ?? tool}</span>
+                <span className="permissions-item-label">
+                  {AUTO_APPROVABLE_TOOL_LABELS[tool] ?? CONSENT_TOOL_LABELS[tool] ?? tool}
+                </span>
                 <button
                   type="button"
                   className="settings-link-btn danger permissions-item-revoke"

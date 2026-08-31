@@ -20,7 +20,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::domain::ai_access::{call_requires_confirmation, ToolName};
+use crate::domain::ai_access::{call_requires_confirmation, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
 use crate::domain::conversation_mode::{mode_tools, ConversationMode};
 use crate::domain::llm::{
@@ -126,31 +126,78 @@ fn last_user_message_asks_for_a_diagram(history: &[LlmMessage]) -> bool {
 const REPEAT_READ_NOTE: &str =
     "Этот файл уже прочитан в этом ходе, в том же диапазоне, и с тех пор не изменился — результат выше в переписке, повторно он не приводится.";
 
-/// Replaces the body of a `readFile` result the model has already been
-/// given, byte for byte, earlier in this turn.
+/// The same, for a search whose ranking came back identical.
+const REPEAT_SEARCH_NOTE: &str =
+    "Этот поиск уже выполнялся в этом ходе с теми же параметрами и вернул тот же результат — он выше в переписке, повторно не приводится.";
+
+/// Replaces the body of a result the model has already been given, byte for
+/// byte, earlier in this turn.
 ///
 /// Not a correctness fix — a re-read is legitimate, and after a
 /// `writeFile`/`editFile` it is required. It is a context fix: in the
 /// transcript that prompted this, one service file was read three times and
 /// two more twice, each time resending the whole file on every subsequent
-/// round of the turn. Keyed on the raw arguments so a different line range
-/// is a different read, and gated on a content hash so an edited file comes
-/// back in full.
-fn dedupe_repeat_read(
+/// round of the turn; the same turn also ran one `semanticSearch` three
+/// times, and one `grep` twice, for identical hits. Keyed on tool name plus
+/// raw arguments (so a different line range, or a different query, is a
+/// different call) and gated on a hash of the payload itself, so an edited
+/// file — or a search that now ranks differently — comes back in full.
+fn dedupe_repeat_result(
     seen: &mut HashMap<String, u64>,
     call: &LlmToolCall,
     outcome: &Result<ToolResult, String>,
     content: String,
 ) -> String {
-    let Ok(ToolResult::File { content: file, .. }) = outcome else {
-        return content;
+    let note = match outcome {
+        Ok(ToolResult::File { .. }) => REPEAT_READ_NOTE,
+        Ok(ToolResult::SemanticSearchResults(_)) | Ok(ToolResult::GrepResults { .. }) => {
+            REPEAT_SEARCH_NOTE
+        }
+        _ => return content,
     };
     let mut hasher = DefaultHasher::new();
-    file.hash(&mut hasher);
+    content.hash(&mut hasher);
     let hash = hasher.finish();
-    match seen.insert(call.arguments.clone(), hash) {
-        Some(previous) if previous == hash => REPEAT_READ_NOTE.to_string(),
+    match seen.insert(format!("{}|{}", call.name, call.arguments), hash) {
+        Some(previous) if previous == hash => note.to_string(),
         _ => content,
+    }
+}
+
+/// Appended to an empty search result in Docs-only mode.
+///
+/// The model cannot see the boundary from the inside: `grep`/`listFiles`
+/// resolve against the access-mode root, so "no matches under docs_root"
+/// and "no such thing in this repository" arrive as the identical empty
+/// list. In the transcript that prompted this, that ambiguity became a
+/// flat, false claim to the user that the service's source code "лежит в
+/// другом репозитории". One sentence is enough to make the difference
+/// visible — and to name the tool that resolves it.
+const DOCS_BOUNDARY_NOTE: &str = "Примечание: сейчас активен режим «только документация», и поиск шёл лишь по корню документации. Пустой результат означает «нет под этим корнем», а не «нет в репозитории». Если для ответа нужен исходный код — запросите доступ к репозиторию (requestFullRepoAccess), не утверждайте, что кода нет.";
+
+/// Adds `DOCS_BOUNDARY_NOTE` to a search that came back empty while the
+/// docs-only boundary was in force. `semanticSearch` also reports an exact
+/// count of what the boundary hid (`SemanticSearchMeta::
+/// hidden_by_access_boundary`); this covers the tools that walk `scope.root`
+/// directly and so have nothing to count.
+fn docs_boundary_note(
+    scope: &ToolScope,
+    outcome: &Result<ToolResult, String>,
+    content: String,
+) -> String {
+    if scope.mode != AiAccessMode::DocsOnly {
+        return content;
+    }
+    let came_back_empty = match outcome {
+        Ok(ToolResult::GrepResults { matches, .. }) => matches.is_empty(),
+        Ok(ToolResult::SemanticSearchResults(payload)) => payload.matches.is_empty(),
+        Ok(ToolResult::FileList(entries)) => entries.is_empty(),
+        _ => false,
+    };
+    if came_back_empty {
+        format!("{content}\n\n{DOCS_BOUNDARY_NOTE}")
+    } else {
+        content
     }
 }
 
@@ -250,8 +297,9 @@ fn run_tool_loop(
     let diagram_requested = last_user_message_asks_for_a_diagram(&history);
     let mut visualize_ok = history_has_a_visualize_call(&history);
     let mut diagram_nudge_sent = false;
-    // Arguments of every `readFile` this turn → hash of what came back.
-    let mut reads_this_turn: HashMap<String, u64> = HashMap::new();
+    // `<tool>|<arguments>` of every deduplicable call this turn → hash of
+    // what came back, see `dedupe_repeat_result`.
+    let mut results_this_turn: HashMap<String, u64> = HashMap::new();
 
     loop {
         // Checkpoint 1 — see this function's doc comment for exactly which
@@ -308,6 +356,10 @@ fn run_tool_loop(
                         );
                     }
                 }
+                // Announced after the steering drain above, so the steer
+                // block and this boundary land in the transcript in the
+                // same order the history has them.
+                (ctx.events)(ChatEvent::RoundStarted);
                 let request = ChatRequest {
                     messages: history.clone(),
                     tools: tools.clone(),
@@ -620,7 +672,8 @@ fn run_tool_loop(
                 Err(e) if e == "denied by user" => "Отклонено пользователем".to_string(),
                 Err(e) => format!("Ошибка: {e}"),
             };
-            let content = dedupe_repeat_read(&mut reads_this_turn, call, &outcome, content);
+            let content = docs_boundary_note(&scope, &outcome, content);
+            let content = dedupe_repeat_result(&mut results_this_turn, call, &outcome, content);
             history.push(LlmMessage {
                 role: LlmRole::Tool,
                 content: Some(content),
@@ -1008,6 +1061,40 @@ mod tests {
         run_tool_loop(&ctx, scope, Vec::new(), history, 0, 0, None, Vec::new())
     }
 
+    /// A turn run under the docs-only boundary: `repo` is the whole
+    /// repository, `docs` the subtree the tools may actually see. The other
+    /// helpers use `FullRepo` with one directory playing both roles, where
+    /// nothing is ever filtered.
+    fn run_docs_only(
+        provider: &dyn LlmProvider,
+        repo: &std::path::Path,
+        docs: &std::path::Path,
+        events: &ChatEventSink,
+        cancel_flag: &ChatCancelFlag,
+    ) -> Result<ChatStreamOutcome, String> {
+        let steering = SteeringQueue::default();
+        let scope = ToolScope::new(
+            repo,
+            docs,
+            AiAccessMode::DocsOnly,
+            default_allowed_tools(AiAccessMode::DocsOnly),
+        );
+        let settings = LlmSettings::default();
+        let deps = EmbeddingDeps::empty();
+        let ctx = LoopCtx {
+            events,
+            provider,
+            provider_id: "test-provider",
+            model: "test-model",
+            settings: &settings,
+            deps: &deps,
+            cancel_flag,
+            steering: &steering,
+            conversation_mode: ConversationMode::Question,
+        };
+        run_tool_loop(&ctx, scope, Vec::new(), Vec::new(), 0, 0, None, Vec::new())
+    }
+
     /// `run`, re-entered on a paused round — the shape
     /// `llm_chat_stream_resume` produces. `history` must end with the
     /// assistant's tool-call turn, same as the real resume path checks.
@@ -1145,6 +1232,93 @@ mod tests {
         // First read: the file itself. Second: a note pointing at it.
         assert!(provider.tool_reply("c1").contains("= Intro"));
         assert_eq!(provider.tool_reply("c2"), REPEAT_READ_NOTE);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn the_same_search_repeated_in_one_turn_is_not_resent() {
+        let root = fixture_repo("repeat-search");
+        let args = r#"{"pattern":"Intro"}"#;
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![tool_call("c1", "grep", args)]),
+            round("", vec![tool_call("c2", "grep", args)]),
+            round("Готово.", vec![]),
+        ]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        assert!(provider.tool_reply("c1").contains("intro.adoc"));
+        assert_eq!(provider.tool_reply("c2"), REPEAT_SEARCH_NOTE);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn an_empty_docs_only_search_says_the_boundary_was_in_the_way() {
+        // The failure this prevents: "no matches under docs_root" reaching
+        // the model as plain emptiness, and coming back out as "такого кода
+        // в проекте нет" — about a file that is right there in `src/`.
+        let repo = fixture_repo("docs-boundary");
+        let docs = repo.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("guide.adoc"), "= Guide\n").unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/Service.java"), "class CmsLinksService {}\n").unwrap();
+
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![tool_call("c1", "grep", r#"{"pattern":"CmsLinksService"}"#)]),
+            round("Отвечаю.", vec![]),
+        ]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run_docs_only(&provider, &repo, &docs, &events, &cancel).unwrap();
+
+        let reply = provider.tool_reply("c1");
+        assert!(reply.contains("requestFullRepoAccess"), "got {reply}");
+
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn a_search_that_found_something_carries_no_boundary_note() {
+        let repo = fixture_repo("docs-boundary-hit");
+        let docs = repo.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("guide.adoc"), "= Guide\n\nCmsLinksService\n").unwrap();
+
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![tool_call("c1", "grep", r#"{"pattern":"CmsLinksService"}"#)]),
+            round("Отвечаю.", vec![]),
+        ]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run_docs_only(&provider, &repo, &docs, &events, &cancel).unwrap();
+
+        assert!(!provider.tool_reply("c1").contains("requestFullRepoAccess"));
+
+        std::fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn an_empty_full_repo_search_gets_no_boundary_note() {
+        // Nothing is filtered in Full-repo mode, so "ничего не найдено" is
+        // the whole truth there and the note would be noise.
+        let root = fixture_repo("no-boundary-note");
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![tool_call("c1", "grep", r#"{"pattern":"NoSuchSymbolAnywhere"}"#)]),
+            round("Готово.", vec![]),
+        ]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        assert!(!provider.tool_reply("c1").contains("requestFullRepoAccess"));
 
         std::fs::remove_dir_all(&root).ok();
     }

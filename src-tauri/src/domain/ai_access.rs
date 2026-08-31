@@ -102,6 +102,34 @@ impl ToolName {
         // handled separately, see the doc comment above.
     }
 
+    /// Whether the user may switch this tool's confirmation gate off for
+    /// good ("Разрешать всегда" on the approval card, persisted as
+    /// `ProjectConfig::ai_auto_approved_tools`).
+    ///
+    /// False for the two consent tools. `RequestFullRepoAccess` and
+    /// `RequestModeSwitch` don't touch a file — what they change is *what
+    /// the assistant is allowed to do next*: the read boundary, and the
+    /// system prompt plus toolset. Remembering "always allow" for those
+    /// deletes the only checkpoint that stands between a model deciding it
+    /// wants Agent mode and having it, silently, in every later chat of the
+    /// project. The pause is the entire feature; a per-call decision is the
+    /// only shape it has.
+    ///
+    /// The pause-only tools (`AskUser`, `RequestArtifact`) are excluded for
+    /// a different reason — auto-approving them would skip the very card
+    /// that collects the answer — and are enforced frontend-side in
+    /// `PAUSE_ONLY_TOOLS`, since they never reach `set_tool_auto_approved`.
+    pub fn auto_approvable(self) -> bool {
+        self.requires_confirmation()
+            && !matches!(
+                self,
+                ToolName::RequestFullRepoAccess
+                    | ToolName::RequestModeSwitch
+                    | ToolName::AskUser
+                    | ToolName::RequestArtifact
+            )
+    }
+
     /// Maps the wire `LlmToolCall::name` string to a `ToolName`, independent
     /// of whether `arguments` parses — the tool-calling loop needs to
     /// classify a call as risky/safe before it's known whether the model's
@@ -488,6 +516,41 @@ mod tests {
                 tool.requires_confirmation(),
                 "tool {name} disagreed"
             );
+        }
+    }
+
+    #[test]
+    fn consent_tools_can_never_be_auto_approved() {
+        // Widening the read boundary and switching conversation mode change
+        // what the assistant may do next, so the pause is the feature —
+        // "Разрешать всегда" must not be able to delete it, in any UI.
+        assert!(!ToolName::RequestFullRepoAccess.auto_approvable());
+        assert!(!ToolName::RequestModeSwitch.auto_approvable());
+        // Same answer for the pause-only pair, for a different reason:
+        // auto-approving them would skip the answer they exist to collect.
+        assert!(!ToolName::AskUser.auto_approvable());
+        assert!(!ToolName::RequestArtifact.auto_approvable());
+    }
+
+    #[test]
+    fn every_filesystem_mutation_stays_auto_approvable() {
+        for tool in [
+            ToolName::WriteFile,
+            ToolName::EditFile,
+            ToolName::DeleteFile,
+            ToolName::CreateDirectory,
+            ToolName::DeleteDirectory,
+            ToolName::Move,
+        ] {
+            assert!(tool.auto_approvable(), "{tool:?} should stay auto-approvable");
+        }
+    }
+
+    #[test]
+    fn a_tool_that_never_pauses_is_not_auto_approvable_either() {
+        // Nothing to remember: these never show a card in the first place.
+        for tool in [ToolName::ListFiles, ToolName::ReadFile, ToolName::Grep, ToolName::Todo] {
+            assert!(!tool.auto_approvable(), "{tool:?} has no confirmation gate to waive");
         }
     }
 

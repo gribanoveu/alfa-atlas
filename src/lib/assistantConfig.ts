@@ -36,6 +36,22 @@ A \`listFiles\` tree starts with \`./\`; that line is not a path segment. Do not
 ${openApi}`;
 }
 
+/** What Docs-only actually means for the model, injected into all three
+ * mode prompts (empty in Full-repo).
+ *
+ * Written because of the failure it prevents: `grep`/`listFiles` resolve
+ * against the access-mode root, so a search for source code in Docs-only
+ * comes back as a clean zero — indistinguishable, from inside the model,
+ * from a repository that genuinely has no such file. Observed result was a
+ * confident, entirely false "исходного кода в этом проекте нет — он лежит в
+ * другом репозитории", with no mention that a boundary was even involved.
+ * The second half is the fix for the other half of that incident: the model
+ * asked for Agent mode when all it wanted was to read a .java file. */
+const DOCS_ONLY_ACCESS_NOTE = `
+**Docs-only is a boundary, not a fact about the repository.** File tools and searches resolve against the documentation root only, so an empty result means "not under the documentation root" — never "does not exist in this repository". Do not tell the user that a file, symbol, or module is absent, or that it "lives in another repository", on the strength of a Docs-only search: say that it is outside your current access.
+
+When answering genuinely needs source code, call \`requestFullRepoAccess\` with a specific reason. It is available in every conversation mode, needs the user's approval, and takes effect immediately — for the rest of the same turn. Never request a *mode switch* just to read files: that is not what conversation modes control.`;
+
 /** Compact router hint — skills catalog is never inlined into the prompt. */
 const SKILLS_ROUTER_HINT = `## Skills
 
@@ -157,6 +173,7 @@ Be clear, practical, and substantive. Give a complete answer that the analyst ca
 - Response language: always respond in Russian, regardless of the language of the user's message. Keep code, identifiers, file paths, and technical terms as-is.
 
 You cannot change your access mode directly. Use \`requestFullRepoAccess\` only when the current mode is clearly insufficient — with a specific reason, not speculatively. User approval is required and may be denied.
+${mode === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
 
 - Conversation mode: **Agent** — you can research and make changes directly. If the request is really just a question with nothing to change, call \`requestModeSwitch\` with \`mode: "question"\`; if it clearly needs a plan drafted and reviewed before any change, call \`requestModeSwitch\` with \`mode: "plan"\`. Do this only when genuinely appropriate, not for every request — most requests in Agent mode should just be handled directly. User approval is required and may be denied.
 
@@ -507,6 +524,7 @@ Your sole job is to research the repository with read-only tools and produce a p
 - Access mode: ${modeDescription}
 - Project type: ${projectTypeDescription}
 - Response language: always respond in Russian, regardless of the language of the user's message. Keep code, identifiers, file paths, and technical terms as-is.
+${mode === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
 
 ## Core principle
 
@@ -708,6 +726,7 @@ Answer the user's question directly and concisely, grounded in the repository wh
 - Access mode: ${modeDescription}
 - Project type: ${projectTypeDescription}
 - Response language: always respond in Russian, regardless of the language of the user's message. Keep code, identifiers, file paths, and technical terms as-is.
+${mode === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
 
 ## Answering
 
@@ -723,7 +742,9 @@ You cannot execute changes or draft a structured plan in this mode. If the reque
 - Needs a multi-step plan before anything should happen: call \`requestModeSwitch\` with \`mode: "plan"\`.
 - Clearly needs actual file changes with no planning step needed first: call \`requestModeSwitch\` with \`mode: "agent"\`.
 
-Do not use \`askUser\` to request a mode change — that is \`requestModeSwitch\`'s job. Always include a \`reason\`. User approval is required and may be denied — if denied, answer as best you can within Question mode instead of retrying the switch.
+A question about source code is **not** one of these cases — it is still a question. Answer it here, requesting \`requestFullRepoAccess\` if the code is outside your current access.
+
+Do not use \`askUser\` to request a mode change — that is \`requestModeSwitch\`'s job. Always include a \`reason\`. User approval is required. Do not narrate the outcome from memory: an approved switch comes back as a result object with \`approved: true\` and takes effect on the user's next message, a denial comes back as the text «Отклонено пользователем». If denied, answer as best you can within Question mode instead of retrying the switch.
 
 ## Path resolution
 
@@ -1212,12 +1233,19 @@ export function describeToolResult(
   block: Pick<ToolCallBlock, "name" | "status" | "result" | "errorMessage">,
 ): string {
   if (block.status === "error") {
+    // An expired countdown is reported as its own outcome rather than as a
+    // refusal: the user was reading the card, not answering it, and a
+    // transcript that says they declined is simply false. `useLlmChat`
+    // swaps this in for the backend's marker (the backend cannot tell the
+    // two apart — both arrive as `approved: false`).
+    if (block.errorMessage === APPROVAL_TIMED_OUT_ERROR) {
+      return "Время на решение истекло — запрос отклонён";
+    }
     // The one error string this UI itself can produce (a "Отклонить" click
-    // or an expired countdown on the inline approval card, see
-    // `commands::llm`'s tool loop) — worth its own Russian phrasing rather
-    // than falling through to the generic "Ошибка: {raw backend text}" line
-    // below. `askUser` skip uses the same backend marker but reads as
-    // "Пропущено", not "Отклонено".
+    // on the inline approval card, see `commands::llm`'s tool loop) —
+    // worth its own Russian phrasing rather than falling through to the
+    // generic "Ошибка: {raw backend text}" line below. `askUser` skip uses
+    // the same backend marker but reads as "Пропущено", not "Отклонено".
     if (block.errorMessage === "denied by user") {
       if (block.name === "askUser") return "Пропущено пользователем";
       // «Заполню позже» is a deferral, not a refusal — saying "Отклонено"
@@ -1250,9 +1278,14 @@ export function describeToolResult(
     }
     case "semanticSearchResults": {
       const { matches, meta } = normalizeSemanticSearchResult(block.result.result);
+      // Hits that exist but sit outside the documentation root. Shown to
+      // the user for the same reason the model is told: "Результатов: 0" on
+      // a question about source code otherwise reads as "нет такого кода".
+      const hidden = meta.hiddenByAccessBoundary ?? 0;
+      const hiddenSuffix = hidden > 0 ? ` · вне доступа: ${hidden}` : "";
       if (matches.length === 0) {
-        if (meta.degraded) return "Результатов: 0 · без семантики";
-        return meta.weak ? "Результатов: 0 · слабый поиск" : "Результатов: 0";
+        if (meta.degraded) return `Результатов: 0 · без семантики${hiddenSuffix}`;
+        return meta.weak ? `Результатов: 0 · слабый поиск${hiddenSuffix}` : `Результатов: 0${hiddenSuffix}`;
       }
       const counts = new Map<MatchSource, number>();
       for (const m of matches) counts.set(m.source, (counts.get(m.source) ?? 0) + 1);
@@ -1268,7 +1301,7 @@ export function describeToolResult(
       // results are a *narrower* search, not a weaker query, and that
       // difference changes how much the answer built on them is worth.
       const weakSuffix = meta.degraded ? " · без семантики" : meta.weak ? " · слабый поиск" : "";
-      return `Результатов: ${matches.length} (${breakdown})${weakSuffix}`;
+      return `Результатов: ${matches.length} (${breakdown})${weakSuffix}${hiddenSuffix}`;
     }
     case "grepResults": {
       const { matches, truncated } = block.result.result;
@@ -1320,7 +1353,10 @@ export function describeToolResult(
     case "accessModeChanged":
       return block.result.result.mode === "fullRepo" ? "Доступ изменён: весь репозиторий" : "Доступ изменён: только документация";
     case "modeSwitchRequested":
-      return `Режим изменён: ${conversationModeLabel(block.result.result.mode)}`;
+      // "со следующего сообщения" is the whole contract of this tool: the
+      // turn that asked keeps the old mode and toolset (`LoopCtx` pins it),
+      // and the picker only flips once that turn ends.
+      return `Режим изменён: ${conversationModeLabel(block.result.result.mode)} — со следующего сообщения`;
     case "asciidocTemplates": {
       const { templates, notFound } = block.result.result;
       const suffix = notFound.length > 0 ? `, не найдено: ${notFound.length}` : "";
@@ -1503,7 +1539,13 @@ export const CONTEXT_COMPACTION_MIN_MESSAGES = CONTEXT_COMPACTION_KEEP_LAST_MESS
 // automatically — the card's countdown strip animates toward this same
 // duration, so what the user sees running out is exactly the deadline that
 // actually fires.
-export const TOOL_APPROVAL_TIMEOUT_MS = 30_000;
+//
+// Two minutes rather than the original thirty seconds: the reason text on a
+// write/delete card is worth actually reading, and a silent auto-deny while
+// the user is still reading it produces the worst possible outcome — the
+// model reports a refusal the user never made. Tools in
+// `NO_TIMEOUT_TOOLS` get no deadline at all.
+export const TOOL_APPROVAL_TIMEOUT_MS = 120_000;
 
 /** Confirmation-gated tools that are not really *approvals* — they pause the
  * turn to collect something from the user (a structured answer, a filled-in
@@ -1516,14 +1558,42 @@ export const TOOL_APPROVAL_TIMEOUT_MS = 30_000;
  * point. */
 export const PAUSE_ONLY_TOOLS = new Set(["askUser", "requestArtifact"]);
 
+/** Tools whose approval card is a consent gate over what the assistant is
+ * allowed to do *next* — the read boundary, and the mode that decides the
+ * system prompt and toolset. Mirrors `ToolName::auto_approvable` on the Rust
+ * side (which refuses to persist a grant for these regardless of what any UI
+ * sends), and drives two things here: no "Разрешать всегда" checkbox on
+ * their card, and no auto-deny countdown — remembering the answer, or
+ * inventing one on a timer, defeats the only checkpoint these tools have. */
+export const CONSENT_TOOLS = new Set(["requestFullRepoAccess", "requestModeSwitch"]);
+
+/** Whether "Разрешать всегда" may be offered for a tool at all. */
+export function isAutoApprovable(toolName: string): boolean {
+  return !PAUSE_ONLY_TOOLS.has(toolName) && !CONSENT_TOOLS.has(toolName);
+}
+
+/** Confirmation-gated tools that never get a `TOOL_APPROVAL_TIMEOUT_MS`
+ * countdown: the pause-only pair (a question the user is still reading, an
+ * artifact being filled in another tab) plus the consent tools, where an
+ * auto-deny is indistinguishable to the model from a real refusal. */
+export const NO_TIMEOUT_TOOLS = new Set([...PAUSE_ONLY_TOOLS, ...CONSENT_TOOLS]);
+
+/** `errorMessage` `useLlmChat` substitutes for the backend's generic
+ * `"denied by user"` when it was the countdown, not the user, that refused
+ * the call — see `describeToolResult`, which renders it as its own line. */
+export const APPROVAL_TIMED_OUT_ERROR = "approval timed out";
+
 /** Static Russian labels for the tools a pending-approval card's "не
  * спрашивать больше"/"Разрешать всегда" controls can apply to
- * (`domain::ai_access::call_requires_confirmation` in Rust — `Todo` is never
- * among them, see `AI_HARNESS.md`'s "Tool-calling loop"). Falls back to the
- * raw wire name for anything unrecognized, so a future tool never silently
- * disappears from this list before this map is updated.
+ * (`ToolName::auto_approvable` in Rust — `Todo` is never among them, see
+ * `AI_HARNESS.md`'s "Tool-calling loop", and neither are the `CONSENT_TOOLS`
+ * or the pause-only pair). Falls back to the raw wire name for anything
+ * unrecognized, so a future tool never silently disappears from this list
+ * before this map is updated.
  * Shared by `PermissionsTab` (revoking) and `AssistantToolApprovalGroup`
- * (granting) so both show the exact same copy. */
+ * (granting) so both show the exact same copy — and by being exactly the
+ * auto-approvable set, it is also what keeps a consent tool's checkbox off
+ * the card. */
 export const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
   writeFile: "Запись файлов (writeFile)",
   editFile: "Редактирование файлов (editFile)",
@@ -1531,6 +1601,12 @@ export const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
   createDirectory: "Создание папок (createDirectory)",
   deleteDirectory: "Удаление папок (deleteDirectory)",
   move: "Перемещение / переименование (move)",
+};
+
+/** Labels for the two consent tools — still shown wherever a tool needs a
+ * name (the allowlist in Settings, an approval card's own title), just never
+ * as something that can be auto-approved. */
+export const CONSENT_TOOL_LABELS: Record<string, string> = {
   requestFullRepoAccess: "Запрос доступа к репозиторию (requestFullRepoAccess)",
   requestModeSwitch: "Смена режима ассистента (requestModeSwitch)",
 };

@@ -697,6 +697,18 @@ pub struct ToolResultEvent {
 pub enum ChatEvent {
     Delta(ChatStreamDelta),
     Reasoning(ChatStreamReasoning),
+    /// A fresh model round is about to start inside this turn.
+    ///
+    /// The frontend appends streamed text to whichever text block the
+    /// current round already opened, and until this event existed the only
+    /// thing that could close one was a tool call or a user steer. A round
+    /// that ended in prose and was followed by another round (an app
+    /// authored note, or a steer the user typed while it streamed) therefore
+    /// had its two answers concatenated mid-sentence, permanently, in the
+    /// transcript and in everything replayed from it. This is the round
+    /// boundary stated outright instead of inferred from what happened to
+    /// come next.
+    RoundStarted,
     SteeringApplied(SteeringAppliedEvent),
     /// Fired while a tool call's `arguments` are still arriving on the
     /// SSE stream — same payload shape as `ToolCall`, but the JSON may be

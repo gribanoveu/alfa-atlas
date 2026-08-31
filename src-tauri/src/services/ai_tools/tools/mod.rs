@@ -171,7 +171,12 @@ pub fn execute_tool(
         // does *not* re-scope mid-round for this tool the way it does for
         // `RequestFullRepoAccess`.
         ToolCall::RequestModeSwitch(args) => {
-            Ok(ToolResult::ModeSwitchRequested { mode: args.mode, reason: args.reason })
+            Ok(ToolResult::ModeSwitchRequested {
+                approved: true,
+                mode: args.mode,
+                applies_from: conversation::MODE_SWITCH_APPLIES_FROM.to_string(),
+                reason: args.reason,
+            })
         }
         ToolCall::GetAsciidocTemplates(args) => {
             Ok(asciidoc_templates::get_asciidoc_templates(args))
@@ -307,7 +312,9 @@ mod tests {
         assert_eq!(
             result,
             ToolResult::ModeSwitchRequested {
+                approved: true,
                 mode: ConversationMode::Plan,
+                applies_from: "nextUserMessage".to_string(),
                 reason: "just drafting a plan first".to_string(),
             }
         );
@@ -447,7 +454,9 @@ mod tests {
             .map(|d| d.name)
             .collect();
         assert!(!question_names.contains("writeFile"));
-        assert!(!question_names.contains("requestFullRepoAccess"));
+        // Widening the read boundary is available in every mode — see
+        // `domain::conversation_mode::base_tools`.
+        assert!(question_names.contains("requestFullRepoAccess"));
         assert!(question_names.contains("requestModeSwitch"));
         assert!(question_names.contains("getAsciidocTemplates"));
         assert!(question_names.contains("skill"));

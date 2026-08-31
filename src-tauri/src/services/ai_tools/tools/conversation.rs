@@ -10,12 +10,20 @@
 
 use crate::domain::llm::LlmToolDefinition;
 
+/// When an approved `requestModeSwitch` actually changes anything — echoed
+/// back in `ToolResult::ModeSwitchRequested` and stated in the schema below,
+/// so the model reads the same rule in both places. The backend pins
+/// `ConversationMode` for the whole turn (`services::llm_chat`'s `LoopCtx`),
+/// and the frontend flushes the new mode onto the picker only once that turn
+/// ends (`AssistantConversation`'s `pendingModeSwitchRef`).
+pub(super) const MODE_SWITCH_APPLIES_FROM: &str = "nextUserMessage";
+
 /// The `requestFullRepoAccess` schema the model sees.
 pub(super) fn full_repo_access_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "requestFullRepoAccess".to_string(),
         description:
-            "Request escalating from docs-only to full-repo access when repository access beyond documentation is genuinely needed to answer the user's request. Requires a stated reason, and always requires explicit user approval — the user may deny it. Do not call this speculatively or repeatedly; only when docs-only access is clearly insufficient."
+            "Request escalating from docs-only to full-repo access when repository access beyond documentation is genuinely needed to answer the user's request — including a plain question about source code, which does NOT require a mode switch. Requires a stated reason, and always requires explicit user approval. Read the outcome off the tool result, never guess it: approval returns an object with the new access mode and takes effect immediately, for the rest of this same turn; denial returns the text \"Отклонено пользователем\". Do not call this speculatively or repeatedly, and never a second time once access is already full-repo — that call is rejected."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -35,7 +43,7 @@ pub(super) fn mode_switch_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "requestModeSwitch".to_string(),
         description:
-            "Request switching the conversation to a different mode (\"agent\", \"plan\", or \"question\") when the current mode structurally cannot do what the user is asking. In Plan mode, when asked to actually implement/apply something: request \"agent\". In Question mode, when a request needs a multi-step plan: request \"plan\"; when it needs actual file changes: request \"agent\". In Agent mode, when the request is really just a question with no changes needed: request \"question\"; when it clearly needs a plan drafted first: request \"plan\". Requires a stated reason, and always requires explicit user approval — the user may deny it. Do not call this speculatively; only when the current mode is genuinely the wrong fit for the request. An approved switch does not change the toolset mid-turn: the new mode applies starting with the next user message — after approval, confirm briefly and stop; do not attempt tools that only the new mode would allow."
+            "Request switching the conversation to a different mode (\"agent\", \"plan\", or \"question\") when the current mode structurally cannot do what the user is asking. In Plan mode, when asked to actually implement/apply something: request \"agent\". In Question mode, when a request needs a multi-step plan: request \"plan\"; when it needs actual file changes: request \"agent\". In Agent mode, when the request is really just a question with no changes needed: request \"question\"; when it clearly needs a plan drafted first: request \"plan\". Never request a switch merely to read files outside the documentation root — that is what requestFullRepoAccess is for, and it works in every mode. Requires a stated reason, and always requires explicit user approval. Read the outcome off the tool result, never guess it: approval returns an object with \"approved\": true, denial returns the text \"Отклонено пользователем\". Do not call this speculatively; only when the current mode is genuinely the wrong fit for the request. An approved switch does not change the toolset mid-turn: the new mode applies starting with the next user message — after approval, confirm briefly and stop; do not attempt tools that only the new mode would allow."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",

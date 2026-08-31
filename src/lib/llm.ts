@@ -142,7 +142,18 @@ export type LlmMessage = {
   toolCallId: string | null;
 };
 
-export type LlmChatStreamDelta = {
+/** Every `llm:*` chat event carries the id of the turn that emitted it
+ * (`commands::chat_events::chat_event_sink` stamps it on). These events are
+ * global — one channel per event name, not one per request — so a listener
+ * that appends blindly will happily write another turn's tokens into the
+ * message it is showing. `useLlmChat` compares this against the turn it
+ * started and drops anything else.
+ *
+ * `"none"` (`NO_CHAT_TURN`) marks a sink that is not a chat turn at all:
+ * history compaction and the memory pipeline. */
+export type TurnScoped = { turnId: string };
+
+export type LlmChatStreamDelta = TurnScoped & {
   delta: string;
 };
 
@@ -150,14 +161,14 @@ export type LlmChatStreamDelta = {
 // as `LlmChatStreamDelta`, but for a reasoning-capable model's "thinking"
 // text, fired ahead of any `LlmChatStreamDelta` for that round. Never fires
 // at all for a provider/model that doesn't send `reasoning_content`.
-export type LlmChatStreamReasoningDelta = {
+export type LlmChatStreamReasoningDelta = TurnScoped & {
   delta: string;
 };
 
 export const STEERING_PREFIX =
   "[Уточнение от пользователя, не новое задание — учти в текущей работе]: ";
 
-export type LlmSteeringAppliedEvent = {
+export type LlmSteeringAppliedEvent = TurnScoped & {
   text: string;
 };
 
@@ -369,6 +380,7 @@ export function llmChatOnce(providerId: string, messages: LlmMessage[]): Promise
  * meanwhile. */
 export function streamLlmChat(
   providerId: string,
+  turnId: string,
   messages: LlmMessage[],
   todos: Task[],
   activeFilePath: string | null,
@@ -376,6 +388,7 @@ export function streamLlmChat(
 ): Promise<ChatStreamOutcome> {
   return invoke<ChatStreamOutcome>("llm_chat_stream", {
     providerId,
+    turnId,
     messages,
     todos,
     activeFilePath,
@@ -394,6 +407,7 @@ export function streamLlmChat(
  * shows *right now* may have moved on since. */
 export function streamLlmChatResume(
   providerId: string,
+  turnId: string,
   history: LlmMessage[],
   round: number,
   budgetUsed: number,
@@ -404,6 +418,7 @@ export function streamLlmChatResume(
 ): Promise<ChatStreamOutcome> {
   return invoke<ChatStreamOutcome>("llm_chat_stream_resume", {
     providerId,
+    turnId,
     history,
     round,
     budgetUsed,
@@ -460,6 +475,16 @@ export function listenLlmChatReasoningDelta(
   return listen<LlmChatStreamReasoningDelta>("llm:chat-stream-reasoning-delta", (event) => onDelta(event.payload));
 }
 
+/** Fires immediately before every model round of a turn, including the
+ * first. The transcript closes the previous round's open text/reasoning
+ * blocks on it, so prose from two rounds is never concatenated into one
+ * block (see `chatBlocks.ts`'s `closeOpenBlocks`). */
+export function listenLlmRoundStarted(
+  onRoundStarted: (payload: TurnScoped) => void,
+): Promise<UnlistenFn> {
+  return listen<TurnScoped>("llm:round-started", (event) => onRoundStarted(event.payload));
+}
+
 export function listenLlmSteeringApplied(
   onApplied: (payload: LlmSteeringAppliedEvent) => void,
 ): Promise<UnlistenFn> {
@@ -473,7 +498,7 @@ export function listenLlmSteeringApplied(
 // `id` is the model's own tool-call id, carried through so a later
 // `LlmToolResultEvent` can be matched back to the entry this created.
 // `arguments` stays a raw JSON string, same as `domain::llm::LlmToolCall`.
-export type LlmToolCallEvent = {
+export type LlmToolCallEvent = TurnScoped & {
   id: string;
   name: string;
   arguments: string;
@@ -505,7 +530,7 @@ export function listenLlmToolCall(
 // Mirrors `domain::llm::ToolResultEvent` — fires once the tool
 // call started by a matching `LlmToolCallEvent` (same `id`) has settled.
 // Exactly one of `result`/`error` is ever non-null.
-export type LlmToolResultEvent = {
+export type LlmToolResultEvent = TurnScoped & {
   id: string;
   result: ToolResult | null;
   error: string | null;
@@ -526,6 +551,8 @@ export function listenLlmToolResult(
  * so the context ring can stop guessing at each round boundary instead of
  * waiting for the turn's final `ChatStreamResult.usage`. Never fires for a
  * provider that doesn't report usage. */
-export function listenLlmContextUsage(onUsage: (usage: ChatUsage) => void): Promise<UnlistenFn> {
-  return listen<ChatUsage>("llm:context-usage", (event) => onUsage(event.payload));
+export function listenLlmContextUsage(
+  onUsage: (usage: ChatUsage & TurnScoped) => void,
+): Promise<UnlistenFn> {
+  return listen<ChatUsage & TurnScoped>("llm:context-usage", (event) => onUsage(event.payload));
 }

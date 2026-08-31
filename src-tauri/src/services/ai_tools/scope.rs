@@ -33,12 +33,23 @@ pub fn set_access_mode(mode: AiAccessMode) -> Result<(), ProjectError> {
 /// set, so a choice made in one chat carries into every later chat on the
 /// same repo. Empty when the project has never customized this (matches the
 /// `None` default), not an error.
+///
+/// Filtered through `ToolName::auto_approvable`, so a grant that is no
+/// longer allowed to exist stops taking effect the moment this ships —
+/// projects that ticked "Разрешать всегда" for a consent tool while that
+/// was still possible keep the stale row in their config, and it is simply
+/// ignored here rather than needing a config migration.
 pub fn auto_approved_tools() -> Result<HashSet<ToolName>, ProjectError> {
     let opened = project_open::get_project()?
         .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
     let config = project_store::load(&opened.root)?
         .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
-    Ok(config.ai_auto_approved_tools.unwrap_or_default().into_iter().collect())
+    Ok(config
+        .ai_auto_approved_tools
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|tool| tool.auto_approvable())
+        .collect())
 }
 
 /// Persists (or revokes) one tool's "always allow" status for the currently
@@ -46,7 +57,18 @@ pub fn auto_approved_tools() -> Result<HashSet<ToolName>, ProjectError> {
 /// всегда" button. Only ever changes whether a *future* call still pauses
 /// for confirmation; it never widens `ai_allowed_tools`, so a tool the
 /// project has otherwise disallowed stays disallowed regardless.
+///
+/// Granting is refused for a tool `ToolName::auto_approvable` says can
+/// never be auto-approved (the consent tools); revoking one is always
+/// allowed, so a stale grant can still be cleared. The frontend doesn't
+/// offer those toggles at all — this is the backstop, since the persisted
+/// config outlives any one UI.
 pub fn set_tool_auto_approved(tool: ToolName, auto_approved: bool) -> Result<(), ProjectError> {
+    if auto_approved && !tool.auto_approvable() {
+        return Err(ProjectError::Message(format!(
+            "tool {tool:?} can never be auto-approved — it is a consent gate, not a convenience"
+        )));
+    }
     let opened = project_open::get_project()?
         .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
     let mut config = project_store::load(&opened.root)?

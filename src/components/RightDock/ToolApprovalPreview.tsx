@@ -152,11 +152,23 @@ export function ToolApprovalPreview({
     <div className="assistant-tool-call-detail-section">
       <div className="assistant-tool-call-detail-label">Причина</div>
       <div className="assistant-tool-approval-reason">{args.reason}</div>
+      {/* Both consent cards say what approving actually does, because the
+          two do different things and neither is obvious from the request:
+          access is persisted to the project until it is switched back by
+          hand, while a mode switch only takes effect on the next message. */}
+      <div className="assistant-tool-approval-reason">
+        Доступ на чтение всего репозитория сохранится для проекта, пока вы не вернёте режим «только
+        документация». Записывать ассистент по-прежнему сможет только в документацию.
+      </div>
     </div>
   ) : block.name === "requestModeSwitch" && typeof args.reason === "string" ? (
     <div className="assistant-tool-call-detail-section">
       <div className="assistant-tool-call-detail-label">Причина</div>
       <div className="assistant-tool-approval-reason">{args.reason}</div>
+      <div className="assistant-tool-approval-reason">
+        Новый режим включится со следующего вашего сообщения — текущий ответ ассистент дописывает в
+        прежнем режиме.
+      </div>
     </div>
   ) : block.name === "memory" && args.op === "note" && typeof args.text === "string" ? (
     <div className="assistant-tool-call-detail-section">
@@ -175,7 +187,11 @@ export function ToolApprovalPreview({
  * frame after mount, not a per-frame JS timer, so it stays smooth
  * regardless of render cadence. Purely visual: the actual auto-deny is a
  * real `setTimeout` in `useLlmChat`, independent of whether this component
- * is even mounted to show it. */
+ * is even mounted to show it.
+ *
+ * No `deadlineAt`, no strip: a card for a tool in `NO_TIMEOUT_TOOLS` (the
+ * consent and pause-only tools) is never auto-denied, and a bar draining to
+ * empty under it would promise a deadline that does not exist. */
 export function ApprovalCountdown({ deadlineAt }: { deadlineAt?: number }) {
   const [durationMs] = useState(() =>
     deadlineAt !== undefined ? Math.max(0, deadlineAt - Date.now()) : TOOL_APPROVAL_TIMEOUT_MS,
@@ -186,6 +202,8 @@ export function ApprovalCountdown({ deadlineAt }: { deadlineAt?: number }) {
     const raf = requestAnimationFrame(() => setDepleted(true));
     return () => cancelAnimationFrame(raf);
   }, []);
+
+  if (deadlineAt === undefined) return null;
 
   return (
     <div className="assistant-tool-approval-timer" aria-hidden="true">

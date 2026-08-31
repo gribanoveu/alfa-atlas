@@ -142,6 +142,7 @@ pub(super) fn semantic_matches(
     deps: &EmbeddingDeps,
     query: &str,
     top_k: usize,
+    hidden: &mut u32,
 ) -> Result<Vec<ToolMatch>, ToolError> {
     let project = project_open::get_project()
         .map_err(|e| ToolError::SemanticSearch(e.to_string()))?
@@ -218,6 +219,7 @@ pub(super) fn semantic_matches(
             continue;
         };
         if !scope.allows_search_result(&metadata.file_id) {
+            *hidden += 1;
             continue;
         }
         let Ok(text) = resolve_text(&scope.repo_root, &metadata) else {
@@ -252,6 +254,7 @@ pub(super) fn lexical_matches(
     scope: &ToolScope,
     query: &str,
     top_k: usize,
+    hidden: &mut u32,
 ) -> Vec<ToolMatch> {
     let tokens = extract_search_tokens(query);
     let needles: Vec<(String, f32)> = if tokens.is_empty() {
@@ -270,6 +273,7 @@ pub(super) fn lexical_matches(
     let mut scored: Vec<(f32, ChunkMetadata, String)> = Vec::new();
     for metadata in chunk_index.all() {
         if !scope.allows_search_result(&metadata.file_id) {
+            *hidden += 1;
             continue;
         }
         let Ok(text) = resolve_text(&scope.repo_root, &metadata) else {
@@ -323,6 +327,7 @@ pub(super) fn symbol_matches(
     scope: &ToolScope,
     query: &str,
     top_k: usize,
+    hidden: &mut u32,
 ) -> Vec<ToolMatch> {
     let mut tokens = extract_search_tokens(query);
     // Backward compat: a single exact name with no separators still works
@@ -362,6 +367,7 @@ pub(super) fn symbol_matches(
     for token in &tokens {
         for (file_id, symbol) in repo_index.find_symbol(token) {
             if !scope.allows_search_result(&file_id) {
+                *hidden += 1;
                 continue;
             }
             let Some(access_path) = to_access_relative(scope, &file_id.0) else {
@@ -395,6 +401,7 @@ pub(super) fn symbol_matches(
     for token in &tokens {
         for (file_id, indexed) in repo_index.all_files() {
             if !scope.allows_search_result(&file_id) {
+                *hidden += 1;
                 continue;
             }
             let Some(access_path) = to_access_relative(scope, &file_id.0) else {
@@ -430,6 +437,7 @@ pub(super) fn symbol_matches(
     for token in &tokens {
         for (file_id, _indexed) in repo_index.all_files() {
             if !scope.allows_search_result(&file_id) {
+                *hidden += 1;
                 continue;
             }
             if !path_segment_matches(&file_id.0, token) {
@@ -628,7 +636,7 @@ mod tests {
         repo_index.build(&repo).unwrap();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        let matches = symbol_matches(&repo_index, &scope, "userservice", 10);
+        let matches = symbol_matches(&repo_index, &scope, "userservice", 10, &mut 0);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].source, MatchSource::Symbol);
         assert!(matches[0].path.ends_with("UserService.java"));
@@ -655,6 +663,7 @@ mod tests {
             &scope,
             "алгоритм формирования списка уведомлений для подачи notifications",
             10,
+            &mut 0,
         );
         assert!(!matches.is_empty());
         assert!(matches.iter().any(|m| m.path.contains("CollectNotificationService")));
@@ -694,6 +703,7 @@ mod tests {
             &scope,
             "CollectNotificationService getPatentNotifications",
             10,
+            &mut 0,
         );
         assert!(matches.iter().any(|m| m.path.contains("CollectNotificationService")));
         assert!(matches.iter().any(|m| m.path.contains("getPatentNotifications")));
@@ -714,7 +724,7 @@ mod tests {
         repo_index.build(&repo).unwrap();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        let matches = symbol_matches(&repo_index, &scope, "UserService", 10);
+        let matches = symbol_matches(&repo_index, &scope, "UserService", 10, &mut 0);
         let path_hits: Vec<_> = matches
             .iter()
             .filter(|m| m.path.ends_with("UserService.java"))
@@ -732,7 +742,7 @@ mod tests {
         repo_index.build(&repo).unwrap();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        assert!(symbol_matches(&repo_index, &scope, "NoSuchSymbol", 10).is_empty());
+        assert!(symbol_matches(&repo_index, &scope, "NoSuchSymbol", 10, &mut 0).is_empty());
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -754,6 +764,7 @@ mod tests {
             &scope,
             "алгоритм формирования списка уведомлений",
             10,
+            &mut 0,
         );
         assert!(
             matches.iter().any(|m| m.path.contains("CollectNotificationService")),
@@ -775,7 +786,7 @@ mod tests {
         repo_index.build(&repo).unwrap();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        let matches = symbol_matches(&repo_index, &scope, "notifications", 10);
+        let matches = symbol_matches(&repo_index, &scope, "notifications", 10, &mut 0);
         assert!(matches.iter().any(|m| m.path.contains("CollectNotificationService")));
         assert!(matches.iter().any(|m| (m.score - 0.95).abs() < 0.01 || m.score >= 0.95));
 
@@ -795,7 +806,7 @@ mod tests {
         repo_index.build(&repo).unwrap();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
-        assert!(symbol_matches(&repo_index, &scope, "userservice", 10).is_empty());
+        assert!(symbol_matches(&repo_index, &scope, "userservice", 10, &mut 0).is_empty());
 
         fs::remove_dir_all(&repo).ok();
     }
@@ -814,7 +825,7 @@ mod tests {
         chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        let matches = lexical_matches(&chunk_index, &scope, "needle", 10);
+        let matches = lexical_matches(&chunk_index, &scope, "needle", 10, &mut 0);
         assert!(!matches.is_empty());
         assert_eq!(matches[0].source, MatchSource::Lexical);
         assert!(matches[0].snippet.to_lowercase().contains("needle"));
@@ -845,6 +856,7 @@ mod tests {
             &scope,
             "алгоритм формирования списка уведомлений notifications",
             10,
+            &mut 0,
         );
         assert!(!matches.is_empty());
         assert!(matches[0].snippet.to_lowercase().contains("notifications"));
@@ -857,7 +869,7 @@ mod tests {
         let (repo, docs) = fixture_repo();
         let chunk_index = ChunkIndex::new();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
-        assert!(lexical_matches(&chunk_index, &scope, "", 10).is_empty());
+        assert!(lexical_matches(&chunk_index, &scope, "", 10, &mut 0).is_empty());
         fs::remove_dir_all(&repo).ok();
     }
 
@@ -879,7 +891,7 @@ mod tests {
         chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
-        assert!(lexical_matches(&chunk_index, &scope, "needle", 10).is_empty());
+        assert!(lexical_matches(&chunk_index, &scope, "needle", 10, &mut 0).is_empty());
 
         fs::remove_dir_all(&repo).ok();
     }

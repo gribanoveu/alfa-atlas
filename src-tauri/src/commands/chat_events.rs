@@ -13,10 +13,8 @@ use tauri::{AppHandle, Emitter};
 use crate::domain::llm::{ChatEvent, ChatEventSink};
 
 /// Fires once per non-empty text chunk while `llm_chat_stream`'s promise is
-/// still in flight. Global/unscoped, matching `SYNC_PROGRESS_EVENT`'s
-/// precedent in `commands::embeddings` — this app has exactly one chat
-/// panel / one in-flight conversation at a time, so no per-request id is
-/// threaded through.
+/// still in flight. Carries a `turnId` like every other event here — see
+/// `chat_event_sink`.
 pub const CHAT_STREAM_DELTA_EVENT: &str = "llm:chat-stream-delta";
 
 /// Same shape/lifecycle as `CHAT_STREAM_DELTA_EVENT`, but for a
@@ -29,6 +27,12 @@ pub const CHAT_STREAM_REASONING_EVENT: &str = "llm:chat-stream-reasoning-delta";
 
 /// Fires when queued user guidance is added to the history of a fresh round.
 pub const STEERING_APPLIED_EVENT: &str = "llm:steering-applied";
+
+/// Fires immediately before each model round of a turn — including the
+/// first. The frontend closes the previous round's open text/reasoning
+/// blocks on it, so two rounds' prose can never be appended into one block
+/// (see `ChatEvent::RoundStarted`).
+pub const ROUND_STARTED_EVENT: &str = "llm:round-started";
 
 /// Fires while a tool call's arguments are still arriving on the SSE
 /// stream — same payload as `TOOL_CALL_EVENT`, but the JSON may be
@@ -65,22 +69,66 @@ pub const CONTEXT_USAGE_EVENT: &str = "llm:context-usage";
 /// the status-bar chip refreshes without waiting for its poll interval.
 pub const RATE_LIMIT_CHANGED_EVENT: &str = "llm:rate-limit-changed";
 
+/// Stamps the turn a payload belongs to onto the payload itself.
+///
+/// `#[serde(flatten)]`, so the wire shape stays exactly what it was plus one
+/// `turnId` field — no frontend type has to be restructured, only widened.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WithTurn<T: Clone + serde::Serialize> {
+    turn_id: String,
+    #[serde(flatten)]
+    inner: T,
+}
+
+/// The `turn_id` for a sink that does not belong to a chat turn at all —
+/// history compaction (`llm_chat_once`) and the memory pipeline. Both only
+/// ever report `RateLimitChanged`, which carries no payload and is not
+/// filtered by turn on the frontend; the constant exists so those call
+/// sites read as deliberate rather than as a missing id.
+pub const NO_CHAT_TURN: &str = "none";
+
+/// A closure cannot be generic, so the stamping the arms below all do goes
+/// through this instead.
+fn with_turn<T: Clone + serde::Serialize>(turn_id: &str, inner: T) -> WithTurn<T> {
+    WithTurn { turn_id: turn_id.to_string(), inner }
+}
+
+/// The payload for an event that carries nothing but its turn.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TurnOnly {
+    turn_id: String,
+}
+
 /// Turns `services::llm_chat`'s framework-free reports into real Tauri
 /// events. This is the only place any of the `llm:*` events above is
 /// emitted — the chat loop itself has no `AppHandle` and no idea a UI is
 /// listening.
-pub fn chat_event_sink(app: &AppHandle) -> ChatEventSink {
+///
+/// `turn_id` identifies the turn this sink belongs to, and is stamped onto
+/// every payload it emits. These events are global (one Tauri channel per
+/// name, not per window or per request), and the frontend appends whatever
+/// arrives to whichever assistant message is currently streaming — so two
+/// overlapping turns used to interleave their deltas character by character
+/// into one message, which is exactly as readable as it sounds. The id lets
+/// a listener drop what is not its own. It stays a transport concern:
+/// `domain::llm::ChatEvent` never learns about it.
+pub fn chat_event_sink(app: &AppHandle, turn_id: String) -> ChatEventSink {
     let app = app.clone();
     Arc::new(move |event: ChatEvent| {
         let _ = match event {
-            ChatEvent::Delta(p) => app.emit(CHAT_STREAM_DELTA_EVENT, p),
-            ChatEvent::Reasoning(p) => app.emit(CHAT_STREAM_REASONING_EVENT, p),
-            ChatEvent::SteeringApplied(p) => app.emit(STEERING_APPLIED_EVENT, p),
-            ChatEvent::ToolCallDelta(p) => app.emit(TOOL_CALL_DELTA_EVENT, p),
-            ChatEvent::ToolCall(p) => app.emit(TOOL_CALL_EVENT, p),
-            ChatEvent::ToolResult(p) => app.emit(TOOL_RESULT_EVENT, p),
+            ChatEvent::Delta(p) => app.emit(CHAT_STREAM_DELTA_EVENT, with_turn(&turn_id, p)),
+            ChatEvent::Reasoning(p) => app.emit(CHAT_STREAM_REASONING_EVENT, with_turn(&turn_id, p)),
+            ChatEvent::RoundStarted => {
+                app.emit(ROUND_STARTED_EVENT, TurnOnly { turn_id: turn_id.clone() })
+            }
+            ChatEvent::SteeringApplied(p) => app.emit(STEERING_APPLIED_EVENT, with_turn(&turn_id, p)),
+            ChatEvent::ToolCallDelta(p) => app.emit(TOOL_CALL_DELTA_EVENT, with_turn(&turn_id, p)),
+            ChatEvent::ToolCall(p) => app.emit(TOOL_CALL_EVENT, with_turn(&turn_id, p)),
+            ChatEvent::ToolResult(p) => app.emit(TOOL_RESULT_EVENT, with_turn(&turn_id, p)),
             ChatEvent::RateLimitChanged => app.emit(RATE_LIMIT_CHANGED_EVENT, ()),
-            ChatEvent::ContextUsage(p) => app.emit(CONTEXT_USAGE_EVENT, p),
+            ChatEvent::ContextUsage(p) => app.emit(CONTEXT_USAGE_EVENT, with_turn(&turn_id, p)),
         };
     })
 }

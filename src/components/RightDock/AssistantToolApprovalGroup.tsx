@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, Shield } from "lucide-react";
 import { useState } from "react";
-import { AUTO_APPROVABLE_TOOL_LABELS, describeToolActivity } from "../../lib/assistantConfig";
+import { AUTO_APPROVABLE_TOOL_LABELS, describeToolActivity, isAutoApprovable } from "../../lib/assistantConfig";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
 import { ApprovalCountdown, editCountBadge, isExpandableToolCall, ToolApprovalPreview } from "./ToolApprovalPreview";
 
@@ -29,6 +29,9 @@ type AssistantToolApprovalGroupProps = {
  * checkbox) and persists the grant for future calls, mirroring the old
  * single-card semantics at the granularity that already exists
  * (`ai_auto_approved_tools` is keyed by tool name, never by path or batch).
+ * Only tools `isAutoApprovable` accepts get that row: for a consent tool
+ * (widening access, switching mode) the pause *is* the feature, so the
+ * whole trust block disappears when a batch holds nothing else.
  *
  * Always used even for a round with exactly one confirmable call — no
  * separate one-item code path, see `groupBlocksForRender`. */
@@ -41,10 +44,17 @@ export function AssistantToolApprovalGroup({ blocks, docsRoot, repoRoot, onDecid
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const distinctNames = [...new Set(blocks.map((b) => b.name))];
+  const trustableNames = distinctNames.filter(isAutoApprovable);
   const multiple = blocks.length > 1;
+  // The round can also be settled from outside this card — the approval
+  // countdown expiring, or Stop denying everything. Without this the
+  // buttons stayed live on an already-answered round and a click did
+  // nothing at all, which reads as the app ignoring the user.
+  const settledElsewhere = blocks.some((b) => b.status !== "pendingApproval");
+  const locked = decided || settledElsewhere;
 
   const handleDecideAll = (mode: "approveSelected" | "denyAll") => {
-    if (decided) return;
+    if (locked) return;
     setDecided(true);
     for (const block of blocks) {
       if (mode === "denyAll") {
@@ -76,7 +86,7 @@ export function AssistantToolApprovalGroup({ blocks, docsRoot, repoRoot, onDecid
                   type="checkbox"
                   className="assistant-tool-approval-group-item-checkbox"
                   checked={included[block.id] ?? true}
-                  disabled={decided}
+                  disabled={locked}
                   aria-label={title}
                   onChange={(e) => setIncluded((prev) => ({ ...prev, [block.id]: e.target.checked }))}
                 />
@@ -107,30 +117,32 @@ export function AssistantToolApprovalGroup({ blocks, docsRoot, repoRoot, onDecid
         })}
       </ul>
 
-      <div className="assistant-tool-approval-group-trust">
-        <div className="assistant-tool-approval-group-trust-heading">
-          <Shield size={13} aria-hidden />
-          <span>Больше не спрашивать в этом проекте для:</span>
+      {trustableNames.length > 0 ? (
+        <div className="assistant-tool-approval-group-trust">
+          <div className="assistant-tool-approval-group-trust-heading">
+            <Shield size={13} aria-hidden />
+            <span>Больше не спрашивать в этом проекте для:</span>
+          </div>
+          {trustableNames.map((name) => (
+            <label key={name} className="assistant-tool-approval-group-trust-item">
+              <input
+                type="checkbox"
+                checked={Boolean(trustedNames[name])}
+                disabled={locked}
+                onChange={(e) => setTrustedNames((prev) => ({ ...prev, [name]: e.target.checked }))}
+              />
+              <span>{AUTO_APPROVABLE_TOOL_LABELS[name] ?? name}</span>
+            </label>
+          ))}
         </div>
-        {distinctNames.map((name) => (
-          <label key={name} className="assistant-tool-approval-group-trust-item">
-            <input
-              type="checkbox"
-              checked={Boolean(trustedNames[name])}
-              disabled={decided}
-              onChange={(e) => setTrustedNames((prev) => ({ ...prev, [name]: e.target.checked }))}
-            />
-            <span>{AUTO_APPROVABLE_TOOL_LABELS[name] ?? name}</span>
-          </label>
-        ))}
-      </div>
+      ) : null}
 
       <div className="assistant-tool-approval-actions">
         <div className="assistant-tool-approval-buttons">
           <button
             type="button"
             className="assistant-btn"
-            disabled={decided}
+            disabled={locked}
             onClick={() => handleDecideAll("denyAll")}
           >
             Отклонить всё
@@ -138,7 +150,7 @@ export function AssistantToolApprovalGroup({ blocks, docsRoot, repoRoot, onDecid
           <button
             type="button"
             className="assistant-btn primary"
-            disabled={decided}
+            disabled={locked}
             onClick={() => handleDecideAll("approveSelected")}
           >
             {multiple ? "Одобрить выбранные" : "Одобрить"}

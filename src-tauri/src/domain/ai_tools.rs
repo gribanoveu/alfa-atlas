@@ -610,6 +610,16 @@ pub struct SemanticSearchMeta {
     /// this field means *lost capability*, not *cheap tier*. The text is
     /// read by both the model (it replaces `hint`) and the UI.
     pub degraded: Option<String>,
+    /// How many otherwise-ranked hits were dropped because they sit
+    /// outside the documentation root (`ToolScope::allows_search_result`).
+    /// Always `0` in Full-repo mode, where nothing is filtered.
+    ///
+    /// Exists because the alternative is a lie: a Docs-only search over
+    /// source code returns a clean empty list, which the model reads as
+    /// "this repository has no such code" and reports to the user as fact.
+    /// A count says "there is something here, you just cannot see it" —
+    /// without leaking a path, a name, or a line of the content itself.
+    pub hidden_by_access_boundary: u32,
 }
 
 /// Settled `SemanticSearch` payload — matches plus `meta` so the model can
@@ -936,8 +946,23 @@ pub enum ToolResult {
     /// `domain::conversation_mode`). The frontend applies `mode` to its own
     /// lifted chat-mode state once this result settles; `reason` is echoed
     /// back mainly so the model's own tool-call history stays legible.
+    ///
+    /// `approved` is always `true` — a denied call never reaches
+    /// `execute_tool` at all (`services::llm_chat::run_tool_loop` turns the
+    /// decision into `Err("denied by user")` first). It is serialized
+    /// anyway because this result is *also* what the model reads: without
+    /// it the payload is an echo of the model's own request, and a model
+    /// that was told "the user may deny this" has been observed reporting
+    /// an approved switch to the user as refused. Same reason for
+    /// `applies_from`: the new mode is pinned for the rest of this turn, so
+    /// "did it take effect" has a real answer that is not just "yes".
     #[serde(rename_all = "camelCase")]
-    ModeSwitchRequested { mode: ConversationMode, reason: String },
+    ModeSwitchRequested {
+        approved: bool,
+        mode: ConversationMode,
+        applies_from: String,
+        reason: String,
+    },
     /// Settled `getAsciidocTemplates` — full markup for every requested id
     /// that matched `domain::asciidoc_element_templates::
     /// ASCIIDOC_ELEMENT_TEMPLATES`, in request order. `not_found` echoes
