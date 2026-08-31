@@ -164,8 +164,14 @@ export type CheckoutOutcome = {
   restore: GitStashRestoreOutcome | null;
 };
 
+/** Which stage of a clone/fetch is running. Mirrors `GitPhase` in
+ * `domain/git.rs` — the point of these is that a stall before any bytes move
+ * (connect, auth, host key) is visible instead of looking like a freeze. */
+export type GitPhase = "connecting" | "authenticating" | "hostKey" | "remote";
+
 export type GitProgressEvent =
   | { kind: "started"; op: string }
+  | { kind: "phase"; op: string; phase: GitPhase; detail: string | null }
   | {
       kind: "transfer";
       op: string;
@@ -176,6 +182,13 @@ export type GitProgressEvent =
       totalDeltas: number;
     }
   | { kind: "push"; op: string; current: number; total: number; bytes: number }
+  | {
+      kind: "checkout";
+      op: string;
+      completed: number;
+      total: number;
+      path: string | null;
+    }
   | { kind: "finished"; op: string };
 
 export const GIT_PROGRESS_EVENT = "git://progress";
@@ -460,8 +473,16 @@ export type { ProbeResult };
 export function gitClone(
   url: string,
   destination: string,
+  cloneId: string,
 ): Promise<ProbeResult> {
-  return invoke<ProbeResult>("git_clone", { url, destination });
+  return invoke<ProbeResult>("git_clone", { url, destination, cloneId });
+}
+
+/** Asks an in-flight clone to stop. Best effort: a clone wedged inside a
+ * blocking syscall never reaches a libgit2 callback and so never sees this —
+ * the caller must stop waiting on `gitClone` regardless. */
+export function gitCloneCancel(cloneId: string): Promise<void> {
+  return invoke<void>("git_clone_cancel", { cloneId });
 }
 
 export function gitGetKeyStatus(): Promise<AppKeyStatus> {

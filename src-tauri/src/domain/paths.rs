@@ -160,8 +160,72 @@ pub fn join_relative(root: &Path, relative: &str) -> Result<PathBuf, ProjectErro
     Ok(out)
 }
 
+/// Strip the Windows extended-length (`\\?\`) prefix that `canonicalize`
+/// returns, turning `\\?\C:\repos\x` back into `C:\repos\x`.
+///
+/// Verbatim paths are not universally understood: libgit2 does not accept
+/// them, and the string ends up persisted in `project.json` and the recent
+/// projects list, where it leaks into every path the UI shows. Always run a
+/// `canonicalize()` result through this before handing it onward. On non-
+/// Windows targets there is no such prefix and the path passes through.
+pub fn strip_verbatim(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::Prefix;
+
+        let mut components = path.components();
+        let Some(Component::Prefix(prefix)) = components.next() else {
+            return path;
+        };
+        let rebuilt_root = match prefix.kind() {
+            Prefix::VerbatimDisk(letter) => format!("{}:\\", letter as char),
+            Prefix::VerbatimUNC(server, share) => {
+                format!("\\\\{}\\{}\\", server.to_string_lossy(), share.to_string_lossy())
+            }
+            // `\\?\` with anything else (device paths) has no plain-path
+            // equivalent — leave it alone rather than corrupt it.
+            _ => return path,
+        };
+        let mut out = PathBuf::from(rebuilt_root);
+        for component in components {
+            // The root component is already in `rebuilt_root`.
+            if !matches!(component, Component::RootDir) {
+                out.push(component);
+            }
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        path
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn strip_verbatim_leaves_plain_paths_alone() {
+        let plain = PathBuf::from(if cfg!(windows) { r"C:\repos\x" } else { "/repos/x" });
+        assert_eq!(super::strip_verbatim(plain.clone()), plain);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_removes_extended_length_prefix() {
+        assert_eq!(
+            super::strip_verbatim(PathBuf::from(r"\\?\C:\repos\clonned-repo")),
+            PathBuf::from(r"C:\repos\clonned-repo")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn strip_verbatim_is_a_noop_off_windows() {
+        // There is no verbatim prefix to strip; the string is just a path.
+        let p = PathBuf::from(r"\\?\C:\repos");
+        assert_eq!(super::strip_verbatim(p.clone()), p);
+    }
+
     use super::*;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};

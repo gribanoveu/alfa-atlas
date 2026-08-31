@@ -182,6 +182,7 @@ pub fn run() {
             app.manage(Arc::new(LlmProviderSlot::new(None)));
             app.manage(Arc::new(ChatCancelFlag::new(false)));
             app.manage(Arc::new(SteeringQueue::default()));
+            app.manage(Arc::new(commands::git::CloneCancellations::new()));
             app.manage(Arc::new(services::memory_pipeline::MemoryExtractGuard::new()));
 
             // Fire-and-forget: metrics must neither delay startup nor
@@ -316,6 +317,7 @@ pub fn run() {
             commands::git::git_generate_key,
             commands::git::git_import_key,
             commands::git::git_clone,
+            commands::git::git_clone_cancel,
             commands::git_action_log::git_action_log_list,
             commands::git_action_log::git_action_log_append,
             commands::git_action_log::git_action_log_mark_undone,

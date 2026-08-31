@@ -24,9 +24,18 @@ export function CloneRepoModal({
     progressLabel,
     needsAuth,
     conflict,
+    stalled,
     submit,
+    cancel,
     submitDisabled,
   } = useCloneRepo(onOpened);
+
+  /** Closing mid-clone has to cancel, not just unmount: the hook would
+   * otherwise keep a clone running with nothing left to report to. */
+  const handleClose = () => {
+    if (cloning) cancel();
+    onClose();
+  };
 
   const handleOpenSettings = () => {
     onClose();
@@ -37,7 +46,7 @@ export function CloneRepoModal({
     <div
       className="clone-modal-backdrop"
       role="presentation"
-      onClick={onClose}
+      onClick={handleClose}
     >
       <div
         className="clone-modal"
@@ -97,6 +106,13 @@ export function CloneRepoModal({
           </div>
         ) : null}
 
+        {stalled ? (
+          <div className="clone-modal-hint">
+            Ответа от сервера нет больше минуты. Проверьте доступ к хосту и VPN
+            — операцию можно отменить.
+          </div>
+        ) : null}
+
         {needsAuth && onOpenSettings ? (
           <div className="clone-modal-actions">
             <button
@@ -113,8 +129,7 @@ export function CloneRepoModal({
           <button
             type="button"
             className="clone-modal-btn"
-            onClick={onClose}
-            disabled={cloning}
+            onClick={handleClose}
           >
             Отмена
           </button>

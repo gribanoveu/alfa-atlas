@@ -6,7 +6,9 @@ import * as actualPrefs from "../lib/prefs";
 
 let cloneResult: unknown = { root: "/repo" };
 let cloneError: string | null = null;
-let pathExists = false;
+let pathIsNonEmpty = false;
+let cancelledIds: string[] = [];
+let resolveClone: ((value: unknown) => void) | null = null;
 let lastCloneDir: string | null = null;
 let savedPrefs: unknown[] = [];
 let pickResult: string | null = null;
@@ -15,12 +17,25 @@ mock.module("../lib/git", () => ({
   ...actualGit,
   gitClone: async () => {
     if (cloneError) throw cloneError;
+    if (resolveClone) {
+      // Lets a test hold a clone open and cancel it mid-flight.
+      return await new Promise((resolve) => {
+        resolveClone = resolve;
+      });
+    }
     return cloneResult;
+  },
+  gitCloneCancel: async (cloneId: string) => {
+    cancelledIds.push(cloneId);
   },
 }));
 mock.module("../lib/project", () => ({
   ...actualProject,
-  checkPathExists: async () => ({ exists: pathExists }),
+  checkPathExists: async () => ({
+    exists: pathIsNonEmpty,
+    isDir: pathIsNonEmpty,
+    isNonEmpty: pathIsNonEmpty,
+  }),
 }));
 mock.module("../lib/prefs", () => ({
   ...actualPrefs,
@@ -40,7 +55,9 @@ const { useCloneRepo } = await import("../hooks/useCloneRepo");
 beforeEach(() => {
   cloneResult = { root: "/repo" };
   cloneError = null;
-  pathExists = false;
+  pathIsNonEmpty = false;
+  cancelledIds = [];
+  resolveClone = null;
   lastCloneDir = null;
   savedPrefs = [];
   pickResult = null;
@@ -73,8 +90,8 @@ describe("useCloneRepo", () => {
     await waitFor(() => expect(result.current.submitDisabled).toBe(false));
   });
 
-  test("an existing destination blocks submit", async () => {
-    pathExists = true;
+  test("a non-empty destination blocks submit", async () => {
+    pathIsNonEmpty = true;
     const { result } = renderHook(() => useCloneRepo());
     act(() => result.current.setUrl("git@host:g/r.git"));
     act(() => result.current.setDestination("/home/u/projects/r"));
@@ -150,5 +167,53 @@ describe("useCloneRepo", () => {
 
     expect(result.current.destination).toBe("/home/u/projects");
     expect(savedPrefs).toHaveLength(0);
+  });
+
+  test("the destination is joined with the separator the folder already uses", async () => {
+    // The Windows report this fixes: the picker hands back `C:\repos` and the
+    // hook used to append `/name`, producing `C:\repos/clonned-repo`.
+    lastCloneDir = "C:\\repos";
+    const { result } = renderHook(() => useCloneRepo());
+    await waitFor(() => expect(result.current.destination).toBe("C:\\repos"));
+
+    act(() => result.current.setUrl("ssh://git@host/group/clonned-repo.git"));
+    await waitFor(() =>
+      expect(result.current.destination).toBe("C:\\repos\\clonned-repo"),
+    );
+  });
+
+  test("a hand-typed Windows path is split back apart, not doubled", async () => {
+    const { result } = renderHook(() => useCloneRepo());
+    act(() => result.current.setUrl("git@host:g/repo.git"));
+    act(() => result.current.setDestination("C:\\repos\\other\\repo"));
+
+    await waitFor(() =>
+      expect(result.current.destination).toBe("C:\\repos\\other\\repo"),
+    );
+  });
+
+  test("cancelling releases the dialog and ignores the late answer", async () => {
+    const opened: unknown[] = [];
+    resolveClone = () => {};
+    const { result } = renderHook(() => useCloneRepo((p) => opened.push(p)));
+    act(() => result.current.setUrl("git@host:g/r.git"));
+    act(() => result.current.setDestination("/home/u/projects/r"));
+
+    let pending: Promise<void>;
+    act(() => {
+      pending = result.current.submit();
+    });
+    await waitFor(() => expect(result.current.cloning).toBe(true));
+
+    act(() => result.current.cancel());
+    expect(result.current.cloning).toBe(false);
+    expect(cancelledIds).toHaveLength(1);
+
+    // The abandoned clone still finishes; its result must not open a project.
+    await act(async () => {
+      resolveClone?.({ root: "/repo" });
+      await pending;
+    });
+    expect(opened).toEqual([]);
   });
 });

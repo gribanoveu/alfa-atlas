@@ -185,6 +185,15 @@ pub struct CheckoutOutcome {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum GitProgressEvent {
     Started { op: String },
+    /// Which stage of a clone/fetch is currently running. Emitted from the
+    /// libgit2 callbacks that fire *before* any bytes move (credentials, host
+    /// key, server sideband messages), so a stall during connect or auth is
+    /// visible in the UI instead of looking like a frozen "in progress".
+    Phase {
+        op: String,
+        phase: GitPhase,
+        detail: Option<String>,
+    },
     Transfer {
         op: String,
         received_objects: usize,
@@ -199,7 +208,30 @@ pub enum GitProgressEvent {
         total: usize,
         bytes: usize,
     },
+    /// Writing the working tree after the objects are fetched. A clone that
+    /// leaves only a `.git` directory behind is stuck here, and without this
+    /// event that phase reports nothing at all.
+    Checkout {
+        op: String,
+        completed: usize,
+        total: usize,
+        path: Option<String>,
+    },
     Finished { op: String },
+}
+
+/// The stage a network git operation is in, for `GitProgressEvent::Phase`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GitPhase {
+    /// Opening the connection and negotiating with the remote.
+    Connecting,
+    /// Offering credentials — `detail` names the source being tried.
+    Authenticating,
+    /// Verifying the server's host key.
+    HostKey,
+    /// A human-readable message sent by the server itself (`detail`).
+    Remote,
 }
 
 /// SSH key stored in app settings.

@@ -1,6 +1,10 @@
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useState } from "react";
-import { GIT_PROGRESS_EVENT, type GitProgressEvent } from "../lib/git";
+import {
+  GIT_PROGRESS_EVENT,
+  type GitPhase,
+  type GitProgressEvent,
+} from "../lib/git";
 
 /** Subscribes to backend progress events for network-bound git operations
  * (fetch/pull/push/clone) — see `configure_transfer_progress`/
@@ -34,8 +38,23 @@ export function useGitProgress() {
 /** Renders a progress event as a short label, e.g. "42%" or "1.2 МБ".
  * Returns null when there isn't enough information yet (no total known) —
  * callers should fall back to a static "in progress" label in that case. */
+const PHASE_LABELS: Record<GitPhase, string> = {
+  connecting: "Подключение…",
+  authenticating: "Аутентификация…",
+  hostKey: "Проверка ключа хоста…",
+  remote: "Сервер…",
+};
+
 export function formatGitProgress(event: GitProgressEvent | null): string | null {
   if (!event) return null;
+  if (event.kind === "phase") return PHASE_LABELS[event.phase];
+  if (event.kind === "checkout") {
+    // Checkout is where a clone that leaves only a `.git` directory is stuck,
+    // so this label doubles as the diagnosis.
+    return event.total > 0
+      ? `Распаковка ${event.completed}/${event.total}`
+      : "Распаковка…";
+  }
   if (event.kind === "transfer") {
     if (event.totalObjects > 0) {
       const pct = Math.round((event.receivedObjects / event.totalObjects) * 100);

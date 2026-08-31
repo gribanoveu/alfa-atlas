@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { docsRootRelativeToRepo, resolveAssetTargetDocsRelative } from "../lib/paths";
+import {
+  docsRootRelativeToRepo,
+  joinPath,
+  parentPath,
+  resolveAssetTargetDocsRelative,
+} from "../lib/paths";
 
 describe("docsRootRelativeToRepo", () => {
   test("nested docs root returns the relative path", () => {
@@ -50,5 +55,36 @@ describe("resolveAssetTargetDocsRelative", () => {
     expect(resolveAssetTargetDocsRelative("images/logo.png", null)).toBe(
       "images/logo.png",
     );
+  });
+});
+
+describe("joinPath", () => {
+  test("keeps the separator style of the path it is joining onto", () => {
+    expect(joinPath("C:\\repos", "clonned-repo")).toBe("C:\\repos\\clonned-repo");
+    expect(joinPath("/home/u/projects", "docs")).toBe("/home/u/projects/docs");
+    expect(joinPath("\\\\server\\share", "repo")).toBe("\\\\server\\share\\repo");
+  });
+
+  test("a trailing separator does not produce a doubled one", () => {
+    expect(joinPath("C:\\repos\\", "repo")).toBe("C:\\repos\\repo");
+    expect(joinPath("/home/u/", "repo")).toBe("/home/u/repo");
+  });
+
+  test("joining onto a bare root keeps the root's slash", () => {
+    expect(joinPath("C:\\", "repo")).toBe("C:\\repo");
+    expect(joinPath("/", "repo")).toBe("/repo");
+  });
+});
+
+describe("parentPath", () => {
+  test("drops the last segment on either separator", () => {
+    expect(parentPath("C:\\repos\\other\\repo")).toBe("C:\\repos\\other");
+    expect(parentPath("/home/u/projects/repo")).toBe("/home/u/projects");
+  });
+
+  test("stops at the drive or root instead of eating it", () => {
+    expect(parentPath("C:\\repos")).toBe("C:\\");
+    expect(parentPath("/repo")).toBe("/");
+    expect(parentPath("C:\\")).toBe("C:\\");
   });
 });

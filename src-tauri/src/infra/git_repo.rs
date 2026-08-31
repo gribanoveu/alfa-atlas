@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use git2::{
@@ -9,10 +11,12 @@ use git2::{
 
 use crate::domain::git::{
     CheckoutOutcome, GitBlameHunk, GitBranchInfo, GitCommitSummary, GitConflictFile,
-    GitCredentials, GitDiffScope, GitError, GitFileDiff, GitFileStatus, GitProgressEvent,
+    GitCredentials, GitDiffScope, GitError, GitFileDiff, GitFileStatus, GitPhase,
+    GitProgressEvent,
     GitResetMode, GitStashEntry, GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus,
-    PullMode, SshKeySource,
+    PullMode, SshKeyConfig, SshKeySource,
 };
+use crate::domain::paths;
 
 /// `git2::Error` -> `GitError`, in one place rather than at each of the ~140
 /// call sites below. `GitError` carries the message as text (see its own doc
@@ -27,17 +31,26 @@ fn open_err(e: git2::Error) -> GitError {
 
 /// Discover the git workdir containing `path`, or return the canonicalized path itself.
 pub fn discover_repo_root(path: &Path) -> PathBuf {
+    // Every `canonicalize` here goes through `strip_verbatim`: on Windows the
+    // raw result carries a `\\?\` prefix, and this value becomes the repo root
+    // string stored in project.json and shown throughout the UI.
     match Repository::discover(path) {
         Ok(repo) => {
             if let Some(workdir) = repo.workdir() {
                 workdir
                     .canonicalize()
+                    .map(paths::strip_verbatim)
                     .unwrap_or_else(|_| workdir.to_path_buf())
             } else {
-                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+                path.canonicalize()
+                    .map(paths::strip_verbatim)
+                    .unwrap_or_else(|_| path.to_path_buf())
             }
         }
-        Err(_) => path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
+        Err(_) => path
+            .canonicalize()
+            .map(paths::strip_verbatim)
+            .unwrap_or_else(|_| path.to_path_buf()),
     }
 }
 
@@ -865,75 +878,154 @@ fn credentials_exhausted_message(attempts: &[String]) -> String {
     format!("no credentials available (tried: {detail})")
 }
 
-fn configure_credentials<'a>(
+/// Shared control surface for one network git operation (fetch/push/clone):
+/// the op name its progress events are tagged with, where those events go,
+/// and whether the caller has asked to stop.
+///
+/// libgit2 invokes every callback through a shared `&` borrow, so the sink
+/// lives behind a `RefCell` rather than being handed to a single callback as
+/// `&mut` — that is what lets the credentials, host-key, sideband, transfer
+/// and checkout callbacks all report into the same channel.
+struct NetOpControl<'s> {
+    op: RefCell<String>,
+    sink: RefCell<Option<&'s mut dyn FnMut(GitProgressEvent)>>,
+    cancelled: Option<&'s dyn Fn() -> bool>,
+}
+
+impl<'s> NetOpControl<'s> {
+    fn new(
+        op: impl Into<String>,
+        sink: Option<&'s mut dyn FnMut(GitProgressEvent)>,
+        cancelled: Option<&'s dyn Fn() -> bool>,
+    ) -> Self {
+        Self {
+            op: RefCell::new(op.into()),
+            sink: RefCell::new(sink),
+            cancelled,
+        }
+    }
+
+    fn op(&self) -> String {
+        self.op.borrow().clone()
+    }
+
+    /// Retag subsequent events. `fetch_branches` reuses one control across
+    /// several remotes; re-borrowing the sink per remote is not possible
+    /// because `&mut dyn FnMut` is invariant in its own lifetime.
+    fn set_op(&self, op: impl Into<String>) {
+        *self.op.borrow_mut() = op.into();
+    }
+
+    fn emit(&self, event: GitProgressEvent) {
+        // `try_borrow_mut` rather than `borrow_mut`: a reentrant callback
+        // would otherwise panic inside libgit2's C stack. Dropping a progress
+        // update is always preferable to that.
+        if let Ok(mut slot) = self.sink.try_borrow_mut() {
+            if let Some(sink) = slot.as_mut() {
+                sink(event);
+            }
+        }
+    }
+
+    fn phase(&self, phase: GitPhase, detail: Option<String>) {
+        self.emit(GitProgressEvent::Phase {
+            op: self.op(),
+            phase,
+            detail,
+        });
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.map(|f| f()).unwrap_or(false)
+    }
+
+    /// The error every callback returns once the user has cancelled. libgit2
+    /// propagates it out of the clone/fetch as a normal failure.
+    fn cancel_error() -> git2::Error {
+        git2::Error::from_str(CANCELLED_MESSAGE)
+    }
+}
+
+/// Marker text carried by the error a cancelled operation fails with, so the
+/// command layer can tell a deliberate stop from a real failure.
+pub const CANCELLED_MESSAGE: &str = "operation cancelled by user";
+
+/// One place credentials can come from, in the order they get tried. Built
+/// per credentials callback invocation and filtered against what has already
+/// been offered, so libgit2 never receives the same credential twice — doing
+/// so makes it retry the same rejected key indefinitely.
+enum CredSource<'a> {
+    AppKey(&'a str),
+    Agent,
+    Stored(&'a SshKeyConfig),
+    Helper,
+}
+
+impl CredSource<'_> {
+    /// Stable id used to remember that this source has already been offered.
+    fn id(&self) -> String {
+        match self {
+            CredSource::AppKey(_) => "app-managed key".to_string(),
+            CredSource::Agent => "SSH agent".to_string(),
+            CredSource::Stored(kc) => format!("stored key '{}'", kc.name),
+            CredSource::Helper => "credential helper".to_string(),
+        }
+    }
+}
+
+fn configure_credentials<'a, 's: 'a>(
     callbacks: &mut RemoteCallbacks<'a>,
     config: &'a git2::Config,
     credentials: &'a GitCredentials,
     app_private_key: Option<&'a str>,
+    control: &'a NetOpControl<'s>,
 ) {
+    // Sources already offered to libgit2. It calls this back after each
+    // rejection, and handing it the same key again is an infinite retry loop
+    // rather than a failure the user ever sees.
+    let mut offered: HashSet<String> = HashSet::new();
+    // Collected as we go so that, if every source fails, the caller gets
+    // a concrete reason per attempt instead of a bare "no credentials"
+    // — this ends up in GitError::Message via map_remote_error, not in
+    // a log, since credential failures are something the UI may need
+    // to explain to the user.
+    let mut attempts: Vec<String> = Vec::new();
+
     callbacks.credentials(move |url, username_from_url, allowed| {
-        // Collected as we go so that, if every source fails, the caller gets
-        // a concrete reason per attempt instead of a bare "no credentials"
-        // — this ends up in GitError::Message via map_remote_error, not in
-        // a log, since credential failures are something the UI may need
-        // to explain to the user.
-        let mut attempts: Vec<String> = Vec::new();
-
-        if allowed.contains(CredentialType::SSH_KEY) {
-            let user = username_from_url.unwrap_or("git");
-
-            // 1. Try the app-managed key (highest priority — user explicitly set it up).
-            if let Some(key) = app_private_key {
-                match Cred::ssh_key_from_memory(user, None::<&str>, key, None) {
-                    Ok(cred) => return Ok(cred),
-                    Err(e) => attempts.push(format!("app-managed key: {}", e.message())),
-                }
-            }
-
-            // 2. Try SSH agent as fallback.
-            match Cred::ssh_key_from_agent(user) {
-                Ok(cred) => return Ok(cred),
-                Err(e) => attempts.push(format!("SSH agent: {}", e.message())),
-            }
-
-            // 3. Try stored SSH keys matching the URL host first.
-            let url_host = host_from_url(url);
-            let key_configs: Vec<&crate::domain::git::SshKeyConfig> =
-                credentials.ssh_keys.iter().collect();
-            // Try host-matching keys first, then all others.
-            let mut matching = Vec::new();
-            let mut others = Vec::new();
-            for kc in &key_configs {
-                if key_matches_host(url_host, kc) {
-                    matching.push(*kc);
-                } else {
-                    others.push(*kc);
-                }
-            }
-            for kc in matching.iter().chain(others.iter()) {
-                let passphrase = kc.passphrase.as_deref();
-                let result = match &kc.source {
-                    SshKeySource::KeyContent { private_key } => {
-                        Cred::ssh_key_from_memory(user, None::<&str>, private_key, passphrase)
-                    }
-                    SshKeySource::KeyFile { path } => {
-                        Cred::ssh_key(user, None::<&Path>, Path::new(path), passphrase)
-                    }
-                };
-                match result {
-                    Ok(cred) => return Ok(cred),
-                    Err(e) => {
-                        attempts.push(format!("stored key '{}': {}", kc.name, e.message()))
-                    }
-                }
-            }
+        if control.is_cancelled() {
+            return Err(NetOpControl::cancel_error());
         }
-        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
-            || allowed.contains(CredentialType::DEFAULT)
-        {
-            match Cred::credential_helper(config, url, username_from_url) {
+
+        for source in credential_sources(url, allowed, credentials, app_private_key) {
+            let id = source.id();
+            if !offered.insert(id.clone()) {
+                continue;
+            }
+            control.phase(GitPhase::Authenticating, Some(id.clone()));
+
+            let user = username_from_url.unwrap_or("git");
+            let result = match source {
+                CredSource::AppKey(key) => {
+                    Cred::ssh_key_from_memory(user, None::<&str>, key, None)
+                }
+                CredSource::Agent => Cred::ssh_key_from_agent(user),
+                CredSource::Stored(kc) => {
+                    let passphrase = kc.passphrase.as_deref();
+                    match &kc.source {
+                        SshKeySource::KeyContent { private_key } => {
+                            Cred::ssh_key_from_memory(user, None::<&str>, private_key.as_str(), passphrase)
+                        }
+                        SshKeySource::KeyFile { path } => {
+                            Cred::ssh_key(user, None::<&Path>, Path::new(path.as_str()), passphrase)
+                        }
+                    }
+                }
+                CredSource::Helper => Cred::credential_helper(config, url, username_from_url),
+            };
+
+            match result {
                 Ok(cred) => return Ok(cred),
-                Err(e) => attempts.push(format!("credential helper: {}", e.message())),
+                Err(e) => attempts.push(format!("{id}: {}", e.message())),
             }
         }
 
@@ -943,6 +1035,48 @@ fn configure_credentials<'a>(
     });
 }
 
+/// The credential sources to try for `url`, most-specific first.
+///
+/// The SSH agent is deliberately last and only when nothing else is
+/// configured: on Windows libssh2 reaches Pageant through a blocking
+/// `SendMessage` with no timeout, so a stale agent window hangs the whole
+/// clone with no way out. A user who has set up a key in the app should never
+/// touch that path.
+fn credential_sources<'a>(
+    url: &str,
+    allowed: CredentialType,
+    credentials: &'a GitCredentials,
+    app_private_key: Option<&'a str>,
+) -> Vec<CredSource<'a>> {
+    let mut sources = Vec::new();
+
+    if allowed.contains(CredentialType::SSH_KEY) {
+        if let Some(key) = app_private_key {
+            sources.push(CredSource::AppKey(key));
+        }
+
+        // Host-matching keys first, then the rest.
+        let url_host = host_from_url(url);
+        let (matching, others): (Vec<_>, Vec<_>) = credentials
+            .ssh_keys
+            .iter()
+            .partition(|kc| key_matches_host(url_host, kc));
+        sources.extend(matching.into_iter().chain(others).map(CredSource::Stored));
+
+        if sources.is_empty() {
+            sources.push(CredSource::Agent);
+        }
+    }
+
+    if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
+        || allowed.contains(CredentialType::DEFAULT)
+    {
+        sources.push(CredSource::Helper);
+    }
+
+    sources
+}
+
 /// Attach a certificate_check callback that accepts host keys on first
 /// connection (trust-on-first-use, no pinning against a known_hosts store).
 /// That is a deliberate usability tradeoff for now, but it means a
@@ -950,45 +1084,73 @@ fn configure_credentials<'a>(
 /// stronger guarantees are needed later, compare the presented key's
 /// fingerprint (`cert.as_hostkey().hash_sha256()`) against a persisted
 /// per-remote value and only auto-accept on first contact.
-fn configure_ssh_transport(callbacks: &mut RemoteCallbacks<'_>, trust_all: bool) {
-    if trust_all {
-        callbacks.certificate_check(|_cert, _host| Ok(git2::CertificateCheckStatus::CertificateOk));
-    } else {
-        callbacks.certificate_check(|_cert, _host| Ok(git2::CertificateCheckStatus::CertificatePassthrough));
-    }
+fn configure_ssh_transport<'a, 's: 'a>(
+    callbacks: &mut RemoteCallbacks<'a>,
+    trust_all: bool,
+    control: &'a NetOpControl<'s>,
+) {
+    callbacks.certificate_check(move |_cert, host| {
+        if control.is_cancelled() {
+            return Err(NetOpControl::cancel_error());
+        }
+        control.phase(GitPhase::HostKey, Some(host.to_string()));
+        Ok(if trust_all {
+            git2::CertificateCheckStatus::CertificateOk
+        } else {
+            git2::CertificateCheckStatus::CertificatePassthrough
+        })
+    });
+}
+
+/// Surfaces the remote's own progress text ("Counting objects…") and, more
+/// importantly, gives the connect/negotiate phase a heartbeat: without it a
+/// stall before the first byte transfers is indistinguishable from a freeze.
+fn configure_sideband<'a, 's: 'a>(
+    callbacks: &mut RemoteCallbacks<'a>,
+    control: &'a NetOpControl<'s>,
+) {
+    callbacks.sideband_progress(move |data| {
+        if control.is_cancelled() {
+            return false;
+        }
+        let text = String::from_utf8_lossy(data).trim().to_string();
+        if !text.is_empty() {
+            control.phase(GitPhase::Remote, Some(text));
+        }
+        true
+    });
 }
 
 /// Wires `on_progress` into `callbacks.transfer_progress`, used by
 /// fetch/pull/clone. Emits one `GitProgressEvent::Transfer` per libgit2
 /// progress tick — the caller (`commands/git.rs`) is responsible for
 /// throttling before turning these into UI updates.
-fn configure_transfer_progress<'cb>(
-    callbacks: &mut RemoteCallbacks<'cb>,
-    op: String,
-    on_progress: &'cb mut dyn FnMut(GitProgressEvent),
+fn configure_transfer_progress<'a, 's: 'a>(
+    callbacks: &mut RemoteCallbacks<'a>,
+    control: &'a NetOpControl<'s>,
 ) {
     callbacks.transfer_progress(move |progress| {
-        on_progress(GitProgressEvent::Transfer {
-            op: op.clone(),
+        control.emit(GitProgressEvent::Transfer {
+            op: control.op(),
             received_objects: progress.received_objects(),
             total_objects: progress.total_objects(),
             received_bytes: progress.received_bytes(),
             indexed_deltas: progress.indexed_deltas(),
             total_deltas: progress.total_deltas(),
         });
-        true
+        // Returning false is libgit2's documented way to abort a transfer.
+        !control.is_cancelled()
     });
 }
 
 /// Wires `on_progress` into `callbacks.push_transfer_progress`, used by push.
-fn configure_push_progress<'cb>(
-    callbacks: &mut RemoteCallbacks<'cb>,
-    op: String,
-    on_progress: &'cb mut dyn FnMut(GitProgressEvent),
+fn configure_push_progress<'a, 's: 'a>(
+    callbacks: &mut RemoteCallbacks<'a>,
+    control: &'a NetOpControl<'s>,
 ) {
     callbacks.push_transfer_progress(move |current, total, bytes| {
-        on_progress(GitProgressEvent::Push {
-            op: op.clone(),
+        control.emit(GitProgressEvent::Push {
+            op: control.op(),
             current,
             total,
             bytes,
@@ -1050,12 +1212,12 @@ fn fetch_upstream<'repo>(
     on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<AnnotatedCommit<'repo>, GitError> {
     let config = repo.config().map_err(op_err)?;
+    let control = NetOpControl::new("fetch", on_progress, None);
     let mut callbacks = RemoteCallbacks::new();
-    configure_credentials(&mut callbacks, &config, credentials, app_private_key);
-    configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
-    if let Some(cb) = on_progress {
-        configure_transfer_progress(&mut callbacks, "fetch".to_string(), cb);
-    }
+    configure_credentials(&mut callbacks, &config, credentials, app_private_key, &control);
+    configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys, &control);
+    configure_sideband(&mut callbacks, &control);
+    configure_transfer_progress(&mut callbacks, &control);
 
     let mut fetch_opts = FetchOptions::new(); // fetch_upstream
     fetch_opts.remote_callbacks(callbacks);
@@ -1926,12 +2088,12 @@ fn push_refspec(
     on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let config = repo.config().map_err(op_err)?;
+    let control = NetOpControl::new("push", on_progress, None);
     let mut callbacks = RemoteCallbacks::new();
-    configure_credentials(&mut callbacks, &config, credentials, app_private_key);
-    configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
-    if let Some(cb) = on_progress {
-        configure_push_progress(&mut callbacks, "push".to_string(), cb);
-    }
+    configure_credentials(&mut callbacks, &config, credentials, app_private_key, &control);
+    configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys, &control);
+    configure_sideband(&mut callbacks, &control);
+    configure_push_progress(&mut callbacks, &control);
 
     let mut push_opts = PushOptions::new();
     push_opts.remote_callbacks(callbacks);
@@ -2352,20 +2514,22 @@ pub fn fetch_branches(
     repo_root: &Path,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
-    mut on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
+    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
 ) -> Result<(), GitError> {
     let repo = open_repo(repo_root)?;
     let config = repo.config().map_err(op_err)?;
     let remote_names = repo.remotes().map_err(op_err)?;
 
+    let control = NetOpControl::new("fetch", on_progress, None);
+
     for name in remote_names.iter() {
         let Ok(Some(name)) = name else { continue };
+        control.set_op(format!("fetch:{name}"));
         let mut callbacks = RemoteCallbacks::new();
-        configure_credentials(&mut callbacks, &config, credentials, app_private_key);
-        configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
-        if let Some(cb) = on_progress.as_deref_mut() {
-            configure_transfer_progress(&mut callbacks, format!("fetch:{name}"), cb);
-        }
+        configure_credentials(&mut callbacks, &config, credentials, app_private_key, &control);
+        configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys, &control);
+        configure_sideband(&mut callbacks, &control);
+        configure_transfer_progress(&mut callbacks, &control);
 
         let mut fetch_opts = FetchOptions::new();
         fetch_opts.remote_callbacks(callbacks);
@@ -2533,36 +2697,86 @@ pub fn checkout_remote_branch(
     Ok(CheckoutOutcome { shelved, restore })
 }
 
-pub fn clone_repo(
+/// Clone `url` into `destination`, reporting through `on_progress` and
+/// stopping early whenever `is_cancelled` turns true.
+///
+/// `destination` may already exist as long as it is empty — that is the state
+/// an aborted attempt leaves behind, and refusing it would lock the user out
+/// of retrying into the same folder.
+pub fn clone_repo<'a>(
     url: &str,
     destination: &Path,
     repo_config: &git2::Config,
     credentials: &GitCredentials,
     app_private_key: Option<&str>,
-    on_progress: Option<&mut dyn FnMut(GitProgressEvent)>,
+    // One lifetime for both: the progress sink is a `&mut` and therefore
+    // invariant, so the cancel probe has to be borrowed for the same span.
+    on_progress: Option<&'a mut dyn FnMut(GitProgressEvent)>,
+    is_cancelled: Option<&'a (dyn Fn() -> bool + 'a)>,
 ) -> Result<Repository, GitError> {
-    if destination.exists() {
+    if directory_is_non_empty(destination) {
         return Err(GitError::DestinationExists(
             destination.display().to_string(),
         ));
     }
 
-    let mut callbacks = RemoteCallbacks::new();
-    configure_credentials(&mut callbacks, repo_config, credentials, app_private_key);
-    configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys);
-    if let Some(cb) = on_progress {
-        configure_transfer_progress(&mut callbacks, "clone".to_string(), cb);
+    let control = NetOpControl::new("clone", on_progress, is_cancelled);
+
+    // Cancellation otherwise only takes effect at a libgit2 callback boundary;
+    // this covers the case where the user gave up before anything started.
+    if control.is_cancelled() {
+        return Err(GitError::CloneFailed(CANCELLED_MESSAGE.into()));
     }
+
+    let mut callbacks = RemoteCallbacks::new();
+    configure_credentials(
+        &mut callbacks,
+        repo_config,
+        credentials,
+        app_private_key,
+        &control,
+    );
+    configure_ssh_transport(&mut callbacks, credentials.trust_all_ssh_host_keys, &control);
+    configure_sideband(&mut callbacks, &control);
+    configure_transfer_progress(&mut callbacks, &control);
 
     let mut fetch_opts = FetchOptions::new(); // clone
     fetch_opts.remote_callbacks(callbacks);
 
+    // Checkout writes the working tree, and it is where a clone that leaves
+    // nothing but a `.git` directory behind is stuck. libgit2 offers no way to
+    // abort from here — the callback returns `()` — so this reports only, and
+    // cancellation during checkout is the caller's problem.
+    let mut checkout = CheckoutBuilder::new();
+    checkout.progress(|path, completed, total| {
+        control.emit(GitProgressEvent::Checkout {
+            op: control.op(),
+            completed,
+            total,
+            path: path.map(|p| p.to_string_lossy().into_owned()),
+        });
+    });
+
     let mut builder = git2::build::RepoBuilder::new();
     builder.fetch_options(fetch_opts);
+    builder.with_checkout(checkout);
+
+    control.phase(GitPhase::Connecting, Some(url.to_string()));
 
     builder
         .clone(url, destination)
         .map_err(|e| GitError::CloneFailed(e.message().to_string()))
+}
+
+/// True when `path` is a directory that already holds something. Used instead
+/// of a bare `exists()` check so an empty leftover directory is not treated as
+/// a conflict — `services::git_clone` applies the same rule up front, and the
+/// UI mirrors it through `check_path_exists`.
+pub fn directory_is_non_empty(path: &Path) -> bool {
+    path.read_dir()
+        .ok()
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -2779,19 +2993,63 @@ mod tests {
     }
 
     #[test]
-    fn clone_repo_destination_exists() {
+    fn clone_repo_destination_non_empty() {
         let dir = temp_dir("clone-exists");
         let dest = dir.join("repo");
         fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("stale.txt"), "old\n").unwrap();
 
         let config = git2::Config::open_default().unwrap();
         let creds = GitCredentials::default();
-        let result = clone_repo("https://example.com/repo.git", &dest, &config, &creds, None, None);
+        let result = clone_repo("https://example.com/repo.git", &dest, &config, &creds, None, None, None);
         assert!(
             matches!(result, Err(GitError::DestinationExists(_))),
             "expected DestinationExists, but got a different result"
         );
 
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clone_repo_accepts_existing_empty_destination() {
+        let dir = temp_dir("clone-empty-dest");
+        let dest = dir.join("repo");
+        fs::create_dir_all(&dest).unwrap();
+
+        let config = git2::Config::open_default().unwrap();
+        let creds = GitCredentials::default();
+        let result = clone_repo("not-a-valid-url", &dest, &config, &creds, None, None, None);
+        // It still fails — on the URL, not on the directory. An empty leftover
+        // folder from an aborted attempt must not block a retry.
+        assert!(
+            !matches!(result, Err(GitError::DestinationExists(_))),
+            "an existing empty destination must not be rejected"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clone_repo_stops_when_already_cancelled() {
+        let dir = temp_dir("clone-cancel");
+        let remote = dir.join("remote.git");
+        Repository::init_bare(&remote).unwrap();
+        let dest = dir.join("dest");
+
+        let config = git2::Config::open_default().unwrap();
+        let creds = GitCredentials::default();
+        // Cancellation mid-flight is observed at libgit2 callback boundaries;
+        // a clone that is already cancelled must not start at all.
+        let cancelled = || true;
+        let result = clone_repo(
+            remote.to_str().unwrap(),
+            &dest,
+            &config,
+            &creds,
+            None,
+            None,
+            Some(&cancelled),
+        );
+        assert!(result.is_err(), "a cancelled clone must not succeed");
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -2802,7 +3060,7 @@ mod tests {
 
         let config = git2::Config::open_default().unwrap();
         let creds = GitCredentials::default();
-        let result = clone_repo("not-a-valid-url", &dest, &config, &creds, None, None);
+        let result = clone_repo("not-a-valid-url", &dest, &config, &creds, None, None, None);
         assert!(
             result.is_err(),
             "expected error for invalid URL, but clone succeeded"
@@ -2858,7 +3116,7 @@ mod tests {
 
         let config = git2::Config::open_default().unwrap();
         let creds = GitCredentials::default();
-        let repo = clone_repo(remote.to_str().unwrap(), &dest, &config, &creds, None, None).unwrap();
+        let repo = clone_repo(remote.to_str().unwrap(), &dest, &config, &creds, None, None, None).unwrap();
         assert!(dest.join("README.md").exists());
         assert!(!repo.is_bare());
 

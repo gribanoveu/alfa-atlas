@@ -2,12 +2,14 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use dashmap::DashMap;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::services::embedding_state::FullSyncActiveSlot;
 use crate::domain::git::{
     AppKeyStatus, CheckoutOutcome, GitBranchInfo, GitCommitSummary, GitConflictFile,
-    GitCredentials, GitDiffScope, GitFileDiff, GitFileStatus, GitProgressEvent, GitResetMode,
+    GitCredentials, GitDiffScope, GitFileDiff, GitFileStatus, GitPhase, GitProgressEvent,
+    GitResetMode,
     GitStashEntry, GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::domain::project_config::ProbeResult;
@@ -42,8 +44,19 @@ fn progress_emitter(app: AppHandle) -> impl FnMut(GitProgressEvent) {
         .unwrap_or_else(Instant::now);
     move |event: GitProgressEvent| {
         let now = Instant::now();
-        let is_lifecycle_marker =
-            matches!(event, GitProgressEvent::Started { .. } | GitProgressEvent::Finished { .. });
+        // Phase transitions are one-off and few, and throttling them away
+        // would hide exactly the information that makes a stall diagnosable.
+        // `Remote` is the exception: it carries the server's own sideband
+        // counter, which ticks as fast as any transfer callback.
+        let is_lifecycle_marker = matches!(
+            event,
+            GitProgressEvent::Started { .. }
+                | GitProgressEvent::Finished { .. }
+                | GitProgressEvent::Phase {
+                    phase: GitPhase::Connecting | GitPhase::Authenticating | GitPhase::HostKey,
+                    ..
+                }
+        );
         if is_lifecycle_marker || now.duration_since(last) >= GIT_PROGRESS_THROTTLE {
             last = now;
             let _ = app.emit(GIT_PROGRESS_EVENT, &event);
@@ -360,23 +373,63 @@ pub fn git_import_key(source_path: String) -> Result<AppKeyStatus, String> {
     crate::infra::key_management::import_key_file(path)
 }
 
+/// Clones the frontend has asked to abandon, keyed by the id it generated for
+/// the run. Registered in `lib.rs`; entries are removed by the clone task
+/// itself once it observes them (or finishes).
+#[derive(Default)]
+pub struct CloneCancellations(DashMap<String, ()>);
+
+impl CloneCancellations {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn is_cancelled(&self, clone_id: &str) -> bool {
+        self.0.contains_key(clone_id)
+    }
+
+    fn clear(&self, clone_id: &str) {
+        self.0.remove(clone_id);
+    }
+}
+
 #[tauri::command]
 pub async fn git_clone(
     url: String,
     destination: String,
+    clone_id: String,
+    cancellations: State<'_, Arc<CloneCancellations>>,
     app: AppHandle,
 ) -> Result<ProbeResult, String> {
+    let cancellations = Arc::clone(&cancellations);
     tauri::async_runtime::spawn_blocking(move || {
+        let cancel_id = clone_id.clone();
+        let cancel_registry = Arc::clone(&cancellations);
+        let is_cancelled = move || cancel_registry.is_cancelled(&cancel_id);
+
         let mut emit = progress_emitter(app);
         emit(GitProgressEvent::Started { op: "clone".to_string() });
-        git_clone::clone_repository(&url, &destination, Some(&mut emit))?;
+
+        let cloned = git_clone::clone_repository(
+            &url,
+            &destination,
+            Some(&mut emit),
+            Some(&is_cancelled),
+        );
+
+        // The UI clears its progress state on `Finished`, so it has to be
+        // emitted on the failure path too — otherwise a failed clone leaves a
+        // stale percentage on screen.
         emit(GitProgressEvent::Finished { op: "clone".to_string() });
+        cancellations.clear(&clone_id);
+        cloned?;
 
         // After cloning, probe the repo to find docs root candidates.
         // The frontend will show ConfirmOpenProjectModal for the user to pick.
         let dest_path = std::path::Path::new(&destination);
         let canonical = dest_path
             .canonicalize()
+            .map(crate::domain::paths::strip_verbatim)
             .unwrap_or_else(|_| dest_path.to_path_buf());
         let repo_root = crate::infra::git_repo::discover_repo_root(&canonical);
         let repo_root_str = repo_root.to_string_lossy().into_owned();
@@ -386,6 +439,15 @@ pub async fn git_clone(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Asks an in-flight `git_clone` to stop. The clone thread notices at its next
+/// libgit2 callback; if it is wedged inside a blocking syscall it may never
+/// notice at all, which is why the frontend stops waiting on its own rather
+/// than treating this as a handshake.
+#[tauri::command]
+pub fn git_clone_cancel(clone_id: String, cancellations: State<'_, Arc<CloneCancellations>>) {
+    cancellations.0.insert(clone_id, ());
 }
 
 #[cfg(test)]

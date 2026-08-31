@@ -181,3 +181,42 @@ export function dirnameOf(path: string): string {
   segments.pop();
   return segments.length > 0 ? segments.join("/") : ".";
 }
+
+/** `"\\"` for absolute Windows paths (`C:\…`, `\\server\share`), `"/"` for
+ * everything else. The destination of a clone is an OS path the user picked in
+ * a native dialog, so it arrives with whatever separator the platform uses —
+ * we have to join onto it in the same style rather than assuming POSIX. */
+export function pathSeparator(p: string): "\\" | "/" {
+  return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\") ? "\\" : "/";
+}
+
+/** Append one path segment to an OS path, using that path's own separator.
+ * `joinPath("C:\\repos", "docs")` → `"C:\\repos\\docs"`. */
+export function joinPath(base: string, segment: string): string {
+  const sep = pathSeparator(base);
+  const trimmedBase = base.replace(/[/\\]+$/, "");
+  const trimmedSegment = segment.replace(/^[/\\]+/, "");
+  if (!trimmedSegment) return trimmedBase || base;
+  // A bare root (`C:\`, `/`) has nothing left after trimming — keep its slash.
+  if (!trimmedBase) return `${base.slice(0, 1) === "/" ? "/" : base}${trimmedSegment}`;
+  return `${trimmedBase}${sep}${trimmedSegment}`;
+}
+
+/** The parent directory of an OS path, preserving the drive/root prefix:
+ * `"C:\\repos\\a"` → `"C:\\repos"`, `"C:\\repos"` → `"C:\\"`, `"/a"` → `"/"`.
+ * Returns the input unchanged when it is already a root. */
+export function parentPath(p: string): string {
+  const sep = pathSeparator(p);
+  // The root is matched against the untrimmed input: `"C:\\"` trimmed down to
+  // `"C:"` no longer looks like a drive root at all.
+  const driveMatch = /^([A-Za-z]:[\\/])/.exec(p);
+  const root = driveMatch ? driveMatch[1] : p.startsWith("/") ? "/" : "";
+  const body = p.replace(/[/\\]+$/, "").slice(root.length);
+  if (!body) return p;
+  const segments = body.split(/[/\\]/).filter(Boolean);
+  segments.pop();
+  // A single relative segment has no parent to report — keep the value as-is
+  // so a half-typed path in the destination field doesn't collapse.
+  if (segments.length === 0) return root || body;
+  return `${root}${segments.join(sep)}`;
+}

@@ -1,8 +1,9 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toMessage } from "../lib/errors";
-import { gitClone, type ProbeResult } from "../lib/git";
+import { gitClone, gitCloneCancel, type ProbeResult } from "../lib/git";
 import { checkPathExists } from "../lib/project";
+import { joinPath, parentPath } from "../lib/paths";
 import { getGeneralPrefs, setGeneralPrefs } from "../lib/prefs";
 import { formatGitProgress, useGitProgress } from "./useGitProgress";
 
@@ -18,6 +19,10 @@ function getRepoName(url: string): string | null {
   return colonIdx >= 0 ? last.slice(colonIdx + 1) : last;
 }
 
+/** How long a clone may report nothing at all before we tell the user it
+ * looks stuck. Long enough that a slow but healthy connect doesn't trip it. */
+const STALL_HINT_MS = 60_000;
+
 /** Everything the clone dialog does: remembering where the user last cloned
  * to, warning before overwriting an existing folder, and the clone itself.
  *
@@ -32,10 +37,30 @@ export function useCloneRepo(onOpened?: (project: ProbeResult) => unknown) {
   const [needsAuth, setNeedsAuth] = useState(false);
   const [conflict, setConflict] = useState(false);
   const gitProgress = useGitProgress();
+  /** Bumped by `cancel` so a late answer from an abandoned clone is ignored.
+   * The backend cannot always be stopped — a thread wedged inside a blocking
+   * syscall never reaches a libgit2 callback — so the UI stops waiting on its
+   * own rather than treating cancellation as a handshake. */
+  const runRef = useRef(0);
+  const cloneIdRef = useRef<string | null>(null);
+  const [stalled, setStalled] = useState(false);
 
   const repoName = useMemo(() => getRepoName(url), [url]);
-  const destination = repoName ? `${baseDir}/${repoName}` : baseDir;
+  const destination = repoName ? joinPath(baseDir, repoName) : baseDir;
   const progressLabel = cloning ? formatGitProgress(gitProgress.event) : null;
+
+  /** A clone that produces no progress event at all is the failure mode this
+   * whole flow exists to make legible — say so rather than spinning silently.
+   * Only a hint: nothing is aborted automatically. */
+  useEffect(() => {
+    if (!cloning) {
+      setStalled(false);
+      return;
+    }
+    setStalled(false);
+    const timer = setTimeout(() => setStalled(true), STALL_HINT_MS);
+    return () => clearTimeout(timer);
+  }, [cloning, gitProgress.event]);
 
   useEffect(() => {
     getGeneralPrefs()
@@ -55,7 +80,10 @@ export function useCloneRepo(onOpened?: (project: ProbeResult) => unknown) {
     let cancelled = false;
     const timer = setTimeout(() => {
       void checkPathExists(destination).then((result) => {
-        if (!cancelled) setConflict(result.exists);
+        // Only a *non-empty* directory blocks the clone — that is the rule the
+        // backend enforces. An empty leftover folder from an aborted attempt
+        // must not lock the user out of retrying into the same path.
+        if (!cancelled) setConflict(result.isNonEmpty);
       });
     }, 400);
     return () => {
@@ -64,9 +92,12 @@ export function useCloneRepo(onOpened?: (project: ProbeResult) => unknown) {
     };
   }, [destination]);
 
+  /** The field shows `baseDir + repoName`, so an edit has to be split back
+   * apart. `parentPath` handles Windows separators — a `C:\repos\x` path has no
+   * forward slash at all, and naive splitting used to leave the whole value as
+   * the base dir and append the repo name a second time. */
   const setDestination = useCallback((value: string) => {
-    const lastSlash = value.lastIndexOf("/");
-    setBaseDir(lastSlash > 0 ? value.slice(0, lastSlash) : value);
+    setBaseDir(parentPath(value));
   }, []);
 
   const pickDestination = useCallback(async () => {
@@ -91,12 +122,17 @@ export function useCloneRepo(onOpened?: (project: ProbeResult) => unknown) {
     setNeedsAuth(false);
     gitProgress.reset();
     setCloning(true);
+    const run = ++runRef.current;
+    const cloneId = crypto.randomUUID();
+    cloneIdRef.current = cloneId;
     try {
       setMessage("Клонирование...");
-      const project = await gitClone(url.trim(), destination.trim());
+      const project = await gitClone(url.trim(), destination.trim(), cloneId);
+      if (runRef.current !== run) return;
       setCloning(false);
       onOpened?.(project);
     } catch (e) {
+      if (runRef.current !== run) return;
       setCloning(false);
       const msg = toMessage(e);
       if (msg.startsWith("no_ssh_credentials:")) {
@@ -109,6 +145,19 @@ export function useCloneRepo(onOpened?: (project: ProbeResult) => unknown) {
       }
     }
   }, [destination, gitProgress, onOpened, url]);
+
+  /** Give the user back control immediately, then ask the backend to stop.
+   * Deliberately not awaited: the whole point is that the UI must not depend
+   * on a clone that may never respond. */
+  const cancel = useCallback(() => {
+    runRef.current += 1;
+    const cloneId = cloneIdRef.current;
+    cloneIdRef.current = null;
+    setCloning(false);
+    setMessage(null);
+    gitProgress.reset();
+    if (cloneId) void gitCloneCancel(cloneId).catch(() => {});
+  }, [gitProgress]);
 
   /** The original called this `canSubmit` while passing it straight to
    * `disabled` — it is the negation. Named for what it does. */
@@ -126,7 +175,9 @@ export function useCloneRepo(onOpened?: (project: ProbeResult) => unknown) {
     progressLabel,
     needsAuth,
     conflict,
+    stalled,
     submit,
+    cancel,
     submitDisabled,
   };
 }
