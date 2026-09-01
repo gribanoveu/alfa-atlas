@@ -33,6 +33,7 @@ use crate::domain::conversation_mode::{ConversationMode, mode_tools};
 use crate::domain::llm::LlmToolDefinition;
 
 pub use artifact::artifact_result;
+pub use check::{check_written_file, WriteCheck};
 pub use list_files::render_file_tree;
 
 use super::scope::set_access_mode;

@@ -33,8 +33,9 @@ use crate::domain::llm::{
 };
 use crate::domain::paths;
 use crate::domain::repo_index::FileId;
+use crate::domain::workspace_index::{Diagnostic, Severity};
 use crate::infra::llm_debug_log;
-use crate::services::ai_tools::{self, EmbeddingDeps, ToolCallLogContext};
+use crate::services::ai_tools::{self, EmbeddingDeps, ToolCallLogContext, WriteCheck};
 use crate::services::llm_rate_limit;
 use crate::services::llm_session;
 use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot, SteeringQueue};
@@ -201,6 +202,130 @@ fn docs_boundary_note(
     }
 }
 
+/// How many diagnostics one post-write note spells out before collapsing the
+/// rest into a count. Far below `check`'s own `MAX_CHECK_DIAGNOSTICS` (200):
+/// this note is appended to every write, unasked, so it has to stay cheap.
+/// A document with more than ten problems has one problem — the model should
+/// be reading it, not scrolling a list.
+const MAX_WRITE_CHECK_DIAGNOSTICS: usize = 10;
+
+/// Appended to a write whose document came back clean. Said out loud rather
+/// than left as silence: absence of a note is indistinguishable from a note
+/// that was never computed, and a model that can't tell those apart will
+/// spend a `check` call finding out.
+const WRITE_CHECK_CLEAN_NOTE: &str = "Автопроверка после записи: по этому файлу диагностик нет. Она смотрит только сам записанный документ — ссылки из других документов на него, а также стандарты оформления в неё не входят.";
+
+/// Appended when the frontend parse didn't land in time. The distinction
+/// from "clean" is the whole point: a write reported as unchecked costs one
+/// explicit `check`, a write wrongly reported as clean costs a broken
+/// document nobody looks at again.
+const WRITE_CHECK_UNSETTLED_NOTE: &str = "Автопроверка после записи не успела отработать, состояние файла неизвестно. Не считайте его ни чистым, ни сломанным — если результат важен, вызовите check по этому пути.";
+
+/// The same note repeated verbatim for the same file within one turn.
+///
+/// Not suppressed to save tokens (it's two lines) but because repetition
+/// alone is the finding: the model rewrote a file and every problem in it
+/// survived, which reads very differently from the same list arriving for
+/// the first time.
+const WRITE_CHECK_UNCHANGED_NOTE: &str = "Автопроверка после записи: тот же список диагностик, что и после предыдущей записи этого файла — правка ни одной из них не устранила.";
+
+fn severity_word(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Error => "ошибка",
+        Severity::Warning => "предупреждение",
+    }
+}
+
+/// The listing note. `diagnostics` is non-empty — `render_write_check` sends
+/// the clean case to `WRITE_CHECK_CLEAN_NOTE` before reaching here.
+fn format_write_check(path: &str, diagnostics: &[Diagnostic]) -> String {
+    let total = diagnostics.len();
+    let mut note = format!(
+        "Автопроверка после записи «{path}» — {total} шт. (только сам записанный документ; ссылки других документов на него и стандарты оформления в неё не входят):"
+    );
+    for d in diagnostics.iter().take(MAX_WRITE_CHECK_DIAGNOSTICS) {
+        note.push_str(&format!(
+            "\n- строка {}, {}: {}",
+            d.line,
+            severity_word(d.severity),
+            d.message
+        ));
+    }
+    if total > MAX_WRITE_CHECK_DIAGNOSTICS {
+        note.push_str(&format!(
+            "\n- … и ещё {}, полный список — через check.",
+            total - MAX_WRITE_CHECK_DIAGNOSTICS
+        ));
+    }
+    note
+}
+
+/// Runs the diagnostics for a file the model just wrote and appends them to
+/// that write's own tool result.
+///
+/// The write already left the index up to date — `writeFile`/`editFile` call
+/// `WorkspaceIndex::update_document` themselves — so this costs one wait on
+/// the frontend parse and one `run_for`, not a re-index. What it buys is the
+/// round trip the model would otherwise spend on `check` to learn it had just
+/// pointed an xref at an anchor that isn't there.
+///
+/// Does not replace `check`: it sees one document, and only the rules
+/// computed over the index (broken links out of this file, duplicate anchors,
+/// parse errors). Both notes say so, because a model that mistakes this for
+/// full verification stops asking for the real thing.
+///
+/// A resolution failure is left silent — the write itself just resolved the
+/// same path, so this is close to unreachable, and a write that succeeded
+/// should not come back carrying an error about its own bookkeeping.
+fn write_check_note(
+    seen: &mut HashMap<String, u64>,
+    scope: &ToolScope,
+    deps: &EmbeddingDeps,
+    outcome: &Result<ToolResult, String>,
+    content: String,
+) -> String {
+    let path = match outcome {
+        Ok(ToolResult::FileWritten { path, .. }) | Ok(ToolResult::FileEdited { path, .. }) => path,
+        _ => return content,
+    };
+    let Ok(check) = ai_tools::check_written_file(scope, deps, path) else {
+        return content;
+    };
+    format!("{content}\n\n{}", render_write_check(seen, path, check))
+}
+
+/// The note itself, split from `write_check_note` so the wording and the
+/// repeat-collapse are testable without a `ToolScope` and a live index.
+fn render_write_check(seen: &mut HashMap<String, u64>, path: &str, check: WriteCheck) -> String {
+    match check {
+        // Only a non-empty list is worth collapsing on repeat: "still clean"
+        // is not a finding the way "still broken, identically" is, and the
+        // clean note is one line either way.
+        WriteCheck::Settled(diagnostics) if !diagnostics.is_empty() => {
+            let note = format_write_check(path, &diagnostics);
+            let mut hasher = DefaultHasher::new();
+            note.hash(&mut hasher);
+            let hash = hasher.finish();
+            match seen.insert(path.to_string(), hash) {
+                Some(previous) if previous == hash => WRITE_CHECK_UNCHANGED_NOTE.to_string(),
+                _ => note,
+            }
+        }
+        WriteCheck::Settled(_) => {
+            // Clearing the entry keeps the collapse honest: a file that goes
+            // broken → clean → broken with the identical list has genuinely
+            // regressed, and should be spelled out again rather than
+            // collapsed against a state two writes back.
+            seen.remove(path);
+            WRITE_CHECK_CLEAN_NOTE.to_string()
+        }
+        WriteCheck::Unsettled => {
+            seen.remove(path);
+            WRITE_CHECK_UNSETTLED_NOTE.to_string()
+        }
+    }
+}
+
 /// One round's cost against `MAX_TOOL_BUDGET` — the sum of
 /// `ToolName::loop_weight` over every call the round contains (a round can
 /// bundle several parallel calls, each adding to the cost). An
@@ -300,6 +425,9 @@ fn run_tool_loop(
     // `<tool>|<arguments>` of every deduplicable call this turn → hash of
     // what came back, see `dedupe_repeat_result`.
     let mut results_this_turn: HashMap<String, u64> = HashMap::new();
+    // Written file path → hash of the last post-write diagnostics note it
+    // produced, see `write_check_note`.
+    let mut write_checks_this_turn: HashMap<String, u64> = HashMap::new();
 
     loop {
         // Checkpoint 1 — see this function's doc comment for exactly which
@@ -674,6 +802,8 @@ fn run_tool_loop(
             };
             let content = docs_boundary_note(&scope, &outcome, content);
             let content = dedupe_repeat_result(&mut results_this_turn, call, &outcome, content);
+            let content =
+                write_check_note(&mut write_checks_this_turn, &scope, ctx.deps, &outcome, content);
             history.push(LlmMessage {
                 role: LlmRole::Tool,
                 content: Some(content),
@@ -830,6 +960,110 @@ mod tests {
 
     fn call(name: &str) -> LlmToolCall {
         LlmToolCall { id: "1".to_string(), name: name.to_string(), arguments: "{}".to_string() }
+    }
+
+    fn diagnostic(line: u32, message: &str) -> Diagnostic {
+        Diagnostic {
+            kind: crate::domain::workspace_index::DiagnosticKind::MissingXrefAnchor,
+            message: message.to_string(),
+            document: crate::domain::workspace_index::DocumentId::new("api/get.adoc"),
+            line,
+            column: 1,
+            severity: Severity::Error,
+        }
+    }
+
+    #[test]
+    fn a_clean_write_still_says_it_was_checked() {
+        let mut seen = HashMap::new();
+        let note = render_write_check(&mut seen, "api/get.adoc", WriteCheck::Settled(vec![]));
+        assert_eq!(note, WRITE_CHECK_CLEAN_NOTE);
+    }
+
+    #[test]
+    fn an_unchecked_write_is_not_reported_as_clean() {
+        let mut seen = HashMap::new();
+        let note = render_write_check(&mut seen, "api/get.adoc", WriteCheck::Unsettled);
+        assert_eq!(note, WRITE_CHECK_UNSETTLED_NOTE);
+        assert_ne!(note, WRITE_CHECK_CLEAN_NOTE);
+    }
+
+    #[test]
+    fn diagnostics_are_listed_with_line_and_severity() {
+        let mut seen = HashMap::new();
+        let note = render_write_check(
+            &mut seen,
+            "api/get.adoc",
+            WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]),
+        );
+        assert!(note.contains("api/get.adoc"), "{note}");
+        assert!(note.contains("строка 12"), "{note}");
+        assert!(note.contains("ошибка"), "{note}");
+        assert!(note.contains("не найден якорь «limits»"), "{note}");
+    }
+
+    #[test]
+    fn a_long_diagnostic_list_is_capped_with_a_remainder() {
+        let mut seen = HashMap::new();
+        let diagnostics: Vec<Diagnostic> =
+            (1..=15).map(|i| diagnostic(i, &format!("проблема {i}"))).collect();
+        let note = render_write_check(&mut seen, "api/get.adoc", WriteCheck::Settled(diagnostics));
+        assert!(note.contains("проблема 10"), "{note}");
+        assert!(!note.contains("проблема 11"), "{note}");
+        assert!(note.contains("и ещё 5"), "{note}");
+    }
+
+    #[test]
+    fn an_identical_repeat_collapses_into_the_unchanged_note() {
+        let mut seen = HashMap::new();
+        let check = || WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]);
+
+        let first = render_write_check(&mut seen, "api/get.adoc", check());
+        assert!(first.contains("строка 12"));
+
+        let second = render_write_check(&mut seen, "api/get.adoc", check());
+        assert_eq!(second, WRITE_CHECK_UNCHANGED_NOTE);
+    }
+
+    #[test]
+    fn a_changed_diagnostic_list_is_spelled_out_again() {
+        let mut seen = HashMap::new();
+        render_write_check(
+            &mut seen,
+            "api/get.adoc",
+            WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]),
+        );
+        let second = render_write_check(
+            &mut seen,
+            "api/get.adoc",
+            WriteCheck::Settled(vec![diagnostic(40, "не найдена картинка scheme.png")]),
+        );
+        assert!(second.contains("строка 40"), "{second}");
+        assert_ne!(second, WRITE_CHECK_UNCHANGED_NOTE);
+    }
+
+    #[test]
+    fn a_reappearing_problem_is_spelled_out_rather_than_collapsed() {
+        let mut seen = HashMap::new();
+        let broken = || WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]);
+
+        render_write_check(&mut seen, "api/get.adoc", broken());
+        render_write_check(&mut seen, "api/get.adoc", WriteCheck::Settled(vec![]));
+        // Fixed, then broken again the same way: a regression, not a repeat.
+        let third = render_write_check(&mut seen, "api/get.adoc", broken());
+        assert!(third.contains("строка 12"), "{third}");
+        assert_ne!(third, WRITE_CHECK_UNCHANGED_NOTE);
+    }
+
+    #[test]
+    fn each_file_is_collapsed_against_its_own_previous_note() {
+        let mut seen = HashMap::new();
+        let check = || WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]);
+
+        render_write_check(&mut seen, "api/get.adoc", check());
+        // Same diagnostics, different file — the model has not seen this one.
+        let other = render_write_check(&mut seen, "api/post.adoc", check());
+        assert_ne!(other, WRITE_CHECK_UNCHANGED_NOTE);
     }
 
     #[test]

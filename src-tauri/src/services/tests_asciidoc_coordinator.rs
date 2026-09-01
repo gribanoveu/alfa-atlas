@@ -271,3 +271,117 @@ fn submit_always_decrements_inflight_even_when_stale() {
         "queue must be drained after stale response"
     );
 }
+
+#[test]
+fn parse_settled_is_true_for_a_document_never_dispatched() {
+    let index = Arc::new(WorkspaceIndex::with_max_inflight(ParserRegistry::new(), 1));
+    // Every non-AsciiDoc file, plus anything already removed from the index:
+    // nothing is owed, so a reader is free to trust what it finds.
+    assert!(index.parse_settled(&DocumentId::new("never.md")));
+}
+
+#[test]
+fn parse_settled_is_false_until_the_matching_facts_land() {
+    let index = Arc::new(WorkspaceIndex::with_max_inflight(ParserRegistry::new(), 1));
+    let doc_id = DocumentId::new("install.adoc");
+    insert_doc(&index, "install.adoc");
+    index.doc_versions.insert(doc_id.clone(), 1);
+
+    assert!(
+        !index.parse_settled(&doc_id),
+        "a dispatched parse with no facts back yet is not settled"
+    );
+
+    index.submit_asciidoc_facts(&doc_id, 1, empty_facts()).unwrap();
+    assert!(index.parse_settled(&doc_id), "facts for the current version settle it");
+}
+
+#[test]
+fn parse_settled_goes_back_to_false_on_the_next_write() {
+    let index = Arc::new(WorkspaceIndex::with_max_inflight(ParserRegistry::new(), 1));
+    let doc_id = DocumentId::new("install.adoc");
+    insert_doc(&index, "install.adoc");
+    index.doc_versions.insert(doc_id.clone(), 1);
+    index.submit_asciidoc_facts(&doc_id, 1, empty_facts()).unwrap();
+
+    // A second write dispatches version 2. The version-1 facts still in the
+    // index describe the previous content — this is exactly the state a
+    // post-write check must not read as current.
+    index.doc_versions.insert(doc_id.clone(), 2);
+    assert!(!index.parse_settled(&doc_id));
+
+    index.submit_asciidoc_facts(&doc_id, 2, empty_facts()).unwrap();
+    assert!(index.parse_settled(&doc_id));
+}
+
+#[test]
+fn parse_settled_is_false_while_stale_facts_arrive() {
+    let index = Arc::new(WorkspaceIndex::with_max_inflight(ParserRegistry::new(), 1));
+    let doc_id = DocumentId::new("install.adoc");
+    insert_doc(&index, "install.adoc");
+    index.doc_versions.insert(doc_id.clone(), 5);
+
+    // A response for a superseded dispatch is discarded by
+    // `submit_asciidoc_facts`, so it must not settle the document either —
+    // otherwise a fast stale response would hand a reader version-3 facts
+    // while version 5 is still out.
+    index.submit_asciidoc_facts(&doc_id, 3, empty_facts()).unwrap();
+    assert!(!index.parse_settled(&doc_id));
+}
+
+#[test]
+fn wait_for_parse_settled_returns_true_as_soon_as_facts_land() {
+    let index = Arc::new(WorkspaceIndex::with_max_inflight(ParserRegistry::new(), 1));
+    let doc_id = DocumentId::new("install.adoc");
+    insert_doc(&index, "install.adoc");
+    index.frontend_ready();
+    index.doc_versions.insert(doc_id.clone(), 1);
+
+    // The real shape of the wait: facts arrive on another thread, exactly as
+    // the `submit_asciidoc_facts` command does relative to the tool loop.
+    let writer = Arc::clone(&index);
+    let writer_doc = doc_id.clone();
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        writer.submit_asciidoc_facts(&writer_doc, 1, empty_facts()).unwrap();
+    });
+
+    assert!(index.wait_for_parse_settled(&doc_id));
+    handle.join().unwrap();
+}
+
+#[test]
+fn wait_for_parse_settled_gives_up_when_nothing_comes_back() {
+    let mut index = WorkspaceIndex::with_max_inflight(ParserRegistry::new(), 1);
+    index.set_settle_wait(std::time::Duration::from_millis(80));
+    let index = Arc::new(index);
+    let doc_id = DocumentId::new("install.adoc");
+    insert_doc(&index, "install.adoc");
+    index.frontend_ready();
+    index.doc_versions.insert(doc_id.clone(), 1);
+
+    // A frontend that is listening but never answers — the parse queued
+    // behind others, or asciidoctor wedged on this document — must produce a
+    // `false`, not a silent "clean".
+    assert!(!index.wait_for_parse_settled(&doc_id));
+}
+
+#[test]
+fn wait_for_parse_settled_does_not_burn_the_budget_with_no_frontend() {
+    let mut index = WorkspaceIndex::with_max_inflight(ParserRegistry::new(), 1);
+    // Long enough that spending it would be obvious in the elapsed time.
+    index.set_settle_wait(std::time::Duration::from_secs(30));
+    let index = Arc::new(index);
+    let doc_id = DocumentId::new("install.adoc");
+    insert_doc(&index, "install.adoc");
+    index.doc_versions.insert(doc_id.clone(), 1);
+    // `frontend_ready` deliberately not called: nothing will ever answer, so
+    // the wait must return at once rather than once per write in a turn.
+
+    let started = std::time::Instant::now();
+    assert!(!index.wait_for_parse_settled(&doc_id));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "the wait must short-circuit, not sit out its budget"
+    );
+}

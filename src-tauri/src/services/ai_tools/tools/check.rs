@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::domain::ai_tools::{CheckArgs, CheckKind, ToolError, ToolResult, ToolScope};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::paths;
-use crate::domain::workspace_index::DocumentId;
+use crate::domain::workspace_index::{Diagnostic, DocumentId};
 use crate::services::{diagnostics, reference_rewrite, standards, standards_prefs};
 
 use super::super::EmbeddingDeps;
@@ -53,6 +53,14 @@ pub(super) fn check_problems(
         }
         Some(access_path) => {
             let doc_id = access_path_to_document_id(scope, access_path)?;
+            // A `check` right after a `writeFile` is the common case, and
+            // AsciiDoc facts arrive asynchronously from the frontend parser
+            // (`workspace_index::submit_asciidoc_facts`). Without this wait
+            // the answer describes the file as it was *before* the write —
+            // the model's own edit, reported back as still broken or still
+            // fine. Best-effort: a wait that times out still returns the
+            // diagnostics we have, since one stale answer beats none.
+            deps.workspace_index.wait_for_parse_settled(&doc_id);
             diagnostics::run_for(&deps.workspace_index, &doc_id);
             deps.workspace_index.get_diagnostics_for(&doc_id)
         }
@@ -78,6 +86,53 @@ pub(super) fn check_problems(
         diagnostics,
         truncated,
     })
+}
+
+/// Outcome of the automatic post-write check (`check_written_file`).
+pub enum WriteCheck {
+    /// The written document's own diagnostics, with paths already rewritten
+    /// to access-mode-relative. Empty means the file is clean.
+    Settled(Vec<Diagnostic>),
+    /// The frontend parse did not come back within
+    /// `WorkspaceIndex::wait_for_parse_settled`'s budget, so nothing is known
+    /// about the file as it now stands. Distinct from `Settled(vec![])` on
+    /// purpose — reporting "clean" here would be a guess.
+    Unsettled,
+}
+
+/// The diagnostics for one just-written file, for `llm_chat` to append to
+/// that write's tool result.
+///
+/// Deliberately the same three steps `check_problems` runs for a single
+/// path — wait for the parse, recompute, read back — rather than a second,
+/// cheaper approximation that could disagree with what an explicit `check`
+/// would say about the very same file.
+///
+/// Scoped to the written document alone. `run_for` also refreshes the
+/// documents that include or xref it, but their diagnostics are not read
+/// here: most of them predate the write, and attributing them to it would
+/// be worse than silence. Incoming breakage stays `check`'s job.
+pub fn check_written_file(
+    scope: &ToolScope,
+    deps: &EmbeddingDeps,
+    access_path: &str,
+) -> Result<WriteCheck, ToolError> {
+    let doc_id = access_path_to_document_id(scope, access_path)?;
+    if !deps.workspace_index.wait_for_parse_settled(&doc_id) {
+        return Ok(WriteCheck::Unsettled);
+    }
+    diagnostics::run_for(&deps.workspace_index, &doc_id);
+    let mut diagnostics = deps.workspace_index.get_diagnostics_for(&doc_id);
+    for d in &mut diagnostics {
+        if let Some(access) = to_access_relative(scope, &d.document.0) {
+            let old = d.document.0.clone();
+            if old != access {
+                d.message = d.message.replace(&old, &access);
+            }
+            d.document = DocumentId::new(access);
+        }
+    }
+    Ok(WriteCheck::Settled(diagnostics))
 }
 
 /// Access-mode-relative path → repo-relative `DocumentId`, after requiring

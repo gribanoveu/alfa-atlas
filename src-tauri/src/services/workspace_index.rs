@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use dashmap::DashMap;
 
@@ -35,6 +35,19 @@ use crate::infra::workspace_scanner;
 use crate::services::diagnostics;
 
 const PARSE_TIMEOUT_SECS: u64 = 30;
+
+/// How long `wait_for_parse_settled` will block before giving up. Two orders
+/// of magnitude under `PARSE_TIMEOUT_SECS` deliberately: that one is the
+/// backstop against a hung frontend and must outlast any real parse, this one
+/// bounds how long a chat turn is willing to stall for one. A single
+/// document's asciidoctor pass is tens of milliseconds; anything past this is
+/// a queue or a frontend that isn't listening, and reporting "didn't settle"
+/// beats holding the turn.
+const PARSE_SETTLE_WAIT: Duration = Duration::from_millis(2_000);
+
+/// Poll interval for the same. The wait ends on a `DashMap` write from
+/// another thread, which is not something we can park on directly.
+const PARSE_SETTLE_POLL: Duration = Duration::from_millis(20);
 
 /// Reverse-dependency map: for each target `DocumentId`, the set of documents
 /// that reference it (via include or xref). Used to recompute diagnostics for
@@ -64,6 +77,18 @@ pub struct WorkspaceIndex {
     /// Monotonic per-document version counter; incremented on each dispatch
     /// for the document, removed on document deletion.
     doc_versions: DashMap<DocumentId, u64>,
+    /// The highest `doc_versions` value whose facts have been fully applied —
+    /// written at the very end of `submit_asciidoc_facts`'s valid-response
+    /// branch, once the parsed entities *and* the recomputed diagnostics are
+    /// both in the index.
+    ///
+    /// This, not `parse_timeouts`, is what `parse_settled` reads. The timeout
+    /// entry is removed at the *top* of `submit_asciidoc_facts` (it has to
+    /// be — that removal is what makes response-vs-timeout exactly-once), so
+    /// "no timeout entry" is true for the whole window in which the facts are
+    /// still being written. A caller polling that would be told the parse had
+    /// landed and then read the diagnostics from just before it.
+    facts_version: DashMap<DocumentId, u64>,
     /// Pending parse requests buffered while the frontend is not yet ready
     /// or while `inflight_adoc_count` is at `max_inflight`.
     pending_adoc_queue: RwLock<VecDeque<AsciiDocParseRequested>>,
@@ -94,6 +119,11 @@ pub struct WorkspaceIndex {
     /// Set to true once the frontend signals it is ready to receive parse
     /// requests. Before this is true, all dispatches are buffered.
     frontend_ready: AtomicBool,
+    /// How long `wait_for_parse_settled` blocks before giving up. A field
+    /// rather than reading `PARSE_SETTLE_WAIT` directly for the same reason
+    /// `max_inflight` is one: so a test can exercise the give-up branch
+    /// without spending the production budget doing it.
+    settle_wait: Duration,
 }
 
 impl WorkspaceIndex {
@@ -115,6 +145,7 @@ impl WorkspaceIndex {
             event_sink: RwLock::new(None),
             watcher: RwLock::new(None),
             doc_versions: DashMap::new(),
+            facts_version: DashMap::new(),
             pending_adoc_queue: RwLock::new(VecDeque::new()),
             parse_timeouts: DashMap::new(),
             detached_headers: DashMap::new(),
@@ -123,7 +154,15 @@ impl WorkspaceIndex {
             build_adoc_pending: AtomicU32::new(0),
             building_in_progress: AtomicBool::new(false),
             frontend_ready: AtomicBool::new(false),
+            settle_wait: PARSE_SETTLE_WAIT,
         }
+    }
+
+    /// Test-only override of `settle_wait`, so a test for the give-up branch
+    /// of `wait_for_parse_settled` doesn't cost `PARSE_SETTLE_WAIT` seconds.
+    #[cfg(test)]
+    pub fn set_settle_wait(&mut self, wait: Duration) {
+        self.settle_wait = wait;
     }
 
     /// Test-only constructor that allows injecting a smaller `max_inflight`
@@ -302,6 +341,7 @@ impl WorkspaceIndex {
             false
         });
         self.doc_versions.clear();
+        self.facts_version.clear();
         *self.adoc_queue_write() = VecDeque::new();
         self.inflight_adoc_count.store(0, Ordering::SeqCst);
         self.build_adoc_pending.store(0, Ordering::SeqCst);
@@ -350,6 +390,7 @@ impl WorkspaceIndex {
         // Drop the version entry so any in-flight parse for this doc is treated
         // as stale when its response arrives.
         self.doc_versions.remove(&id);
+        self.facts_version.remove(&id);
         diagnostics::run_for(self, &id);
         self.emit(IndexEvent::IndexUpdated {
             document: path_str.clone(),
@@ -741,6 +782,55 @@ impl WorkspaceIndex {
         }
     }
 
+    /// Whether the facts for `doc`'s current version have been applied, so a
+    /// read of its entities or diagnostics reflects the file as it is on disk
+    /// now rather than as it was before the last `update_document`.
+    ///
+    /// `true` for anything never dispatched to the frontend parser — a
+    /// document removed from the index, and every non-AsciiDoc file, whose
+    /// facts `index_file` fills in synchronously.
+    pub fn parse_settled(&self, doc: &DocumentId) -> bool {
+        let Some(dispatched) = self.doc_versions.get(doc).map(|v| *v) else {
+            return true;
+        };
+        self.facts_version.get(doc).is_some_and(|applied| *applied >= dispatched)
+    }
+
+    /// Blocks the calling thread until `parse_settled(doc)`, giving up after
+    /// `PARSE_SETTLE_WAIT` and returning `false`.
+    ///
+    /// For callers that have just written a file and want to report on what
+    /// they wrote. Only safe from a blocking context — `llm_chat`'s tool loop
+    /// runs on `spawn_blocking`, and the `submit_asciidoc_facts` command that
+    /// ends the wait arrives on a different thread.
+    ///
+    /// A `false` return is a real outcome, not an error to swallow: the
+    /// frontend may not be listening yet (`frontend_ready`), or the parse may
+    /// be queued behind `max_inflight` others. Callers must say the check
+    /// didn't run rather than report the stale state as current.
+    pub fn wait_for_parse_settled(&self, doc: &DocumentId) -> bool {
+        // Nothing is being parsed until the React listener signals in, and
+        // `frontend_ready` never goes back to false once it has. Waiting the
+        // full budget here would buy nothing and would cost it again on every
+        // write in the turn.
+        if !self.frontend_ready.load(Ordering::SeqCst) {
+            return self.parse_settled(doc);
+        }
+        let deadline = Instant::now() + self.settle_wait;
+        loop {
+            // Called through the helper on purpose: it drops its DashMap read
+            // guards before returning, so the sleep below cannot hold a shard
+            // lock that `submit_asciidoc_facts` needs to write through.
+            if self.parse_settled(doc) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(PARSE_SETTLE_POLL);
+        }
+    }
+
     /// Frontend signals it is ready to receive parse requests. Drains the
     /// buffered queue up to `max_inflight`.
     pub fn frontend_ready(&self) {
@@ -832,6 +922,12 @@ impl WorkspaceIndex {
                 }
                 self.set_diagnostics(doc_id, diags);
             }
+
+            // Last write of the branch, and deliberately before the events
+            // below: from here on `parse_settled(doc_id)` is true, and both
+            // the facts and the diagnostics a caller would then read are
+            // already in place. See the field's own doc comment.
+            self.facts_version.insert(doc_id.clone(), version);
 
             self.emit(IndexEvent::IndexUpdated {
                 document: doc_id.0.clone(),
