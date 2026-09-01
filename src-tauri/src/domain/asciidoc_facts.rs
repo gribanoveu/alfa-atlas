@@ -44,6 +44,11 @@ pub struct AsciiDocFacts {
     pub attributes: Vec<AttributeFact>,
     pub images: Vec<ImageFact>,
     pub parse_errors: Vec<ParseErrorFact>,
+    /// What asciidoctor resolved each `|===` block into. `#[serde(default)]`
+    /// because `handle_parse_timeout` synthesizes a facts payload by hand and
+    /// has no shape to report.
+    #[serde(default)]
+    pub tables: Vec<TableFact>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,6 +89,25 @@ pub struct AttributeFact {
 pub struct ImageFact {
     pub path: String,
     pub line: u32,
+}
+
+/// Mirrors `TableShapeFact` in `src/lib/asciidocTableModel.ts` — what
+/// asciidoctor resolved one `|===` block into.
+///
+/// From the un-normalized parse: the preview runs content through
+/// `normalizeBarePipeTables` first, which hides exactly the reshaping this is
+/// meant to surface. asciidoctor does not reject a malformed table, it
+/// recovers from it — and the recovered shape is the only evidence of what
+/// went wrong.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableFact {
+    pub line: u32,
+    pub columns: u32,
+    pub head_rows: u32,
+    pub body_rows: u32,
+    pub foot_rows: u32,
+    pub declared_cols: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

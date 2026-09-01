@@ -104,6 +104,29 @@ pub struct Image {
     pub line: u32,
 }
 
+/// The shape asciidoctor resolved for one `|===` block — see
+/// `domain::asciidoc_facts::TableFact` for where it comes from and why it is
+/// reported un-normalized.
+///
+/// Unlike every other fact here this one has no cross-document meaning: a
+/// table belongs entirely to the file that contains it, which is exactly why
+/// it can be reported right after a write without resolving any includes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Table {
+    pub document: DocumentId,
+    /// 1-indexed line of the opening `|===` fence.
+    pub line: u32,
+    /// Columns asciidoctor settled on, which is not necessarily the number
+    /// the author wrote — see `domain::asciidoc_facts::TableFact`.
+    pub columns: u32,
+    pub head_rows: u32,
+    pub body_rows: u32,
+    pub foot_rows: u32,
+    /// The `cols` spec as written (`"1,3,1"`, `"5"`), or `None`.
+    pub declared_cols: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Severity {
@@ -159,6 +182,8 @@ pub struct ParsedDocument {
     pub references: Vec<Reference>,
     pub attributes: Vec<Attribute>,
     pub images: Vec<Image>,
+    /// Empty for every format but AsciiDoc.
+    pub tables: Vec<Table>,
     /// Parse-time warnings/errors (syntax issues), keyed to lines in the source.
     pub diagnostics: Vec<Diagnostic>,
 }

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { load } from "asciidoctor";
 import { ASCIIDOC_SNIPPETS } from "../lib/asciidocSnippets";
 import {
+  collectTableShapes,
   distributeColumnWidths,
   findTableBlockAtLine,
   findTableBlocks,
@@ -198,5 +200,86 @@ describe("parseColsWeights", () => {
 
   test("insertColsWeightAfter adds weight for new column", () => {
     expect(insertColsWeightAfter('[cols="1,1,1,3"]', 1, 4)).toBe('[cols="1,1,1,1,3"]');
+  });
+});
+
+describe("collectTableShapes", () => {
+  async function shapesOf(content: string) {
+    return collectTableShapes(await load(content, { sourcemap: true, safe: "safe" }));
+  }
+
+  test("reports the shape asciidoctor resolved", async () => {
+    const content = [
+      "= Doc",
+      "",
+      '[cols="1,1,1"]',
+      "|===",
+      "| A | B | C",
+      "",
+      "| 1 | 2 | 3",
+      "| 4 | 5 | 6",
+      "|===",
+      "",
+    ].join("\n");
+
+    const shapes = await shapesOf(content);
+    expect(shapes).toHaveLength(1);
+    expect(shapes[0].line).toBe(4);
+    expect(shapes[0].columns).toBe(3);
+    expect(shapes[0].headRows).toBe(1);
+    expect(shapes[0].bodyRows).toBe(2);
+    expect(shapes[0].declaredCols).toBe("1,1,1");
+  });
+
+  test("rows written without a leading pipe come back reshaped, not rejected", async () => {
+    // asciidoctor recovers ("table missing leading separator") and builds a
+    // table anyway — a five-column one, from three written columns. The
+    // recovery is logged, but only the shape says what it recovered into.
+    const content = ["|===", "A | B | C", "1 | 2 | 3", "|===", ""].join("\n");
+
+    const shapes = await shapesOf(content);
+    expect(shapes).toHaveLength(1);
+    expect(shapes[0].columns).toBe(5);
+    expect(shapes[0].headRows).toBe(0);
+  });
+
+  test("a cols count larger than the cells given empties the table", async () => {
+    const content = ['[cols="5"]', "|===", "| A | B | C | D", "|===", ""].join("\n");
+
+    const shapes = await shapesOf(content);
+    expect(shapes[0].columns).toBe(5);
+    expect(shapes[0].declaredCols).toBe("5");
+    // Every cell was dropped as an incomplete row — the table renders empty.
+    expect(shapes[0].headRows + shapes[0].bodyRows + shapes[0].footRows).toBe(0);
+  });
+
+  test("a fence inside a listing block is sample markup, not a table", async () => {
+    const content = ["----", "|===", "| A | B", "|===", "----", ""].join("\n");
+    expect(await shapesOf(content)).toEqual([]);
+  });
+
+  test("tables nested in sections are found too", async () => {
+    const content = [
+      "|===",
+      "| A | B",
+      "|===",
+      "",
+      "== Section",
+      "",
+      "|===",
+      "| X | Y | Z",
+      "|===",
+      "",
+    ].join("\n");
+
+    const shapes = await shapesOf(content);
+    expect(shapes).toHaveLength(2);
+    expect(shapes[0].columns).toBe(2);
+    expect(shapes[1].columns).toBe(3);
+    expect(shapes[1].line).toBe(7);
+  });
+
+  test("a document with no tables reports nothing", async () => {
+    expect(await shapesOf("= Doc\n\nJust a paragraph.\n")).toEqual([]);
   });
 });

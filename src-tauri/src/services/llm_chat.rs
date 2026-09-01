@@ -33,7 +33,7 @@ use crate::domain::llm::{
 };
 use crate::domain::paths;
 use crate::domain::repo_index::FileId;
-use crate::domain::workspace_index::{Diagnostic, Severity};
+use crate::domain::workspace_index::{Diagnostic, Severity, Table};
 use crate::infra::llm_debug_log;
 use crate::services::ai_tools::{self, EmbeddingDeps, ToolCallLogContext, WriteCheck};
 use crate::services::llm_rate_limit;
@@ -268,7 +268,7 @@ const WRITE_CHECK_UNSETTLED_NOTE: &str = "Автопроверка после з
 /// alone is the finding: the model rewrote a file and every problem in it
 /// survived, which reads very differently from the same list arriving for
 /// the first time.
-const WRITE_CHECK_UNCHANGED_NOTE: &str = "Автопроверка после записи: тот же список диагностик, что и после предыдущей записи этого файла — правка ни одной из них не устранила.";
+const WRITE_CHECK_UNCHANGED_NOTE: &str = "Автопроверка после записи: результат для этого файла не изменился с предыдущей записи — ни диагностики, ни разбор таблиц. Правка не устранила ничего из того, что было в прошлый раз.";
 
 fn severity_word(severity: Severity) -> &'static str {
     match severity {
@@ -335,35 +335,82 @@ fn write_check_note(
     format!("{content}\n\n{}", render_write_check(seen, path, check))
 }
 
+/// How many tables the shape report lists before collapsing the rest into a
+/// count — same reasoning as `MAX_WRITE_CHECK_DIAGNOSTICS`.
+const MAX_TABLE_SHAPES_LISTED: usize = 10;
+
+/// What asciidoctor made of the document's `|===` blocks, or `None` when it
+/// has none.
+///
+/// Every table is listed, not only the suspicious ones, because the check
+/// that matters is against the author's intent and nothing here knows what
+/// that was. A shape the model agrees with costs it one line; a shape it does
+/// not is the only warning it gets, because asciidoctor does not reject a
+/// broken table — it recovers, silently reshaping it, and re-reading the
+/// source afterwards shows only what was already written.
+fn format_table_shapes(tables: &[Table]) -> Option<String> {
+    if tables.is_empty() {
+        return None;
+    }
+    let total = tables.len();
+    let mut note = format!(
+        "Разбор таблиц в записанном файле ({total}) — то, что получилось у asciidoctor, а не то, что написано в исходнике. Сверьте с тем, что задумано:"
+    );
+    for t in tables.iter().take(MAX_TABLE_SHAPES_LISTED) {
+        let rows = t.head_rows + t.body_rows + t.foot_rows;
+        note.push_str(&format!(
+            "\n- строка {}: {} колонок × {} строк (шапка {})",
+            t.line, t.columns, rows, t.head_rows
+        ));
+        if let Some(declared) = &t.declared_cols {
+            note.push_str(&format!(", cols=\"{declared}\""));
+        }
+        note.push('.');
+    }
+    if total > MAX_TABLE_SHAPES_LISTED {
+        note.push_str(&format!("\n- … и ещё {}.", total - MAX_TABLE_SHAPES_LISTED));
+    }
+    Some(note)
+}
+
 /// The note itself, split from `write_check_note` so the wording and the
 /// repeat-collapse are testable without a `ToolScope` and a live index.
 fn render_write_check(seen: &mut HashMap<String, u64>, path: &str, check: WriteCheck) -> String {
-    match check {
-        // Only a non-empty list is worth collapsing on repeat: "still clean"
-        // is not a finding the way "still broken, identically" is, and the
-        // clean note is one line either way.
-        WriteCheck::Settled(diagnostics) if !diagnostics.is_empty() => {
-            let note = format_write_check(path, &diagnostics);
-            let mut hasher = DefaultHasher::new();
-            note.hash(&mut hasher);
-            let hash = hasher.finish();
-            match seen.insert(path.to_string(), hash) {
-                Some(previous) if previous == hash => WRITE_CHECK_UNCHANGED_NOTE.to_string(),
-                _ => note,
-            }
-        }
-        WriteCheck::Settled(_) => {
-            // Clearing the entry keeps the collapse honest: a file that goes
-            // broken → clean → broken with the identical list has genuinely
-            // regressed, and should be spelled out again rather than
-            // collapsed against a state two writes back.
-            seen.remove(path);
-            WRITE_CHECK_CLEAN_NOTE.to_string()
-        }
+    let (diagnostics, tables) = match check {
+        WriteCheck::Settled { diagnostics, tables } => (diagnostics, tables),
         WriteCheck::Unsettled => {
             seen.remove(path);
-            WRITE_CHECK_UNSETTLED_NOTE.to_string()
+            return WRITE_CHECK_UNSETTLED_NOTE.to_string();
         }
+    };
+
+    let mut note = if diagnostics.is_empty() {
+        WRITE_CHECK_CLEAN_NOTE.to_string()
+    } else {
+        format_write_check(path, &diagnostics)
+    };
+    if let Some(shapes) = format_table_shapes(&tables) {
+        note.push_str("\n\n");
+        note.push_str(&shapes);
+    }
+
+    // A file that is clean and has no tables produces one line either way,
+    // so there is nothing to collapse and nothing gained by remembering it.
+    // Clearing the entry also keeps the collapse honest: a file that goes
+    // broken → clean → broken with the identical findings has genuinely
+    // regressed, and should be spelled out again rather than collapsed
+    // against a state two writes back.
+    if diagnostics.is_empty() && tables.is_empty() {
+        seen.remove(path);
+        return note;
+    }
+
+    let mut hasher = DefaultHasher::new();
+    note.hash(&mut hasher);
+    let hash = hasher.finish();
+    match seen.insert(path.to_string(), hash) {
+        Some(previous) if previous == hash => WRITE_CHECK_UNCHANGED_NOTE.to_string(),
+        _ => note,
     }
 }
 
@@ -1010,6 +1057,24 @@ mod tests {
         LlmToolCall { id: "1".to_string(), name: name.to_string(), arguments: "{}".to_string() }
     }
 
+    /// A settled check with no tables — the shape most of these tests are
+    /// about.
+    fn settled(diagnostics: Vec<Diagnostic>) -> WriteCheck {
+        WriteCheck::Settled { diagnostics, tables: vec![] }
+    }
+
+    fn table(line: u32, columns: u32, body_rows: u32) -> Table {
+        Table {
+            document: crate::domain::workspace_index::DocumentId::new("api/get.adoc"),
+            line,
+            columns,
+            head_rows: 1,
+            body_rows,
+            foot_rows: 0,
+            declared_cols: None,
+        }
+    }
+
     fn diagnostic(line: u32, message: &str) -> Diagnostic {
         Diagnostic {
             kind: crate::domain::workspace_index::DiagnosticKind::MissingXrefAnchor,
@@ -1069,7 +1134,7 @@ mod tests {
     #[test]
     fn a_clean_write_still_says_it_was_checked() {
         let mut seen = HashMap::new();
-        let note = render_write_check(&mut seen, "api/get.adoc", WriteCheck::Settled(vec![]));
+        let note = render_write_check(&mut seen, "api/get.adoc", settled(vec![]));
         assert_eq!(note, WRITE_CHECK_CLEAN_NOTE);
     }
 
@@ -1087,7 +1152,7 @@ mod tests {
         let note = render_write_check(
             &mut seen,
             "api/get.adoc",
-            WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]),
+            settled(vec![diagnostic(12, "не найден якорь «limits»")]),
         );
         assert!(note.contains("api/get.adoc"), "{note}");
         assert!(note.contains("строка 12"), "{note}");
@@ -1100,7 +1165,7 @@ mod tests {
         let mut seen = HashMap::new();
         let diagnostics: Vec<Diagnostic> =
             (1..=15).map(|i| diagnostic(i, &format!("проблема {i}"))).collect();
-        let note = render_write_check(&mut seen, "api/get.adoc", WriteCheck::Settled(diagnostics));
+        let note = render_write_check(&mut seen, "api/get.adoc", settled(diagnostics));
         assert!(note.contains("проблема 10"), "{note}");
         assert!(!note.contains("проблема 11"), "{note}");
         assert!(note.contains("и ещё 5"), "{note}");
@@ -1109,7 +1174,7 @@ mod tests {
     #[test]
     fn an_identical_repeat_collapses_into_the_unchanged_note() {
         let mut seen = HashMap::new();
-        let check = || WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]);
+        let check = || settled(vec![diagnostic(12, "не найден якорь «limits»")]);
 
         let first = render_write_check(&mut seen, "api/get.adoc", check());
         assert!(first.contains("строка 12"));
@@ -1124,12 +1189,12 @@ mod tests {
         render_write_check(
             &mut seen,
             "api/get.adoc",
-            WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]),
+            settled(vec![diagnostic(12, "не найден якорь «limits»")]),
         );
         let second = render_write_check(
             &mut seen,
             "api/get.adoc",
-            WriteCheck::Settled(vec![diagnostic(40, "не найдена картинка scheme.png")]),
+            settled(vec![diagnostic(40, "не найдена картинка scheme.png")]),
         );
         assert!(second.contains("строка 40"), "{second}");
         assert_ne!(second, WRITE_CHECK_UNCHANGED_NOTE);
@@ -1138,10 +1203,10 @@ mod tests {
     #[test]
     fn a_reappearing_problem_is_spelled_out_rather_than_collapsed() {
         let mut seen = HashMap::new();
-        let broken = || WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]);
+        let broken = || settled(vec![diagnostic(12, "не найден якорь «limits»")]);
 
         render_write_check(&mut seen, "api/get.adoc", broken());
-        render_write_check(&mut seen, "api/get.adoc", WriteCheck::Settled(vec![]));
+        render_write_check(&mut seen, "api/get.adoc", settled(vec![]));
         // Fixed, then broken again the same way: a regression, not a repeat.
         let third = render_write_check(&mut seen, "api/get.adoc", broken());
         assert!(third.contains("строка 12"), "{third}");
@@ -1151,12 +1216,119 @@ mod tests {
     #[test]
     fn each_file_is_collapsed_against_its_own_previous_note() {
         let mut seen = HashMap::new();
-        let check = || WriteCheck::Settled(vec![diagnostic(12, "не найден якорь «limits»")]);
+        let check = || settled(vec![diagnostic(12, "не найден якорь «limits»")]);
 
         render_write_check(&mut seen, "api/get.adoc", check());
         // Same diagnostics, different file — the model has not seen this one.
         let other = render_write_check(&mut seen, "api/post.adoc", check());
         assert_ne!(other, WRITE_CHECK_UNCHANGED_NOTE);
+    }
+
+    #[test]
+    fn a_file_with_no_tables_gets_no_table_section() {
+        let mut seen = HashMap::new();
+        let note = render_write_check(&mut seen, "api/get.adoc", settled(vec![]));
+        assert_eq!(note, WRITE_CHECK_CLEAN_NOTE);
+    }
+
+    #[test]
+    fn every_table_is_reported_with_its_resolved_shape() {
+        let mut seen = HashMap::new();
+        let note = render_write_check(
+            &mut seen,
+            "api/get.adoc",
+            WriteCheck::Settled {
+                diagnostics: vec![],
+                tables: vec![table(34, 4, 5)],
+            },
+        );
+        // Clean on the diagnostics side, but the shape still comes back: the
+        // model can only compare it against an intent nothing here knows.
+        assert!(note.contains(WRITE_CHECK_CLEAN_NOTE), "{note}");
+        assert!(note.contains("строка 34"), "{note}");
+        assert!(note.contains("4 колонок"), "{note}");
+        // head 1 + body 5 + foot 0.
+        assert!(note.contains("6 строк"), "{note}");
+    }
+
+    #[test]
+    fn a_table_that_lost_every_row_still_reports_its_columns() {
+        let mut seen = HashMap::new();
+        // What `[cols="5"]` with four cells per row actually produces:
+        // asciidoctor obeys `cols`, finds no complete row, and drops the lot.
+        // Declared and resolved columns agree — the row count is the tell.
+        let mut t = table(34, 5, 0);
+        t.head_rows = 0;
+        t.declared_cols = Some("5".to_string());
+        let note = render_write_check(
+            &mut seen,
+            "api/get.adoc",
+            WriteCheck::Settled { diagnostics: vec![], tables: vec![t] },
+        );
+        assert!(note.contains("5 колонок"), "{note}");
+        assert!(note.contains("0 строк"), "{note}");
+        assert!(note.contains("cols=\"5\""), "{note}");
+    }
+
+    #[test]
+    fn a_long_table_list_is_capped_with_a_remainder() {
+        let mut seen = HashMap::new();
+        let tables: Vec<Table> = (1..=13).map(|i| table(i * 10, 3, 2)).collect();
+        let note = render_write_check(
+            &mut seen,
+            "api/get.adoc",
+            WriteCheck::Settled { diagnostics: vec![], tables },
+        );
+        assert!(note.contains("строка 100"), "{note}");
+        assert!(!note.contains("строка 110"), "{note}");
+        assert!(note.contains("и ещё 3"), "{note}");
+    }
+
+    #[test]
+    fn an_unchanged_table_shape_collapses_on_a_repeat_write() {
+        let mut seen = HashMap::new();
+        let check = || WriteCheck::Settled {
+            diagnostics: vec![],
+            tables: vec![table(34, 4, 5)],
+        };
+        let first = render_write_check(&mut seen, "api/get.adoc", check());
+        assert!(first.contains("строка 34"), "{first}");
+
+        // Rewritten, and asciidoctor still makes the same thing of it.
+        let second = render_write_check(&mut seen, "api/get.adoc", check());
+        assert_eq!(second, WRITE_CHECK_UNCHANGED_NOTE);
+    }
+
+    #[test]
+    fn a_table_that_changed_shape_is_spelled_out_again() {
+        let mut seen = HashMap::new();
+        render_write_check(
+            &mut seen,
+            "api/get.adoc",
+            WriteCheck::Settled { diagnostics: vec![], tables: vec![table(34, 4, 5)] },
+        );
+        let second = render_write_check(
+            &mut seen,
+            "api/get.adoc",
+            WriteCheck::Settled { diagnostics: vec![], tables: vec![table(34, 5, 5)] },
+        );
+        assert!(second.contains("5 колонок"), "{second}");
+        assert_ne!(second, WRITE_CHECK_UNCHANGED_NOTE);
+    }
+
+    #[test]
+    fn diagnostics_and_table_shapes_arrive_in_the_same_note() {
+        let mut seen = HashMap::new();
+        let note = render_write_check(
+            &mut seen,
+            "api/get.adoc",
+            WriteCheck::Settled {
+                diagnostics: vec![diagnostic(12, "не найден якорь «limits»")],
+                tables: vec![table(34, 4, 5)],
+            },
+        );
+        assert!(note.contains("не найден якорь «limits»"), "{note}");
+        assert!(note.contains("строка 34"), "{note}");
     }
 
     #[test]

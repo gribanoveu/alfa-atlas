@@ -12,6 +12,7 @@ import {
 // `types` entry, so TypeScript resolves types through the shim in
 // `src/types/asciidoctor.d.ts`.
 import { Extensions, load, MemoryLogger, LoggerManager } from "asciidoctor";
+import { collectTableShapes } from "../lib/asciidocTableModel";
 import { toMessage } from "../lib/errors";
 
 type AsciiDocParseRequested = {
@@ -90,6 +91,7 @@ export async function extractFacts(content: string): Promise<AsciiDocFacts> {
     attributes: [],
     images: [],
     parseErrors: [],
+    tables: [],
   };
 
   // Capture parse-time warnings/errors via a MemoryLogger so genuine syntax
@@ -99,7 +101,7 @@ export async function extractFacts(content: string): Promise<AsciiDocFacts> {
   LoggerManager.setLogger(logger);
 
   try {
-    await load(content, {
+    const doc = await load(content, {
       sourcemap: true,
       safe: "safe",
       attributes: { showtitle: true },
@@ -108,6 +110,12 @@ export async function extractFacts(content: string): Promise<AsciiDocFacts> {
     });
 
     facts.includes = capturedIncludes.slice();
+    // Reads the document already parsed above — a tree walk, no extra `load`
+    // and no file access, so it costs the same order as the line scans below.
+    // Deliberately the un-normalized parse: `useAsciiDocRender` puts content
+    // through `normalizeBarePipeTables` first and so hides exactly the
+    // mangling this is meant to surface.
+    facts.tables = collectTableShapes(doc);
     facts.anchors = scanAnchors(content);
     facts.references = scanXrefs(content);
     facts.attributes = scanAttributes(content);
@@ -349,6 +357,7 @@ export function useAsciiDocParser(): void {
               severity: "error",
             },
           ],
+          tables: [],
         };
       }
 
@@ -373,6 +382,7 @@ export function useAsciiDocParser(): void {
               severity: "error",
             },
           ],
+          tables: [],
         };
         try {
           await submitAsciiDocFacts(documentId, version, emptyFacts);

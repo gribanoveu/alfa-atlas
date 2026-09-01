@@ -7,7 +7,7 @@ use std::path::Path;
 use crate::domain::ai_tools::{CheckArgs, CheckKind, ToolError, ToolResult, ToolScope};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::paths;
-use crate::domain::workspace_index::{Diagnostic, DocumentId};
+use crate::domain::workspace_index::{Diagnostic, DocumentId, Table};
 use crate::services::{diagnostics, reference_rewrite, standards, standards_prefs};
 
 use super::super::EmbeddingDeps;
@@ -90,9 +90,14 @@ pub(super) fn check_problems(
 
 /// Outcome of the automatic post-write check (`check_written_file`).
 pub enum WriteCheck {
-    /// The written document's own diagnostics, with paths already rewritten
-    /// to access-mode-relative. Empty means the file is clean.
-    Settled(Vec<Diagnostic>),
+    /// The written document's own diagnostics (empty means clean), plus the
+    /// shape asciidoctor resolved for each `|===` block in it.
+    ///
+    /// The two travel together because they answer the same question about
+    /// the same write and are gated on the same wait: diagnostics say whether
+    /// the file's references hold, tables say whether its markup produced the
+    /// structure the author meant. Neither is derivable from the other.
+    Settled { diagnostics: Vec<Diagnostic>, tables: Vec<Table> },
     /// The frontend parse did not come back within
     /// `WorkspaceIndex::wait_for_parse_settled`'s budget, so nothing is known
     /// about the file as it now stands. Distinct from `Settled(vec![])` on
@@ -132,7 +137,8 @@ pub fn check_written_file(
             d.document = DocumentId::new(access);
         }
     }
-    Ok(WriteCheck::Settled(diagnostics))
+    let tables = deps.workspace_index.get_tables_for(&doc_id);
+    Ok(WriteCheck::Settled { diagnostics, tables })
 }
 
 /// Access-mode-relative path → repo-relative `DocumentId`, after requiring

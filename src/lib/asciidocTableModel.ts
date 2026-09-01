@@ -61,8 +61,55 @@ type AscTableBlock = AbstractBlock & {
     body: AscCell[][];
     foot: AscCell[][];
   };
+  /** One entry per column asciidoctor resolved — `[cols="1,3,1"]`, an explicit
+   *  count, or inferred from the first row. */
+  columns?: unknown[];
   hasHeaderOption: boolean;
 };
+
+/**
+ * The shape asciidoctor resolved for one `|===` block.
+ *
+ * This is the answer to a question the author cannot answer by re-reading
+ * their own source, because re-reading the source is what they already did
+ * when they wrote it. A stray `|` or a row missing its leading one does not
+ * fail — asciidoctor recovers, and the recovery is what reshapes the table:
+ * three written columns can come back as five.
+ *
+ * Read off the parse tree rather than off the `|===` fences in the text.
+ * Fences are not evidence of a table: a `|===` inside a listing block is
+ * sample markup, and asciidoctor rightly builds nothing from it. Walking the
+ * tree means such a block is simply absent here, with no false alarm to
+ * suppress.
+ */
+export type TableShapeFact = {
+  /** 1-based line of the opening `|===` fence. */
+  line: number;
+  /** Columns asciidoctor settled on — from `cols`, or inferred from the
+   *  first row when there is no such attribute. */
+  columns: number;
+  headRows: number;
+  bodyRows: number;
+  footRows: number;
+  /** The `cols` spec as written (`"1,3,1"`, `"5"`), or null when absent.
+   *  asciidoctor obeys it, so it never disagrees with `columns` — it is here
+   *  to show which of the two numbers the author actually chose. */
+  declaredCols: string | null;
+};
+
+/** Every table in `doc`, in document order, including tables nested inside
+ *  sections (`findBy` walks the whole tree). */
+export function collectTableShapes(doc: AbstractBlock): TableShapeFact[] {
+  return (doc.findBy({ context: "table" }) as AscTableBlock[]).map((node) => ({
+    // Always present under `sourcemap: true`, which every caller sets.
+    line: node.getLineNumber() ?? 0,
+    columns: node.columns?.length ?? 0,
+    headRows: node.rows.head.length,
+    bodyRows: node.rows.body.length,
+    footRows: node.rows.foot.length,
+    declaredCols: node.getAttribute("cols") ?? null,
+  }));
+}
 
 /** Find every `|===` … `|===` pipe table block in `content`. */
 export function findTableBlocks(content: string): TableBlockRange[] {

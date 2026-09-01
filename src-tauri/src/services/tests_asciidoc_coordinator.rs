@@ -26,6 +26,7 @@ fn empty_facts() -> AsciiDocFacts {
         attributes: vec![],
         images: vec![],
         parse_errors: vec![],
+        tables: vec![],
     }
 }
 
@@ -41,6 +42,7 @@ fn facts_with_anchor(id: &str) -> AsciiDocFacts {
         attributes: vec![],
         images: vec![],
         parse_errors: vec![],
+        tables: vec![],
     }
 }
 

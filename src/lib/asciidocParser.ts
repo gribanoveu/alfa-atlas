@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { TableShapeFact } from "./asciidocTableModel";
+
 export type AnchorFact = { id: string; line: number; column: number };
 export type IncludeFact = { path: string; line: number; column: number };
 export type ReferenceFact = {
@@ -24,6 +26,9 @@ export type AsciiDocFacts = {
   attributes: AttributeFact[];
   images: ImageFact[];
   parseErrors: ParseErrorFact[];
+  /** Resolved shape of each `|===` block — see `TableShapeFact` in
+   * `asciidocTableModel`, mirrored by `domain::asciidoc_facts::TableFact`. */
+  tables: TableShapeFact[];
 };
 
 /**

@@ -27,8 +27,8 @@ use crate::domain::supported_files::is_supported_file;
 use crate::domain::workspace_index::{
     relative_key, relative_key_lenient, resolve_against_document, unix_seconds, Anchor, Attribute,
     Diagnostic, DiagnosticKind, Document, DocumentId, DocumentType, Image, Include, IndexEvent,
-    IndexStats, ParsedDocument, Reference, Severity, WorkspaceIndexError, WorkspaceIndexEvent,
-    WorkspaceIndexEventSink,
+    IndexStats, ParsedDocument, Reference, Severity, Table, WorkspaceIndexError,
+    WorkspaceIndexEvent, WorkspaceIndexEventSink,
 };
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::infra::workspace_scanner;
@@ -65,6 +65,9 @@ pub struct WorkspaceIndex {
     attributes_by_doc: DashMap<DocumentId, Vec<Attribute>>,
     images: DashMap<String, Vec<Image>>,
     images_by_doc: DashMap<DocumentId, Vec<Image>>,
+    /// Per-document only — a table has no cross-document identity to key a
+    /// global map on, so unlike anchors/images there is no `tables` twin.
+    tables_by_doc: DashMap<DocumentId, Vec<Table>>,
     diagnostics: DashMap<DocumentId, Vec<Diagnostic>>,
     dependents: DependentsMap,
     parsers: ParserRegistry,
@@ -139,6 +142,7 @@ impl WorkspaceIndex {
             attributes_by_doc: DashMap::new(),
             images: DashMap::new(),
             images_by_doc: DashMap::new(),
+            tables_by_doc: DashMap::new(),
             diagnostics: DashMap::new(),
             dependents: DashMap::new(),
             parsers,
@@ -331,6 +335,7 @@ impl WorkspaceIndex {
         self.attributes_by_doc.clear();
         self.images.clear();
         self.images_by_doc.clear();
+        self.tables_by_doc.clear();
         self.diagnostics.clear();
         self.dependents.clear();
 
@@ -550,6 +555,12 @@ impl WorkspaceIndex {
                 .or_default()
                 .push(img.clone());
         }
+        if !parsed.tables.is_empty() {
+            for t in &mut parsed.tables {
+                t.document = id.clone();
+            }
+            self.tables_by_doc.insert(id.clone(), parsed.tables);
+        }
         // Parse-time diagnostics (syntax warnings).
         if !parsed.diagnostics.is_empty() {
             let mut fixed = parsed.diagnostics;
@@ -627,6 +638,9 @@ impl WorkspaceIndex {
                 }
             }
         }
+
+        // No global twin to clean up — see the field's doc comment.
+        self.tables_by_doc.remove(id);
 
         self.diagnostics.remove(id);
     }
@@ -984,6 +998,11 @@ impl WorkspaceIndex {
                 line: None,
                 severity: "error".to_string(),
             }],
+            // Nothing parsed, so there is no shape to report. This payload
+            // does settle the document, but it carries the `ParseError`
+            // above with it — a reader that sees no tables here also sees
+            // why.
+            tables: vec![],
         };
         let _ = self.submit_asciidoc_facts(doc_id, version, facts);
     }
@@ -1047,6 +1066,17 @@ impl WorkspaceIndex {
                 path: img.path.clone(),
                 document: doc_id.clone(),
                 line: img.line,
+            });
+        }
+        for t in &facts.tables {
+            out.tables.push(Table {
+                document: doc_id.clone(),
+                line: t.line,
+                columns: t.columns,
+                head_rows: t.head_rows,
+                body_rows: t.body_rows,
+                foot_rows: t.foot_rows,
+                declared_cols: t.declared_cols.clone(),
             });
         }
         out
@@ -1182,6 +1212,14 @@ impl WorkspaceIndex {
             .get(id)
             .map(|v| v.len())
             .unwrap_or(0)
+    }
+
+    /// Table shapes for one document, in source order. Empty for a document
+    /// with no `|===` blocks, and also for one whose facts have not come back
+    /// from the frontend yet — callers that need the distinction must gate on
+    /// `parse_settled` first.
+    pub fn get_tables_for(&self, doc: &DocumentId) -> Vec<Table> {
+        self.tables_by_doc.get(doc).map(|r| r.clone()).unwrap_or_default()
     }
 
     pub(crate) fn images_for_doc(&self, doc: &DocumentId) -> Vec<Image> {
@@ -1431,6 +1469,7 @@ mod tests {
             attributes: Vec::new(),
             images: Vec::new(),
             parse_errors: Vec::new(),
+            tables: Vec::new(),
         }
     }
 
