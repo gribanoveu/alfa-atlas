@@ -2372,6 +2372,13 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   color: var(--text-2);
 }
 
+/* Та же светлая подложка, что у PlantUML в полноразмерном вьюере
+   (`--diagram-backdrop-plantuml`, см. AsciiDocPreview.css): движок не
+   поддерживает тёмную палитру, и на `--bg-0` его линии сливались с фоном. */
+.assistant-visual-preview.is-plantuml {
+  background: var(--diagram-backdrop-plantuml, #ffffff);
+}
+
 /* Fit the rendered SVG to the card's width — Mermaid emits its own
    width/height, which would otherwise push the chat column sideways. */
 .assistant-visual-preview > svg {

@@ -45,8 +45,12 @@ import { OpenApiExplorer } from "./components/OpenApiExplorer/OpenApiExplorer";
 import { UtilityView } from "./components/Utilities/UtilityView";
 import { utilityTabId } from "./data/utilities";
 import { artifactTabId, createAndOpenArtifact } from "./lib/artifactTabs";
-import { normalizeDiagramTheme, resolveDiagramBackdrop } from "./lib/prefs";
-import { setDiagramTheme } from "./lib/diagramTheme";
+import {
+  normalizeDiagramTheme,
+  resolveDiagramBackdrop,
+  resolvePlantumlBackdrop,
+} from "./lib/prefs";
+import { setDiagramTheme, useDiagramTheme } from "./lib/diagramTheme";
 import { visualTabId, type Visual } from "./lib/visuals";
 import { VisualView } from "./components/Visuals/VisualView";
 import { ARTIFACT_KINDS } from "./data/artifactKinds";
@@ -495,6 +499,11 @@ function App() {
   useEffect(() => {
     setDiagramTheme(diagramTheme);
   }, [diagramTheme]);
+  // Читаем палитру обратно из стора, а не из `prefs`: кнопка на панели
+  // диаграммы пишет в стор напрямую (`chooseDiagramTheme`), и подложка
+  // «Авто» должна переворачиваться вместе с ней, а не ждать перезагрузки
+  // настроек.
+  const activeDiagramTheme = useDiagramTheme();
 
   const panelStyle = {
     ["--sidebar-width" as string]: `${panels.layout.sidebarWidth}px`,
@@ -511,7 +520,12 @@ function App() {
     // CSS custom property, which React does not escape.
     ["--diagram-backdrop" as string]: resolveDiagramBackdrop(
       generalPrefs.prefs.diagramBackdrop,
-      diagramTheme,
+      activeDiagramTheme,
+    ),
+    // PlantUML не перекрашивается под тёмную палитру, поэтому «Авто» у него
+    // всегда светлое — иначе чёрные линии оказываются на тёмной подложке.
+    ["--diagram-backdrop-plantuml" as string]: resolvePlantumlBackdrop(
+      generalPrefs.prefs.diagramBackdrop,
     ),
   };
 

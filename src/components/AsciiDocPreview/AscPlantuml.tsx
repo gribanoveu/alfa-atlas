@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Moon, Sun } from "lucide-react";
 import { readProjectFile } from "../../lib/project";
 import type { AbstractBlock } from "./types";
+import { useDiagramTheme } from "../../lib/diagramTheme";
 import { renderPlantuml } from "./plantumlRenderer";
 
 type RenderState =
@@ -106,6 +108,9 @@ export function AscPlantuml({
   docsRoot?: string | null;
 }) {
   const rawSource = safeGetSource(block) ?? "";
+  // Только чтобы неактивная кнопка на панели показывала текущую палитру:
+  // сам рендер PlantUML темы не знает (см. `DiagramTheme` в `lib/prefs.ts`).
+  const theme = useDiagramTheme();
 
   const [scale, setScale] = useState(1);
   const [naturalSize, setNaturalSize] = useState<SvgSize | null>(null);
@@ -323,6 +328,32 @@ export function AscPlantuml({
               aria-label="Сбросить масштаб"
             >
               1:1
+            </button>
+            {/* Место переключателя палитры занято, но кнопка неактивна:
+                панели двух движков должны выглядеть одинаково, а нажимать
+                тут нечего. PlantUML рисует цветами из исходника и палитру
+                не слушает (см. `DiagramTheme` в `lib/prefs.ts`), а его
+                подложка зафиксирована светлой (`resolvePlantumlBackdrop`) —
+                то есть переключение не изменило бы на экране ничего.
+                Иконка всё же показывает текущую палитру: это состояние
+                общей настройки, а не свойство этой диаграммы. */}
+            <button
+              type="button"
+              className="asc-plantuml-btn asc-diagram-theme-btn"
+              // `aria-disabled`, а не `disabled`: у по-настоящему
+              // отключённой кнопки браузер не показывает `title`, а
+              // подсказка здесь и есть весь смысл — иначе кнопка выглядит
+              // сломанной. Обработчика нет, так что нажатие ничего не
+              // делает ни мышью, ни с клавиатуры.
+              aria-disabled="true"
+              title="PlantUML не поддерживает тему диаграмм — он рисуется цветами из исходника. Палитра Mermaid: Настройки → Оформление"
+              aria-label="Тема диаграмм недоступна для PlantUML"
+            >
+              {theme === "dark" ? (
+                <Moon size={13} aria-hidden />
+              ) : (
+                <Sun size={13} aria-hidden />
+              )}
             </button>
           </div>
           <div

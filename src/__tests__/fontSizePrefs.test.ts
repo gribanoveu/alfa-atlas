@@ -7,6 +7,7 @@ import {
   normalizeDiagramBackdrop,
   normalizeDiagramTheme,
   resolveDiagramBackdrop,
+  resolvePlantumlBackdrop,
 } from "../lib/prefs";
 
 describe("fontSizePrefs", () => {
@@ -83,6 +84,23 @@ describe("resolveDiagramBackdrop", () => {
     // string into the CSS custom property.
     expect(resolveDiagramBackdrop("red; } body {", "dark")).toBe("transparent");
     expect(resolveDiagramBackdrop("red; } body {", "light")).toBe("#ffffff");
+  });
+});
+
+describe("resolvePlantumlBackdrop", () => {
+  test("auto stays light whatever the palette is", () => {
+    // PlantUML не перекрашивается под тёмную тему — «прозрачная» подложка
+    // оставила бы его чёрные линии на тёмном фоне приложения.
+    expect(resolvePlantumlBackdrop("auto")).toBe("#ffffff");
+  });
+
+  test("an explicit colour still wins", () => {
+    expect(resolvePlantumlBackdrop("transparent")).toBe("transparent");
+    expect(resolvePlantumlBackdrop("#1e1f22")).toBe("#1e1f22");
+  });
+
+  test("an invalid colour resolves to the light default, never leaking", () => {
+    expect(resolvePlantumlBackdrop("red; } body {")).toBe("#ffffff");
   });
 });
 

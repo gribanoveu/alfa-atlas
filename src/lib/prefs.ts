@@ -102,6 +102,18 @@ export function resolveDiagramBackdrop(
   return theme === "dark" ? "transparent" : "#ffffff";
 }
 
+/** PlantUML's own plate. The same setting as everywhere else, but `"auto"`
+ *  resolves as if the palette were light.
+ *
+ *  Mermaid genuinely repaints itself dark, so under a dark palette it wants
+ *  the app's chrome showing through. PlantUML does not — it ignores the
+ *  palette and keeps drawing dark-on-transparent (see `DiagramTheme`), so
+ *  the same "auto" rule left black lines on the app's dark background. An
+ *  explicit colour still wins, for both engines. */
+export function resolvePlantumlBackdrop(backdrop: string): string {
+  return resolveDiagramBackdrop(backdrop, "light");
+}
+
 export function normalizeDiagramTheme(value: unknown): DiagramTheme {
   return value === "light" ? "light" : DEFAULT_DIAGRAM_THEME;
 }

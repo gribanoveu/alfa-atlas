@@ -1,5 +1,10 @@
 import { useSyncExternalStore } from "react";
-import { DEFAULT_DIAGRAM_THEME, type DiagramTheme } from "./prefs";
+import {
+  DEFAULT_DIAGRAM_THEME,
+  getGeneralPrefs,
+  setGeneralPrefs,
+  type DiagramTheme,
+} from "./prefs";
 
 /** The current diagram palette, as a tiny subscribable store.
  *
@@ -28,6 +33,24 @@ export function setDiagramTheme(theme: DiagramTheme): void {
   if (theme === currentTheme) return;
   currentTheme = theme;
   for (const listener of listeners) listener();
+}
+
+/** The same switch as Настройки → Оформление → «Тема диаграмм», reachable
+ *  from a diagram's own toolbar.
+ *
+ *  Applies the palette at once — every open diagram redraws through the
+ *  store — and saves it, so the button and the settings dialog cannot drift
+ *  apart. The write re-reads prefs first instead of patching a copy held in
+ *  React state: this is called from viewers three subtrees deep, which have
+ *  no business carrying the other twenty preferences around just to save one
+ *  of them (`useNotificationsLayout` persists its two flags the same way). */
+export function chooseDiagramTheme(theme: DiagramTheme): void {
+  setDiagramTheme(theme);
+  void getGeneralPrefs()
+    .then((prefs) => setGeneralPrefs({ ...prefs, diagramTheme: theme }))
+    .catch(() => {
+      // Не сохранилось — переключение всё равно применено к текущей сессии.
+    });
 }
 
 function subscribe(listener: () => void): () => void {

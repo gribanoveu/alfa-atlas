@@ -571,16 +571,33 @@
   transition: background 0.12s ease, border-color 0.12s ease;
 }
 
-.asc-plantuml-btn:hover:not(:disabled),
-.asc-mermaid-btn:hover:not(:disabled) {
+.asc-plantuml-btn:hover:not(:disabled):not([aria-disabled="true"]),
+.asc-mermaid-btn:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--bg-0);
   border-color: var(--text-2);
 }
 
+/* `aria-disabled` наравне с `disabled`: у отключённой по-настоящему кнопки
+   браузер не показывает `title`, а у кнопки палитры на панели PlantUML
+   подсказка объясняет, почему она неактивна (см. `AscPlantuml`). */
 .asc-plantuml-btn:disabled,
-.asc-mermaid-btn:disabled {
+.asc-mermaid-btn:disabled,
+.asc-plantuml-btn[aria-disabled="true"],
+.asc-mermaid-btn[aria-disabled="true"] {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* Прижата к правому краю: это не про масштаб, а про палитру — соседство с
+   «Fit»/«1:1» читалось бы как ещё одна кнопка зума. Отступ справа — для
+   вкладки визуализации, где карточка диаграммы идёт без своих полей и
+   кнопка иначе упирается в край панели. */
+.asc-diagram-theme-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  margin-right: 6px;
 }
 
 .asc-plantuml-zoom,
@@ -647,6 +664,14 @@
      (`--diagram-backdrop`, задаётся на `.app` в App.tsx). Фолбэк нужен
      для контекстов вне оболочки приложения — например превью в тестах. */
   background: var(--diagram-backdrop, #ffffff);
+}
+
+/* У PlantUML своя переменная: он не перекрашивается под тёмную палитру, и
+   «Авто» для него всегда светлое (`resolvePlantumlBackdrop`), тогда как
+   тёмный Mermaid выше по-прежнему пропускает сквозь себя фон приложения.
+   Явно выбранный в настройках цвет действует на оба движка. */
+.asc-plantuml-svg svg {
+  background: var(--diagram-backdrop-plantuml, #ffffff);
 }
 
 .asc-plantuml-svg svg text,

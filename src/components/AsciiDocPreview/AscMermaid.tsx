@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Moon, Sun } from "lucide-react";
 import { readProjectFile } from "../../lib/project";
 import type { AbstractBlock } from "./types";
-import { useDiagramTheme } from "../../lib/diagramTheme";
+import { chooseDiagramTheme, useDiagramTheme } from "../../lib/diagramTheme";
 import { normalizeMermaidSource, renderMermaid } from "./mermaidRenderer";
 
 type RenderState =
@@ -292,6 +293,26 @@ export function AscMermaid({
               aria-label="Сбросить масштаб"
             >
               1:1
+            </button>
+            {/* Та же настройка, что в Настройки → Оформление → «Тема
+                диаграмм»: сохраняется и применяется ко всем схемам сразу,
+                а не только к этой. */}
+            <button
+              type="button"
+              className="asc-mermaid-btn asc-diagram-theme-btn"
+              onClick={() => chooseDiagramTheme(theme === "dark" ? "light" : "dark")}
+              title={
+                theme === "dark"
+                  ? "Тема диаграмм: тёмная. Переключить на светлую"
+                  : "Тема диаграмм: светлая. Переключить на тёмную"
+              }
+              aria-label="Переключить тему диаграмм"
+            >
+              {theme === "dark" ? (
+                <Moon size={13} aria-hidden />
+              ) : (
+                <Sun size={13} aria-hidden />
+              )}
             </button>
           </div>
           <div

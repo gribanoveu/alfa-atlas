@@ -357,7 +357,12 @@ export function RightDock({
                 <button
                   key={id}
                   type="button"
-                  className={`tool-stripe-btn ${activeTool === id ? "active" : ""}`}
+                  // `is-assistant` — только ради заливки иконки: ассистент
+                  // выделен среди одинаковых штриховых значков полосы
+                  // (см. RightDock.css).
+                  className={`tool-stripe-btn${id === "assistant" ? " is-assistant" : ""} ${
+                    activeTool === id ? "active" : ""
+                  }`}
                   title={label}
                   aria-label={label}
                   aria-pressed={activeTool === id}

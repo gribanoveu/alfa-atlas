@@ -90,7 +90,10 @@ function VisualPreview({
   }
   return (
     <div
-      className="assistant-visual-preview"
+      // Тот же случай, что и в полноразмерном вьюере: PlantUML рисует тёмным
+      // по прозрачному и палитру не слушает, поэтому ему нужна светлая
+      // подложка. Mermaid перекрашивается сам и остаётся на фоне панели.
+      className={`assistant-visual-preview${format === "plantuml" ? " is-plantuml" : ""}`}
       role="img"
       aria-label={title}
       dangerouslySetInnerHTML={{ __html: state.svg }}
