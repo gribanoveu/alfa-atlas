@@ -130,12 +130,17 @@
   color: inherit;
 }
 
-/* Ассистент — единственная кнопка полосы, к которой возвращаются постоянно,
-   а сама полоса состоит из одинаковых штриховых значков, среди которых
-   ничто не выделяется. Заливаем контур lucide-иконки изнутри: обводка
-   остаётся `currentColor` и по-прежнему светлеет на hover и в активном
-   состоянии, так что кнопка не выпадает из общего поведения — меняется
-   только «начинка». */
+/* Ассистент выделяется красным, но мягче остальных акцентных элементов:
+   тонкая обводка и слегка приглушённая заливка не перегружают полосу. */
 .tool-stripe-btn.is-assistant .tool-stripe-icon {
-  fill: var(--red-tag);
+  color: color-mix(in srgb, var(--red-tag) 68%, var(--text-2));
+  fill: color-mix(in srgb, var(--red-tag) 80%, transparent);
+  stroke-width: 1.5;
+  transition: color 0.12s ease, fill 0.12s ease;
+}
+
+.tool-stripe-btn.is-assistant:hover .tool-stripe-icon,
+.tool-stripe-btn.is-assistant.active .tool-stripe-icon {
+  color: var(--red-tag);
+  fill: color-mix(in srgb, var(--red-tag) 90%, transparent);
 }
