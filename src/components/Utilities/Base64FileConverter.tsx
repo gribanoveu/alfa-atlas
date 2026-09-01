@@ -13,6 +13,7 @@ import {
   type Base64Alphabet,
 } from "../../lib/base64Codec";
 import { copyToClipboard } from "../../lib/clipboard";
+import { toMessage } from "../../lib/errors";
 import { saveDecodedBinaryFile } from "../../lib/fileSave";
 import { UtilityClearButton, UtilityLabeledField } from "./UtilityClearButton";
 import "./Base64FileConverter.css";
@@ -57,6 +58,8 @@ export function Base64FileConverter() {
     null,
   );
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeTab = TABS.find((item) => item.id === tab) ?? TABS[0];
@@ -133,7 +136,17 @@ export function Base64FileConverter() {
       return;
     }
 
-    await saveDecodedBinaryFile(decoded.bytes, decoded.content);
+    setSaveError(null);
+    try {
+      const saved = await saveDecodedBinaryFile(decoded.bytes, decoded.content);
+      // `false` — пользователь закрыл диалог, это не ошибка.
+      if (saved) {
+        setJustSaved(true);
+        setTimeout(() => setJustSaved(false), 2000);
+      }
+    } catch (e) {
+      setSaveError(toMessage(e));
+    }
   };
 
   const decodeError = tab === "decode" && raw.trim() && decoded && !decoded.ok ? decoded.reason : null;
@@ -248,7 +261,10 @@ export function Base64FileConverter() {
             <textarea
               className="b64file-input utility-field-control"
               value={raw}
-              onChange={(event) => setRaw(event.target.value)}
+              onChange={(event) => {
+                setRaw(event.target.value);
+                setSaveError(null);
+              }}
               placeholder={TINY_PNG_BASE64}
               spellCheck={false}
               aria-label="Base64 или data URI"
@@ -330,9 +346,15 @@ export function Base64FileConverter() {
 
             <div className="b64file-actions">
               <button type="button" className="b64file-action" onClick={() => void handleSaveDecoded()}>
-                Сохранить файл
+                {justSaved ? "Сохранено" : "Сохранить файл"}
               </button>
             </div>
+
+            {saveError ? (
+              <p className="b64file-error" role="status">
+                Не удалось сохранить файл: {saveError}
+              </p>
+            ) : null}
           </>
         ) : null}
 
