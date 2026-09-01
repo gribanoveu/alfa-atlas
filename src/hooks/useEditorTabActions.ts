@@ -142,6 +142,12 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
         setActiveKind("visual");
         return;
       }
+      // Не полагаемся на эффект по `editor.activeTabId`: клик по файловой
+      // вкладке, которая и так активна в редакторе (обычно это сосед слева
+      // от псевдовкладки — с неё пользователь и ушёл на визуализацию), не
+      // меняет `activeTabId`, эффект не срабатывает, и вкладка выглядит
+      // «некликабельной». Вид переключаем здесь же.
+      setActiveKind("file");
       editor.selectTab(id);
     },
     [editor.selectTab],

@@ -238,6 +238,20 @@ describe("useEditorTabActions", () => {
     expect(editor.selectTab).toHaveBeenCalledWith("a.adoc");
   });
 
+  test("switching back to the already-active file tab leaves the visualization", () => {
+    // The neighbour left of a visualization tab is usually the file the user
+    // came from, so it is still `editor.activeTabId` and `editor.selectTab`
+    // is a no-op on it. The pane kind must flip anyway, or that tab looks
+    // dead to the click.
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result } = render(editor);
+    act(() => result.current.openVisualTab(visual("v1", "Схема")));
+    expect(result.current.activeKind).toBe("visual");
+
+    act(() => result.current.selectTab("a.adoc"));
+    expect(result.current.activeKind).toBe("file");
+  });
+
   test("closing the active visualization hands focus back to the file view", () => {
     const { result } = render(makeEditor());
     act(() => result.current.openVisualTab(visual("v1", "Схема")));
