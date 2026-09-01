@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { appConfig } from "../../lib/appConfig";
+import { NOTHING_AVAILABLE, type EditAvailability } from "../../lib/editClipboard";
 import type { MenuActionId } from "../../lib/menuActions";
 import { MenuDropdown, type MenuItem } from "./MenuDropdown";
 
@@ -76,9 +77,9 @@ const MENUS: MenuDef[] = [
       { type: "item", id: "undo", label: "Отменить", action: "edit.undo", icon: Undo2 },
       { type: "item", id: "redo", label: "Повторить", action: "edit.redo", icon: Redo2 },
       { type: "separator" },
-      { type: "item", id: "cut", label: "Вырезать", disabled: true, icon: Scissors },
-      { type: "item", id: "copy", label: "Копировать", disabled: true, icon: Copy },
-      { type: "item", id: "paste", label: "Вставить", disabled: true, icon: Clipboard },
+      { type: "item", id: "cut", label: "Вырезать", action: "edit.cut", icon: Scissors },
+      { type: "item", id: "copy", label: "Копировать", action: "edit.copy", icon: Copy },
+      { type: "item", id: "paste", label: "Вставить", action: "edit.paste", icon: Clipboard },
     ],
   },
   {
@@ -240,6 +241,8 @@ type MenuBarProps = {
   hasProject?: boolean;
   gitBusy?: boolean;
   hasActiveTab?: boolean;
+  /** Asked once per opening of «Правка» — see `openMenu`. */
+  getEditAvailability?: () => EditAvailability;
 };
 
 export function MenuBar({
@@ -247,9 +250,21 @@ export function MenuBar({
   hasProject = false,
   gitBusy = false,
   hasActiveTab = false,
+  getEditAvailability,
 }: MenuBarProps) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const [editAvailability, setEditAvailability] = useState<EditAvailability>(NOTHING_AVAILABLE);
   const rootRef = useRef<HTMLElement>(null);
+
+  // Cut/Copy/Paste depend on what is selected right now, which no prop can
+  // carry: sample it as the menu opens, in the same event that opens it, so
+  // the items never render enabled for a frame and then flip.
+  const openMenu = (id: string | null) => {
+    if (id === "edit") {
+      setEditAvailability(getEditAvailability?.() ?? NOTHING_AVAILABLE);
+    }
+    setOpenId(id);
+  };
 
   const menus = MENUS.map((menu) => {
     if (menu.id === "git") {
@@ -267,11 +282,16 @@ export function MenuBar({
         ...menu,
         items: menu.items.map((item) => {
           if (item.type !== "item") return item;
-          if (item.id !== "undo" && item.id !== "redo") return item;
-          // Monaco's ITextModel has no public canUndo/canRedo — gate on
-          // "is a document open" rather than the exact stack state; an
-          // Undo/Redo click with nothing to do is a harmless no-op.
-          return { ...item, disabled: !hasActiveTab };
+          if (item.id === "undo" || item.id === "redo") {
+            // Monaco's ITextModel has no public canUndo/canRedo — gate on
+            // "is a document open" rather than the exact stack state; an
+            // Undo/Redo click with nothing to do is a harmless no-op.
+            return { ...item, disabled: !hasActiveTab };
+          }
+          if (item.id === "cut") return { ...item, disabled: !editAvailability.cut };
+          if (item.id === "copy") return { ...item, disabled: !editAvailability.copy };
+          if (item.id === "paste") return { ...item, disabled: !editAvailability.paste };
+          return item;
         }),
       };
     }
@@ -322,9 +342,9 @@ export function MenuBar({
               className={`menu-item${open ? " is-open" : ""}`}
               aria-haspopup="menu"
               aria-expanded={open}
-              onClick={() => setOpenId(open ? null : menu.id)}
+              onClick={() => openMenu(open ? null : menu.id)}
               onMouseEnter={() => {
-                if (openId !== null) setOpenId(menu.id);
+                if (openId !== null) openMenu(menu.id);
               }}
             >
               {menu.label}

@@ -675,6 +675,10 @@ function App() {
         }}
         onUndo={tabs.undo}
         onRedo={tabs.redo}
+        onCut={tabs.cut}
+        onCopy={tabs.copy}
+        onPaste={tabs.paste}
+        getEditAvailability={tabs.editAvailability}
         hasActiveTab={editor.activeTab !== null}
         onPrefsChange={generalPrefs.setPrefs}
         onSpellcheckConfigChange={spellcheck.setConfig}

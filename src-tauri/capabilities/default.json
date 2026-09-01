@@ -19,6 +19,7 @@
     "fs:default",
     "fs:allow-write-file",
     "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-text",
     "notification:default",
     "mcp-bridge:default",
     {

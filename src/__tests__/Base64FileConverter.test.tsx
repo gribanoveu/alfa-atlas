@@ -1,10 +1,14 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import * as actualClipboard from "../lib/clipboard";
 import * as actualFileSave from "../lib/fileSave";
 
 afterEach(cleanup);
 
+// Same process-wide caveat as `fileSave` below: `readClipboardText` has to
+// survive, or the edit menu's paste path loses its binding.
 mock.module("../lib/clipboard", () => ({
+  ...actualClipboard,
   copyToClipboard: async () => {},
 }));
 

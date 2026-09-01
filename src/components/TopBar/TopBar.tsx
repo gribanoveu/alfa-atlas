@@ -3,6 +3,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, FolderOpen, GitBranch } from "l
 import { useCallback, useEffect, useRef, useState } from "react";
 import { exitApp } from "../../lib/app";
 import { appConfig } from "../../lib/appConfig";
+import type { EditAvailability } from "../../lib/editClipboard";
 import type { MenuActionId } from "../../lib/menuActions";
 import type { GeneralPrefs } from "../../lib/prefs";
 import type { ProbeResult, SyncPillState } from "../../lib/git";
@@ -35,6 +36,10 @@ type TopBarProps = {
   onSave: () => Promise<unknown>;
   onUndo?: () => void;
   onRedo?: () => void;
+  onCut?: () => void;
+  onCopy?: () => void;
+  onPaste?: () => void;
+  getEditAvailability?: () => EditAvailability;
   hasActiveTab?: boolean;
   onPrefsChange?: (prefs: GeneralPrefs) => void;
   onSpellcheckConfigChange?: (config: SpellcheckConfig) => void;
@@ -76,6 +81,10 @@ export function TopBar({
   onSave,
   onUndo,
   onRedo,
+  onCut,
+  onCopy,
+  onPaste,
+  getEditAvailability,
   hasActiveTab = false,
   onPrefsChange,
   onSpellcheckConfigChange,
@@ -181,6 +190,15 @@ export function TopBar({
         case "edit.redo":
           onRedo?.();
           break;
+        case "edit.cut":
+          onCut?.();
+          break;
+        case "edit.copy":
+          onCopy?.();
+          break;
+        case "edit.paste":
+          onPaste?.();
+          break;
         case "view.toggleSidebar":
           onToggleSidebar();
           break;
@@ -253,6 +271,9 @@ export function TopBar({
       onSave,
       onUndo,
       onRedo,
+      onCut,
+      onCopy,
+      onPaste,
       onToggleBottom,
       onToggleGit,
       onOpenBranches,
@@ -269,6 +290,7 @@ export function TopBar({
           hasProject={hasProject}
           gitBusy={gitBusy}
           hasActiveTab={hasActiveTab}
+          getEditAvailability={getEditAvailability}
         />
         <div className="topbar-spacer" />
         <div className="topbar-right">

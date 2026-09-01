@@ -10,6 +10,7 @@ import {
 import { artifactIdFromTabId, artifactTabId } from "../lib/artifactTabs";
 import { visualIdFromTabId, visualTabId, type Visual } from "../lib/visuals";
 import type { SpecsRepoInfo } from "../lib/openapi";
+import { useEditClipboard } from "./useEditClipboard";
 import type { useEditorTabs } from "./useEditorTabs";
 
 type Deps = {
@@ -338,6 +339,10 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
   const undo = useCallback(() => runEditorCommand("undo"), [runEditorCommand]);
   const redo = useCallback(() => runEditorCommand("redo"), [runEditorCommand]);
 
+  // Cut/Copy/Paste reach further than the editor — any focused text field
+  // counts — but the active Monaco instance is here, so the wiring is too.
+  const clipboard = useEditClipboard(activeEditorRef);
+
   return {
     openApiTabOpen,
     setOpenApiTabOpen,
@@ -360,5 +365,9 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
     onEditorInstanceChange,
     undo,
     redo,
+    cut: clipboard.cut,
+    copy: clipboard.copy,
+    paste: clipboard.paste,
+    editAvailability: clipboard.availability,
   };
 }
