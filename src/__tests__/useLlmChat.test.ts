@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import * as actualLlm from "../lib/llm";
 import * as actualAiTools from "../lib/aiTools";
+import * as actualPlans from "../lib/plans";
+import * as actualArtifacts from "../lib/artifacts";
 import type { ChatMessage } from "../lib/chatBlocks";
 import type { ChatStreamOutcome, ChatUsage, PendingApproval, PendingToolCall, ToolCallDecision } from "../lib/llm";
 
@@ -145,8 +147,11 @@ mock.module("../lib/assistantSounds", () => ({
   playNeedAnswerSound: () => {},
   playTaskDoneSound: () => {},
 }));
-mock.module("../lib/plans", () => ({ planGet: async () => null }));
-mock.module("../lib/artifacts", () => ({ artifactList: async () => [] }));
+// Both spread the real module rather than standing in for it wholesale:
+// `mock.module` is global for the whole `bun test` run, so a replacement that
+// drops the other exports is what every later test file importing them sees.
+mock.module("../lib/plans", () => ({ ...actualPlans, planGet: async () => null }));
+mock.module("../lib/artifacts", () => ({ ...actualArtifacts, artifactList: async () => [] }));
 
 const { useLlmChat } = await import("../hooks/useLlmChat");
 

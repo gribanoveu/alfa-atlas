@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { useState } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import * as actualArtifacts from "../lib/artifacts";
 import type { ArtifactContent } from "../lib/artifacts";
 
 afterEach(cleanup);
@@ -15,7 +16,11 @@ mock.module("@tauri-apps/plugin-clipboard-manager", () => ({
 // The preview goes through the real Rust renderer over IPC; here we only
 // need to know the builder asks for it with the current spec.
 const renderCalls: ArtifactContent[] = [];
+// Spread rather than replace: `mock.module` is global for the whole `bun
+// test` run, so dropping the module's other exports here removes them from
+// every later test file that imports them.
 mock.module("../lib/artifacts", () => ({
+  ...actualArtifacts,
   ARTIFACT_KIND_LABELS: { httpRequest: "HTTP-запрос" },
   artifactRender: async (content: ArtifactContent) => {
     renderCalls.push(content);

@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import * as actualGit from "../lib/git";
 import * as actualProject from "../lib/project";
 import * as actualPrefs from "../lib/prefs";
+import * as actualGitProgress from "../hooks/useGitProgress";
 
 let cloneResult: unknown = { root: "/repo" };
 let cloneError: string | null = null;
@@ -45,9 +46,14 @@ mock.module("../lib/prefs", () => ({
   },
 }));
 mock.module("@tauri-apps/plugin-dialog", () => ({ open: async () => pickResult }));
+// Only the hook needs replacing — it opens a Tauri event listener. The rest
+// of the module is kept, like every other mock here: `mock.module` is global
+// for the whole `bun test` run, so a hand-written stand-in for
+// `formatGitBusyLabel` would be what `formatGitBusyLabel.test.ts` tests
+// against too, whenever this file happens to load first.
 mock.module("../hooks/useGitProgress", () => ({
+  ...actualGitProgress,
   useGitProgress: () => ({ event: null, reset: () => {} }),
-  formatGitBusyLabel: (base: string) => `${base}…`,
 }));
 
 const { useCloneRepo } = await import("../hooks/useCloneRepo");
