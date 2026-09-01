@@ -631,6 +631,7 @@ export function LlmTab() {
     loadModels,
     testConnection,
     setRateLimitEnabled,
+    setRateLimitOffHoursEnforced,
   } = useLlmSetup();
 
   const activeId = settings?.activeProviderId ?? providers[0]?.id ?? null;
@@ -756,7 +757,23 @@ export function LlmTab() {
           <span>Учитывать лимиты API</span>
         </label>
         <p className="settings-hint">
-          Для AlfaGen — скользящее окно EVC. Выключите, чтобы скрыть чип и не записывать расход токенов.
+          Для AlfaGen — скользящее окно EVC: токены запроса, токены ответа и число
+          обращений считаются отдельно, отказ приходит по любому из трёх.
+          Выключите, чтобы скрыть чип и не записывать расход.
+        </p>
+        <label className="settings-check">
+          <input
+            type="checkbox"
+            checked={settings?.rateLimitOffHoursEnforced ?? false}
+            disabled={busy || !settings || !(settings?.rateLimitEnabled ?? true)}
+            onChange={(event) => void setRateLimitOffHoursEnforced(event.target.checked)}
+          />
+          <span>Считать и в нерабочее время</span>
+        </label>
+        <p className="settings-hint">
+          Вне будних 9:00–19:00 сервер лимиты не проверяет, поэтому по умолчанию
+          чип в это время показывает «без лимита». Включите, чтобы расход
+          считался круглосуточно — пригодится, если график лимитов изменился.
         </p>
       </div>
 

@@ -213,16 +213,46 @@
   letter-spacing: 0.01em;
 }
 
+.statusbar .rate-limit-window {
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+/* Три счётчика одного окна идут стопкой. Ведущий — тот, чьё число вынесено
+   на сам чип, — подсвечен, чтобы связь между чипом и строкой читалась. */
+.statusbar .rate-limit-resource + .rate-limit-resource {
+  margin-top: 10px;
+}
+
+.statusbar .rate-limit-resource-name {
+  margin-right: 6px;
+  font-size: var(--font-ui-xs);
+  font-weight: 500;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.statusbar .rate-limit-resource.is-driving .rate-limit-resource-name {
+  color: var(--text-0);
+}
+
+.statusbar .rate-limit-resource-note {
+  margin-top: 4px;
+  color: var(--red-tag);
+  font-size: var(--font-ui-xs);
+}
+
 .statusbar .rate-limit-usage-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .statusbar .rate-limit-usage-num {
-  font-size: calc(var(--font-ui) * 1.15);
+  font-size: var(--font-ui);
   font-weight: 600;
   color: var(--text-0);
 }

@@ -247,6 +247,25 @@ export function useLlmSetup() {
     [settings],
   );
 
+  const setRateLimitOffHoursEnforced = useCallback(
+    async (enabled: boolean) => {
+      if (!settings) return;
+      const next = { ...settings, rateLimitOffHoursEnforced: enabled };
+      setSettingsState(next);
+      setBusy(true);
+      try {
+        await setLlmSettings(next);
+        setError(null);
+        notifyLlmSetupChanged();
+      } catch (e) {
+        setError(toMessage(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [settings],
+  );
+
   const setMemoryExtractionEnabled = useCallback(
     async (enabled: boolean) => {
       if (!settings) return;
@@ -322,6 +341,7 @@ export function useLlmSetup() {
     setTaskDoneSoundEnabled,
     setNeedAnswerSoundEnabled,
     setRateLimitEnabled,
+    setRateLimitOffHoursEnforced,
     setMemoryExtractionEnabled,
     removeProvider,
     saveApiKey,

@@ -142,7 +142,7 @@ pub fn chat_once(
     );
     if let Ok(ref response) = outcome {
         if let Some(usage) = response.usage {
-            llm_rate_limit::record(&session.provider_id, usage.completion_tokens);
+            llm_rate_limit::record(&session.provider_id, usage.prompt_tokens, usage.completion_tokens);
             events(ChatEvent::RateLimitChanged);
         }
     }

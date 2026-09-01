@@ -172,8 +172,9 @@ pub fn llm_get_settings() -> Result<LlmSettings, String> {
 #[tauri::command]
 pub fn llm_set_settings(app: AppHandle, settings: LlmSettings) -> Result<(), String> {
     llm_config::save_llm_settings(settings).map_err(|e| e.to_string())?;
-    // Settings owns `rate_limit_enabled`; the chip's hook already listens
-    // to this event, so a toggle takes effect without waiting for a poll.
+    // Settings owns `rate_limit_enabled` and
+    // `rate_limit_off_hours_enforced`; the chip's hook already listens to
+    // this event, so either toggle takes effect without waiting for a poll.
     let _ = app.emit(RATE_LIMIT_CHANGED_EVENT, ());
     Ok(())
 }

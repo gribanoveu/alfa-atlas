@@ -87,21 +87,27 @@ fn prune(events: &mut Vec<UsageEvent>, retention_ms: Option<i64>, now: i64) {
 }
 
 fn active_policy(provider_id: &str) -> Box<dyn crate::domain::llm_rate_limit::RateLimitPolicy> {
-    let enabled = llm_config::load_llm_settings()
-        .map(|s| s.rate_limit_enabled)
-        .unwrap_or(true);
+    let settings = llm_config::load_llm_settings().ok();
+    let enabled = settings.as_ref().map(|s| s.rate_limit_enabled).unwrap_or(true);
+    let enforce_off_hours = settings
+        .as_ref()
+        .map(|s| s.rate_limit_off_hours_enforced)
+        .unwrap_or(false);
     if !enabled {
-        return policy_for(None);
+        return policy_for(None, false);
     }
-    policy_for(llm_provider_manifest::find_rate_limit(provider_id))
+    policy_for(
+        llm_provider_manifest::find_rate_limit(provider_id),
+        enforce_off_hours,
+    )
 }
 
-/// Record completion tokens for one successful LLM HTTP round.
-/// No-op when `tokens == 0`, tracking is disabled, or the provider has no baked-in rule.
-pub fn record(provider_id: &str, tokens: u32) {
-    if tokens == 0 {
-        return;
-    }
+/// Record one successful LLM HTTP round: its prompt and completion tokens,
+/// and — implicitly, by existing at all — one request against the request
+/// cap. That last part is why a zero-token round is still recorded.
+///
+/// No-op when tracking is disabled or the provider has no baked-in rule.
+pub fn record(provider_id: &str, prompt_tokens: u32, completion_tokens: u32) {
     let policy = active_policy(provider_id);
     let Some(retention) = policy.retention_ms() else {
         return;
@@ -115,7 +121,8 @@ pub fn record(provider_id: &str, tokens: u32) {
         events.push(UsageEvent {
             id,
             at_ms: now,
-            tokens,
+            tokens: completion_tokens,
+            prompt_tokens,
         });
         save_unlocked(store);
     });
@@ -148,20 +155,43 @@ mod tests {
     use super::*;
     use crate::infra::settings_store::test_support::with_temp_home;
 
+    use crate::domain::llm_rate_limit::RateLimitResourceKind;
+
+    fn used(snap: &crate::domain::llm_rate_limit::RateLimitSnapshot, kind: RateLimitResourceKind) -> u32 {
+        snap.resources
+            .iter()
+            .find(|r| r.kind == kind)
+            .map(|r| r.used)
+            .unwrap_or(0)
+    }
+
     #[test]
     fn record_and_snapshot_round_trip() {
         with_temp_home(|| {
             // Reset in-memory cache so this test's HOME is what we load.
             *STORE.lock().unwrap() = None;
-            record("alfagen", 12_000);
+            record("alfagen", 300_000, 12_000);
             let snap = snapshot("alfagen");
             assert_eq!(snap.policy_id, "evc-sliding-window");
-            assert_eq!(snap.used, 12_000);
+            assert_eq!(used(&snap, RateLimitResourceKind::Completion), 12_000);
+            assert_eq!(used(&snap, RateLimitResourceKind::Prompt), 300_000);
+            assert_eq!(used(&snap, RateLimitResourceKind::Requests), 1);
             assert_eq!(snap.samples.len(), 1);
             // Reload from disk through a fresh cache.
             *STORE.lock().unwrap() = None;
             let snap2 = snapshot("alfagen");
-            assert_eq!(snap2.used, 12_000);
+            assert_eq!(used(&snap2, RateLimitResourceKind::Completion), 12_000);
+            assert_eq!(used(&snap2, RateLimitResourceKind::Prompt), 300_000);
+        });
+    }
+
+    #[test]
+    fn a_token_free_round_still_counts_as_a_request() {
+        with_temp_home(|| {
+            *STORE.lock().unwrap() = None;
+            record("alfagen", 0, 0);
+            let snap = snapshot("alfagen");
+            assert_eq!(used(&snap, RateLimitResourceKind::Requests), 1);
         });
     }
 
@@ -169,7 +199,7 @@ mod tests {
     fn noop_provider_does_not_persist() {
         with_temp_home(|| {
             *STORE.lock().unwrap() = None;
-            record("custom-openai", 50_000);
+            record("custom-openai", 10_000, 50_000);
             let snap = snapshot("custom-openai");
             assert_eq!(snap.policy_id, "none");
             assert_eq!(snap.used, 0);
@@ -191,10 +221,32 @@ mod tests {
                 ..Default::default()
             };
             llm_config::save_llm_settings(settings).unwrap();
-            record("alfagen", 12_000);
+            record("alfagen", 300_000, 12_000);
             let snap = snapshot("alfagen");
             assert_eq!(snap.policy_id, "none");
             assert_eq!(snap.used, 0);
+            assert!(snap.resources.is_empty());
+        });
+    }
+
+    #[test]
+    fn off_hours_setting_reaches_the_policy() {
+        with_temp_home(|| {
+            *STORE.lock().unwrap() = None;
+            let settings = crate::domain::llm::LlmSettings {
+                rate_limit_off_hours_enforced: true,
+                ..Default::default()
+            };
+            llm_config::save_llm_settings(settings).unwrap();
+            record("alfagen", 1_000, 100);
+            // Whatever the clock says right now, the override means the
+            // window is being counted — never the off-hours severity.
+            let snap = snapshot("alfagen");
+            assert!(snap.is_enforced);
+            assert_ne!(
+                snap.severity,
+                crate::domain::llm_rate_limit::RateLimitSeverity::OffHours
+            );
         });
     }
 }

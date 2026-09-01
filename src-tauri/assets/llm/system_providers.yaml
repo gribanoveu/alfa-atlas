@@ -119,8 +119,14 @@ rateLimits:
   - providerId: alfagen
     policyId: evc-sliding-window
     label: EVC
+    # completion-токены; prompt и число запросов — отдельные счётчики того
+    # же окна, сервер отказывает при достижении любого из трёх.
     limit: 60000
-    windowMinutes: 30
-    workFromHour: null
-    workToHour: null
+    promptLimit: 10000000
+    requestLimit: 1000
+    windowMinutes: 20
+    # Будни 9:00–19:00 по Москве; вне этого окна сервер лимиты не проверяет.
+    workFromHour: 9
+    workToHour: 19
+    workWeekdaysOnly: true
     timezoneOffsetHours: 3

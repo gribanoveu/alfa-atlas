@@ -213,9 +213,12 @@ mod tests {
         assert_eq!(preset.policy_id, "evc-sliding-window");
         assert_eq!(preset.label, "EVC");
         assert_eq!(preset.limit, 60_000);
-        assert_eq!(preset.window_minutes, 30);
-        assert_eq!(preset.work_from_hour, None);
-        assert_eq!(preset.work_to_hour, None);
+        assert_eq!(preset.prompt_limit, 10_000_000);
+        assert_eq!(preset.request_limit, 1_000);
+        assert_eq!(preset.window_minutes, 20);
+        assert_eq!(preset.work_from_hour, Some(9));
+        assert_eq!(preset.work_to_hour, Some(19));
+        assert!(preset.work_weekdays_only);
         assert_eq!(preset.timezone_offset_hours, 3);
     }
 

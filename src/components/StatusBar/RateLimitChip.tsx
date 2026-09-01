@@ -1,6 +1,27 @@
 import { useEffect, useRef, useState } from "react";
-import type { RateLimitSeverity, RateLimitSnapshot } from "../../lib/llm";
+import type {
+  RateLimitResource,
+  RateLimitResourceKind,
+  RateLimitSeverity,
+  RateLimitSnapshot,
+} from "../../lib/llm";
 import "./StatusBar.css";
+
+/** Wording for the three counters. Lives here rather than in the manifest:
+ * the backend sends a `kind`, the labels are UI copy. */
+const RESOURCE_LABELS: Record<RateLimitResourceKind, string> = {
+  prompt: "Запрос",
+  completion: "Ответ",
+  requests: "Обращения",
+};
+
+/** Unit for the "frees up" hint — tokens for the two token counters, calls
+ * for the request counter. */
+const RESOURCE_UNITS: Record<RateLimitResourceKind, string> = {
+  prompt: "токенов",
+  completion: "токенов",
+  requests: "обращений",
+};
 
 type RateLimitChipProps = {
   snapshot: RateLimitSnapshot;
@@ -8,7 +29,14 @@ type RateLimitChipProps = {
   onOpenChange: (open: boolean) => void;
 };
 
+/** Compact enough for the chip, which now has to fit a 10 000 000 prompt
+ * cap next to a 1 000 request one — hence the M step, or the token counters
+ * would read "10000k". */
 function formatK(n: number): string {
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000;
+    return Number.isInteger(m) ? `${m}M` : `${m.toFixed(1)}M`;
+  }
   if (n >= 1000) {
     const k = n / 1000;
     return Number.isInteger(k) ? `${k}k` : `${k.toFixed(1)}k`;
@@ -18,6 +46,13 @@ function formatK(n: number): string {
 
 function spaced(n: number): string {
   return n.toLocaleString("ru-RU").replace(/\u00A0/g, " ");
+}
+
+/** Exact digits where they fit, compact where they don't: the popover is
+ * 280px wide and "9 900 000 / 10 000 000" wraps onto three lines, while
+ * "60 000" and "1 000" read better in full. */
+function exactOrCompact(n: number): string {
+  return n >= 1_000_000 ? formatK(n) : spaced(n);
 }
 
 function hhmm(ms: number): string {
@@ -70,20 +105,29 @@ export function RateLimitChip({ snapshot, open, onOpenChange }: RateLimitChipPro
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open, onOpenChange]);
 
+  // The chip has room for one number, so it shows whichever counter the
+  // backend nominated as closest to its cap.
+  const drivingLabel = snapshot.drivingKind ? RESOURCE_LABELS[snapshot.drivingKind] : "";
   const chipLabel = !snapshot.isEnforced
     ? "без лимита"
     : `${formatK(snapshot.used)} / ${formatK(snapshot.limit)}`;
 
-  const pct = snapshot.limit > 0 ? Math.min(100, (snapshot.used / snapshot.limit) * 100) : 0;
+  const driving = snapshot.resources.find((r) => r.kind === snapshot.drivingKind) ?? null;
   const hint = !snapshot.isEnforced
     ? snapshot.nextEnforceAt != null
       ? `Лимит с ${hhmm(snapshot.nextEnforceAt)} · через ${dur(snapshot.nextEnforceAt - now)}`
       : "Лимит не проверяется"
     : snapshot.isLimited && snapshot.retryUntil != null
       ? `Повтор с ${hhmm(snapshot.retryUntil)} · через ${dur(snapshot.retryUntil - now)}`
-      : snapshot.nextReleaseAt != null
-        ? `Освободится ${formatK(snapshot.releases[0]?.tokens ?? 0)} · через ${dur(snapshot.nextReleaseAt - now)}`
+      : driving?.nextReleaseAt != null
+        ? `Освободится ${formatK(driving.nextReleaseAmount)} ${
+            RESOURCE_UNITS[driving.kind]
+          } · через ${dur(driving.nextReleaseAt - now)}`
         : "Окно пустое";
+
+  const windowLabel =
+    snapshot.windowMs != null ? `окно ${Math.round(snapshot.windowMs / 60000)} мин` : "";
+  const limitedCount = snapshot.resources.filter((r) => r.isLimited).length;
 
   return (
     <div className="seg rate-limit" ref={rootRef}>
@@ -91,7 +135,11 @@ export function RateLimitChip({ snapshot, open, onOpenChange }: RateLimitChipPro
         type="button"
         className={`seg rate-limit-chip clickable ${severityClass(snapshot.severity)}${open ? " open" : ""}`}
         onClick={() => onOpenChange(!open)}
-        title={`${snapshot.label} API — лимит completion-токенов`}
+        title={
+          snapshot.isEnforced && drivingLabel
+            ? `${snapshot.label} API — ближе всего к лимиту: ${drivingLabel.toLowerCase()}`
+            : `${snapshot.label} API — лимиты запроса, ответа и числа обращений`
+        }
         aria-expanded={open}
         aria-haspopup="dialog"
       >
@@ -106,24 +154,74 @@ export function RateLimitChip({ snapshot, open, onOpenChange }: RateLimitChipPro
       {open ? (
         <div className="rate-limit-popover" role="dialog" aria-labelledby="rate-limit-popover-title">
           <div className="rate-limit-title" id="rate-limit-popover-title">
-            Лимиты API
+            Лимиты API{windowLabel ? <span className="rate-limit-window"> · {windowLabel}</span> : null}
           </div>
-          <div className="rate-limit-usage-row">
-            <span className="rate-limit-usage-num">
-              {spaced(snapshot.used)}
-              <span className="rate-limit-usage-den"> / {spaced(snapshot.limit)}</span>
-            </span>
-            <span className="rate-limit-usage-unit">
-              {snapshot.isEnforced ? `${spaced(snapshot.remaining)} осталось` : "08:00–21:00"}
-            </span>
-          </div>
-          <div className="rate-limit-bar-track">
-            <div
-              className={`rate-limit-bar-fill ${severityClass(snapshot.severity)}`}
-              style={{ width: `${snapshot.isEnforced ? pct : 0}%` }}
+
+          {snapshot.resources.map((resource) => (
+            <ResourceRow
+              key={resource.kind}
+              resource={resource}
+              isEnforced={snapshot.isEnforced}
+              isDriving={resource.kind === snapshot.drivingKind}
+              // Общая подсказка внизу уже называет самый поздний срок
+              // повтора; расписывать сроки по строкам стоит только когда
+              // упёрлись сразу в несколько счётчиков и они разные.
+              showRetry={limitedCount > 1}
+              now={now}
             />
-          </div>
+          ))}
+
           <div className={`rate-limit-hint${snapshot.isLimited ? " limited" : ""}`}>{hint}</div>
+          {snapshot.offHoursOverride ? (
+            <div className="rate-limit-hint">
+              Сейчас нерабочее время — сервер лимиты не проверяет, но подсчёт включён в настройках.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** One counter: name, numbers, bar. The driving one is marked so the chip's
+ * single number can be traced back to the row it came from. */
+function ResourceRow({
+  resource,
+  isEnforced,
+  isDriving,
+  showRetry,
+  now,
+}: {
+  resource: RateLimitResource;
+  isEnforced: boolean;
+  isDriving: boolean;
+  showRetry: boolean;
+  now: number;
+}) {
+  const pct = resource.limit > 0 ? Math.min(100, (resource.used / resource.limit) * 100) : 0;
+  return (
+    <div className={`rate-limit-resource${isDriving ? " is-driving" : ""}`}>
+      <div className="rate-limit-usage-row">
+        <span className="rate-limit-usage-num">
+          <span className="rate-limit-resource-name">{RESOURCE_LABELS[resource.kind]}</span>
+          {exactOrCompact(resource.used)}
+          <span className="rate-limit-usage-den"> / {exactOrCompact(resource.limit)}</span>
+        </span>
+        {/* Вне рабочего времени остаток не значит ничего, а «с 09:00» уже
+            сказано подсказкой внизу — три повтора подряд только шумят. */}
+        <span className="rate-limit-usage-unit">
+          {isEnforced ? `${exactOrCompact(resource.remaining)} осталось` : ""}
+        </span>
+      </div>
+      <div className="rate-limit-bar-track">
+        <div
+          className={`rate-limit-bar-fill ${severityClass(resource.severity)}`}
+          style={{ width: `${isEnforced ? pct : 0}%` }}
+        />
+      </div>
+      {showRetry && isEnforced && resource.isLimited && resource.retryUntil != null ? (
+        <div className="rate-limit-resource-note">
+          освободится {hhmm(resource.retryUntil)} · через {dur(resource.retryUntil - now)}
         </div>
       ) : null}
     </div>

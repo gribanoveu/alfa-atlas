@@ -158,6 +158,13 @@ pub struct LlmSettings {
     /// turned back on.
     #[serde(default = "default_true")]
     pub rate_limit_enabled: bool,
+    /// Off by default, matching the server: outside the schedule baked into
+    /// `system_providers.yaml` (weekday working hours) it does not check
+    /// limits at all, so neither do we — the chip reads "без лимита". Turn
+    /// this on to keep counting the window around the clock, which is the
+    /// safer read when the schedule is in doubt.
+    #[serde(default)]
+    pub rate_limit_off_hours_enforced: bool,
     /// On by default. When on, a tool-free extractor LLM call runs after
     /// each persisted chat turn and (subject to `memory_policy`) appends
     /// lasting facts to OptMem. Off skips the job entirely — wake of
@@ -189,6 +196,7 @@ impl Default for LlmSettings {
             task_done_sound_enabled: true,
             need_answer_sound_enabled: true,
             rate_limit_enabled: true,
+            rate_limit_off_hours_enforced: false,
             memory_extraction_enabled: true,
             memory_confidence_threshold: crate::domain::memory_policy::DEFAULT_CONFIDENCE_THRESHOLD,
         }

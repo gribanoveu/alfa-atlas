@@ -390,7 +390,7 @@ fn run_tool_loop(
                 llm_debug_log::log_response(ctx.settings.debug_logging, ctx.provider_id, round, &raw_result);
                 let result = raw_result.map_err(|e| e.to_string())?;
                 if let Some(usage) = result.usage {
-                    llm_rate_limit::record(ctx.provider_id, usage.completion_tokens);
+                    llm_rate_limit::record(ctx.provider_id, usage.prompt_tokens, usage.completion_tokens);
                     (ctx.events)(ChatEvent::RateLimitChanged);
                     (ctx.events)(ChatEvent::ContextUsage(usage));
                 }

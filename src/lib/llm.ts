@@ -81,6 +81,10 @@ export type LlmSettings = {
    * and completion tokens are not recorded. The baked-in rule lives in
    * `system_providers.yaml` `rateLimits`. */
   rateLimitEnabled: boolean;
+  /** Off by default, like the provider: outside its schedule (weekday
+   * working hours) it checks nothing, so neither do we. On keeps the window
+   * counted around the clock. */
+  rateLimitOffHoursEnforced: boolean;
   /** On by default. When on, a background extractor runs after each
    * persisted chat turn and writes lasting facts to OptMem. */
   memoryExtractionEnabled: boolean;
@@ -330,6 +334,7 @@ export type RateLimitSeverity =
 export type RateLimitRelease = {
   at: number;
   tokens: number;
+  promptTokens: number;
 };
 
 /** Mirrors `domain::llm_rate_limit::RateLimitSample`. */
@@ -337,17 +342,42 @@ export type RateLimitSample = {
   id: string;
   at: number;
   tokens: number;
+  promptTokens: number;
   expiresAt: number;
 };
 
+/** Which of the three counters a resource describes. Wording stays here in
+ * the UI; the backend only sends the kind. */
+export type RateLimitResourceKind = "prompt" | "completion" | "requests";
+
+/** Mirrors `domain::llm_rate_limit::RateLimitResource` — one counter of the
+ * shared window. The server refuses as soon as any of them is full. */
+export type RateLimitResource = {
+  kind: RateLimitResourceKind;
+  used: number;
+  remaining: number;
+  limit: number;
+  isLimited: boolean;
+  severity: RateLimitSeverity;
+  retryUntil: number | null;
+  nextReleaseAt: number | null;
+  nextReleaseAmount: number;
+};
+
 /** Mirrors `domain::llm_rate_limit::RateLimitSnapshot` — stable UI contract;
- * the frontend must not hard-code window length / limit / working hours. */
+ * the frontend must not hard-code window length / limits / working hours.
+ *
+ * `used`/`remaining`/`limit`/`severity`/`retryUntil` describe the *driving*
+ * resource (the counter closest to its cap), which is what the one-line chip
+ * shows; `resources` carries all of them for the popover. */
 export type RateLimitSnapshot = {
   policyId: string;
   label: string;
   used: number;
   remaining: number;
   limit: number;
+  drivingKind: RateLimitResourceKind | null;
+  resources: RateLimitResource[];
   windowMs: number | null;
   isEnforced: boolean;
   isLimited: boolean;
@@ -355,6 +385,8 @@ export type RateLimitSnapshot = {
   retryUntil: number | null;
   nextReleaseAt: number | null;
   nextEnforceAt: number | null;
+  /** Counting outside the provider's schedule because the user asked to. */
+  offHoursOverride: boolean;
   releases: RateLimitRelease[];
   samples: RateLimitSample[];
 };
