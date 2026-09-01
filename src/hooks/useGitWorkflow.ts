@@ -304,6 +304,11 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
   const onPullConfirm = useCallback(
     async (mode: PullMode) => {
       const result = await git.pull(mode);
+      // `git.pull` обновляет только статус рабочего дерева. Отставание от
+      // сервера живёт в списке веток, и без этого обновления «есть
+      // обновления» продолжает гореть в пилюле синхронизации и в шторке
+      // веток до ручного «Обновить список локально».
+      await branches.refresh();
       setPullModalOpen(false);
       if (result.status === "error") {
         setGitAlert({ message: result.message });
@@ -313,13 +318,17 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
       // "conflict" is surfaced via the Git panel's "Конфликты слияния"
       // section (git.status.conflicted), which auto-opens — no alert here.
     },
-    [git, showSuccess],
+    [git, branches.refresh, showSuccess],
   );
   const onResetToRemoteConfirm = useCallback(async () => {
     const preResetOid = project.repoRoot
       ? await gitHeadOid(project.repoRoot).catch(() => null)
       : null;
     const err = await git.resetToRemote();
+    // Второй выход из того же диалога «Обновить проект»: после сброса ветка
+    // тоже перестаёт отставать от сервера — перечитываем список по той же
+    // причине, что и после pull.
+    await branches.refresh();
     setResetRemoteConfirmOpen(false);
     setPullModalOpen(false);
     if (err) {
@@ -332,7 +341,7 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
         payload: { kind: "resetToRemote", preResetOid },
       });
     }
-  }, [git, project.repoRoot, actionLog]);
+  }, [git, branches.refresh, project.repoRoot, actionLog]);
   const onDeleteBranchConfirm = useCallback(async () => {
     if (!deleteBranchTarget) return;
     const { name, tipOid } = deleteBranchTarget;

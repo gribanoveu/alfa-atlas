@@ -281,6 +281,18 @@ describe("useGitWorkflow — pull", () => {
     expect(successes).toEqual([]);
   });
 
+  test("a pull refreshes the branch list, not just the working-tree status", async () => {
+    // `behind` (стрелка «доступно обновление» и пилюля синхронизации)
+    // читается из списка веток, который `git.pull` не трогает.
+    const { deps, result } = render();
+
+    await act(async () => {
+      await result.current.onPullConfirm("merge" as never);
+    });
+
+    expect(deps.branches.refresh).toHaveBeenCalled();
+  });
+
   test("a conflicting pull raises no alert — the git panel shows it", async () => {
     pullResult = { status: "conflict" };
     const { result } = render();
@@ -291,6 +303,17 @@ describe("useGitWorkflow — pull", () => {
 
     expect(result.current.gitAlert).toBeNull();
     expect(successes).toEqual([]);
+  });
+
+  test("a reset to remote refreshes the branch list too", async () => {
+    const { deps, result } = render();
+
+    await act(async () => {
+      await result.current.onResetToRemoteConfirm();
+    });
+
+    expect(deps.branches.refresh).toHaveBeenCalled();
+    expect(result.current.pullModalOpen).toBe(false);
   });
 });
 

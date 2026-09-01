@@ -239,6 +239,14 @@ function App() {
   const branches = useBranches(project.repoRoot, {
     active: Boolean(project.repoRoot),
   });
+  // Открытие шторки веток равнозначно нажатию «Обновить список локально»:
+  // сам по себе список читается один раз при открытии проекта, а к моменту,
+  // когда пользователь до него добирается, и состав веток, и их отставание
+  // от сервера (стрелка «доступно обновление») обычно уже устарели.
+  useEffect(() => {
+    if (layout.activeTool !== "branches") return;
+    void branches.refresh();
+  }, [layout.activeTool, branches.refresh]);
   const stash = useGitStash(project.repoRoot, {
     active: Boolean(project.repoRoot),
   });
