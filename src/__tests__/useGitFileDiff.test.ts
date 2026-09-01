@@ -156,19 +156,19 @@ describe("useGitFileDiff", () => {
     expect(result.current.saving).toBe(false);
   });
 
-  test('a save that leaves nothing to diff reports "gone"', async () => {
+  test('a save that leaves an empty diff reports "gone"', async () => {
     let loads = 0;
     const d = deps({
       onLoadDiff: async () => {
         loads += 1;
-        return loads === 1 ? diff("old", "new") : null;
+        return loads === 1 ? diff("old", "new") : diff("same", "same");
       },
     });
     const { result } = renderHook(() => useGitFileDiff(d));
     await waitFor(() => expect(result.current.diff?.modified).toBe("new"));
 
-    // The file now matches HEAD, so there is no diff left to show — the
-    // caller closes rather than reporting a load failure.
+    // The file now matches HEAD. The real git command returns an object with
+    // equal sides, so the caller must close rather than keep the modal open.
     let outcome: string | undefined;
     await act(async () => {
       outcome = await result.current.save("reverted");

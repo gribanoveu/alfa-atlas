@@ -78,6 +78,9 @@ export function useGitFileDiff({ target, onLoadDiff, onDiscard, onSaveContent }:
         const result = await onLoadDiff(path, scope);
         if (!mounted.current) return "saved";
         if (!result) return "gone";
+        // The git command returns an empty diff object when the edited side
+        // now matches the original side, rather than returning null.
+        if (!result.isBinary && result.original === result.modified) return "gone";
         setDiff(result);
         return "saved";
       } finally {

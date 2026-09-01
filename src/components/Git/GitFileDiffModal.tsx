@@ -101,7 +101,9 @@ export function GitFileDiffModal({
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      wordWrap: "on" as const,
+      // Keep both sides horizontally scrollable instead of wrapping long
+      // lines differently when their available widths do not match.
+      wordWrap: "off" as const,
       fontFamily: "'JetBrains Mono', ui-monospace, monospace",
       fontSize: editorFontSizePx,
       renderOverviewRuler: false,

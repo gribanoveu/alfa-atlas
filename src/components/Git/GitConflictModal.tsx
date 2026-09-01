@@ -184,7 +184,8 @@ export function GitConflictModal({
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      wordWrap: "on" as const,
+      // Keep long lines horizontally scrollable in every conflict pane.
+      wordWrap: "off" as const,
       fontFamily: "'JetBrains Mono', ui-monospace, monospace",
       fontSize: editorFontSizePx,
       glyphMargin: false,
@@ -200,7 +201,8 @@ export function GitConflictModal({
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      wordWrap: "on" as const,
+      // Keep long lines horizontally scrollable in every conflict pane.
+      wordWrap: "off" as const,
       fontFamily: "'JetBrains Mono', ui-monospace, monospace",
       fontSize: editorFontSizePx,
       glyphMargin: false,
