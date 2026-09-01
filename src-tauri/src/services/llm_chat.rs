@@ -202,6 +202,47 @@ fn docs_boundary_note(
     }
 }
 
+/// How many closed macros the note below spells out before collapsing the
+/// rest into a count. Same reasoning as `MAX_WRITE_CHECK_DIAGNOSTICS`, and a
+/// write that needed more than ten of these has a systematic habit the note's
+/// first sentence already names.
+const MAX_CLOSED_MACROS_LISTED: usize = 10;
+
+/// Tells the model that what landed on disk is not byte-for-byte what it
+/// sent.
+///
+/// `writeFile`/`editFile` run every AsciiDoc write through
+/// `domain::asciidoc_macro_brackets`, which completes bare `include::` /
+/// `image::` / `xref:` targets with `[]`. That rewrite is silent, and a model
+/// that doesn't know about it holds a picture of the file that disagrees with
+/// the file — it will "fix" the same lines again, or reason from text that
+/// isn't there.
+///
+/// Worded as a statement about the file, not about the caller's mistake: on
+/// `editFile` the pass runs over the whole document, so it can close a macro
+/// that was already in the file on a line the edits never touched.
+fn closed_macros_note(outcome: &Result<ToolResult, String>, content: String) -> String {
+    let closed = match outcome {
+        Ok(ToolResult::FileWritten { closed_macros, .. })
+        | Ok(ToolResult::FileEdited { closed_macros, .. }) => closed_macros,
+        _ => return content,
+    };
+    if closed.is_empty() {
+        return content;
+    }
+    let total = closed.len();
+    let mut note = format!(
+        "Записанный файл отличается от переданного текста: {total} макрос(ов) стояли без обязательных квадратных скобок, и скобки дописаны при записи. Без `[]` AsciiDoc не считает строку макросом — она не попадёт ни в индекс, ни в проверки. Сейчас на диске:"
+    );
+    for m in closed.iter().take(MAX_CLOSED_MACROS_LISTED) {
+        note.push_str(&format!("\n- строка {}: {}", m.line, m.text));
+    }
+    if total > MAX_CLOSED_MACROS_LISTED {
+        note.push_str(&format!("\n- … и ещё {}.", total - MAX_CLOSED_MACROS_LISTED));
+    }
+    format!("{content}\n\n{note}")
+}
+
 /// How many diagnostics one post-write note spells out before collapsing the
 /// rest into a count. Far below `check`'s own `MAX_CHECK_DIAGNOSTICS` (200):
 /// this note is appended to every write, unasked, so it has to stay cheap.
@@ -802,6 +843,9 @@ fn run_tool_loop(
             };
             let content = docs_boundary_note(&scope, &outcome, content);
             let content = dedupe_repeat_result(&mut results_this_turn, call, &outcome, content);
+            // Before the diagnostics note, so a write reads as "here is what
+            // actually landed" and only then "here is what is wrong with it".
+            let content = closed_macros_note(&outcome, content);
             let content =
                 write_check_note(&mut write_checks_this_turn, &scope, ctx.deps, &outcome, content);
             history.push(LlmMessage {
@@ -958,6 +1002,10 @@ pub fn stream_resume(
 mod tests {
     use super::*;
 
+    // Only the tests name this type: `closed_macros_note` reads the field
+    // through a pattern match on `ToolResult`.
+    use crate::domain::asciidoc_macro_brackets::ClosedMacro;
+
     fn call(name: &str) -> LlmToolCall {
         LlmToolCall { id: "1".to_string(), name: name.to_string(), arguments: "{}".to_string() }
     }
@@ -971,6 +1019,51 @@ mod tests {
             column: 1,
             severity: Severity::Error,
         }
+    }
+
+    fn written(closed: Vec<ClosedMacro>) -> Result<ToolResult, String> {
+        Ok(ToolResult::FileWritten {
+            path: "api/get.adoc".to_string(),
+            diff: crate::domain::ai_tools::FileDiffStats {
+                lines_added: 1,
+                lines_removed: 0,
+                unified_diff: String::new(),
+                truncated: false,
+            },
+            closed_macros: closed,
+        })
+    }
+
+    #[test]
+    fn a_write_that_landed_verbatim_says_nothing_about_macros() {
+        let content = closed_macros_note(&written(vec![]), "{}".to_string());
+        assert_eq!(content, "{}");
+    }
+
+    #[test]
+    fn a_rewritten_macro_is_reported_with_its_line_and_final_text() {
+        let closed = vec![ClosedMacro { line: 12, text: "include::request.adoc[]".to_string() }];
+        let content = closed_macros_note(&written(closed), "{}".to_string());
+        assert!(content.starts_with("{}\n\n"), "{content}");
+        assert!(content.contains("строка 12"), "{content}");
+        assert!(content.contains("include::request.adoc[]"), "{content}");
+    }
+
+    #[test]
+    fn a_long_list_of_rewritten_macros_is_capped_with_a_remainder() {
+        let closed: Vec<ClosedMacro> = (1..=14)
+            .map(|i| ClosedMacro { line: i, text: format!("include::f{i}.adoc[]") })
+            .collect();
+        let content = closed_macros_note(&written(closed), "{}".to_string());
+        assert!(content.contains("include::f10.adoc[]"), "{content}");
+        assert!(!content.contains("include::f11.adoc[]"), "{content}");
+        assert!(content.contains("и ещё 4"), "{content}");
+    }
+
+    #[test]
+    fn a_result_that_is_not_a_write_is_left_alone() {
+        let outcome = Ok(ToolResult::FileList(vec![]));
+        assert_eq!(closed_macros_note(&outcome, "{}".to_string()), "{}");
     }
 
     #[test]

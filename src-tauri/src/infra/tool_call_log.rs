@@ -533,6 +533,7 @@ mod tests {
                 unified_diff: "SECRET DIFF".to_string(),
                 truncated: false,
             },
+            closed_macros: vec![],
         };
         let redacted = redact_result(&result);
         assert_eq!(redacted["result"]["diff"]["unifiedDiff"], "<redacted>");

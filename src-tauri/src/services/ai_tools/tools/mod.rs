@@ -138,10 +138,10 @@ pub fn execute_tool(
         ToolCall::GitBlame(args) => git::git_blame(scope, args),
         ToolCall::Check(args) => check::check(scope, args, deps),
         ToolCall::WriteFile(args) => write_file::write_file(scope, args, deps)
-            .map(|(path, diff)| ToolResult::FileWritten { path, diff }),
+            .map(|(path, diff, closed_macros)| ToolResult::FileWritten { path, diff, closed_macros }),
         ToolCall::EditFile(args) => {
             edit_file::edit_file(scope, args, deps.fast_apply.as_ref(), deps)
-                .map(|(path, diff)| ToolResult::FileEdited { path, diff })
+                .map(|(path, diff, closed_macros)| ToolResult::FileEdited { path, diff, closed_macros })
         }
         ToolCall::DeleteFile(args) => delete_file::delete_file(scope, args, deps)
             .map(|(path, diff)| ToolResult::FileDeleted { path, diff }),

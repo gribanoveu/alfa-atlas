@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use crate::domain::ai_tools::{EditFileArgs, FileDiffStats, FileEdit, ToolError, ToolScope};
+use crate::domain::asciidoc_macro_brackets::{ClosedMacro, MacroBracketPass};
 use crate::domain::llm::{ChatRequest, LlmMessage, LlmProvider, LlmRole, LlmToolDefinition};
 use crate::services::{docs_fs, text_diff};
 
@@ -31,18 +32,23 @@ pub(super) fn edit_file(
     args: EditFileArgs,
     fast_apply: Option<&(Arc<dyn LlmProvider>, String)>,
     deps: &EmbeddingDeps,
-) -> Result<(String, FileDiffStats), ToolError> {
+) -> Result<(String, FileDiffStats, Vec<ClosedMacro>), ToolError> {
     let (access_rel, docs_rel) = resolve_mutable_docs_path(scope, &args.path)?;
     reject_atlas_memory_path(scope, &docs_rel)?;
     let docs_root = scope.docs_root.to_string_lossy();
     let content = docs_fs::read_project_file(&docs_root, &docs_rel)?;
     let edited = apply_edits(&content, &args.edits, fast_apply)?;
-    let edited = close_adoc_macro_brackets(&docs_rel, edited);
+    // Runs over the whole file, not just the edited regions, so it can also
+    // close a bare macro that was already sitting in the file — a line the
+    // edits never asked to touch. That is the existing behaviour; reporting
+    // `closed` is what stops it from being invisible.
+    let MacroBracketPass { content: edited, closed } =
+        close_adoc_macro_brackets(&docs_rel, edited);
     docs_fs::write_project_file(&docs_root, &docs_rel, &edited)?;
     // See `write_file`'s matching comment — same best-effort sync.
     let _ = deps.workspace_index.update_document(scope.docs_root.join(&docs_rel));
     let diff = text_diff::diff_stats(&content, &edited);
-    Ok((access_rel, diff))
+    Ok((access_rel, diff, closed))
 }
 
 /// Applies every edit in `edits` to `content`. The primary path is exact and
@@ -310,7 +316,7 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "editFile".to_string(),
         description:
-            "Make one or more precise, targeted edits to an existing documentation file by replacing exact snippets of its current content, given its path relative to the current access-mode root (same as readFile/listFiles). The path must resolve under the documentation tree — paths outside it are rejected with an error. Each edit's `old` text should match the file's CURRENT content exactly once, and all edits in one call are validated against the file's original content and applied together, or none are — they are independent of each other and of their order (atomic application). If an edit's `old` doesn't match exactly (whitespace/formatting drift, or you're recalling the content from memory rather than a fresh read), the call may be rejected; some sessions may attempt automatic reconciliation, but treat exact matching as the contract and add a few more surrounding lines to `old` to make it unique and exact. Prefer this over writeFile for small, localized changes: it's cheaper and safer than resending the whole file. Always requires explicit user approval before anything is written."
+            "Make one or more precise, targeted edits to an existing documentation file by replacing exact snippets of its current content, given its path relative to the current access-mode root (same as readFile/listFiles). The path must resolve under the documentation tree — paths outside it are rejected with an error. Each edit's `old` text should match the file's CURRENT content exactly once, and all edits in one call are validated against the file's original content and applied together, or none are — they are independent of each other and of their order (atomic application). If an edit's `old` doesn't match exactly (whitespace/formatting drift, or you're recalling the content from memory rather than a fresh read), the call may be rejected; some sessions may attempt automatic reconciliation, but treat exact matching as the contract and add a few more surrounding lines to `old` to make it unique and exact. Prefer this over writeFile for small, localized changes: it's cheaper and safer than resending the whole file. Always requires explicit user approval before anything is written. In AsciiDoc files, block macros are normalized after the edits land, across the whole file rather than only the edited regions: a bare `include::target`, `image::target` or `xref:target` is stored with `[]` appended, because without the brackets AsciiDoc does not read the line as a macro at all. Write the brackets yourself in `new`; the result lists every line changed this way, including any your edits did not touch."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",

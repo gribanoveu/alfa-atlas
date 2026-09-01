@@ -255,6 +255,19 @@ export type FileDiffStats = {
   truncated: boolean;
 };
 
+/** One bare `include::`/`image::`/`xref:` that the write path completed with
+ * `[]` on its way to disk — mirrors
+ * `domain::asciidoc_macro_brackets::ClosedMacro`. `line` is 1-indexed into
+ * the content that was written; `text` is the macro as it now reads.
+ *
+ * Optional on the result: the backend omits the array when it is empty (the
+ * usual case), and chats persisted before the field existed have no value at
+ * all. Absent therefore means "nothing was rewritten", never "unknown". */
+export type ClosedMacro = {
+  line: number;
+  text: string;
+};
+
 /** Contiguous authorship run from `gitBlame` — mirrors
  * `domain::git::GitBlameHunk`. */
 export type GitBlameHunk = {
@@ -308,8 +321,8 @@ export type ToolResult =
   | { tool: "gitBlame"; result: { path: string; hunks: GitBlameHunk[]; truncated: boolean } }
   | { tool: "checkResults"; result: { kind: CheckKind; diagnostics: Diagnostic[]; truncated: boolean } }
   | { tool: "standardsChecked"; result: { report: StandardsReport; truncated: boolean } }
-  | { tool: "fileWritten"; result: { path: string; diff: FileDiffStats } }
-  | { tool: "fileEdited"; result: { path: string; diff: FileDiffStats } }
+  | { tool: "fileWritten"; result: { path: string; diff: FileDiffStats; closedMacros?: ClosedMacro[] } }
+  | { tool: "fileEdited"; result: { path: string; diff: FileDiffStats; closedMacros?: ClosedMacro[] } }
   | { tool: "fileDeleted"; result: { path: string; diff: FileDiffStats } }
   | { tool: "directoryCreated"; result: { path: string; template: string | null; createdFiles: string[] } }
   | { tool: "directoryDeleted"; result: { path: string } }

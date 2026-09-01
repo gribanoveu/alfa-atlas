@@ -7,6 +7,7 @@ use thiserror::Error;
 #[cfg(test)]
 use super::ai_access::default_allowed_tools;
 use super::ai_access::{AiAccessMode, ToolName};
+use super::asciidoc_macro_brackets::ClosedMacro;
 use super::conversation_mode::ConversationMode;
 use super::embeddings::EmbeddingError;
 use super::flexible_args;
@@ -908,8 +909,29 @@ pub enum ToolResult {
         report: crate::domain::standards::StandardsReport,
         truncated: bool,
     },
-    FileWritten { path: String, diff: FileDiffStats },
-    FileEdited { path: String, diff: FileDiffStats },
+    /// Settled `writeFile`. `closed_macros` reports the bare
+    /// `include::`/`image::`/`xref:` targets the write path silently completed
+    /// with `[]` (`domain::asciidoc_macro_brackets`) — without it the file on
+    /// disk differs from the content the caller sent and nothing says so.
+    /// Empty (and omitted from the wire) whenever the content was already
+    /// valid, which is nearly always; also absent in chats persisted before
+    /// this field existed.
+    #[serde(rename_all = "camelCase")]
+    FileWritten {
+        path: String,
+        diff: FileDiffStats,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        closed_macros: Vec<ClosedMacro>,
+    },
+    /// Settled `editFile` — `closed_macros` as in `FileWritten`, applied to
+    /// the whole file after the edits land.
+    #[serde(rename_all = "camelCase")]
+    FileEdited {
+        path: String,
+        diff: FileDiffStats,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        closed_macros: Vec<ClosedMacro>,
+    },
     FileDeleted { path: String, diff: FileDiffStats },
     /// Settled `createDirectory`. `template`/`created_files` are empty when
     /// the call created a bare folder; with `template: "restEndpoint"` they

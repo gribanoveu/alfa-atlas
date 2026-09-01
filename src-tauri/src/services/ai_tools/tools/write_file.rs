@@ -2,7 +2,9 @@
 //! even in Full-repo mode.
 
 use crate::domain::ai_tools::{FileDiffStats, ToolError, ToolScope, WriteFileArgs};
-use crate::domain::asciidoc_macro_brackets::ensure_macro_attribute_brackets;
+use crate::domain::asciidoc_macro_brackets::{
+    ensure_macro_attribute_brackets, ClosedMacro, MacroBracketPass,
+};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::project_config::ProjectError;
 use crate::domain::supported_files;
@@ -14,11 +16,15 @@ use super::super::resolve::{reject_atlas_memory_path, resolve_mutable_docs_path}
 /// Append `[]` to bare `include::`/`image::`/`xref:` targets in AsciiDoc
 /// files the assistant writes, so a missing attribute list does not make
 /// the macro invisible to the index and diagnostics.
-pub(super) fn close_adoc_macro_brackets(docs_rel: &str, content: String) -> String {
+///
+/// Returns what it changed alongside the content: this rewrites the caller's
+/// text on its way to disk, and both the assistant (through `ToolResult`)
+/// and the user (through the diff) are entitled to know it happened.
+pub(super) fn close_adoc_macro_brackets(docs_rel: &str, content: String) -> MacroBracketPass {
     if supported_files::is_asciidoc(docs_rel) {
         ensure_macro_attribute_brackets(&content)
     } else {
-        content
+        MacroBracketPass { content, closed: vec![] }
     }
 }
 
@@ -31,7 +37,7 @@ pub(super) fn write_file(
     scope: &ToolScope,
     args: WriteFileArgs,
     deps: &EmbeddingDeps,
-) -> Result<(String, FileDiffStats), ToolError> {
+) -> Result<(String, FileDiffStats, Vec<ClosedMacro>), ToolError> {
     let (access_rel, docs_rel) = resolve_mutable_docs_path(scope, &args.path)?;
     reject_atlas_memory_path(scope, &docs_rel)?;
     let docs_root = scope.docs_root.to_string_lossy();
@@ -43,7 +49,7 @@ pub(super) fn write_file(
         Err(ProjectError::NotFound(_)) => String::new(),
         Err(e) => return Err(e.into()),
     };
-    let content = close_adoc_macro_brackets(&docs_rel, args.content);
+    let MacroBracketPass { content, closed } = close_adoc_macro_brackets(&docs_rel, args.content);
     docs_fs::write_project_file(&docs_root, &docs_rel, &content)?;
     // Best-effort: keeps the in-memory index in step with this write
     // immediately, rather than only once the async file-watcher gets to it
@@ -55,7 +61,7 @@ pub(super) fn write_file(
     // project open).
     let _ = deps.workspace_index.update_document(scope.docs_root.join(&docs_rel));
     let diff = text_diff::diff_stats(&old, &content);
-    Ok((access_rel, diff))
+    Ok((access_rel, diff, closed))
 }
 
 /// The `writeFile` schema the model sees.
@@ -63,7 +69,7 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "writeFile".to_string(),
         description:
-            "Create or overwrite one documentation file's full content, given its path relative to the current access-mode root (same as readFile/listFiles). The path must resolve under the documentation tree — paths outside it are rejected with an error. Any missing parent directories in the path are created automatically — there is no need to call createDirectory first. Always requires explicit user approval before the write actually happens — the user may deny it, in which case the file is left unchanged. Do not retry automatically after a denial; ask the user how they'd like to proceed instead. Only recognized documentation file types can be written."
+            "Create or overwrite one documentation file's full content, given its path relative to the current access-mode root (same as readFile/listFiles). The path must resolve under the documentation tree — paths outside it are rejected with an error. Any missing parent directories in the path are created automatically — there is no need to call createDirectory first. Always requires explicit user approval before the write actually happens — the user may deny it, in which case the file is left unchanged. Do not retry automatically after a denial; ask the user how they'd like to proceed instead. Only recognized documentation file types can be written. In AsciiDoc files, block macros are normalized on the way to disk: a bare `include::target`, `image::target` or `xref:target` is stored with `[]` appended, because without the brackets AsciiDoc does not read the line as a macro at all. Write the brackets yourself — where you don't, the stored file differs from the `content` you sent, and the result lists every line that was changed."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",
