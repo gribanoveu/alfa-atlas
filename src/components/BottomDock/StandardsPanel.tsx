@@ -21,12 +21,15 @@ function folderContainsPath(folder: string, path: string): boolean {
   return path === folder || path.startsWith(`${folder}/`);
 }
 
-function FolderGroup({ folder }: { folder: FolderReport }) {
-  // Default to showing every criterion (pass and fail alike) so a mixed
-  // result is visually obvious at a glance, not just the failing subset.
-  const [showAll, setShowAll] = useState(true);
+function FolderGroup({
+  folder,
+  hidePassed,
+}: {
+  folder: FolderReport;
+  hidePassed: boolean;
+}) {
   const failed = folder.findings.filter((f) => !f.passed);
-  const visible = showAll ? folder.findings : failed;
+  const visible = hidePassed ? failed : folder.findings;
   const percent =
     folder.maxScore > 0 ? Math.round((folder.score / folder.maxScore) * 100) : 0;
 
@@ -72,15 +75,6 @@ function FolderGroup({ folder }: { folder: FolderReport }) {
         </ul>
       )}
 
-      {folder.findings.length > failed.length ? (
-        <button
-          type="button"
-          className="standards-toggle-all"
-          onClick={() => setShowAll((v) => !v)}
-        >
-          {showAll ? "Скрыть пройденные критерии" : "Показать все критерии"}
-        </button>
-      ) : null}
     </div>
   );
 }
@@ -94,6 +88,7 @@ export function StandardsPanel({
   onOpenSettings,
 }: StandardsPanelProps) {
   const [scope, setScope] = useState<StandardsScope>("current");
+  const [hidePassed, setHidePassed] = useState(false);
   const running = status === "running";
   const passedCount = report?.folders.filter((f) => f.passed).length ?? 0;
   const totalCount = report?.folders.length ?? 0;
@@ -169,6 +164,15 @@ export function StandardsPanel({
             </button>
             <button
               type="button"
+              className="standards-filter-btn"
+              aria-pressed={hidePassed}
+              disabled={!report || totalCount === 0}
+              onClick={() => setHidePassed((value) => !value)}
+            >
+              {hidePassed ? "Показать все критерии" : "Скрыть пройденные критерии"}
+            </button>
+            <button
+              type="button"
               className="standards-settings-btn"
               onClick={onOpenSettings}
             >
@@ -196,7 +200,11 @@ export function StandardsPanel({
         <div className="standards-scroll">
           <div className="standards-folders">
             {visibleFolders.map((folder) => (
-              <FolderGroup key={folder.folder} folder={folder} />
+              <FolderGroup
+                key={folder.folder}
+                folder={folder}
+                hidePassed={hidePassed}
+              />
             ))}
           </div>
         </div>
