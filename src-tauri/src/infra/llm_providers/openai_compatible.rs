@@ -86,6 +86,12 @@ struct ChatCompletionRequest<'a> {
     /// to attach it to).
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptions>,
+    /// Sampling temperature, or nothing at all. `skip_serializing_if` is
+    /// load-bearing rather than tidiness: several reasoning models reject a
+    /// request carrying any `temperature`, so "unset" has to mean the key is
+    /// absent, not that a default was sent on the caller's behalf.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -447,6 +453,8 @@ pub struct OpenAiCompatibleProvider {
     base_url: String,
     api_key: String,
     request_headers: HashMap<String, String>,
+    /// `None` means send no `temperature` — see `ChatCompletionRequest`.
+    temperature: Option<f32>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -455,12 +463,14 @@ impl OpenAiCompatibleProvider {
         base_url: String,
         api_key: String,
         request_headers: HashMap<String, String>,
+        temperature: Option<f32>,
     ) -> Self {
         Self {
             agent,
             base_url,
             api_key,
             request_headers,
+            temperature,
         }
     }
 
@@ -517,6 +527,7 @@ impl OpenAiCompatibleProvider {
             tool_choice,
             stream,
             stream_options,
+            temperature: self.temperature,
         }
     }
 
@@ -651,12 +662,35 @@ mod tests {
     use super::*;
 
     fn provider(base_url: &str) -> OpenAiCompatibleProvider {
+        provider_at(base_url, None)
+    }
+
+    fn provider_at(base_url: &str, temperature: Option<f32>) -> OpenAiCompatibleProvider {
         OpenAiCompatibleProvider::new(
             build_agent(None).unwrap(),
             base_url.to_string(),
             "key".to_string(),
             HashMap::new(),
+            temperature,
         )
+    }
+
+    #[test]
+    fn build_body_sends_temperature_when_the_provider_has_one() {
+        let p = provider_at("https://api.example.com/v1", Some(0.3));
+        let request = ChatRequest { messages: vec![], tools: vec![], model: "m".to_string() };
+        let json = serde_json::to_string(&p.build_body(&request, true)).unwrap();
+        assert!(json.contains(r#""temperature":0.3"#), "{json}");
+    }
+
+    #[test]
+    fn build_body_omits_temperature_entirely_when_unset() {
+        // Not "sends the API default" — the key must be absent, or the
+        // reasoning models that reject any temperature start failing.
+        let p = provider_at("https://api.example.com/v1", None);
+        let request = ChatRequest { messages: vec![], tools: vec![], model: "m".to_string() };
+        let json = serde_json::to_string(&p.build_body(&request, true)).unwrap();
+        assert!(!json.contains("temperature"), "{json}");
     }
 
     #[test]
@@ -685,6 +719,7 @@ mod tests {
             tool_choice: None,
             stream: false,
             stream_options: None,
+            temperature: None,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert_eq!(
@@ -711,6 +746,7 @@ mod tests {
             tool_choice: Some("auto"),
             stream: false,
             stream_options: None,
+            temperature: None,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains(r#""tool_choice":"auto""#));

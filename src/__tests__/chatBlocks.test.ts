@@ -8,6 +8,7 @@ import {
   applyToolCallDelta,
   chatMessageToPlainText,
   closeOpenBlocks,
+  correctRoundText,
   correctTrailingReasoning,
   correctTrailingText,
   flattenBlocksToText,
@@ -164,6 +165,88 @@ describe("interleaved reasoning and text deltas", () => {
     const corrected = correctTrailingReasoning(blocks, "partial thought, made whole");
     expect(corrected).toHaveLength(2);
     expect(corrected[0]).toMatchObject({ type: "reasoning", content: "partial thought, made whole" });
+  });
+});
+
+describe("correctRoundText", () => {
+  const call = { id: "call_1", name: "readFile", argumentsJson: "{}" };
+
+  test("reaches the round's text block through the tool calls that follow it", () => {
+    // The shape that used to be unreachable: prose, then the call it led to.
+    const blocks = appendToolCallBlock(appendDeltaToBlocks([], "Смотрю фай"), call);
+    const corrected = correctRoundText(blocks, "Смотрю файл конфигурации.");
+    expect(corrected[0]).toMatchObject({ type: "text", content: "Смотрю файл конфигурации." });
+    expect(corrected).toHaveLength(2);
+  });
+
+  test("reaches it through several parallel calls in the same round", () => {
+    let blocks = appendDeltaToBlocks([], "Читаю об");
+    blocks = appendToolCallBlock(blocks, call);
+    blocks = appendToolCallBlock(blocks, { ...call, id: "call_2" });
+    const corrected = correctRoundText(blocks, "Читаю оба файла.");
+    expect(corrected[0]).toMatchObject({ type: "text", content: "Читаю оба файла." });
+  });
+
+  test("corrects a round that has not called anything yet", () => {
+    const corrected = correctRoundText(appendDeltaToBlocks([], "Гото"), "Готово.");
+    expect(corrected[0]).toMatchObject({ type: "text", content: "Готово." });
+  });
+
+  test("leaves an earlier round's closed block alone", () => {
+    // `closeOpenBlocks` runs on the *next* round's start, so a closed block
+    // is by definition not the round reporting now.
+    const blocks = appendToolCallBlock(closeOpenBlocks(appendDeltaToBlocks([], "Первый раунд.")), call);
+    expect(correctRoundText(blocks, "текст другого раунда")).toBe(blocks);
+  });
+
+  test("stops at a steer instead of reaching across it", () => {
+    const blocks = appendSteerBlock(appendDeltaToBlocks([], "До вмешательства."), "подожди");
+    expect(correctRoundText(blocks, "не сюда")).toBe(blocks);
+  });
+
+  test("an empty text never blanks a block that has content", () => {
+    const blocks = appendDeltaToBlocks([], "Настоящий ответ.");
+    expect(correctRoundText(blocks, "")).toBe(blocks);
+  });
+
+  test("inserts the prose before the round's calls when every delta was lost", () => {
+    const blocks = appendToolCallBlock([], call);
+    const corrected = correctRoundText(blocks, "Проза, потерянная целиком.");
+    expect(corrected).toHaveLength(2);
+    expect(corrected[0]).toMatchObject({ type: "text", content: "Проза, потерянная целиком." });
+    expect(corrected[1]).toMatchObject({ type: "toolCall" });
+  });
+
+  test("reaches the text block past a reasoning block that trails the tool calls", () => {
+    // The regression: an interleaving provider can leave a reasoning block
+    // after the round's tool calls. Treating that as a boundary left the
+    // text block unreached, and the round's prose was appended a second
+    // time — the transcript showed every paragraph twice.
+    let blocks = appendDeltaToBlocks([], "Начну с чтен");
+    blocks = appendToolCallBlock(blocks, call);
+    blocks = appendReasoningDeltaToBlocks(blocks, "ещё думаю");
+    const corrected = correctRoundText(blocks, "Начну с чтения файлов.");
+    expect(corrected).toHaveLength(3);
+    expect(corrected.filter((b) => b.type === "text")).toHaveLength(1);
+    expect(corrected[0]).toMatchObject({ type: "text", content: "Начну с чтения файлов." });
+  });
+
+  test("reaches it past reasoning interleaved on both sides of the prose", () => {
+    let blocks = appendReasoningDeltaToBlocks([], "сначала");
+    blocks = appendDeltaToBlocks(blocks, "част");
+    blocks = appendToolCallBlock(blocks, call);
+    blocks = appendReasoningDeltaToBlocks(blocks, "потом");
+    const corrected = correctRoundText(blocks, "частичный ответ, целиком");
+    expect(corrected.filter((b) => b.type === "text")).toHaveLength(1);
+    expect(corrected.find((b) => b.type === "text")).toMatchObject({
+      content: "частичный ответ, целиком",
+    });
+  });
+
+  test("puts recovered prose after the reasoning it followed", () => {
+    const blocks = appendToolCallBlock(appendReasoningDeltaToBlocks([], "думаю"), call);
+    const corrected = correctRoundText(blocks, "Ответ.");
+    expect(corrected.map((b) => b.type)).toEqual(["reasoning", "text", "toolCall"]);
   });
 });
 

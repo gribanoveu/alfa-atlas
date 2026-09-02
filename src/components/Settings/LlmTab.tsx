@@ -91,6 +91,7 @@ function ProviderDetail({
   const [certDraft, setCertDraft] = useState(provider.trustedCertPem ?? "");
   const [contextDraft, setContextDraft] = useState(String(effectiveTokenLimit(provider).context));
   const [outputDraft, setOutputDraft] = useState(String(effectiveTokenLimit(provider).output));
+  const [temperatureDraft, setTemperatureDraft] = useState(provider.temperature?.toString() ?? "");
   const [newModelDraft, setNewModelDraft] = useState("");
   const [modelFilterDraft, setModelFilterDraft] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -123,6 +124,10 @@ function ProviderDetail({
     setContextDraft(String(limit.context));
     setOutputDraft(String(limit.output));
   }, [provider.id, provider.limit?.context, provider.limit?.output]);
+
+  useEffect(() => {
+    setTemperatureDraft(provider.temperature?.toString() ?? "");
+  }, [provider.id, provider.temperature]);
 
   useEffect(() => {
     if (!modelSelectOpen) return;
@@ -212,6 +217,24 @@ function ProviderDetail({
 
   const handleResetTokenLimits = () => {
     void updateProviderConfig(provider.id, { limit: null });
+  };
+
+  /** An empty field means "send no `temperature` at all" — not zero, and not
+   * the API's own default. Anything unparseable or out of range snaps back
+   * to what is saved rather than writing a value the provider will reject. */
+  const handleSaveTemperature = () => {
+    const trimmed = temperatureDraft.trim();
+    if (trimmed === "") {
+      if (provider.temperature !== null) void updateProviderConfig(provider.id, { temperature: null });
+      return;
+    }
+    const parsed = Number(trimmed.replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2) {
+      setTemperatureDraft(provider.temperature?.toString() ?? "");
+      return;
+    }
+    if (parsed === provider.temperature) return;
+    void updateProviderConfig(provider.id, { temperature: parsed });
   };
 
   const modelOptions = [
@@ -515,6 +538,30 @@ function ProviderDetail({
             Сбросить
           </button>
         </div>
+      </section>
+
+      <section className="llm-detail-group">
+        <h4 className="llm-detail-group-title">Генерация</h4>
+        <label className="llm-field">
+          <span className="llm-field-label">Температура</span>
+          <input
+            className="clone-modal-input"
+            type="number"
+            min={0}
+            max={2}
+            step={0.1}
+            placeholder="не отправлять"
+            value={temperatureDraft}
+            disabled={busy}
+            onChange={(event) => setTemperatureDraft(event.target.value)}
+            onBlur={handleSaveTemperature}
+          />
+        </label>
+        <p className="settings-hint settings-hint-compact">
+          Ниже — предсказуемее и суше, выше — разнообразнее. Для документации подходит 0.2–0.4. Пустое
+          поле означает, что параметр не отправляется вовсе: часть моделей с рассуждением отвергает
+          запрос, в котором он есть.
+        </p>
       </section>
 
       <section className="llm-detail-group llm-detail-advanced">

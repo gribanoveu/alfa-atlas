@@ -95,6 +95,13 @@ pub struct LlmProviderConfig {
     /// override fields; `None` means inherit from the manifest.
     #[serde(default)]
     pub request_headers: Option<HashMap<String, String>>,
+    /// Sampling temperature, overriding the manifest's for a system
+    /// provider — same "override wins when `Some`" merge as the fields
+    /// above. `None` on both layers means the parameter is not sent at all,
+    /// which is the only safe default for a provider we know nothing about:
+    /// some reasoning models reject any temperature but their own.
+    #[serde(default)]
+    pub temperature: Option<f32>,
 }
 
 /// Persisted globally (`AppSettings.llm`) — provider configuration is not
@@ -225,6 +232,11 @@ pub struct LlmProviderPreset {
     /// replaced with a fresh UUID per request.
     #[serde(default)]
     pub request_headers: Option<HashMap<String, String>>,
+    /// Sampling temperature for this shipped provider. Set here rather than
+    /// as a global default so a custom provider — whose model we cannot
+    /// know — keeps sending no temperature at all.
+    #[serde(default)]
+    pub temperature: Option<f32>,
 }
 
 /// The merged, ready-to-use view of one provider — a manifest preset (if
@@ -258,6 +270,9 @@ pub struct ResolvedLlmProvider {
     pub limit: Option<ProviderTokenLimit>,
     /// HTTP headers merged from manifest preset and settings override.
     pub request_headers: HashMap<String, String>,
+    /// Merged sampling temperature; `None` means send no `temperature` at
+    /// all, not "send the API default".
+    pub temperature: Option<f32>,
 }
 
 /// A chat message's speaker. `Tool` is needed even though nothing sends one
@@ -605,6 +620,13 @@ pub struct ChatStreamDelta {
     pub delta: String,
 }
 
+/// Payload of `ChatEvent::RoundText` — one round's finished prose, in full.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRoundText {
+    pub text: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatStreamReasoning {
@@ -717,6 +739,24 @@ pub enum ChatEvent {
     /// boundary stated outright instead of inferred from what happened to
     /// come next.
     RoundStarted,
+    /// A model round has finished streaming, with the authoritative text it
+    /// produced.
+    ///
+    /// `Delta` is the only thing that builds a round's prose on the
+    /// frontend, and a dropped delta there is permanent: the blocks are what
+    /// gets persisted, and the only reconciliation that existed
+    /// (`correctTrailingText`) runs once per *turn*, against the final
+    /// round. A round closed by a tool call was therefore never checked
+    /// against anything — every one of them in the transcript that prompted
+    /// this ended mid-word, while the same round's full text sat in
+    /// `history` and went to the model. The user read a truncated version of
+    /// what the model actually said.
+    ///
+    /// Fires for every round, the last one included (where it agrees with
+    /// what `correctTrailingText` will do anyway — one rule is cheaper than
+    /// a special case), and before the pending-approval check, so a round
+    /// that pauses for a confirmation has already reported its prose.
+    RoundText(ChatRoundText),
     SteeringApplied(SteeringAppliedEvent),
     /// Fired while a tool call's `arguments` are still arriving on the
     /// SSE stream — same payload shape as `ToolCall`, but the JSON may be

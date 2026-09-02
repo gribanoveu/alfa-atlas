@@ -190,9 +190,17 @@ function scanXrefs(content: string): {
   // passthrough `++++`, comment `////`) are treated literally by asciidoctor —
   // `<<PK>>` inside a plantuml/source block is NOT an xref. Skip them.
   const verbatimLines = collectVerbatimLineIndices(lines);
-  // Match `xref:target[#anchor][]` or `xref:target[]`. Target may be a path
-  // (with optional `#fragment`) or just `#fragment` for same-doc anchors.
-  const re = /xref:([^\[\]]+?)(?:#([^\[\]]+))?\[\]/g;
+  // Match `xref:target#anchor[...]` or `xref:target[...]`. Target may be a
+  // path (with optional `#fragment`) or just `#fragment` for same-doc
+  // anchors.
+  //
+  // Only the *opening* bracket is required, the way `scanImages` already
+  // does it. Requiring `\[\]` meant every xref carrying link text —
+  // `xref:a.adoc[Настройка]`, which is the ordinary form in real
+  // documentation — was invisible here, so neither its broken target nor
+  // its broken anchor was ever reported. The angle-bracket branch below
+  // always accepted text; the two forms had simply drifted apart.
+  const re = /xref:([^\[\]]+?)(?:#([^\[\]]+))?\[/g;
   // Angle-bracket short form: `<<target#anchor,text>>`, `<<target,text>>`,
   // `<<#anchor,text>>`, `<<target#anchor>>`, `<<target>>`, `<<#anchor>>`.
   // Target/anchor stop at `#`, `,` or `>`. Target is `*` (not `+`) so that a

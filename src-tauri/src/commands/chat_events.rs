@@ -34,6 +34,12 @@ pub const STEERING_APPLIED_EVENT: &str = "llm:steering-applied";
 /// (see `ChatEvent::RoundStarted`).
 pub const ROUND_STARTED_EVENT: &str = "llm:round-started";
 
+/// Fires once each model round has finished streaming, carrying that
+/// round's full text. The frontend overwrites the round's text block with
+/// it, so a dropped `CHAT_STREAM_DELTA_EVENT` cannot leave the transcript
+/// permanently truncated mid-word (see `ChatEvent::RoundText`).
+pub const ROUND_TEXT_EVENT: &str = "llm:round-text";
+
 /// Fires while a tool call's arguments are still arriving on the SSE
 /// stream — same payload as `TOOL_CALL_EVENT`, but the JSON may be
 /// incomplete. Lets the UI show the call (and, for `visualize`, the
@@ -123,6 +129,7 @@ pub fn chat_event_sink(app: &AppHandle, turn_id: String) -> ChatEventSink {
             ChatEvent::RoundStarted => {
                 app.emit(ROUND_STARTED_EVENT, TurnOnly { turn_id: turn_id.clone() })
             }
+            ChatEvent::RoundText(p) => app.emit(ROUND_TEXT_EVENT, with_turn(&turn_id, p)),
             ChatEvent::SteeringApplied(p) => app.emit(STEERING_APPLIED_EVENT, with_turn(&turn_id, p)),
             ChatEvent::ToolCallDelta(p) => app.emit(TOOL_CALL_DELTA_EVENT, with_turn(&turn_id, p)),
             ChatEvent::ToolCall(p) => app.emit(TOOL_CALL_EVENT, with_turn(&turn_id, p)),

@@ -181,7 +181,9 @@ export type ToolCall =
   | { tool: "artifactList"; args: Record<string, never> }
   | { tool: "artifactRead"; args: { id: string } }
   | { tool: "todoWrite"; args: { titles: string[] } }
-  | { tool: "todoUpdate"; args: { id: string; status: "completed" | "cancelled"; note: string | null } }
+  // `id` omitted targets the task currently in progress — see
+  // `services::ai_tools::tools::todo::todo_update`.
+  | { tool: "todoUpdate"; args: { id: string | null; status: "completed" | "cancelled"; note: string | null } }
   | {
       tool: "memory";
       args: {

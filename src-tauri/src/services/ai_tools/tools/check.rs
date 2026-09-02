@@ -52,17 +52,22 @@ pub(super) fn check_problems(
             deps.workspace_index.get_diagnostics()
         }
         Some(access_path) => {
-            let doc_id = access_path_to_document_id(scope, access_path)?;
-            // A `check` right after a `writeFile` is the common case, and
-            // AsciiDoc facts arrive asynchronously from the frontend parser
-            // (`workspace_index::submit_asciidoc_facts`). Without this wait
-            // the answer describes the file as it was *before* the write —
-            // the model's own edit, reported back as still broken or still
-            // fine. Best-effort: a wait that times out still returns the
-            // diagnostics we have, since one stale answer beats none.
-            deps.workspace_index.wait_for_parse_settled(&doc_id);
-            diagnostics::run_for(&deps.workspace_index, &doc_id);
-            deps.workspace_index.get_diagnostics_for(&doc_id)
+            let mut out = Vec::new();
+            for doc_id in problem_check_targets(scope, access_path, deps)? {
+                // A `check` right after a `writeFile` is the common case, and
+                // AsciiDoc facts arrive asynchronously from the frontend
+                // parser (`workspace_index::submit_asciidoc_facts`). Without
+                // this wait the answer describes the file as it was *before*
+                // the write — the model's own edit, reported back as still
+                // broken or still fine. Cheap when the facts already landed,
+                // which is the usual case even for a whole folder.
+                // Best-effort: a wait that times out still returns the
+                // diagnostics we have, since one stale answer beats none.
+                deps.workspace_index.wait_for_parse_settled(&doc_id);
+                diagnostics::run_for(&deps.workspace_index, &doc_id);
+                out.extend(deps.workspace_index.get_diagnostics_for(&doc_id));
+            }
+            out
         }
     };
 
@@ -139,6 +144,46 @@ pub fn check_written_file(
     }
     let tables = deps.workspace_index.get_tables_for(&doc_id);
     Ok(WriteCheck::Settled { diagnostics, tables })
+}
+
+/// Which documents one narrowed `problems` check covers: a file is itself,
+/// a directory is every indexed document beneath it.
+///
+/// The directory case exists because leaving it out was not a limitation but
+/// a wrong answer. `access_path_to_document_id` will happily build a
+/// `DocumentId` out of a folder path, and `get_diagnostics_for` then looks
+/// up a document by that exact key, finds none, and returns an empty list —
+/// so `check` reported "no problems" for a folder it had never looked at.
+/// A benchmark run caught it: the same folder came back clean when named
+/// directly and with three broken includes when the whole tree was checked.
+///
+/// The trap is built into the argument, too: this tool's own `path` takes a
+/// folder for `kind: "standards"`, so passing one here is the natural thing
+/// to do.
+fn problem_check_targets(
+    scope: &ToolScope,
+    access_path: &str,
+    deps: &EmbeddingDeps,
+) -> Result<Vec<DocumentId>, ToolError> {
+    let doc_id = access_path_to_document_id(scope, access_path)?;
+    let (_access_rel, docs_rel) = resolve_mutable_docs_path(scope, access_path)?;
+    let joined = paths::join_relative(&scope.docs_root, &docs_rel)?;
+    let canonical = paths::ensure_under(&scope.docs_root, &joined)?;
+    if !canonical.is_dir() {
+        return Ok(vec![doc_id]);
+    }
+    // Trailing separator so `.../api` cannot swallow `.../apiV2/…`.
+    let prefix = format!("{}/", doc_id.0);
+    let mut ids: Vec<DocumentId> = deps
+        .workspace_index
+        .get_documents()
+        .into_iter()
+        .map(|d| d.id)
+        .filter(|id| id.0.starts_with(&prefix))
+        .collect();
+    // Stable order so a truncated result is the same list every run.
+    ids.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(ids)
 }
 
 /// Access-mode-relative path → repo-relative `DocumentId`, after requiring
@@ -224,7 +269,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                 },
                 "path": {
                     "type": ["string", "null"],
-                    "description": "Optional path relative to the current access-mode root (same as readFile); must resolve under the documentation tree. For \"problems\": a single file to check (omit/null to check all indexed documentation files). For \"standards\": a method folder to check, or any file inside one (its parent folder is used) — omit/null to check the entire documentation tree."
+                    "description": "Optional path relative to the current access-mode root (same as readFile); must resolve under the documentation tree. For \"problems\": a single file, or a folder to check every documentation file beneath it (omit/null to check all indexed documentation files). For \"standards\": a method folder to check, or any file inside one (its parent folder is used) — omit/null to check the entire documentation tree."
                 }
             },
             "required": ["kind"]
@@ -245,6 +290,48 @@ mod tests {
     use crate::services::ai_tools::{EmbeddingDeps, execute_tool};
 
     use super::*;
+
+    #[test]
+    fn check_problems_on_a_folder_covers_the_files_inside_it() {
+        // The regression: a folder path produced a `DocumentId` no document
+        // answers to, so the tool reported "no problems" about files it had
+        // never looked at.
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(docs.join("api")).unwrap();
+        fs::write(docs.join("api/broken.adoc"), "xref:nope.adoc[Ссылка]\n").unwrap();
+        fs::write(docs.join("outside.adoc"), "xref:alsonope.adoc[Другая]\n").unwrap();
+
+        let workspace_index = build_test_workspace_index(&repo);
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let deps = EmbeddingDeps { workspace_index, ..EmbeddingDeps::empty() };
+
+        let result = execute_tool(
+            &scope,
+            ToolCall::Check(CheckArgs {
+                kind: CheckKind::Problems,
+                path: Some("api".to_string()),
+            }),
+            &deps,
+            &[],
+        )
+        .unwrap();
+
+        match result {
+            ToolResult::CheckResults { diagnostics, .. } => {
+                assert!(
+                    diagnostics.iter().any(|d| d.document.as_str() == "api/broken.adoc"),
+                    "the folder's own file must be checked: {diagnostics:?}"
+                );
+                assert!(
+                    !diagnostics.iter().any(|d| d.document.as_str() == "outside.adoc"),
+                    "a sibling outside the folder must not leak in: {diagnostics:?}"
+                );
+            }
+            other => panic!("expected CheckResults, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
 
     #[test]
     fn check_problems_returns_broken_xref_for_all_and_for_one_file() {

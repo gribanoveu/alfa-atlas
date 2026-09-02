@@ -526,7 +526,12 @@ impl From<TodoUpdateStatus> for TodoStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TodoUpdateArgs {
-    pub id: String,
+    /// Which task to change. `None` means the one currently `InProgress` —
+    /// see `services::ai_tools::tools::todo::todo_update`. Optional because
+    /// picking an id by hand is a step the model gets to skip in the case
+    /// that is nearly always what it means: finishing the task it is on.
+    #[serde(default)]
+    pub id: Option<String>,
     pub status: TodoUpdateStatus,
     #[serde(default)]
     pub note: Option<String>,

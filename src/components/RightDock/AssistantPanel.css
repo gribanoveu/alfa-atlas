@@ -1467,6 +1467,26 @@
   margin-left: 6px;
 }
 
+/* The growing size of a reasoning trace, shown so a collapsed card proves
+   it is still filling up. `flex: none` because the label beside it is the
+   part that should give way when the dock is narrow, and tabular figures so
+   the digits do not jitter sideways while the number climbs.
+
+   `margin-left: auto` parks it against the right edge: a number that changes
+   several times a second is calmer anchored to an edge than floating at
+   whatever position the label's current length leaves it. The margin
+   collapses to nothing when the row runs out of space, and the header's own
+   `gap` still keeps it clear of the timer. */
+.assistant-reasoning-chars {
+  flex: none;
+  margin-left: auto;
+
+  font-size: var(--font-ui-xs);
+  color: var(--text-2);
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
 .assistant-chat-duration {
   margin-top: 4px;
   font-size: var(--font-ui-xs);
@@ -2394,15 +2414,32 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
 .assistant-chat-tool-spinner {
   flex: none;
 
+  /* Must equal the `size` every call site passes to the icon. The arc is
+     centred in its own 24-unit viewBox, so the spin is geometrically true;
+     what made it read as a wobble was rendering a 13px icon into a 15px
+     box, which put the stroke on a fractional grid and re-rasterised it at
+     a slightly different offset every frame. */
   width: 15px;
   height: 15px;
 
   color: var(--accent);
 
   animation: assistant-chat-spin 0.8s linear infinite;
+  /* Stated rather than left to the default: this is the one property whose
+     silent change would turn the spin back into a wobble. */
+  transform-origin: 50% 50%;
+  /* Rasterise once and let the compositor turn it, instead of redrawing a
+     1.25px stroke on the main thread 60 times a second. */
+  will-change: transform;
 }
 
 @keyframes assistant-chat-spin {
+  /* Explicit, so the animation can never interpolate from some inherited
+     transform instead of from zero. */
+  from {
+    transform: rotate(0deg);
+  }
+
   to {
     transform: rotate(360deg);
   }

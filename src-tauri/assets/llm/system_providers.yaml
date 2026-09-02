@@ -7,6 +7,10 @@ llm:
     limit:
       context: 260000
       output: 30000
+    # Documentation work wants reproducible prose, not variety. Left at the
+    # endpoint default, long Russian generations visibly decayed into
+    # word-salad partway through a report.
+    temperature: 0.3
     requestHeaders: null
     trustedCertPem: |
       -----BEGIN CERTIFICATE-----

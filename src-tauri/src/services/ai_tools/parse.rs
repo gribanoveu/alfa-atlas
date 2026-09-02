@@ -284,7 +284,6 @@ pub(super) fn parse_todo_call(input: &str) -> Result<ToolCall, String> {
             Ok(ToolCall::TodoWrite(TodoWriteArgs { titles: tasks }))
         }
         "update" => {
-            let id = raw.id.ok_or_else(|| "op \"update\" requires `id`".to_string())?;
             let raw_status = raw.status.ok_or_else(|| {
                 "op \"update\" requires `status` (\"completed\" or \"cancelled\")".to_string()
             })?;
@@ -302,7 +301,10 @@ pub(super) fn parse_todo_call(input: &str) -> Result<ToolCall, String> {
                     ));
                 }
             };
-            Ok(ToolCall::TodoUpdate(TodoUpdateArgs { id, status, note: raw.note }))
+            // `id` stays optional here — `todo_update` resolves an absent
+            // one to the active task, and rejecting it at parse time would
+            // take that away.
+            Ok(ToolCall::TodoUpdate(TodoUpdateArgs { id: raw.id, status, note: raw.note }))
         }
         other => Err(format!("unknown todo op: \"{other}\" (expected \"write\" or \"update\")")),
     }
@@ -1163,9 +1165,28 @@ mod tests {
         assert_eq!(
             parse_tool_call(&update_call).unwrap(),
             ToolCall::TodoUpdate(TodoUpdateArgs {
-                id: "t2".to_string(),
+                id: Some("t2".to_string()),
                 status: TodoUpdateStatus::Completed,
                 note: Some("endpoint в UserController.java:45".to_string()),
+            }),
+        );
+    }
+
+    #[test]
+    fn a_todo_update_may_omit_the_id() {
+        // Resolved to the active task downstream; rejecting it here would
+        // take that default away before it is ever reached.
+        let call = LlmToolCall {
+            id: "1".to_string(),
+            name: "todo".to_string(),
+            arguments: r#"{"op":"update","status":"completed"}"#.to_string(),
+        };
+        assert_eq!(
+            parse_tool_call(&call).unwrap(),
+            ToolCall::TodoUpdate(TodoUpdateArgs {
+                id: None,
+                status: TodoUpdateStatus::Completed,
+                note: None,
             }),
         );
     }

@@ -52,6 +52,60 @@ describe("extractFacts", () => {
     ]);
   });
 
+  test("a commented-out include is not captured as a directive", async () => {
+    // The REST scaffold relies on this: its placeholder includes ship
+    // commented out so a freshly created method folder does not open with
+    // three `missingInclude` diagnostics the author did not cause.
+    const facts = await extractFacts(
+      "= T\n\n// include::../_external/названиеСервиса/названиеМетода-request.adoc[]\ninclude::request.adoc[]\n",
+    );
+    expect(facts.includes.map((i) => i.path)).toEqual(["request.adoc"]);
+  });
+
+  test("xref with link text and an anchor", async () => {
+    // The form that actually appears in written documentation. Requiring
+    // empty brackets meant this was never indexed at all, so a broken
+    // anchor here was reported by nothing.
+    const facts = await extractFacts("xref:install.adoc#configuration[Настройка]\n");
+    expect(facts.references).toEqual([
+      {
+        targetDocument: "install.adoc",
+        anchor: "configuration",
+        line: 1,
+        column: 1,
+      },
+    ]);
+  });
+
+  test("xref with link text and no anchor", async () => {
+    // Same omission cost a broken *target* its diagnostic too, not only a
+    // broken anchor.
+    const facts = await extractFacts("xref:install.adoc[Установка]\n");
+    expect(facts.references).toEqual([
+      {
+        targetDocument: "install.adoc",
+        anchor: null,
+        line: 1,
+        column: 1,
+      },
+    ]);
+  });
+
+  test("same-document xref with link text", async () => {
+    const facts = await extractFacts("xref:#setup[К настройке]\n");
+    expect(facts.references).toEqual([
+      { targetDocument: "", anchor: "setup", line: 1, column: 1 },
+    ]);
+  });
+
+  test("two xrefs with link text on one line", async () => {
+    const facts = await extractFacts("см. xref:a.adoc[А] и xref:b.adoc#x[Б]\n");
+    expect(facts.references).toEqual([
+      { targetDocument: "a.adoc", anchor: null, line: 1, column: 5 },
+      { targetDocument: "b.adoc", anchor: "x", line: 1, column: 22 },
+    ]);
+  });
+
   test("angle-bracket xref with anchor and text", async () => {
     const facts = await extractFacts(
       "<<install.adoc#configuration, конфигурация>>\n",

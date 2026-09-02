@@ -34,6 +34,30 @@ function pickThinkingPhrase(): string {
   return THINKING_PHRASES[Math.floor(Math.random() * THINKING_PHRASES.length)]!;
 }
 
+/** Size of a reasoning trace, for the collapsed header.
+ *
+ * The whole point is a number that visibly moves while the card stays shut:
+ * the shimmer says "busy", this says "busy *and getting somewhere*". So it
+ * has to stay narrow — the label beside it is `white-space: nowrap` with an
+ * ellipsis, and every character here is one the label loses in a narrow
+ * dock. Exact below a thousand, one decimal above, no decimal past ten
+ * thousand.
+ *
+ * `null` for an empty trace: a "0 зн." that flashes before the first delta
+ * says less than showing nothing.
+ *
+ * Counts UTF-16 code units, not glyphs — `String.length`. A reasoning trace
+ * is prose, so the difference only shows up on emoji, and the number is
+ * meant to be watched rather than read off. */
+export function formatReasoningSize(chars: number): string | null {
+  if (chars < 1) return null;
+  if (chars < 1000) return `${chars} зн.`;
+  const thousands = chars / 1000;
+  const value =
+    thousands < 10 ? thousands.toFixed(1).replace(".", ",") : Math.round(thousands).toString();
+  return `${value}к зн.`;
+}
+
 type AssistantReasoningBlockProps = {
   block: ReasoningBlock;
   /** Whether the model is still producing this block's text right now —
@@ -78,6 +102,7 @@ export function AssistantReasoningBlock({ block, thinking }: AssistantReasoningB
   const [wasThinking] = useState(thinking);
   const [phrase] = useState(pickThinkingPhrase);
   const Chevron = expanded ? ChevronDown : ChevronRight;
+  const size = formatReasoningSize(block.content.length);
 
   return (
     <div className={`assistant-reasoning ${thinking ? "assistant-reasoning-thinking" : "assistant-reasoning-done"}`}>
@@ -93,6 +118,10 @@ export function AssistantReasoningBlock({ block, thinking }: AssistantReasoningB
         {wasThinking ? (
           <AssistantElapsedTimer running={thinking} className="assistant-reasoning-elapsed" />
         ) : null}
+        {/* Unlike the timer, this needs no `wasThinking` guard: the text it
+            measures is really there in a block restored from history, so
+            showing its size is a fact rather than a fabricated duration. */}
+        {size ? <span className="assistant-reasoning-chars">{size}</span> : null}
       </button>
 
       {expanded ? <div className="assistant-reasoning-detail">{block.content}</div> : null}

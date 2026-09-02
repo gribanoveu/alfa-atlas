@@ -43,6 +43,7 @@ import {
   chatMessageToPlainText,
   estimateMessageContextTokens,
   correctTrailingReasoning,
+  correctRoundText,
   correctTrailingText,
   markRunningToolCallsAsInterrupted,
   settleToolCallBlock,
@@ -85,6 +86,7 @@ import {
   listenLlmChatReasoningDelta,
   listenLlmContextUsage,
   listenLlmRoundStarted,
+  listenLlmRoundText,
   listenLlmSteeringApplied,
   listenLlmToolCall,
   listenLlmToolCallDelta,
@@ -611,6 +613,27 @@ export function useLlmChat(
     void listenLlmRoundStarted(({ turnId }) => {
       if (turnId !== activeTurnIdRef.current) return;
       setMessages((prev) => updateLastAssistantBlocks(prev, closeOpenBlocks));
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Each round's finished prose, as the backend actually received it. The
+  // deltas above are what builds the block; this is what makes a dropped one
+  // survivable. Without it a round that ended in a tool call was never
+  // reconciled against anything, and every such round in the transcript that
+  // prompted this ended mid-word.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenLlmRoundText(({ turnId, text }) => {
+      if (turnId !== activeTurnIdRef.current) return;
+      setMessages((prev) => updateLastAssistantBlocks(prev, (blocks) => correctRoundText(blocks, text)));
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;

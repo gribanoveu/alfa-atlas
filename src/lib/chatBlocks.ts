@@ -533,6 +533,56 @@ export function correctTrailingText(blocks: MessageBlock[], text: string): Messa
   return text !== "" ? [...blocks, { type: "text", id: crypto.randomUUID(), content: text }] : blocks;
 }
 
+/** Overwrites one finished round's text block with the authoritative text
+ * the backend accumulated for it (`llm:round-text`).
+ *
+ * `correctTrailingText` cannot do this job: it goes through
+ * `findOpenBlockIndex`, which gives up the moment it meets a `toolCall`
+ * scanning back — so the prose of a round that *ended* in a tool call, which
+ * is most of them, was never reconciled with anything and a single dropped
+ * delta truncated it permanently. This walks past the round's own tool calls
+ * to reach the text block in front of them.
+ *
+ * It stops only at a `steer`, and at a `text` block already marked `closed`:
+ * both mean the scan has left this round and reached an earlier one, whose
+ * text belongs to a report that already happened. `closed` is only ever set
+ * during a live turn by `closeOpenBlocks`, on the *next* round's
+ * `llm:round-started` — which is why this event, fired as its own round
+ * ends, always arrives while its block is still open.
+ *
+ * An empty `text` is a no-op rather than a blanking: a round with no prose
+ * has no text block to correct, so an empty string here can only mean the
+ * two sides disagree, and dropping visible content is the worse way to be
+ * wrong. */
+export function correctRoundText(blocks: MessageBlock[], text: string): MessageBlock[] {
+  if (text === "") return blocks;
+  // Where a brand-new block goes if the round has none: in front of the
+  // tool calls it opened, never after them.
+  let insertAt = blocks.length;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]!;
+    if (block.type === "steer") return blocks;
+    if (block.type === "toolCall") {
+      insertAt = i;
+      continue;
+    }
+    // Never a boundary. Some providers interleave `reasoning_content` and
+    // `content` chunk by chunk within one round, so a reasoning block can
+    // sit either side of the round's prose — stopping here left the text
+    // block unreached and appended the round's prose a second time after
+    // its tool calls. `findOpenBlockIndex` skips them for the same reason.
+    if (block.type === "reasoning") continue;
+    if (block.type === "text") {
+      if (block.closed) return blocks;
+      return blocks.map((b, j) => (j === i && b.type === "text" ? { ...b, content: text } : b));
+    }
+  }
+  // Every delta for this round was dropped — the text still belongs in the
+  // transcript, in the place the round would have put it.
+  const fresh: MessageBlock = { type: "text", id: crypto.randomUUID(), content: text };
+  return [...blocks.slice(0, insertAt), fresh, ...blocks.slice(insertAt)];
+}
+
 /** Same safety-net role as `correctTrailingText`, for `reasoning` instead
  * of `text`. Only ever corrects an already-open trailing `reasoning` block
  * (the round ended before any `content` arrived) — unlike

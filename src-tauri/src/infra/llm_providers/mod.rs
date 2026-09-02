@@ -23,6 +23,7 @@ pub fn provider_for(
         resolved.base_url.clone(),
         api_key,
         resolved.request_headers.clone(),
+        resolved.temperature,
     )))
 }
 
@@ -43,6 +44,7 @@ mod tests {
             known_models: vec![],
             limit: None,
             request_headers: HashMap::new(),
+            temperature: None,
         }
     }
 

@@ -82,14 +82,22 @@ export function AssistantToolApprovalGroup({ blocks, docsRoot, repoRoot, onDecid
           return (
             <li key={block.id} className="assistant-tool-approval-group-item">
               <div className="assistant-tool-approval-group-item-row">
-                <input
-                  type="checkbox"
-                  className="assistant-tool-approval-group-item-checkbox"
-                  checked={included[block.id] ?? true}
-                  disabled={locked}
-                  aria-label={title}
-                  onChange={(e) => setIncluded((prev) => ({ ...prev, [block.id]: e.target.checked }))}
-                />
+                {/* Only a batch has anything to pick from. On a single call
+                    the checkbox offers a second way to say what "Отклонить"
+                    already says, and on a consent request (widening access,
+                    switching mode) — which is almost always alone in its
+                    round — it is the only thing on the card that does not
+                    look like a decision. */}
+                {multiple ? (
+                  <input
+                    type="checkbox"
+                    className="assistant-tool-approval-group-item-checkbox"
+                    checked={included[block.id] ?? true}
+                    disabled={locked}
+                    aria-label={title}
+                    onChange={(e) => setIncluded((prev) => ({ ...prev, [block.id]: e.target.checked }))}
+                  />
+                ) : null}
                 {expandable ? (
                   <button
                     type="button"
@@ -145,7 +153,7 @@ export function AssistantToolApprovalGroup({ blocks, docsRoot, repoRoot, onDecid
             disabled={locked}
             onClick={() => handleDecideAll("denyAll")}
           >
-            Отклонить всё
+            {multiple ? "Отклонить всё" : "Отклонить"}
           </button>
           <button
             type="button"

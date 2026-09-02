@@ -52,6 +52,7 @@ pub fn resolve_provider(
         let limit = over.and_then(|o| o.limit).or(preset.limit);
         let known_models = over.map(|o| o.known_models.clone()).unwrap_or_default();
         let request_headers = resolve_request_headers(preset, over);
+        let temperature = over.and_then(|o| o.temperature).or(preset.temperature);
         return Ok(ResolvedLlmProvider {
             id: id.to_string(),
             label,
@@ -62,6 +63,7 @@ pub fn resolve_provider(
             known_models,
             limit,
             request_headers,
+            temperature,
         });
     }
 
@@ -81,6 +83,9 @@ pub fn resolve_provider(
         known_models: over.known_models.clone(),
         limit: over.limit.or(Some(DEFAULT_PROVIDER_TOKEN_LIMIT)),
         request_headers: resolve_request_headers_from_override(over),
+        // No manifest layer to fall back on, and no way to know what this
+        // provider's model accepts — unset stays unset.
+        temperature: over.temperature,
     })
 }
 
@@ -242,6 +247,7 @@ mod tests {
                 known_models: vec![],
                 limit: None,
                 request_headers: None,
+            temperature: None,
             }],
             ..Default::default()
         };
@@ -295,6 +301,7 @@ mod tests {
                 known_models: vec![],
                 limit: None,
                 request_headers: None,
+            temperature: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -334,6 +341,7 @@ mod tests {
                 known_models: vec![],
                 limit: None,
                 request_headers: None,
+            temperature: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -359,6 +367,7 @@ mod tests {
                 known_models: vec![],
                 limit: None,
                 request_headers: None,
+            temperature: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -387,6 +396,7 @@ mod tests {
                 known_models: vec![],
                 limit: None,
                 request_headers: None,
+            temperature: None,
             }],
             ..Default::default()
         };
@@ -410,6 +420,7 @@ mod tests {
                 ],
                 limit: None,
                 request_headers: None,
+            temperature: None,
             }],
             ..Default::default()
         };
@@ -440,6 +451,7 @@ mod tests {
                 known_models: vec![],
                 limit: None,
                 request_headers: None,
+            temperature: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -468,6 +480,7 @@ mod tests {
                 known_models: vec![],
                 limit: None,
                 request_headers: None,
+            temperature: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -495,6 +508,7 @@ mod tests {
                 known_models: vec![],
                 limit: None,
                 request_headers: None,
+            temperature: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -536,6 +550,7 @@ mod tests {
             known_models: vec![],
             limit: None,
             request_headers: HashMap::new(),
+            temperature: None,
         };
         let provider = FakeProvider { models: vec![], panics_on_list: true };
         let model = effective_model(&resolved, &provider).unwrap();
@@ -557,6 +572,7 @@ mod tests {
                 known_models: vec![],
                 limit: None,
                 request_headers: HashMap::new(),
+                temperature: None,
             };
             let provider =
                 FakeProvider { models: vec!["model-a", "model-b"], panics_on_list: false };
@@ -585,6 +601,7 @@ mod tests {
             known_models: vec![],
             limit: None,
             request_headers: HashMap::new(),
+            temperature: None,
         };
         let provider = FakeProvider { models: vec![], panics_on_list: false };
         assert!(effective_model(&resolved, &provider).is_err());
@@ -595,11 +612,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None },
         );
         assert_eq!(settings.providers.len(), 1);
         assert_eq!(settings.providers[0].label.as_deref(), Some("Second"));
@@ -610,11 +627,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None },
+            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None },
+            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None },
         );
         assert_eq!(settings.providers.len(), 2);
     }
@@ -623,7 +640,7 @@ mod tests {
     fn remove_provider_config_clears_active_id_when_it_matches() {
         let mut settings = LlmSettings {
             active_provider_id: Some("a".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
             tool_call_logging: true,
@@ -641,7 +658,7 @@ mod tests {
     fn remove_provider_config_leaves_active_id_alone_when_it_does_not_match() {
         let mut settings = LlmSettings {
             active_provider_id: Some("b".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
             tool_call_logging: true,
@@ -678,6 +695,50 @@ mod tests {
     }
 
     #[test]
+    fn a_settings_temperature_overrides_the_manifest_preset() {
+        // Same "override wins when Some" merge as limit/requestHeaders; the
+        // manifest ships a value, the user is allowed to disagree with it.
+        let settings = LlmSettings {
+            providers: vec![LlmProviderConfig {
+                id: "alfagen".to_string(),
+                label: None,
+                base_url: None,
+                model: None,
+                trusted_cert_pem: None,
+                known_models: vec![],
+                limit: None,
+                request_headers: None,
+                temperature: Some(0.9),
+            }],
+            ..LlmSettings::default()
+        };
+        let resolved = resolve_provider("alfagen", &settings).unwrap();
+        assert_eq!(resolved.temperature, Some(0.9));
+    }
+
+    #[test]
+    fn a_custom_provider_sends_no_temperature_unless_told_to() {
+        // Nothing knows what a hand-added endpoint's model accepts, and a
+        // reasoning model rejects any temperature but its own.
+        let settings = LlmSettings {
+            providers: vec![LlmProviderConfig {
+                id: "mine".to_string(),
+                label: None,
+                base_url: Some("https://example.com/v1".to_string()),
+                model: None,
+                trusted_cert_pem: None,
+                known_models: vec![],
+                limit: None,
+                request_headers: None,
+                temperature: None,
+            }],
+            ..LlmSettings::default()
+        };
+        let resolved = resolve_provider("mine", &settings).unwrap();
+        assert_eq!(resolved.temperature, None);
+    }
+
+    #[test]
     fn preset_request_headers_apply_when_no_override() {
         let preset = LlmProviderPreset {
             id: "x".into(),
@@ -687,6 +748,7 @@ mod tests {
             trusted_cert_pem: None,
             limit: None,
             request_headers: Some(HashMap::from([("systemId".into(), "sanduser".into())])),
+            temperature: None,
         };
         let headers = resolve_request_headers(&preset, None);
         assert_eq!(headers.get("systemId").map(String::as_str), Some("sanduser"));

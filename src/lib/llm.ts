@@ -32,6 +32,10 @@ export type LlmProviderConfig = {
   limit: ProviderTokenLimit | null;
   /** When set, replaces bundled preset headers entirely. `null` = inherit. */
   requestHeaders: Record<string, string> | null;
+  /** Sampling temperature. `null` = inherit from the manifest preset, and
+   * for a custom provider that means no `temperature` is sent at all — some
+   * reasoning models reject a request that carries one. */
+  temperature: number | null;
 };
 
 // Mirrors `domain::llm::ProviderTokenLimit` — provider-level token limits
@@ -106,6 +110,8 @@ export type ResolvedLlmProvider = {
   limit: ProviderTokenLimit | null;
   /** HTTP headers sent with chat/models requests (merged preset + override). */
   requestHeaders: Record<string, string>;
+  /** Merged sampling temperature; `null` means none is sent. */
+  temperature: number | null;
 };
 
 /** Substituted with a fresh UUID on each request — mirrors Rust `$uuid`. */
@@ -515,6 +521,17 @@ export function listenLlmRoundStarted(
   onRoundStarted: (payload: TurnScoped) => void,
 ): Promise<UnlistenFn> {
   return listen<TurnScoped>("llm:round-started", (event) => onRoundStarted(event.payload));
+}
+
+/** Fires once a model round has finished streaming, carrying that round's
+ * full text. The transcript overwrites the round's own text block with it,
+ * so a dropped `llm:chat-stream-delta` cannot leave prose permanently cut
+ * off mid-word — which is what used to happen to every round that ended in
+ * a tool call (see `chatBlocks.ts`'s `correctRoundText`). */
+export function listenLlmRoundText(
+  onRoundText: (payload: TurnScoped & { text: string }) => void,
+): Promise<UnlistenFn> {
+  return listen<TurnScoped & { text: string }>("llm:round-text", (event) => onRoundText(event.payload));
 }
 
 export function listenLlmSteeringApplied(

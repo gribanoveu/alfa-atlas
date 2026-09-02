@@ -35,13 +35,31 @@ pub(super) fn todo_write(todos: &[Task], args: TodoWriteArgs) -> Result<Vec<Task
     Ok(enforce_todo_invariant(updated))
 }
 
+/// Completes or cancels one task. An absent `id` means the active one.
+///
+/// The default exists because naming an id is a step that can be got wrong
+/// silently: in the transcript that prompted it, the model closed `t6` while
+/// meaning `t5`, and the checklist ended the turn claiming a finished step
+/// was still outstanding. "The task I am on" needs no id, and that is what
+/// almost every update means.
 pub(super) fn todo_update(todos: &[Task], args: TodoUpdateArgs) -> Result<Vec<Task>, ToolError> {
     let mut updated = todos.to_vec();
+    let target = match args.id.clone() {
+        Some(id) => id,
+        None => todos
+            .iter()
+            .find(|t| t.status == TodoStatus::InProgress)
+            .map(|t| t.id.clone())
+            .ok_or_else(|| ToolError::TaskNotFound {
+                id: String::new(),
+                available: Some(todos.iter().map(|t| t.id.clone()).collect()),
+            })?,
+    };
     let task = updated
         .iter_mut()
-        .find(|t| t.id == args.id)
+        .find(|t| t.id == target)
         .ok_or_else(|| ToolError::TaskNotFound {
-            id: args.id.clone(),
+            id: target.clone(),
             available: Some(todos.iter().map(|t| t.id.clone()).collect()),
         })?;
     task.status = args.status.into();
@@ -75,7 +93,7 @@ pub(super) fn enforce_todo_invariant(mut tasks: Vec<Task>) -> Vec<Task> {
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "todo".to_string(),
-        description: "Manage your working task checklist for a multi-step request (3+ steps). One tool, two operations selected via `op`. `op: \"write\"` adds new task titles (`tasks`, an array of short imperative strings, 3-7 words each) to the end of the checklist; the runtime assigns each an id and, if the checklist was empty before this call, marks the first of the new tasks in_progress automatically (the rest start pending) — calling `write` again later appends more titles to the end, it never replaces or clears the existing list. `op: \"update\"` changes one existing task, named by `id` exactly as shown in your current checklist, to `status: \"completed\"` or `status: \"cancelled\"` (optionally with a short `note`: a brief result for a completed task, or the reason for a cancelled one) — these are the ONLY two status values you may set; you can never set `pending` or `in_progress` yourself, the runtime handles those transitions automatically, including auto-activating the next pending task the instant the current one is completed or cancelled. There is no `read` operation: your current checklist, with the active task marked, is always shown to you at the top of your context — never call this tool just to see the list. Do not use this tool for a task with only 1-2 steps, that is a wasted call. At most 20 tasks total in one checklist."
+        description: "Manage your working task checklist for a multi-step request (3+ steps). One tool, two operations selected via `op`. `op: \"write\"` adds new task titles (`tasks`, an array of short imperative strings, 3-7 words each) to the end of the checklist; the runtime assigns each an id and, if the checklist was empty before this call, marks the first of the new tasks in_progress automatically (the rest start pending) — calling `write` again later appends more titles to the end, it never replaces or clears the existing list. `op: \"update\"` changes one existing task — the active one when `id` is omitted, or the task named by `id` exactly as shown in your current checklist — to `status: \"completed\"` or `status: \"cancelled\"` (optionally with a short `note`: a brief result for a completed task, or the reason for a cancelled one) — these are the ONLY two status values you may set; you can never set `pending` or `in_progress` yourself, the runtime handles those transitions automatically, including auto-activating the next pending task the instant the current one is completed or cancelled. There is no `read` operation: your current checklist, with the active task marked, is always shown to you at the top of your context — never call this tool just to see the list. Do not use this tool for a task with only 1-2 steps, that is a wasted call. At most 20 tasks total in one checklist."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -92,7 +110,7 @@ pub(super) fn definition() -> LlmToolDefinition {
                 },
                 "id": {
                     "type": ["string", "null"],
-                    "description": "Only for op: \"update\". The id of the task to change (e.g. \"t2\"), exactly as shown in your current checklist. Ignored for op: \"write\"."
+                    "description": "Only for op: \"update\". The id of the task to change (e.g. \"t2\"), exactly as shown in your current checklist. Omit it to change the active task — that is what you want whenever you are finishing the step you are on, and it cannot name the wrong one. Ignored for op: \"write\"."
                 },
                 "status": {
                     "type": ["string", "null"],
@@ -145,10 +163,27 @@ mod tests {
         match execute_tool(
             scope,
             ToolCall::TodoUpdate(TodoUpdateArgs {
-                id: id.to_string(),
+                id: Some(id.to_string()),
                 status,
                 note: note.map(str::to_string),
             }),
+            &EmbeddingDeps::empty(),
+            todos,
+        )? {
+            ToolResult::TodoUpdated(list) => Ok(list),
+            other => panic!("expected ToolResult::TodoUpdated, got {other:?}"),
+        }
+    }
+
+    /// The same call with `id` omitted — targets whatever is active.
+    fn update_active(
+        scope: &ToolScope,
+        todos: &[Task],
+        status: TodoUpdateStatus,
+    ) -> Result<Vec<Task>, ToolError> {
+        match execute_tool(
+            scope,
+            ToolCall::TodoUpdate(TodoUpdateArgs { id: None, status, note: None }),
             &EmbeddingDeps::empty(),
             todos,
         )? {
@@ -194,6 +229,35 @@ mod tests {
             err,
             ToolError::TooManyTasks { current: 20, adding: 1, max: 20 }
         ));
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn an_update_without_an_id_closes_the_active_task() {
+        // The default that removes a whole class of silent mistake: naming
+        // the wrong existing id closes the wrong row, and the checklist ends
+        // the turn disagreeing with the work.
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let list = todo_write(&scope, &[], &["Первая", "Вторая", "Третья"]).unwrap();
+        assert_eq!(list[0].status, TodoStatus::InProgress);
+
+        let list = update_active(&scope, &list, TodoUpdateStatus::Completed).unwrap();
+        assert_eq!(list[0].status, TodoStatus::Completed);
+        assert_eq!(list[1].status, TodoStatus::InProgress, "next one activates as usual");
+
+        let list = update_active(&scope, &list, TodoUpdateStatus::Completed).unwrap();
+        assert_eq!(list[1].status, TodoStatus::Completed);
+        assert_eq!(list[2].status, TodoStatus::InProgress);
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn an_update_without_an_id_fails_when_nothing_is_active() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let err = update_active(&scope, &[], TodoUpdateStatus::Completed).unwrap_err();
+        assert!(matches!(err, ToolError::TaskNotFound { .. }));
         fs::remove_dir_all(&repo).ok();
     }
 

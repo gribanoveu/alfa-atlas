@@ -81,7 +81,7 @@ function VisualPreview({
   if (state.kind === "loading") {
     return (
       <div className="assistant-visual-preview is-loading">
-        <Loader2 className="assistant-chat-tool-spinner" size={14} aria-hidden />
+        <Loader2 className="assistant-chat-tool-spinner" size={15} aria-hidden />
       </div>
     );
   }
@@ -129,7 +129,7 @@ export function AssistantVisualCard({
         <div className="assistant-plan-card-header">
           <span className="assistant-plan-card-eyebrow">Визуализация</span>
           <div className="assistant-plan-card-title assistant-plan-card-title-live">
-            <Loader2 className="assistant-chat-tool-spinner" size={14} aria-hidden />
+            <Loader2 className="assistant-chat-tool-spinner" size={15} aria-hidden />
             Рисую схему…
           </div>
         </div>

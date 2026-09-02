@@ -24,7 +24,7 @@ export function AssistantCompactionNotice({ message }: { message: ChatMessage })
         <div className="assistant-plan-card-header">
           <span className="assistant-plan-card-eyebrow">Контекст</span>
           <div className="assistant-plan-card-title assistant-plan-card-title-live">
-            <Loader2 className="assistant-chat-tool-spinner" size={14} aria-hidden />
+            <Loader2 className="assistant-chat-tool-spinner" size={15} aria-hidden />
             {text}
           </div>
         </div>

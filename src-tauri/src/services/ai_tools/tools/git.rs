@@ -92,12 +92,31 @@ pub(super) fn git_blame(scope: &ToolScope, args: GitBlameArgs) -> Result<ToolRes
         }
     };
 
-    let hunks = git_ops::blame(&repo_root, &repo_rel, Some(start), Some(end))?;
+    let hunks = git_ops::blame(&repo_root, &repo_rel, Some(start), Some(end))
+        .map_err(|e| blame_error(&args.path, e))?;
     Ok(ToolResult::GitBlame {
         path: args.path,
         hunks,
         truncated,
     })
+}
+
+/// libgit2 answers a blame on a never-committed file with "the path '…'
+/// does not exist in the given tree" — true about the tree, and useless to
+/// the caller: nothing in it says the file is simply new, so the natural
+/// reading is that the path was wrong.
+///
+/// Rewritten here, at the tool boundary, rather than in `domain::git::
+/// GitError`: that type's `Display` text is matched on verbatim by
+/// `src/lib/gitErrors.ts` to translate git failures for the user, and
+/// editing it would silently break those translations.
+fn blame_error(path: &str, err: crate::domain::git::GitError) -> ToolError {
+    if err.to_string().contains("does not exist in the given tree") {
+        return ToolError::Git(format!(
+            "у файла «{path}» ещё нет истории — он не закоммичен, поэтому blame по нему невозможен. Его текущее содержимое целиком показывает gitDiff."
+        ));
+    }
+    ToolError::from(err)
 }
 
 /// The `gitDiff` schema the model sees.
@@ -170,6 +189,33 @@ mod tests {
 };
     use crate::services::ai_tools::testing::*;
     use crate::services::ai_tools::{EmbeddingDeps, execute_tool};
+
+    #[test]
+    fn git_blame_on_an_uncommitted_file_explains_there_is_no_history_yet() {
+        // The libgit2 text is quoted verbatim from a real run: blaming a
+        // file whose whole folder had never been committed.
+        let err = super::blame_error(
+            "_benchmark_tools/x.adoc",
+            crate::domain::git::GitError::Operation(
+                "the path '_benchmark_tools' does not exist in the given tree; class=Tree (14); code=NotFound (-3)"
+                    .to_string(),
+            ),
+        );
+        let text = err.to_string();
+        assert!(!text.contains("does not exist in the given tree"), "got: {text}");
+        assert!(text.contains("не закоммичен"), "got: {text}");
+        assert!(text.contains("gitDiff"), "should point at what does work: {text}");
+        assert!(text.contains("_benchmark_tools/x.adoc"), "should name the file: {text}");
+    }
+
+    #[test]
+    fn an_unrelated_git_failure_is_passed_through_untouched() {
+        let err = super::blame_error(
+            "a.adoc",
+            crate::domain::git::GitError::NotARepository("/tmp/nope".to_string()),
+        );
+        assert!(err.to_string().contains("not a git repository"), "got: {err}");
+    }
 
     #[test]
     fn git_diff_and_git_blame_reject_paths_outside_docs_root_in_docs_only() {

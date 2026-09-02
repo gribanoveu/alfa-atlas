@@ -102,8 +102,9 @@ export function useLlmSetup() {
   const updateProviderConfig = useCallback(
     async (
       providerId: string,
-      patch: Partial<Omit<LlmProviderConfig, "id" | "requestHeaders">> & {
+      patch: Partial<Omit<LlmProviderConfig, "id" | "requestHeaders" | "temperature">> & {
         requestHeaders?: Record<string, string> | null;
+        temperature?: number | null;
       },
     ) => {
       const existing = settings?.providers.find((p) => p.id === providerId);
@@ -116,6 +117,7 @@ export function useLlmSetup() {
         trustedCertPem: existing?.trustedCertPem ?? null,
         limit: existing?.limit ?? null,
         requestHeaders: existing?.requestHeaders ?? null,
+        temperature: existing?.temperature ?? null,
         ...patch,
       };
       setBusy(true);

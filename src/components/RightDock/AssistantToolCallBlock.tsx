@@ -133,7 +133,7 @@ export function AssistantToolCallBlock({ block }: AssistantToolCallBlockProps) {
       >
         <Chevron className="assistant-tool-call-chevron" size={12} aria-hidden />
         {block.status === "running" ? (
-          <Loader2 className="assistant-tool-call-icon assistant-chat-tool-spinner" size={13} aria-hidden />
+          <Loader2 className="assistant-tool-call-icon assistant-chat-tool-spinner" size={15} aria-hidden />
         ) : block.status === "done" ? (
           <Check className="assistant-tool-call-icon" size={13} aria-hidden />
         ) : block.status === "pendingApproval" ? (

@@ -25,6 +25,7 @@ use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
 use crate::domain::conversation_mode::{mode_tools, ConversationMode};
 use crate::domain::llm::{
     sanitize_tool_call_arguments, ChatDone, ChatEvent, ChatEventSink, ChatRequest,
+    ChatRoundText,
     ChatStreamDelta,
     ChatStreamResult,
     ChatStreamOutcome, ChatStreamReasoning, LlmMessage, LlmProvider, LlmRole, LlmSettings,
@@ -610,6 +611,13 @@ fn run_tool_loop(
                     (ctx.events)(ChatEvent::RateLimitChanged);
                     (ctx.events)(ChatEvent::ContextUsage(usage));
                 }
+
+                // The round's prose, stated outright instead of left to the
+                // deltas that streamed it — see `ChatEvent::RoundText`.
+                // Placed before Checkpoint 2 deliberately: a cancelled round
+                // still shows whatever it managed to say, and a round about
+                // to pause on a confirmation gate has already reported.
+                (ctx.events)(ChatEvent::RoundText(ChatRoundText { text: result.text.clone() }));
 
                 // Checkpoint 2 — see this function's doc comment. Checked
                 // before either branch below so a stop that landed exactly
@@ -1683,6 +1691,92 @@ mod tests {
         assert_eq!(done.result.text, "Готово.");
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1, "one round, one model call");
         assert!(tool_events(&seen).is_empty(), "nothing was executed");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Every `RoundText` the turn emitted, in order.
+    fn round_texts(seen: &Arc<Mutex<Vec<ChatEvent>>>) -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ChatEvent::RoundText(t) => Some(t.text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_round_that_ends_in_a_tool_call_still_reports_its_prose() {
+        // The regression this exists for: that round's text was previously
+        // only ever streamed as deltas, so a dropped one truncated the
+        // transcript permanently while the full text went to the model.
+        let root = fixture_repo("round-text-tool");
+        let provider = ScriptedProvider::new(vec![
+            round("Смотрю файл конфигурации.", vec![tool_call("c1", "readFile", r#"{"path":"intro.adoc"}"#)]),
+            round("Прочитал.", vec![]),
+        ]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        assert_eq!(
+            round_texts(&seen),
+            vec!["Смотрю файл конфигурации.".to_string(), "Прочитал.".to_string()],
+            "every round reports, the one with a tool call included"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_rounds_text_is_reported_before_its_tool_calls_run() {
+        // Order is the contract: the frontend corrects the round's text
+        // block, and `correctRoundText` refuses to reach across a block the
+        // next round has closed. Reporting late would mean reporting into
+        // the wrong round.
+        let root = fixture_repo("round-text-order");
+        let provider = ScriptedProvider::new(vec![
+            round("Сейчас прочитаю.", vec![tool_call("c1", "readFile", r#"{"path":"intro.adoc"}"#)]),
+            round("Готово.", vec![]),
+        ]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        let kinds: Vec<&str> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                ChatEvent::RoundText(_) => Some("text"),
+                ChatEvent::ToolCall(_) => Some("call"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(kinds, vec!["text", "call", "text"]);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_round_that_said_nothing_reports_an_empty_text() {
+        // The frontend treats this as a no-op rather than blanking a block;
+        // the loop still reports uniformly instead of branching.
+        let root = fixture_repo("round-text-silent");
+        let provider = ScriptedProvider::new(vec![
+            round("", vec![tool_call("c1", "readFile", r#"{"path":"intro.adoc"}"#)]),
+            round("Прочитал.", vec![]),
+        ]);
+        let (events, seen) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        assert_eq!(round_texts(&seen), vec![String::new(), "Прочитал.".to_string()]);
 
         std::fs::remove_dir_all(&root).ok();
     }
