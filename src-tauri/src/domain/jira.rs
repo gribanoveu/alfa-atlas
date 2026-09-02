@@ -44,6 +44,15 @@ pub struct JiraSettings {
     /// picked. A cache, never an identity: only the key is ever sent to
     /// Jira, so a stale name here cannot address the wrong project.
     pub project_name: String,
+    /// The issue type new issues are created with, e.g. `20` («User Story»).
+    ///
+    /// Belongs to `project_key`: types are configured per project, so this
+    /// is cleared whenever the project changes (see
+    /// `services::jira_config::save_jira_settings`) rather than pointing at
+    /// a type the new project may not have.
+    pub issue_type_id: String,
+    /// Display name for `issue_type_id`. A cache, like `project_name`.
+    pub issue_type_name: String,
     /// PEM bundle whose certificates *replace* the public trust roots for
     /// Jira requests — the same escape hatch the LLM providers have, for an
     /// internal instance behind a corporate CA. `None` falls back to the
@@ -111,6 +120,43 @@ pub struct JiraProject {
     pub archived: bool,
 }
 
+/// One issue type a project accepts, from
+/// `GET /rest/api/latest/issue/createmeta/{key}/issuetypes`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraIssueType {
+    pub id: String,
+    pub name: String,
+    /// A sub-task cannot exist without a parent, so these are filtered out
+    /// before the list reaches the UI — carried only to do that filtering.
+    #[serde(default)]
+    pub subtask: bool,
+}
+
+/// The fields a new issue is created with. Only the four this instance's
+/// create screen marks required, plus the description — a corporate project
+/// can mandate more (components, custom fields), and that surfaces as a
+/// Jira error naming the field rather than as a guess made here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewIssue {
+    pub project_key: String,
+    pub issue_type_id: String,
+    pub summary: String,
+    /// Jira wiki markup, from `domain::artifact_render`.
+    pub description: String,
+    /// Jira Server addresses users by login `name`. `None` lets Jira decide,
+    /// which fails on a project whose create screen requires a reporter.
+    pub reporter: Option<String>,
+}
+
+/// A published issue: its key and the page a person opens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraCreatedIssue {
+    pub key: String,
+    pub url: String,
+}
+
 /// One link to attach to an issue as a Jira **Web Link** — what the UI
 /// calls «Link → Web link» and the API calls a remote link. Distinct from
 /// the same URL sitting in the description text: real tickets carry both,
@@ -175,6 +221,18 @@ pub enum JiraError {
     Settings(String),
     #[error("Не указан ключ задачи")]
     MissingIssueKey,
+    #[error("Не выбран проект")]
+    MissingProject,
+    #[error("Не выбран тип задачи")]
+    MissingIssueType,
+    #[error("У задачи нет заголовка")]
+    MissingSummary,
+    #[error("Описание пустое — публиковать нечего")]
+    EmptyDescription,
+    #[error("Тикет уже опубликован как {0}")]
+    AlreadyPublished(String),
+    #[error("Не удалось прочитать артефакт: {0}")]
+    Artifact(String),
 }
 
 #[cfg(test)]

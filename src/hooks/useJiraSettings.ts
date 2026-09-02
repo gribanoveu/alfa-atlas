@@ -186,6 +186,8 @@ function shallowEqual(a: JiraSettings, b: JiraSettings): boolean {
     a.baseUrl === b.baseUrl &&
     a.projectKey === b.projectKey &&
     a.projectName === b.projectName &&
+    a.issueTypeId === b.issueTypeId &&
+    a.issueTypeName === b.issueTypeName &&
     a.trustedCertPem === b.trustedCertPem
   );
 }

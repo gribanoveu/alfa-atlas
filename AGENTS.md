@@ -79,6 +79,16 @@ See [`AI_HARNESS.md`](AI_HARNESS.md) for the AI-agent tool-access infrastructure
 - Keep abstractions proportionate to actual need — don't add a layer, trait, or generic parameter for a hypothetical future case.
 - Match existing patterns in the file/module you're editing before introducing a new one.
 
+### UI
+
+**Don't use a browser control where the app already draws its own.** The app renders its interactive widgets itself, so a native one arrives with the platform's look — a macOS `<select>` among hand-styled panels reads as something pasted in from another program, and it ignores the theme tokens everything else is built from.
+
+The pattern for a dropdown is a `<button>` trigger plus a menu of `role="option"` buttons, dismissed by an outside `pointerdown` or `Escape`. Existing implementations to copy: `.method-select*` (`HttpRequestBuilder`), `.oas-select*` (`OpenApiExplorer`), `.assistant-mode-*` (`AssistantConversation`), `.jira-select*` (`JiraIssueTypePicker`). The same applies to anything else the platform would draw its own way — `<input type="checkbox">` is styled through `.settings-check`, dialogs are the app's own modal shell rather than `alert`/`confirm`.
+
+Colours, spacing and fonts come from the tokens in `src/styles/tokens.css` (`--bg-*`, `--text-*`, `--border`, `--accent`, `--font-ui*`). A literal hex or pixel font size in a component is a bug: it will not follow the user's theme or font-size preference.
+
+A component used from more than one place carries its own styles rather than borrowing a neighbour's — CSS is bundled globally, so borrowing appears to work right up until the neighbour is deleted.
+
 ## Commit / PR expectations
 
 - Keep commits scoped to one layer or one concern where practical.

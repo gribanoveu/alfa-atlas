@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, RefreshCw, Settings2, Ticket } from "lucide-react";
 import { useJiraConnection } from "../../hooks/useJiraConnection";
 import { useJiraProject } from "../../hooks/useJiraProject";
+import { JiraIssueTypePicker } from "../Jira/JiraIssueTypePicker";
 import { JiraProjectPicker } from "../Jira/JiraProjectPicker";
 import "./JiraPanel.css";
 
@@ -123,7 +124,14 @@ export function JiraPanel({ onOpenSettings }: JiraPanelProps) {
                   projectKey={project.projectKey}
                   projectName={project.projectName}
                   disabled={project.busy}
-                  onPick={(picked) => void project.pick(picked)}
+                  onPick={(picked) => void project.pickProject(picked)}
+                />
+                <JiraIssueTypePicker
+                  projectKey={project.projectKey}
+                  issueTypeId={project.issueTypeId}
+                  issueTypeName={project.issueTypeName}
+                  disabled={project.busy}
+                  onPick={(picked) => void project.pickIssueType(picked)}
                 />
                 {project.error ? (
                   <p className="jira-panel-notice-text">{project.error}</p>

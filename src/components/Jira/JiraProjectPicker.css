@@ -156,3 +156,103 @@
   border-color: var(--accent-dim);
   background: var(--bg-2);
 }
+
+/* Dropdown for the issue type. Trigger + menu, matching `.method-select*`
+   (HTTP builder), `.oas-select*` (OpenAPI explorer) and `.assistant-mode-*`
+   (chat) — the app's own dropdown shell. A native <select> renders as the
+   platform's control and reads as foreign next to them. */
+.jira-select {
+  position: relative;
+  min-width: 0;
+}
+
+.jira-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jira-select-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.jira-select-trigger.is-open {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.jira-select-trigger:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.jira-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jira-select-value.is-empty {
+  color: var(--text-2);
+}
+
+.jira-select-chevron {
+  flex: none;
+  color: var(--text-2);
+  font-size: calc(var(--font-ui) * 0.75);
+  line-height: 1;
+}
+
+.jira-select-trigger.is-open .jira-select-chevron {
+  color: var(--text-0);
+}
+
+.jira-select-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.jira-select-option {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jira-select-option:hover {
+  background: var(--bg-2);
+}
+
+.jira-select-option.is-active {
+  background: var(--accent-dim);
+}

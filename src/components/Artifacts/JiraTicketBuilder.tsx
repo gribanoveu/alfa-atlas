@@ -399,12 +399,14 @@ function LinkList({
         <ul className="ticket-rows" role="list">
           {links.map((link, index) => (
             <li key={index} className="ticket-row">
-              {/* A datalist, not a select: these three cover the tracker's
-                  tickets, but a fourth type must not need a code change to
-                  be writable. */}
+              {/* Free text rather than a fixed set: GIT / CONFLUENCE / FIGMA
+                  cover the tracker's tickets, but a fourth type must not
+                  need a code change to be writable. No `datalist` — its
+                  suggestion popup is drawn by the platform (see AGENTS.md,
+                  Style → UI); the three usual values are named in the hint
+                  under the field instead. */}
               <input
                 className="ticket-input ticket-input-narrow"
-                list="ticket-link-kinds"
                 value={link.kind}
                 placeholder="GIT"
                 aria-label={`Тип ссылки ${index + 1}`}
@@ -443,11 +445,6 @@ function LinkList({
           ))}
         </ul>
       ) : null}
-      <datalist id="ticket-link-kinds">
-        <option value="GIT" />
-        <option value="CONFLUENCE" />
-        <option value="FIGMA" />
-      </datalist>
       <button
         type="button"
         className="ticket-add-btn"

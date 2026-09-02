@@ -72,6 +72,10 @@ export type TicketLink = {
  *  ticket section "absent" and "empty" mean the same thing, and an empty one
  *  is simply not rendered. */
 export type JiraTicketSpec = {
+  /** The issue this draft became, once published (e.g. `WOWTAX-123`).
+   *  Written only by publishing — it is what stops a second publish from
+   *  creating a duplicate. Never rendered into the description. */
+  issueKey: string;
   why: string;
   outcome: string;
   inScope: string[];
@@ -201,6 +205,7 @@ export function emptyArtifactContent(kind: ArtifactKind): ArtifactContent {
     case "jiraTicket":
       return {
         kind: "jiraTicket",
+        issueKey: "",
         why: "",
         outcome: "",
         inScope: [],

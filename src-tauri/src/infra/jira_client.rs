@@ -15,7 +15,9 @@
 use gouqi::{Credentials, Error as GouqiError, Jira};
 use reqwest::blocking::Client;
 
-use crate::domain::jira::{JiraError, JiraProject, JiraSettings, JiraUser, JiraWebLink};
+use crate::domain::jira::{
+    JiraError, JiraIssueType, JiraProject, JiraSettings, JiraUser, JiraWebLink, NewIssue,
+};
 
 /// `trusted_cert_pem` replaces the built-in roots entirely when present —
 /// an instance either needs its own CA trusted or it doesn't, and mixing
@@ -103,6 +105,93 @@ pub fn list_projects(jira: &Jira, recent_only: bool) -> Result<Vec<JiraProject>,
     // An archived project still answers `/project` but cannot take a new
     // issue, so offering one would only produce a failure at publish time.
     Ok(raw.into_iter().filter(|p| !p.archived).collect())
+}
+
+/// Page size for the issue-type listing. Comfortably above what a project
+/// configures (the busiest one seen here has 30), so the loop below is a
+/// safety net rather than the normal path.
+const ISSUE_TYPE_PAGE: usize = 200;
+
+/// Ceiling on pages, so a server that never sets `isLast` cannot spin here.
+const ISSUE_TYPE_MAX_PAGES: usize = 10;
+
+/// The issue types a new issue in `project_key` may take.
+///
+/// `/issue/createmeta/{key}/issuetypes` rather than `/project/{key}`: both
+/// answer with the project's types, but this one is the create screen's own
+/// endpoint and therefore reflects what the user may actually create.
+/// (`/issue/createmeta?projectKeys=` is gone in Jira 10 — it answers 404.)
+///
+/// Sub-task types are dropped: a sub-task cannot exist without a parent, so
+/// offering one would produce a choice that fails at publish time.
+pub fn list_issue_types(jira: &Jira, project_key: &str) -> Result<Vec<JiraIssueType>, JiraError> {
+    let project_key = project_key.trim();
+    if project_key.is_empty() {
+        return Err(JiraError::MissingProject);
+    }
+
+    let mut types = Vec::new();
+    let mut start_at = 0usize;
+    for _ in 0..ISSUE_TYPE_MAX_PAGES {
+        let page: IssueTypePage = jira
+            .get(
+                "api",
+                &format!(
+                    "/issue/createmeta/{project_key}/issuetypes?startAt={start_at}&maxResults={ISSUE_TYPE_PAGE}"
+                ),
+            )
+            .map_err(map_error)?;
+        let count = page.values.len();
+        types.extend(page.values.into_iter().filter(|t| !t.subtask));
+        start_at += count;
+        if page.is_last || count == 0 || start_at >= page.total {
+            break;
+        }
+    }
+    Ok(types)
+}
+
+/// Jira's paged-collection envelope, as this endpoint returns it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IssueTypePage {
+    #[serde(default)]
+    values: Vec<JiraIssueType>,
+    #[serde(default)]
+    is_last: bool,
+    #[serde(default)]
+    total: usize,
+}
+
+/// `POST /rest/api/latest/issue` — creates an issue and returns its key.
+///
+/// `reporter` is sent explicitly because this instance's create screen
+/// marks it required with no default value (`createmeta/{key}/issuetypes/
+/// {type}` reports `summary`, `issuetype`, `project` and `reporter`).
+/// Setting it to the authenticated user is always permitted; setting it to
+/// somebody else would need the "Modify Reporter" permission, which is why
+/// `services::jira_publish` never offers that.
+pub fn create_issue(jira: &Jira, issue: &NewIssue) -> Result<String, JiraError> {
+    #[derive(serde::Deserialize)]
+    struct Created {
+        key: String,
+    }
+
+    let mut fields = serde_json::json!({
+        "project": { "key": issue.project_key },
+        "issuetype": { "id": issue.issue_type_id },
+        "summary": issue.summary,
+        "description": issue.description,
+    });
+    if let Some(reporter) = issue.reporter.as_deref().filter(|r| !r.trim().is_empty()) {
+        // Jira Server addresses users by `name`; `accountId` is Cloud's.
+        fields["reporter"] = serde_json::json!({ "name": reporter });
+    }
+
+    let created: Created = jira
+        .post("api", "/issue", serde_json::json!({ "fields": fields }))
+        .map_err(map_error)?;
+    Ok(created.key)
 }
 
 /// `POST /rest/api/latest/issue/{key}/remotelink` — attaches one Web Link.

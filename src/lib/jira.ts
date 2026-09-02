@@ -11,6 +11,12 @@ export type JiraSettings = {
   /** Display name for `projectKey` — a cache, never an identity: only the
    *  key is ever sent to Jira. */
   projectName: string;
+  /** The issue type new issues get, e.g. `20` («User Story»). Belongs to
+   *  `projectKey`: the backend clears it whenever the project changes,
+   *  since types are configured per project. */
+  issueTypeId: string;
+  /** Display name for `issueTypeId` — a cache, like `projectName`. */
+  issueTypeName: string;
   /** PEM bundle replacing the public trust roots for Jira requests. */
   trustedCertPem: string | null;
 };
@@ -106,4 +112,47 @@ export type JiraProject = {
  *  someone almost always wants; the full list is for searching. */
 export function jiraListProjects(recentOnly: boolean): Promise<JiraProject[]> {
   return invoke<JiraProject[]>("jira_list_projects", { recentOnly });
+}
+
+/** Mirrors `domain::jira::JiraIssueType`. Sub-task types never reach here —
+ *  the backend drops them, since a sub-task cannot exist without a parent. */
+export type JiraIssueType = {
+  id: string;
+  name: string;
+  subtask: boolean;
+};
+
+/** Issue types the project accepts. Empty `projectKey` is rejected by the
+ *  backend rather than answered with everything. */
+export function jiraListIssueTypes(projectKey: string): Promise<JiraIssueType[]> {
+  return invoke<JiraIssueType[]>("jira_list_issue_types", { projectKey });
+}
+
+/** Mirrors `domain::jira::JiraCreatedIssue`. */
+export type JiraCreatedIssue = {
+  key: string;
+  url: string;
+};
+
+/** Mirrors `services::jira_publish::PublishOutcome`. */
+export type JiraPublishOutcome = {
+  issue: JiraCreatedIssue;
+  /** Per link: a link failing is not the publish failing — the issue exists
+   *  either way, and the user needs to know which links to retry. */
+  links: JiraLinkOutcome[];
+};
+
+/** Publishes a ticket artifact as a real Jira issue, records the key on the
+ *  artifact and attaches its links. Rejects an artifact that already has a
+ *  key rather than creating a duplicate — there is no undo in a tracker the
+ *  whole team reads. */
+export function jiraPublishTicket(artifactId: string): Promise<JiraPublishOutcome> {
+  return invoke<JiraPublishOutcome>("jira_publish_ticket", { artifactId });
+}
+
+/** The page for an already-published issue, or `null` when Jira has no
+ *  address configured. Built on the backend so the `{base}/browse/{KEY}`
+ *  rule lives in one place. */
+export function jiraIssueUrl(issueKey: string): Promise<string | null> {
+  return invoke<string | null>("jira_issue_url", { issueKey });
 }

@@ -22,6 +22,7 @@ pub mod git_ops;
 pub mod index_store_ensure;
 pub mod index_watcher;
 pub mod jira_config;
+pub mod jira_publish;
 pub mod llm_chat;
 pub mod llm_config;
 pub mod llm_rate_limit;

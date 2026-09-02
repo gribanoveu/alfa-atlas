@@ -10,8 +10,8 @@
 //! moment a request is made.
 
 use crate::domain::jira::{
-    JiraError, JiraLinkOutcome, JiraPreset, JiraProject, JiraSettings, JiraSettingsView, JiraUser,
-    JiraWebLink,
+    JiraError, JiraIssueType, JiraLinkOutcome, JiraPreset, JiraProject, JiraSettings,
+    JiraSettingsView, JiraUser, JiraWebLink,
 };
 use crate::domain::settings::SettingsError;
 use crate::infra::{
@@ -45,11 +45,29 @@ pub fn load_jira_settings_view() -> Result<JiraSettingsView, SettingsError> {
 /// string that would shadow it.
 pub fn save_jira_settings(settings: JiraSettings) -> Result<(), SettingsError> {
     let mut all = settings_store::load().unwrap_or_default();
+    let stored = all.jira.clone();
+    let project_key = settings.project_key.trim().to_uppercase();
+
+    // Issue types are configured per project, so a type carried over from a
+    // different project would name something the new one may not have. It is
+    // dropped only when the caller did *not* supply a new one — picking a
+    // project and its type in a single write must not erase the type.
+    let project_changed = project_key != stored.project_key;
+    let kept_old_type = settings.issue_type_id == stored.issue_type_id;
+    let (issue_type_id, issue_type_name) = if project_changed && kept_old_type {
+        (String::new(), String::new())
+    } else {
+        (
+            settings.issue_type_id.trim().to_string(),
+            settings.issue_type_name.trim().to_string(),
+        )
+    };
+
     all.jira = JiraSettings {
+        issue_type_id,
+        issue_type_name,
         base_url: settings.base_url.trim().trim_end_matches('/').to_string(),
-        // Upper-cased because Jira project keys are, and a key typed in the
-        // wrong case would address nothing.
-        project_key: settings.project_key.trim().to_uppercase(),
+        project_key,
         project_name: settings.project_name.trim().to_string(),
         trusted_cert_pem: settings
             .trusted_cert_pem
@@ -67,10 +85,13 @@ pub fn resolve(settings: &JiraSettings, preset: &JiraPreset) -> JiraSettings {
         base_url: non_empty(&settings.base_url)
             .or_else(|| preset.base_url.as_deref().and_then(non_empty))
             .unwrap_or_default(),
-        // No manifest counterpart: which project someone files tickets in
-        // is a personal choice, not something a build can preset.
+        // No manifest counterpart: which project someone files tickets in,
+        // and with which type, is a personal choice rather than something a
+        // build can preset.
         project_key: settings.project_key.clone(),
         project_name: settings.project_name.clone(),
+        issue_type_id: settings.issue_type_id.clone(),
+        issue_type_name: settings.issue_type_name.clone(),
         trusted_cert_pem: settings
             .trusted_cert_pem
             .as_deref()
@@ -82,30 +103,35 @@ pub fn resolve(settings: &JiraSettings, preset: &JiraPreset) -> JiraSettings {
 /// The account behind the stored token — both the right-dock panel's content
 /// and its connection check, since there is nothing to show unless the round
 /// trip succeeded. Blocking; callers run it on a blocking thread.
-pub fn current_user() -> Result<JiraUser, JiraError> {
+/// Settings + stored token → a connected client. Every call that talks to
+/// Jira needs the identical four steps, and repeating them was already
+/// three copies deep.
+pub(crate) fn connect_stored() -> Result<gouqi::Jira, JiraError> {
     let stored = load_jira_settings().map_err(|e| JiraError::Settings(e.to_string()))?;
     let settings = resolve(&stored, llm_provider_manifest::jira_preset());
     if !settings.is_addressable() {
         return Err(JiraError::NotConfigured);
     }
     let token = jira_credentials_store::get_token().ok_or(JiraError::MissingToken)?;
+    jira_client::connect(&settings, token)
+}
 
-    let jira = jira_client::connect(&settings, token)?;
-    jira_client::current_user(&jira)
+pub fn current_user() -> Result<JiraUser, JiraError> {
+    jira_client::current_user(&connect_stored()?)
 }
 
 /// The projects the stored token can see — the recent handful by default,
 /// the full list when the user is searching. Blocking; callers run it on a
 /// blocking thread.
 pub fn list_projects(recent_only: bool) -> Result<Vec<JiraProject>, JiraError> {
-    let stored = load_jira_settings().map_err(|e| JiraError::Settings(e.to_string()))?;
-    let settings = resolve(&stored, llm_provider_manifest::jira_preset());
-    if !settings.is_addressable() {
-        return Err(JiraError::NotConfigured);
-    }
-    let token = jira_credentials_store::get_token().ok_or(JiraError::MissingToken)?;
-    let jira = jira_client::connect(&settings, token)?;
-    jira_client::list_projects(&jira, recent_only)
+    jira_client::list_projects(&connect_stored()?, recent_only)
+}
+
+/// The issue types `project_key` accepts, sub-tasks excluded. Blocking;
+/// callers run it on a blocking thread.
+pub fn list_issue_types(project_key: &str) -> Result<Vec<JiraIssueType>, JiraError> {
+    let jira = connect_stored()?;
+    jira_client::list_issue_types(&jira, project_key)
 }
 
 /// Attaches every link to `issue_key` as a Jira Web Link.
@@ -122,13 +148,7 @@ pub fn attach_web_links(
         return Err(JiraError::MissingIssueKey);
     }
 
-    let stored = load_jira_settings().map_err(|e| JiraError::Settings(e.to_string()))?;
-    let settings = resolve(&stored, llm_provider_manifest::jira_preset());
-    if !settings.is_addressable() {
-        return Err(JiraError::NotConfigured);
-    }
-    let token = jira_credentials_store::get_token().ok_or(JiraError::MissingToken)?;
-    let jira = jira_client::connect(&settings, token)?;
+    let jira = connect_stored()?;
 
     Ok(links
         .iter()
@@ -204,6 +224,62 @@ mod tests {
     fn the_project_choice_has_no_build_default() {
         let resolved = resolve(&JiraSettings::default(), &preset());
         assert_eq!(resolved.project_key, "");
+        assert_eq!(resolved.issue_type_id, "");
+    }
+
+    /// Issue types are configured per project, so one carried over from
+    /// another project would name something the new one may not have.
+    #[test]
+    fn changing_the_project_forgets_its_issue_type() {
+        with_temp_home(|| {
+            save_jira_settings(JiraSettings {
+                base_url: "https://jira.example.com".to_string(),
+                project_key: "ALPHA".to_string(),
+                issue_type_id: "20".to_string(),
+                issue_type_name: "User Story".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+            // The project picker writes only the project — it has no type to
+            // offer for a project whose types it has not fetched.
+            let mut next = load_jira_settings().unwrap();
+            next.project_key = "BETA".to_string();
+            save_jira_settings(next).unwrap();
+
+            let loaded = load_jira_settings().unwrap();
+            assert_eq!(loaded.project_key, "BETA");
+            assert_eq!(loaded.issue_type_id, "");
+            assert_eq!(loaded.issue_type_name, "");
+        });
+    }
+
+    /// …but picking a project *and* its type in one write must not erase the
+    /// type that write just supplied.
+    #[test]
+    fn a_project_and_type_chosen_together_both_survive() {
+        with_temp_home(|| {
+            save_jira_settings(JiraSettings {
+                base_url: "https://jira.example.com".to_string(),
+                project_key: "ALPHA".to_string(),
+                issue_type_id: "20".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+            save_jira_settings(JiraSettings {
+                base_url: "https://jira.example.com".to_string(),
+                project_key: "BETA".to_string(),
+                issue_type_id: "3".to_string(),
+                issue_type_name: "Task".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+            let loaded = load_jira_settings().unwrap();
+            assert_eq!(loaded.project_key, "BETA");
+            assert_eq!(loaded.issue_type_id, "3");
+        });
     }
 
     #[test]

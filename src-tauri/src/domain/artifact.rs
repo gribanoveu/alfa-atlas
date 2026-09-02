@@ -213,6 +213,14 @@ pub struct TicketLink {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct JiraTicketSpec {
+    /// The issue this draft became, once published — e.g. `WOWTAX-123`.
+    ///
+    /// Written by `services::jira_publish`, never by hand and never by the
+    /// model: it is the *result* of publishing, and it is what stops a
+    /// second publish from creating a duplicate issue. Identity, not
+    /// content, so it is outside the section order below and is never
+    /// rendered into the description.
+    pub issue_key: String,
     /// «Почему задача существует» — the problem, without the solution.
     pub why: String,
     /// «Что должно измениться» — target state as «Пользователь может …».
@@ -416,6 +424,19 @@ mod tests {
     fn only_the_ticket_kind_may_be_authored_by_the_assistant() {
         assert!(ArtifactKind::JiraTicket.is_agent_authored());
         assert!(!ArtifactKind::HttpRequest.is_agent_authored());
+    }
+
+    /// The key is written only by publishing, so a rendered ticket must not
+    /// carry it — it is identity, not a section.
+    #[test]
+    fn the_issue_key_is_never_rendered_into_the_description() {
+        let wiki = crate::domain::artifact_render::render_jira_ticket(&JiraTicketSpec {
+            issue_key: "ABC-123".into(),
+            why: "Проблема".into(),
+            ..Default::default()
+        })
+        .wiki;
+        assert!(!wiki.contains("ABC-123"), "issue key leaked into the ticket: {wiki}");
     }
 
     #[test]

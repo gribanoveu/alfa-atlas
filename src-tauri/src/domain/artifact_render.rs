@@ -934,6 +934,7 @@ mod tests {
 
     fn ticket() -> JiraTicketSpec {
         JiraTicketSpec {
+            issue_key: String::new(),
             why: "Бухгалтер не видит, какие взносы уже оплачены.".into(),
             outcome: "Пользователь может отметить взнос оплаченным.".into(),
             in_scope: vec!["Кнопка «Оплачено» в карточке взноса".into()],

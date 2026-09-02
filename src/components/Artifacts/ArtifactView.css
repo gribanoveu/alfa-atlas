@@ -595,3 +595,29 @@
   border-color: var(--accent);
 }
 
+
+/* Confirmation before publishing. Inline rather than a modal: it interrupts
+   nothing else, and the point is to state what will be created — project,
+   type, title — where the user is already looking. */
+.artifact-publish-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.artifact-publish-line {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  line-height: 1.5;
+  color: var(--text-0);
+}
+
+.artifact-publish-actions {
+  display: flex;
+  gap: 8px;
+}

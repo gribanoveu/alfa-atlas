@@ -3,6 +3,7 @@ import { toMessage } from "../lib/errors";
 import {
   getJiraSettings,
   setJiraSettings,
+  type JiraIssueType,
   type JiraProject,
   type JiraSettings,
 } from "../lib/jira";
@@ -35,14 +36,10 @@ export function useJiraProject() {
     };
   }, []);
 
-  const pick = useCallback(
-    async (project: JiraProject) => {
+  const write = useCallback(
+    async (patch: Partial<JiraSettings>) => {
       if (!settings) return;
-      const next: JiraSettings = {
-        ...settings,
-        projectKey: project.key,
-        projectName: project.name,
-      };
+      const next: JiraSettings = { ...settings, ...patch };
       // Optimistic: the row updates immediately and a failed write rolls
       // back to whatever the backend really holds, rather than leaving the
       // panel claiming a project that was never saved.
@@ -50,6 +47,12 @@ export function useJiraProject() {
       setBusy(true);
       try {
         await setJiraSettings(next);
+        // Re-read rather than trust the optimistic value: the backend
+        // normalizes, and it clears the issue type when the project changes
+        // — without this the panel would keep showing a type that is no
+        // longer stored.
+        const stored = await getJiraSettings();
+        setSettings(stored.settings);
         setError(null);
       } catch (e) {
         setError(toMessage(e));
@@ -62,12 +65,30 @@ export function useJiraProject() {
     [settings],
   );
 
+  const pickProject = useCallback(
+    (project: JiraProject) =>
+      // The issue type is not cleared here — the backend does it, because
+      // "types belong to a project" is a rule about the data, not about
+      // this particular screen.
+      write({ projectKey: project.key, projectName: project.name }),
+    [write],
+  );
+
+  const pickIssueType = useCallback(
+    (issueType: JiraIssueType) =>
+      write({ issueTypeId: issueType.id, issueTypeName: issueType.name }),
+    [write],
+  );
+
   return {
     projectKey: settings?.projectKey ?? "",
     projectName: settings?.projectName ?? "",
+    issueTypeId: settings?.issueTypeId ?? "",
+    issueTypeName: settings?.issueTypeName ?? "",
     ready: settings !== null,
     busy,
     error,
-    pick,
+    pickProject,
+    pickIssueType,
   };
 }

@@ -6,10 +6,11 @@
 //! comes back out, only a boolean `jira_has_token` status.
 
 use crate::domain::jira::{
-    JiraLinkOutcome, JiraProject, JiraSettings, JiraSettingsView, JiraUser, JiraWebLink,
+    JiraIssueType, JiraLinkOutcome, JiraProject, JiraSettings, JiraSettingsView, JiraUser,
+    JiraWebLink,
 };
 use crate::infra::jira_credentials_store;
-use crate::services::jira_config;
+use crate::services::{jira_config, jira_publish};
 
 /// Returns the user's own settings plus what the build manifest would fall
 /// back to — the form edits the former and labels the latter, rather than
@@ -82,4 +83,40 @@ pub async fn jira_list_projects(recent_only: bool) -> Result<Vec<JiraProject>, S
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The issue types the given project accepts, sub-tasks excluded.
+#[tauri::command]
+pub async fn jira_list_issue_types(project_key: String) -> Result<Vec<JiraIssueType>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        jira_config::list_issue_types(&project_key).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Publishes a ticket artifact as a real Jira issue, records the issue key
+/// on the artifact, and attaches its links.
+///
+/// Deliberately not a tool the assistant can call: this creates something
+/// in a tracker the whole team reads and there is no undo, so it stays an
+/// action the user takes knowingly. Refuses an artifact that already has a
+/// key rather than creating a duplicate.
+#[tauri::command]
+pub async fn jira_publish_ticket(
+    artifact_id: String,
+) -> Result<jira_publish::PublishOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        jira_publish::publish(&artifact_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The page for an already-published issue. `None` when Jira has no address
+/// configured — the same rule as publishing, kept on this side of the wire
+/// so the link is never rebuilt by hand in the UI.
+#[tauri::command]
+pub fn jira_issue_url(issue_key: String) -> Option<String> {
+    jira_publish::issue_url(&issue_key)
 }

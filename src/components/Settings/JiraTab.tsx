@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, CheckCircle2, ChevronDown, ChevronRight, Save, XCircle } from "lucide-react";
 import { useJiraSettings } from "../../hooks/useJiraSettings";
+import { JiraIssueTypePicker } from "../Jira/JiraIssueTypePicker";
 import { JiraProjectPicker } from "../Jira/JiraProjectPicker";
 import { CERT_PLACEHOLDER } from "./certField";
 import "../Welcome/CloneRepoModal.css";
@@ -72,6 +73,16 @@ export function JiraTab() {
           disabled={busy}
           onPick={(project) =>
             void commit({ projectKey: project.key, projectName: project.name })
+          }
+        />
+
+        <JiraIssueTypePicker
+          projectKey={settings.projectKey}
+          issueTypeId={settings.issueTypeId}
+          issueTypeName={settings.issueTypeName}
+          disabled={busy}
+          onPick={(type) =>
+            void commit({ issueTypeId: type.id, issueTypeName: type.name })
           }
         />
 
