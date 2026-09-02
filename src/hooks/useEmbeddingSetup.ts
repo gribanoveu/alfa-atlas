@@ -223,7 +223,11 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
         kind: next.kind,
         remoteBaseUrl: next.remoteBaseUrl,
         remoteModel: next.remoteModel,
-        remoteTrustedCertPem: next.remoteTrustedCertPem,
+        // Пользовательский слой, а не разрешённое значение: писать сюда
+        // `remoteTrustedCertPem` значило бы при каждой правке любого поля
+        // закреплять сертификат сборки как свой — и обновление манифеста
+        // до этого пользователя больше не доезжало бы.
+        remoteTrustedCertPem: next.remoteTrustedCertOverride,
         remoteRequestHeaders:
           patch.remoteRequestHeaders !== undefined
             ? patch.remoteRequestHeaders
@@ -250,13 +254,16 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
     try {
       await setEmbeddingRemoteApiKey(apiKey);
       setHasApiKey(true);
+      // Reloads the config too: `apiKeyUserSet` lives there, and the
+      // Settings UI labels the field by it (свой ключ / ключ из сборки).
+      await refresh();
       setError(null);
     } catch (e) {
       setError(toMessage(e));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [refresh]);
 
   /** Mirrors `saveApiKey`, including the optimistic `hasApiKey` flip — the
    * backend delete is idempotent, so the only way this leaves the flag
@@ -269,13 +276,16 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
     try {
       await deleteEmbeddingRemoteApiKey();
       setHasApiKey(false);
+      // See `saveApiKey` — and here it also corrects `hasApiKey` back to
+      // `true` when the build ships a bundled key that remains in force.
+      await refresh();
       setError(null);
     } catch (e) {
       setError(toMessage(e));
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [refresh]);
 
   const downloadModel = useCallback(async () => {
     cancelRequestedRef.current = false;

@@ -262,7 +262,20 @@ pub struct ResolvedLlmProvider {
     /// building a `ChatRequest`, rather than treating `None` as a usable
     /// model name.
     pub model: Option<String>,
+    /// The **merged** certificate — what actually builds the HTTP client
+    /// (`infra::llm_providers::build`). Never what the Settings form edits:
+    /// showing a manifest-supplied PEM in an editable box makes it
+    /// indistinguishable from the user's own, and saving the box would pin
+    /// the build's default as a user override, so a later manifest change
+    /// would stop reaching that user. The form uses the pair below.
     pub trusted_cert_pem: Option<String>,
+    /// The settings-layer value alone — `None` when the user has not
+    /// overridden anything, whatever the manifest supplies.
+    pub trusted_cert_override: Option<String>,
+    /// Whether the manifest preset ships a certificate for this provider,
+    /// so the UI can say so without rendering kilobytes of base64. Always
+    /// `false` for a custom provider — it has no manifest layer.
+    pub has_bundled_cert: bool,
     /// Saved model ids for the picker UI — see `LlmProviderConfig::known_models`.
     pub known_models: Vec<String>,
     /// Provider-level token limits (see `ProviderTokenLimit`) — unchanged

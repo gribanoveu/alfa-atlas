@@ -1,8 +1,8 @@
 //! Compiled-in registry of "system" LLM providers, embedded at compile
 //! time from the top-level `llm` section of
 //! `assets/llm/system_providers.yaml` (the same file that holds the
-//! global embedding preset under `embedding` and baked-in API rate-limit
-//! rules under `rateLimits`).
+//! global embedding preset under `embedding`, baked-in API rate-limit
+//! rules under `rateLimits`, and the Jira defaults under `jira`).
 //!
 //! Embedding (rather than shipping as a Tauri bundle resource) sidesteps
 //! the resource-path differences between `cargo tauri dev` and a bundled
@@ -26,6 +26,7 @@
 use std::sync::LazyLock;
 
 use crate::domain::embeddings::EmbeddingPreset;
+use crate::domain::jira::JiraPreset;
 use crate::domain::llm::LlmProviderPreset;
 use crate::domain::metrics::MetricsPreset;
 use crate::domain::llm_rate_limit::RateLimitPreset;
@@ -52,6 +53,13 @@ struct SystemProvidersManifest {
     /// with no telemetry at all.
     #[serde(default)]
     metrics: Option<MetricsPreset>,
+    /// Build-time defaults for the Jira integration — the instance address
+    /// and the CA certificate an internal deployment sits behind. Same
+    /// rebrand story as `llm`: a fork edits this section instead of any
+    /// `.rs` file, and omitting it entirely is valid (the user then
+    /// configures both by hand). Never a token: that identifies a person.
+    #[serde(default)]
+    jira: JiraPreset,
 }
 
 static PARSED: LazyLock<SystemProvidersManifest> = LazyLock::new(|| {
@@ -75,6 +83,12 @@ pub fn metrics_preset() -> Option<&'static MetricsPreset> {
     PARSED.metrics.as_ref()
 }
 
+/// Build-supplied Jira defaults. All-`None` when the manifest ships no
+/// `jira` section — a valid state, not an error.
+pub fn jira_preset() -> &'static JiraPreset {
+    &PARSED.jira
+}
+
 pub fn rate_limit_presets() -> &'static [RateLimitPreset] {
     &PARSED.rate_limits
 }
@@ -93,6 +107,37 @@ mod tests {
         // forces `PARSED`'s `LazyLock` init, which `.expect()`s on
         // malformed JSON.
         let _ = system_providers();
+    }
+
+    /// Structural, not exact-value: the address is a corporate host and the
+    /// certificate rotates, so pinning either here would break the build on
+    /// a legitimate config change. What must hold is that a build shipping a
+    /// Jira address also ships the CA for it — without the certificate the
+    /// integration cannot connect at all, since `gouqi` goes through
+    /// reqwest+rustls, which trusts the public webpki roots rather than the
+    /// OS store that `curl` uses.
+    #[test]
+    fn a_bundled_jira_address_comes_with_its_certificate() {
+        let jira = jira_preset();
+        let Some(base_url) = jira.base_url.as_deref() else {
+            return; // No Jira shipped in this build — a valid manifest.
+        };
+        assert!(
+            base_url.starts_with("https://"),
+            "Jira base URL must be https, got {base_url:?}"
+        );
+        assert!(
+            !base_url.contains("/rest/"),
+            "Jira base URL must be the instance root, got {base_url:?}"
+        );
+        let pem = jira
+            .trusted_cert_pem
+            .as_deref()
+            .expect("a bundled Jira address must ship the CA certificate for it");
+        assert!(
+            pem.contains("-----BEGIN CERTIFICATE-----"),
+            "bundled Jira certificate must be PEM-encoded"
+        );
     }
 
     #[test]

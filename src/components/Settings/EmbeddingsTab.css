@@ -139,3 +139,60 @@
   outline: none;
   border-color: var(--accent);
 }
+
+/* Свёрнутый блок «Дополнительно» — тот же вид, что на вкладках провайдеров
+   LLM и Jira; у каждой вкладки свой CSS-файл, поэтому правила повторены, а
+   не импортированы. */
+.embeddings-advanced {
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.embeddings-advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  color: var(--text-0);
+  font: inherit;
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.embeddings-advanced-toggle:hover {
+  background: var(--bg-2);
+}
+
+.embeddings-advanced-hint {
+  margin-left: auto;
+  font-size: var(--font-ui-sm);
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+.embeddings-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* Кнопка проверки и её результат — бейдж может быть длинным (сообщение об
+   ошибке от эндпоинта), поэтому строка переносится, а не растягивается. */
+.embeddings-test-row {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.embeddings-test-row .embeddings-status-badge {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

@@ -319,6 +319,11 @@ pub struct AppSettings {
     /// skill is on.
     #[serde(default)]
     pub skills: crate::domain::agent_skills::SkillsSettings,
+    /// Global — Jira instance address and auth mode. The API token is never
+    /// part of this (or any) `settings.json` — see
+    /// `infra::jira_credentials_store`.
+    #[serde(default)]
+    pub jira: crate::domain::jira::JiraSettings,
 }
 
 #[derive(Debug, Error)]

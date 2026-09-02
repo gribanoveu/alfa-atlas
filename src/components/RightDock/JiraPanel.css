@@ -1,0 +1,204 @@
+.jira-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+}
+
+.jira-panel-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 28px;
+  padding: 0 6px 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.jira-panel-toolbar-title {
+  min-width: 0;
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jira-panel-toolbar-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.jira-panel-icon-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  color: var(--text-1);
+  flex: none;
+}
+
+.jira-panel-icon-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+
+.jira-panel-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.jira-panel-icon-btn .spin {
+  animation: jira-panel-spin 0.9s linear infinite;
+}
+
+@keyframes jira-panel-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.jira-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.jira-panel-status {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.jira-panel-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.jira-panel-notice.is-error {
+  border-color: color-mix(in srgb, var(--red-tag) 45%, var(--border));
+}
+
+.jira-panel-notice-icon {
+  flex: none;
+  color: var(--text-2);
+}
+
+.jira-panel-notice.is-error .jira-panel-notice-icon {
+  color: var(--red-tag);
+}
+
+.jira-panel-notice-title {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.jira-panel-notice-text {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+.jira-panel-btn {
+  margin-top: 2px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+}
+
+.jira-panel-btn:hover {
+  border-color: var(--accent-dim);
+  background: var(--bg-2);
+}
+
+.jira-panel-user {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Имя слева, статус справа — одной строкой, чтобы блок читался целиком.
+   Статус не сжимается, длинное имя вместо этого обрезается многоточием. */
+.jira-panel-user-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.jira-panel-user-names {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.jira-panel-user-name {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Почта и логин одной строкой под именем — отдельных подписанных полей у
+   панели нет, показывать больше нечего. */
+.jira-panel-user-meta {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jira-panel-connected {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Ровно высота строки имени: значок центрируется в ней и встаёт напротив
+     имени, а не «в воздухе» между ним и второй строкой. */
+  min-height: calc(var(--font-ui) * 1.4);
+  color: var(--green);
+}
+
+.jira-panel-connected svg {
+  flex: none;
+  color: inherit;
+}
+
+.jira-panel-inactive {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--red-tag);
+}

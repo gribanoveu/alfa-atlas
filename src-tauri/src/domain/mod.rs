@@ -16,6 +16,7 @@ pub mod embeddings;
 pub mod flexible_args;
 pub mod git;
 pub mod git_action_log;
+pub mod jira;
 pub mod layout;
 pub mod llm;
 pub mod llm_rate_limit;

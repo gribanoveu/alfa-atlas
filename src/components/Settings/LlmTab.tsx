@@ -11,6 +11,7 @@ import {
   parseLlmRequestHeaders,
   resolveOpenAiCompatibleEndpoints,
 } from "../../lib/llm";
+import { CERT_PLACEHOLDER } from "./certField";
 import "../Welcome/CloneRepoModal.css";
 import "./LlmTab.css";
 
@@ -88,7 +89,11 @@ function ProviderDetail({
 }: ProviderDetailProps) {
   const [baseUrlDraft, setBaseUrlDraft] = useState(provider.baseUrl);
   const [headersDraft, setHeadersDraft] = useState(formatLlmRequestHeaders(provider.requestHeaders));
-  const [certDraft, setCertDraft] = useState(provider.trustedCertPem ?? "");
+  // Только пользовательский слой, не разрешённое значение: вшитый в сборку
+  // PEM в редактируемом поле неотличим от своего, а сохранение такого поля
+  // закрепило бы дефолт сборки как override — и обновление манифеста до
+  // этого пользователя больше не доехало бы.
+  const [certDraft, setCertDraft] = useState(provider.trustedCertOverride ?? "");
   const [contextDraft, setContextDraft] = useState(String(effectiveTokenLimit(provider).context));
   const [outputDraft, setOutputDraft] = useState(String(effectiveTokenLimit(provider).output));
   const [temperatureDraft, setTemperatureDraft] = useState(provider.temperature?.toString() ?? "");
@@ -116,8 +121,8 @@ function ProviderDetail({
   }, [provider.id]);
 
   useEffect(() => {
-    setCertDraft(provider.trustedCertPem ?? "");
-  }, [provider.id, provider.trustedCertPem]);
+    setCertDraft(provider.trustedCertOverride ?? "");
+  }, [provider.id, provider.trustedCertOverride]);
 
   useEffect(() => {
     const limit = effectiveTokenLimit(provider);
@@ -147,6 +152,11 @@ function ProviderDetail({
     };
   }, [modelSelectOpen]);
 
+  /** Вызывается по потере фокуса и по Enter, а не только кнопкой: ключ,
+   * набранный и оставленный в поле, иначе молча пропадал. Пустая строка
+   * отсекается здесь же, поэтому уход с нетронутого поля ничего не пишет, а
+   * клик по кнопке не сохраняет дважды — blur успевает очистить поле, и к
+   * моменту клика кнопка уже неактивна. */
   const handleSaveApiKey = async () => {
     if (!apiKeyInput.trim()) return;
     await saveApiKey(provider.id, apiKeyInput.trim());
@@ -291,6 +301,7 @@ function ProviderDetail({
                   void handleSaveApiKey();
                 }
               }}
+              onBlur={() => void handleSaveApiKey()}
             />
             <button
               type="button"
@@ -604,20 +615,21 @@ function ProviderDetail({
 
             <label className="llm-field">
               <span className="llm-field-label">
-                Доверенный сертификат{provider.isSystem ? " (переопределение)" : ""}
+                Доверенный сертификат{provider.hasBundledCert ? " (переопределение)" : ""}
               </span>
               <textarea
                 className="llm-textarea"
                 rows={4}
-                placeholder={
-                  provider.isSystem
-                    ? "Встроенный сертификат задан. Вставьте PEM, чтобы переопределить."
-                    : "PEM сертификата CA, если эндпоинт не доверен системой."
-                }
+                placeholder={CERT_PLACEHOLDER}
                 value={certDraft}
                 disabled={busy}
                 onChange={(event) => setCertDraft(event.target.value)}
               />
+              <p className="settings-hint settings-hint-compact">
+                {provider.hasBundledCert
+                  ? "Сертификат задан сборкой приложения — поле пустое, пока вы его не переопределили."
+                  : "PEM сертификата CA, если эндпоинт не доверен системой."}
+              </p>
               <div className="llm-advanced-actions">
                 <button
                   type="button"
@@ -629,14 +641,16 @@ function ProviderDetail({
                 >
                   Сохранить сертификат
                 </button>
-                {provider.isSystem ? (
+                {/* Сбрасывать есть что только при своём сертификате — он и
+                    исчезает, возвращая сертификат сборки, если тот есть. */}
+                {provider.trustedCertOverride ? (
                   <button
                     type="button"
                     className="settings-btn"
                     disabled={busy}
                     onClick={() => void updateProviderConfig(provider.id, { trustedCertPem: null })}
                   >
-                    Сбросить
+                    {provider.hasBundledCert ? "Вернуть сертификат сборки" : "Сбросить"}
                   </button>
                 ) : null}
               </div>

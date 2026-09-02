@@ -39,7 +39,10 @@ fn load_user_key() -> Option<String> {
     String::from_utf8(plain).ok()
 }
 
-fn has_user_key() -> bool {
+/// Whether *this user* stored a key, as opposed to `has_api_key`, which is
+/// also true for a build-time bundled key. The Settings UI needs the
+/// difference: only a user key can be replaced or deleted from there.
+pub fn has_user_key() -> bool {
     credentials_path().map(|p| p.exists()).unwrap_or(false)
 }
 

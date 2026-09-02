@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   Sparkles,
   SpellCheck,
+  Ticket,
   X,
 } from "lucide-react";
 import type { GeneralPrefs } from "../../lib/prefs";
@@ -28,6 +29,7 @@ import { CredentialsTab } from "./CredentialsTab";
 import { EditorTab } from "./EditorTab";
 import { EmbeddingsTab } from "./EmbeddingsTab";
 import { GeneralTab } from "./GeneralTab";
+import { JiraTab } from "./JiraTab";
 import { LlmTab } from "./LlmTab";
 import { LoggingTab } from "./LoggingTab";
 import { NotificationsTab } from "./NotificationsTab";
@@ -49,6 +51,7 @@ export type SectionId =
   | "skills"
   | "permissions"
   | "notifications"
+  | "jira"
   | "credentials"
   | "embeddings"
   | "logging";
@@ -185,6 +188,20 @@ const GROUPS: SectionGroup[] = [
           "Звук и системные уведомления о ходе работы",
         icon: Bell,
         keywords: "звук баннер завершение вопрос",
+      },
+    ],
+  },
+  {
+    label: "Интеграции",
+    sections: [
+      {
+        id: "jira",
+        label: "Jira",
+        title: "Jira",
+        description:
+          "Адрес экземпляра Jira и токен, которым приложение к нему подключается",
+        icon: Ticket,
+        keywords: "jira задачи тикеты токен pat personal access token сертификат инстанс",
       },
     ],
   },
@@ -421,6 +438,7 @@ export function SettingsDialog({
                   {section === "skills" ? <SkillsTab /> : null}
                   {section === "permissions" ? <PermissionsTab /> : null}
                   {section === "notifications" ? <NotificationsTab /> : null}
+                  {section === "jira" ? <JiraTab /> : null}
                   {section === "credentials" ? <CredentialsTab /> : null}
                   {section === "embeddings" ? <EmbeddingsTab repoRoot={projectRoot} /> : null}
                   {section === "logging" ? <LoggingTab /> : null}

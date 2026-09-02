@@ -1,5 +1,48 @@
 # API keys MUST NOT go here — see docs/build-secrets.md (embedding) and Settings (LLM).
 
+# Build-time defaults for the Jira integration. Both fields are only
+# *defaults*: whatever the user types in Settings → Интеграции → Jira wins,
+# and an empty field there falls back here. A fork drops or edits this
+# section instead of touching any .rs file; omitting it entirely is valid.
+# The access token is never configured here — it identifies a person and is
+# stored encrypted per user (see infra::jira_credentials_store).
+jira:
+  baseUrl: https://jira.moscow.alfaintra.net
+  # «Alfa-Bank Root CA 2012» — корень цепочки, которой подписан сертификат
+  # jira.moscow.alfaintra.net (leaf → «Alfa-Bank Sub2 CA 2012» → этот корень;
+  # промежуточный сервер отдаёт сам, поэтому здесь только корень). Действует
+  # до 2035-11-17, отпечаток SHA-256
+  # 48:6F:60:E4:B3:8E:E2:98:55:D1:17:A7:64:F3:42:BD:F0:82:B7:CF:B7:F1:86:0D:CD:39:9C:F2:23:C4:81:1D.
+  #
+  # Без него не обойтись: gouqi ходит через reqwest+rustls, а тот доверяет
+  # публичным корням webpki, а не системному хранилищу macOS/Windows — то
+  # есть curl подключается, а приложение без этого блока получило бы ошибку
+  # TLS. Это НЕ тот корень, что в секции llm выше («Alfa-Bank ST CA Root») —
+  # у Jira другая цепочка.
+  trustedCertPem: |
+    -----BEGIN CERTIFICATE-----
+    MIIDjjCCAnagAwIBAgIQdoz96Q3kbKVB2dphzR+EZzANBgkqhkiG9w0BAQsFADBG
+    MQswCQYDVQQGEwJSVTEWMBQGA1UEChMNSlNDIEFsZmEtQmFuazEfMB0GA1UEAxMW
+    QWxmYS1CYW5rIFJvb3QgQ0EgMjAxMjAeFw0yNTExMTcwNTU2MTRaFw0zNTExMTcw
+    NjA2MTRaMEYxCzAJBgNVBAYTAlJVMRYwFAYDVQQKEw1KU0MgQWxmYS1CYW5rMR8w
+    HQYDVQQDExZBbGZhLUJhbmsgUm9vdCBDQSAyMDEyMIIBIjANBgkqhkiG9w0BAQEF
+    AAOCAQ8AMIIBCgKCAQEArF86t+YukrUkD5r8Lj6K2/hX6Y04HV1/uyYjGuqXW2XO
+    RurEraLcCMli2bpzoTGFUChyCiETgGupwEEX++vIdjQCgB7XpAMA/KpQNbLqrVOi
+    KG6eXDDOk8IP/yaEJrIWfko5JQ7xLLLxPhF0atCs85y2g2zt2RtTnfem26oCRU5G
+    R10QnojmE36PKJ7cfEDDhdz/Z5LVf/1a2ZprV5JYFGLg/gJaYVdO3FPGsPRvTfCJ
+    qtN8D6LyCHK7rmfDb2/3Lh9chL0gomnbeiv6ZlAoPn0qkmddyGx5TfrAwNdQYMv6
+    7AzzdmwxPPAD5K0V5aC+I5QND6Wy8F2G3qibriOxNwIDAQABo3gwdjALBgNVHQ8E
+    BAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUA0FhwGWxndeLYqnGJbWf
+    sp3iQ3EwEgYJKwYBBAGCNxUBBAUCAwMAAzAjBgkrBgEEAYI3FQIEFgQUGGmDZnwC
+    RpggBGTBl3+7C6+jWPUwDQYJKoZIhvcNAQELBQADggEBAKX6lHOg7/HQCYS3FNdN
+    PiZxBvZ/Nj0BrDLxQf4XMNO+X0APUNgWw87XDfiYQIO8GneXYXtvXjLZJLiioyQ1
+    ZouyqayPkIEFG2J7g3F1D78vxgK3oe+bauznXeBefgU8Cqh4yA5WQmoE7knIGoBk
+    TwDX+iaOfuGbvyFqdqMIiwqHIqArB9KmrsLfpb4BPo4h6gg7BjwoVkoaatNt7tnM
+    kgPBwYuFmvYdME7syxcM7C5o1uQMNx9q4Fpv+KHA+gogf5g/krk3HZJuWDFrCTzK
+    qNQJhr2VKM42lB57EUkrobl1uQ0Y2PAjfYWiUD+rIdSVkZnfq5pHAwog7NqlVi3I
+    /kg=
+    -----END CERTIFICATE-----
+
 llm:
   - id: alfagen
     label: AlfaGen

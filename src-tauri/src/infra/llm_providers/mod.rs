@@ -41,6 +41,8 @@ mod tests {
             is_system: true,
             model: None,
             trusted_cert_pem: trusted_cert_pem.map(|s| s.to_string()),
+            trusted_cert_override: None,
+            has_bundled_cert: false,
             known_models: vec![],
             limit: None,
             request_headers: HashMap::new(),

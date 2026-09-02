@@ -5,13 +5,18 @@
 use std::collections::HashMap;
 
 use crate::domain::embeddings::{
-    EmbeddingPreset, EmbeddingProviderConfig, EmbeddingProviderKind, REQUEST_HEADER_VALUE_UUID,
-    ResolvedEmbeddingConfig,
+    EmbeddingError, EmbeddingPreset, EmbeddingProviderConfig, EmbeddingProviderKind,
+    REQUEST_HEADER_VALUE_UUID, ResolvedEmbeddingConfig,
 };
 use crate::domain::settings::SettingsError;
 use crate::infra::embedding_credentials_store;
 use crate::infra::embedding_provider_manifest;
+use crate::infra::embedding_providers;
 use crate::infra::settings_store;
+
+/// Text sent by `test_connection`. Deliberately trivial: the point is to
+/// exercise the request path, and a remote endpoint bills by token.
+const CONNECTION_PROBE_TEXT: &str = "test";
 
 pub fn load_embedding_settings() -> Result<EmbeddingProviderConfig, SettingsError> {
     Ok(settings_store::load()?.embedding)
@@ -70,13 +75,81 @@ pub fn resolve_with(
             .remote_trusted_cert_pem
             .clone()
             .or_else(|| preset.trusted_cert_pem.clone()),
+        remote_trusted_cert_override: cert_override(
+            settings.remote_trusted_cert_pem.as_deref(),
+            preset.trusted_cert_pem.as_deref(),
+        ),
+        has_bundled_cert: preset.trusted_cert_pem.is_some(),
         remote_request_headers: resolve_request_headers(preset, settings),
         remote_disable_tls_verification: settings
             .remote_disable_tls_verification
             .or(preset.disable_tls_verification)
             .unwrap_or(false),
         api_key_bundled: embedding_credentials_store::has_bundled_api_key(),
+        api_key_user_set: embedding_credentials_store::has_user_key(),
     }
+}
+
+/// End-to-end check of the remote embedding setup: config → key → TLS →
+/// HTTP → response parsing → vector dimension. Embeds one short probe
+/// string, because `/embeddings` is the only endpoint the provider trait
+/// exposes — there is no `/models` to poke at like the LLM providers have.
+///
+/// The dimension check is the part worth having. A `usearch` index is
+/// dimension-fixed, so a model whose output width differs from the build's
+/// `EmbeddingPreset::dimensions` cannot be used at all — and without this
+/// the mismatch would only surface much later, mid-sync, after the index
+/// had already been wiped.
+///
+/// Builds its own provider rather than going through
+/// `services::embedding_state::ensure_provider`: the point is to test the
+/// settings as they stand right now, not whatever a cached instance was
+/// built from. Blocking; the caller runs it on a blocking thread.
+pub fn test_connection() -> Result<String, EmbeddingError> {
+    let config = resolve_embedding_config().map_err(|e| EmbeddingError::Message(e.to_string()))?;
+    if config.kind != EmbeddingProviderKind::Remote {
+        return Err(EmbeddingError::Message(
+            "Локальная модель работает без сети — проверять нечего.".to_string(),
+        ));
+    }
+
+    let provider = embedding_providers::provider_for(&config, embedding_credentials_store::get_api_key())?;
+    let expected = provider.dimensions();
+    let vectors = provider.embed(&[CONNECTION_PROBE_TEXT])?;
+
+    let actual = vectors
+        .first()
+        .ok_or_else(|| {
+            EmbeddingError::Message("Эндпоинт ответил без единого вектора.".to_string())
+        })?
+        .0
+        .len();
+    if actual != expected {
+        return Err(EmbeddingError::Message(format!(
+            "Модель вернула вектор размерности {actual}, а сборка рассчитана на {expected}. \
+             Индекс с такой моделью работать не будет — нужна другая модель."
+        )));
+    }
+
+    Ok(format!("Соединение установлено. Размерность вектора: {expected}."))
+}
+
+/// The settings-layer certificate, as the Settings form should see it —
+/// `None` when there is nothing of the user's own.
+///
+/// A stored value byte-identical to the build's certificate is treated as
+/// *no* override: it carries no information, and older builds wrote exactly
+/// that. `useEmbeddingSetup.updateConfig` used to persist the **resolved**
+/// certificate, so editing any unrelated field (model, headers) silently
+/// pinned the bundled PEM as the user's own — and once pinned, a manifest
+/// update would never reach that user again. Collapsing the two here heals
+/// those settings on read, and the next save writes the cleaned value back.
+fn cert_override(stored: Option<&str>, preset: Option<&str>) -> Option<String> {
+    let stored = stored?;
+    if Some(stored) == preset {
+        return None;
+    }
+    Some(stored.to_string())
 }
 
 /// HTTP headers for remote `/embeddings`. Settings override replaces the
@@ -154,6 +227,40 @@ mod tests {
         assert_eq!(resolved.remote_model.as_deref(), Some("emb-model"));
         assert_eq!(resolved.remote_dimensions, Some(1024));
         assert!(resolved.remote_trusted_cert_pem.is_some());
+        // …but the *override* stays empty, which is what the Settings form
+        // binds to. Leaking the preset PEM into that field would make it
+        // indistinguishable from the user's own, and saving the form would
+        // pin the build's default so later manifest changes stop arriving.
+        assert_eq!(resolved.remote_trusted_cert_override, None);
+        assert!(resolved.has_bundled_cert);
+    }
+
+    /// Heals settings written by the older `updateConfig`, which persisted
+    /// the *resolved* certificate — so editing any unrelated field pinned
+    /// the bundled PEM as the user's own.
+    #[test]
+    fn a_stored_copy_of_the_build_certificate_is_not_an_override() {
+        let preset = remote_preset();
+        let settings = EmbeddingProviderConfig {
+            remote_trusted_cert_pem: preset.trusted_cert_pem.clone(),
+            ..Default::default()
+        };
+        let resolved = resolve_with(&preset, &settings);
+        assert_eq!(resolved.remote_trusted_cert_override, None);
+        // The client still gets a certificate — only the form sees nothing.
+        assert_eq!(resolved.remote_trusted_cert_pem, preset.trusted_cert_pem);
+    }
+
+    #[test]
+    fn a_user_certificate_shows_up_as_both_merged_and_override() {
+        let settings = EmbeddingProviderConfig {
+            remote_trusted_cert_pem: Some("MY PEM".into()),
+            ..Default::default()
+        };
+        let resolved = resolve_with(&remote_preset(), &settings);
+        assert_eq!(resolved.remote_trusted_cert_pem.as_deref(), Some("MY PEM"));
+        assert_eq!(resolved.remote_trusted_cert_override.as_deref(), Some("MY PEM"));
+        assert!(resolved.has_bundled_cert);
     }
 
     #[test]

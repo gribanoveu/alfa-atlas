@@ -626,7 +626,10 @@ pub(crate) mod tests {
             remote_trusted_cert_pem: None,
             remote_request_headers: HashMap::new(),
             remote_disable_tls_verification: false,
+            remote_trusted_cert_override: None,
+            has_bundled_cert: false,
             api_key_bundled: false,
+            api_key_user_set: false,
         }
     }
 

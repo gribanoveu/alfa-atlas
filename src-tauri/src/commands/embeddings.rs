@@ -101,6 +101,19 @@ pub fn embedding_set_remote_api_key(api_key: String) -> Result<(), String> {
     embedding_credentials_store::save_api_key(&api_key)
 }
 
+/// "Проверить соединение" in Settings — the embedding counterpart of
+/// `llm_test_connection`. Costs one tiny `/embeddings` request; see
+/// `embedding_config::test_connection` for why it also checks the vector
+/// width rather than just the HTTP status.
+#[tauri::command]
+pub async fn embedding_test_connection() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        embedding_config::test_connection().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub fn embedding_has_remote_api_key() -> bool {
     embedding_credentials_store::has_api_key()

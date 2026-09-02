@@ -106,7 +106,17 @@ export type ResolvedLlmProvider = {
   isSystem: boolean;
   model: string | null;
   knownModels: string[];
+  /** The **merged** certificate — what builds the HTTP client on the
+   * backend. Never bind a settings field to it: a manifest-supplied PEM
+   * shown in an editable box is indistinguishable from the user's own, and
+   * saving that box would pin the build's default as a user override, so a
+   * later manifest change would stop reaching this user. Forms use the
+   * pair below. */
   trustedCertPem: string | null;
+  /** The settings-layer value alone — `null` when nothing is overridden. */
+  trustedCertOverride: string | null;
+  /** Whether the build ships a certificate for this provider. */
+  hasBundledCert: boolean;
   limit: ProviderTokenLimit | null;
   /** HTTP headers sent with chat/models requests (merged preset + override). */
   requestHeaders: Record<string, string>;

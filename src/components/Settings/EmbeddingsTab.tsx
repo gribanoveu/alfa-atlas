@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEmbeddingSetup } from "../../hooks/useEmbeddingSetup";
+import { CERT_PLACEHOLDER } from "./certField";
 import {
   EMBEDDING_REQUEST_HEADER_UUID,
   formatRequestHeaders,
   parseRequestHeaders,
+  testEmbeddingConnection,
   type EmbeddingProviderKind,
 } from "../../lib/embeddings";
+import { toMessage } from "../../lib/errors";
 import "../Welcome/CloneRepoModal.css";
 import "./EmbeddingsTab.css";
 
@@ -70,12 +74,19 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  // Только пользовательский слой, не разрешённое значение — см. комментарий
+  // к `remoteTrustedCertPem` в `lib/embeddings.ts`.
+  const [certDraft, setCertDraft] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (!config) return;
     setBaseUrl(config.remoteBaseUrl ?? "");
     setModel(config.remoteModel ?? "");
     setHeadersDraft(formatRequestHeaders(config.remoteRequestHeaders));
+    setCertDraft(config.remoteTrustedCertOverride ?? "");
   }, [config]);
 
   if (!config) {
@@ -86,6 +97,31 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
     );
   }
 
+  const handleTestConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      setTestResult({ ok: true, message: await testEmbeddingConnection() });
+    } catch (e) {
+      setTestResult({ ok: false, message: toMessage(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const apiKeyPlaceholder = config.apiKeyUserSet
+    ? "Свой ключ сохранён — введите новый, чтобы заменить"
+    : config.apiKeyBundled
+      ? "Используется ключ из сборки — введите свой, чтобы переопределить"
+      : hasApiKey
+        ? "Ключ сохранён — введите новый, чтобы заменить"
+        : "sk-...";
+
+  /** Вызывается по потере фокуса и по Enter, а не только кнопкой: ключ,
+   * набранный и оставленный в поле, иначе молча пропадал. Пустая строка
+   * отсекается здесь же, поэтому уход с нетронутого поля ничего не пишет, а
+   * клик по кнопке не сохраняет дважды — blur успевает очистить поле, и к
+   * моменту клика кнопка уже неактивна. */
   const handleSaveApiKey = async () => {
     if (!apiKeyInput.trim()) return;
     await saveApiKey(apiKeyInput.trim());
@@ -248,50 +284,132 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
             <code>{EMBEDDING_REQUEST_HEADER_UUID}</code> подставляет новый UUID на каждый запрос.
             Пустое поле — наследовать из bundled-конфига.
           </p>
-          {config.apiKeyBundled ? (
-            <p className="settings-hint settings-hint-compact">
+          {/* Поле показывается всегда, даже когда ключ вшит в сборку: вшитый
+              ключ — это дефолт, а не запрет, и свой ключ его перекрывает
+              (см. `infra::embedding_credentials_store::get_api_key`). Раньше
+              поле в этом случае просто пряталось, и переопределить ключ было
+              нечем. */}
+          <label className="clone-modal-field">
+            <span className="clone-modal-label">API ключ</span>
+            <input
+              className="clone-modal-input"
+              type="password"
+              placeholder={apiKeyPlaceholder}
+              value={apiKeyInput}
+              disabled={busy}
+              onChange={(event) => setApiKeyInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void handleSaveApiKey();
+                }
+              }}
+              onBlur={() => void handleSaveApiKey()}
+            />
+          </label>
+          <div className="settings-actions">
+            <button
+              type="button"
+              className="settings-btn primary"
+              disabled={busy || !apiKeyInput.trim()}
+              onClick={() => void handleSaveApiKey()}
+            >
+              {apiKeySaved ? "Сохранено!" : "Сохранить ключ"}
+            </button>
+            {/* Удалять можно только свой ключ: вшитый в сборку отсюда не
+                убрать, и кнопка на нём вводила бы в заблуждение. */}
+            {config.apiKeyUserSet && (
+              <button
+                type="button"
+                className="settings-btn"
+                disabled={busy}
+                onClick={() => void handleDeleteApiKey()}
+              >
+                {config.apiKeyBundled ? "Вернуть ключ сборки" : "Удалить ключ"}
+              </button>
+            )}
+            {config.apiKeyUserSet ? (
+              <span className="embeddings-status-badge ok">Задан свой ключ</span>
+            ) : config.apiKeyBundled ? (
               <span className="embeddings-status-badge ok">Ключ встроен в сборку</span>
-            </p>
-          ) : (
-            <>
-              <label className="clone-modal-field">
-                <span className="clone-modal-label">API ключ</span>
-                <input
-                  className="clone-modal-input"
-                  type="password"
-                  placeholder={hasApiKey ? "Ключ сохранён — введите новый, чтобы заменить" : "sk-..."}
-                  value={apiKeyInput}
-                  disabled={busy}
-                  onChange={(event) => setApiKeyInput(event.target.value)}
-                />
-              </label>
-              <div className="settings-actions">
-                <button
-                  type="button"
-                  className="settings-btn primary"
-                  disabled={busy || !apiKeyInput.trim()}
-                  onClick={() => void handleSaveApiKey()}
-                >
-                  {apiKeySaved ? "Сохранено!" : "Сохранить ключ"}
-                </button>
-                {hasApiKey && (
-                  <button
-                    type="button"
-                    className="settings-btn"
+            ) : hasApiKey ? (
+              <span className="embeddings-status-badge ok">Ключ задан</span>
+            ) : (
+              <span className="embeddings-status-badge">Ключ не задан</span>
+            )}
+          </div>
+
+          <div className="settings-actions embeddings-test-row">
+            <button
+              type="button"
+              className="settings-btn"
+              disabled={busy || testing}
+              onClick={() => void handleTestConnection()}
+            >
+              {testing ? "Проверка…" : "Проверить соединение"}
+            </button>
+            {!testing && testResult ? (
+              <span
+                className={`embeddings-status-badge ${testResult.ok ? "ok" : "error"}`}
+                title={testResult.message}
+              >
+                {testResult.message}
+              </span>
+            ) : null}
+          </div>
+          <p className="settings-hint settings-hint-compact">
+            Отправляет одно короткое слово на эндпоинт и сверяет размерность
+            ответа с той, на которую рассчитан индекс.
+          </p>
+
+          {/* Сертификат правится один раз при настройке внутреннего эндпоинта
+              — свёрнут, как «Дополнительно» на вкладке провайдеров LLM. */}
+          <div className="embeddings-advanced">
+            <button
+              type="button"
+              className="embeddings-advanced-toggle"
+              aria-expanded={advancedOpen}
+              onClick={() => setAdvancedOpen((open) => !open)}
+            >
+              {advancedOpen ? (
+                <ChevronDown size={14} aria-hidden />
+              ) : (
+                <ChevronRight size={14} aria-hidden />
+              )}
+              <span>Дополнительно</span>
+              <span className="embeddings-advanced-hint">
+                {config.hasBundledCert ? "сертификат — задан сборкой" : "сертификат"}
+              </span>
+            </button>
+
+            {advancedOpen ? (
+              <div className="embeddings-advanced-body">
+                <label className="clone-modal-field">
+                  <span className="clone-modal-label">
+                    Доверенный сертификат{config.hasBundledCert ? " (переопределение)" : ""}
+                  </span>
+                  <textarea
+                    className="embeddings-config-textarea"
+                    rows={4}
+                    spellCheck={false}
+                    placeholder={CERT_PLACEHOLDER}
+                    value={certDraft}
                     disabled={busy}
-                    onClick={() => void handleDeleteApiKey()}
-                  >
-                    Удалить ключ
-                  </button>
-                )}
-                {hasApiKey ? (
-                  <span className="embeddings-status-badge ok">Ключ задан</span>
-                ) : (
-                  <span className="embeddings-status-badge">Ключ не задан</span>
-                )}
+                    onChange={(event) => setCertDraft(event.target.value)}
+                    onBlur={() =>
+                      void updateConfig({ remoteTrustedCertOverride: certDraft.trim() || null })
+                    }
+                  />
+                  <p className="settings-hint settings-hint-compact">
+                    {config.hasBundledCert
+                      ? "Сертификат задан сборкой приложения — поле пустое, пока вы его не переопределили."
+                      : "Сертификат полностью заменяет публичные корневые сертификаты для запросов к эндпоинту эмбеддингов."}{" "}
+                    Можно вставить цепочку из нескольких сертификатов подряд.
+                  </p>
+                </label>
               </div>
-            </>
-          )}
+            ) : null}
+          </div>
         </>
       )}
 

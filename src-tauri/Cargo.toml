@@ -61,6 +61,17 @@ similar = "2"
 fs2 = "0.4"
 tauri-plugin-notification = "2.3.3"
 tauri-plugin-fs = "2"
+# Jira REST client (blocking). Unlike the LLM/embedding clients this one does
+# not go through `infra::http_agent` — gouqi is built on `reqwest`, not
+# `ureq` — so the corporate-CA override is re-implemented against reqwest's
+# own builder in `infra::jira_client`. Default features only: the sync client
+# is all this app uses, and `async`/`cache`/`observability` would pull a
+# second tokio runtime and extra machinery for nothing.
+gouqi = "0.20.0"
+# Declared directly only so `infra::jira_client` can hand `Jira::from_client`
+# a client with a custom trust store. Feature set mirrors gouqi's own so the
+# same `reqwest` build is reused rather than compiled twice.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json", "multipart"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2.4.3"

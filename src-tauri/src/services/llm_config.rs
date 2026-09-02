@@ -46,8 +46,17 @@ pub fn resolve_provider(
         let model = over
             .and_then(|o| o.model.clone())
             .or_else(|| preset.default_model.clone());
-        let trusted_cert_pem = over
+        // A stored certificate byte-identical to the manifest's is treated
+        // as *no* override: it carries no information, and an older build
+        // could produce exactly that (the Settings form was seeded with the
+        // resolved value, so "Сохранить сертификат" pinned the bundled PEM
+        // as the user's own — after which a manifest update would never
+        // reach that user again).
+        let trusted_cert_override = over
             .and_then(|o| o.trusted_cert_pem.clone())
+            .filter(|pem| Some(pem) != preset.trusted_cert_pem.as_ref());
+        let trusted_cert_pem = trusted_cert_override
+            .clone()
             .or_else(|| preset.trusted_cert_pem.clone());
         let limit = over.and_then(|o| o.limit).or(preset.limit);
         let known_models = over.map(|o| o.known_models.clone()).unwrap_or_default();
@@ -60,6 +69,8 @@ pub fn resolve_provider(
             is_system: true,
             model,
             trusted_cert_pem,
+            trusted_cert_override,
+            has_bundled_cert: preset.trusted_cert_pem.is_some(),
             known_models,
             limit,
             request_headers,
@@ -79,7 +90,10 @@ pub fn resolve_provider(
         base_url,
         is_system: false,
         model: over.model.clone(),
+        // No manifest layer here, so merged and override are the same value.
         trusted_cert_pem: over.trusted_cert_pem.clone(),
+        trusted_cert_override: over.trusted_cert_pem.clone(),
+        has_bundled_cert: false,
         known_models: over.known_models.clone(),
         limit: over.limit.or(Some(DEFAULT_PROVIDER_TOKEN_LIMIT)),
         request_headers: resolve_request_headers_from_override(over),
@@ -281,11 +295,38 @@ mod tests {
         // root) — see `infra::llm_provider_manifest`'s doc comment — so the
         // no-override case must still resolve to *that*, not `None`.
         assert!(resolved.trusted_cert_pem.unwrap().contains("BEGIN CERTIFICATE"));
+        // …but the *override* stays empty, which is what the Settings form
+        // binds to. Leaking the manifest PEM into that field would make it
+        // indistinguishable from the user's own, and saving the form would
+        // pin the build's default so later manifest changes stop arriving.
+        assert_eq!(resolved.trusted_cert_override, None);
+        assert!(resolved.has_bundled_cert);
         assert_eq!(
             resolved.limit,
             llm_provider_manifest::find_system_provider("alfagen")
                 .and_then(|p| p.limit)
         );
+    }
+
+    /// Heals settings where the form, seeded with the resolved value, saved
+    /// the manifest's own certificate back as a user override.
+    #[test]
+    fn a_stored_copy_of_the_manifest_certificate_is_not_an_override() {
+        let bundled = llm_provider_manifest::find_system_provider("alfagen")
+            .and_then(|p| p.trusted_cert_pem.clone())
+            .expect("alfagen ships a bundled certificate");
+        let settings = LlmSettings {
+            providers: vec![LlmProviderConfig {
+                id: "alfagen".to_string(),
+                trusted_cert_pem: Some(bundled.clone()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let resolved = resolve_provider("alfagen", &settings).unwrap();
+        assert_eq!(resolved.trusted_cert_override, None);
+        // The client still gets a certificate — only the form sees nothing.
+        assert_eq!(resolved.trusted_cert_pem.as_deref(), Some(bundled.as_str()));
     }
 
     #[test]
@@ -320,6 +361,13 @@ mod tests {
         // Set override fields win.
         assert_eq!(resolved.model.as_deref(), Some("gpt-4o-mini"));
         assert!(resolved.trusted_cert_pem.unwrap().starts_with("-----BEGIN CERTIFICATE-----"));
+        // A user certificate shows up in both: merged (it wins) and as the
+        // override the form renders.
+        assert_eq!(
+            resolved.trusted_cert_override.as_deref(),
+            Some("-----BEGIN CERTIFICATE-----\n...")
+        );
+        assert!(resolved.has_bundled_cert);
     }
 
     #[test]
@@ -547,6 +595,8 @@ mod tests {
             is_system: true,
             model: Some("pinned-model".to_string()),
             trusted_cert_pem: None,
+            trusted_cert_override: None,
+            has_bundled_cert: false,
             known_models: vec![],
             limit: None,
             request_headers: HashMap::new(),
@@ -569,6 +619,8 @@ mod tests {
                 is_system: true,
                 model: None,
                 trusted_cert_pem: None,
+                trusted_cert_override: None,
+                has_bundled_cert: false,
                 known_models: vec![],
                 limit: None,
                 request_headers: HashMap::new(),
@@ -598,6 +650,8 @@ mod tests {
             is_system: true,
             model: None,
             trusted_cert_pem: None,
+            trusted_cert_override: None,
+            has_bundled_cert: false,
             known_models: vec![],
             limit: None,
             request_headers: HashMap::new(),

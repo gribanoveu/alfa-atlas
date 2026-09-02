@@ -12,12 +12,27 @@ export type ResolvedEmbeddingConfig = {
   // Always the bundled preset's value — fixed for this build, like the
   // local provider's dimension, never user-editable.
   remoteDimensions: number | null;
+  /** The **merged** certificate — what builds the HTTP client on the
+   * backend. Never bind a settings field to it: a manifest-supplied PEM
+   * shown in an editable box is indistinguishable from the user's own, and
+   * saving that box would pin the build's default as a user override, so a
+   * later manifest change would stop reaching this user. Forms use the pair
+   * below. */
   remoteTrustedCertPem: string | null;
+  /** The settings-layer value alone — `null` when nothing is overridden. */
+  remoteTrustedCertOverride: string | null;
+  /** Whether this build ships a certificate for the remote endpoint. */
+  hasBundledCert: boolean;
   /** HTTP headers sent with remote `/embeddings` (merged preset + override). */
   remoteRequestHeaders: Record<string, string>;
   remoteDisableTlsVerification: boolean;
-  /** True when this build ships a compile-time embedding API key. */
+  /** True when this build ships a compile-time embedding API key. Only a
+   * default — a user key stored on top of it wins. */
   apiKeyBundled: boolean;
+  /** True when this user stored a key of their own. Distinct from "a key is
+   * usable at all" (`hasEmbeddingRemoteApiKey`): only a user key can be
+   * replaced or deleted from Settings. */
+  apiKeyUserSet: boolean;
 };
 
 // Mirrors `domain::embeddings::EmbeddingProviderConfig` — the settings-layer
@@ -142,6 +157,13 @@ export function setEmbeddingRemoteApiKey(apiKey: string): Promise<void> {
 
 export function hasEmbeddingRemoteApiKey(): Promise<boolean> {
   return invoke<boolean>("embedding_has_remote_api_key");
+}
+
+/** End-to-end check of the remote setup — resolves on success with a short
+ * status line, rejects with the reason otherwise. Costs one tiny
+ * `/embeddings` request, so it is only ever triggered by the button. */
+export function testEmbeddingConnection(): Promise<string> {
+  return invoke<string>("embedding_test_connection");
 }
 
 /** Drops the stored key but keeps the rest of the remote config (base URL,

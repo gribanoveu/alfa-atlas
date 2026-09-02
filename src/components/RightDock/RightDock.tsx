@@ -5,6 +5,7 @@ import {
   GitFork,
   Lightbulb,
   Sparkles,
+  Ticket,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -27,6 +28,7 @@ import { AssistantPanel } from "./AssistantPanel";
 import { BranchesPanel } from "./BranchesPanel";
 import { GitPanel } from "./GitPanel";
 import { AsciiDocPanel } from "./AsciiDocPanel";
+import { JiraPanel } from "./JiraPanel";
 import { UtilitiesPanel } from "./UtilitiesPanel";
 import { NotificationsPanel } from "./NotificationsPanel";
 import "./RightDock.css";
@@ -65,13 +67,20 @@ const TOOL_DEFS: Record<
     empty: "Нет открытого репозитория",
     Icon: Wrench,
   },
+  jira: {
+    label: "Jira",
+    empty: "Интеграция с Jira недоступна",
+    Icon: Ticket,
+  },
 };
 
-/** Stripe order: notifications + assistant grouped on top, then git tools, then editor tools. */
+/** Stripe order: notifications + assistant grouped on top, then git tools,
+ * then editor tools, then external integrations. */
 const TOOL_STRIPE_GROUPS: RightTool[][] = [
   ["suggestions", "assistant"],
   ["branches", "git"],
   ["asciidoc", "utilities"],
+  ["jira"],
 ];
 
 export type GitPanelViewProps = {
@@ -135,6 +144,11 @@ type RightDockProps = {
     activeId: UtilityId | null;
     onNewArtifact: (kind: ArtifactKind) => void;
     onOpenArtifacts: () => void;
+  } | null;
+  /** Not gated on an open project — the Jira connection is global, and
+   * checking it is exactly what someone does before opening anything. */
+  jira?: {
+    onOpenSettings: () => void;
   } | null;
   assistant?: {
     onOpenSettings: () => void;
@@ -204,6 +218,7 @@ export function RightDock({
   branches,
   asciidoc,
   utilities,
+  jira,
   assistant,
   gitActionLog,
   chatInsertRequest,
@@ -306,6 +321,8 @@ export function RightDock({
                 onFetch={branches.onFetch}
                 onDelete={branches.onDelete}
               />
+            ) : activeTool === "jira" && jira ? (
+              <JiraPanel onOpenSettings={jira.onOpenSettings} />
             ) : activeTool === "suggestions" ? (
               <NotificationsPanel gitActionLog={gitActionLog ?? undefined} />
             ) : (

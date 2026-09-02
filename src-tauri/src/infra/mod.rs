@@ -14,6 +14,8 @@ pub mod git_credentials_store;
 pub mod git_repo;
 pub mod http_agent;
 pub mod index_store;
+pub mod jira_client;
+pub mod jira_credentials_store;
 pub mod key_management;
 pub mod language_indexers;
 pub mod layout_store;

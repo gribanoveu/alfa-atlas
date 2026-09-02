@@ -119,15 +119,30 @@ pub struct ResolvedEmbeddingConfig {
     /// field here. Same "fixed for this build" treatment as the local
     /// provider's `local::DIMENSIONS` constant.
     pub remote_dimensions: Option<usize>,
+    /// The **merged** certificate — what builds the HTTP client. Never what
+    /// the Settings form edits: a manifest-supplied PEM in an editable box
+    /// is indistinguishable from the user's own, and saving that box would
+    /// pin the build's default as a user override, so a later manifest
+    /// change would stop reaching that user. The form uses the pair below.
     pub remote_trusted_cert_pem: Option<String>,
+    /// The settings-layer value alone — `None` when nothing is overridden.
+    pub remote_trusted_cert_override: Option<String>,
+    /// Whether this build ships a certificate for the remote endpoint.
+    pub has_bundled_cert: bool,
     /// Merged HTTP headers for remote `/embeddings` (preset + override).
     #[serde(default)]
     pub remote_request_headers: HashMap<String, String>,
     pub remote_disable_tls_verification: bool,
     /// `true` when this build ships a compile-time embedding API key
-    /// (see `infra::bundled_secrets` / `build.rs`) — the Settings UI
-    /// hides manual key entry when this is set.
+    /// (see `infra::bundled_secrets` / `build.rs`). Only a *default*: a
+    /// user key stored on top wins, so the Settings UI still offers manual
+    /// entry and uses this to label it as an override.
     pub api_key_bundled: bool,
+    /// `true` when this user stored a key of their own — which takes
+    /// precedence over `api_key_bundled`. Distinct from "a key is usable at
+    /// all" (`embedding_has_remote_api_key`), because only a user key can be
+    /// replaced or deleted from Settings.
+    pub api_key_user_set: bool,
 }
 
 impl Default for ResolvedEmbeddingConfig {
@@ -138,9 +153,12 @@ impl Default for ResolvedEmbeddingConfig {
             remote_model: None,
             remote_dimensions: None,
             remote_trusted_cert_pem: None,
+            remote_trusted_cert_override: None,
+            has_bundled_cert: false,
             remote_request_headers: HashMap::new(),
             remote_disable_tls_verification: false,
             api_key_bundled: false,
+            api_key_user_set: false,
         }
     }
 }

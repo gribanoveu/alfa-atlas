@@ -16,7 +16,9 @@ export const DEFAULT_PANEL_LAYOUT: PanelLayout = {
 
 export const PANEL_LAYOUT_LIMITS = {
   sidebarWidth: { min: 160, max: 480 },
-  rightWidth: { min: 400, max: 672 },
+  // max: 672 + 25%. Mirrors `MAX_RIGHT_WIDTH` in
+  // `src-tauri/src/domain/layout.rs` — both sides clamp independently.
+  rightWidth: { min: 400, max: 840 },
   bottomHeight: { min: 120, max: 480 },
   externalHeight: { min: 80, max: 400 },
 } as const;

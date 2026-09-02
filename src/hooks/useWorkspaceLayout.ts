@@ -6,7 +6,8 @@ export type RightTool =
   | "utilities"
   | "git"
   | "suggestions"
-  | "branches";
+  | "branches"
+  | "jira";
 export type BottomTool = "gitHistory" | "formatting" | "problems";
 
 export type PanelUiState = {
@@ -24,6 +25,7 @@ const RIGHT_TOOLS: readonly RightTool[] = [
   "suggestions",
   "asciidoc",
   "utilities",
+  "jira",
 ];
 const BOTTOM_TOOLS: readonly BottomTool[] = [
   "gitHistory",

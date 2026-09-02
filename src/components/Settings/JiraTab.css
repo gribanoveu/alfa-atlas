@@ -1,0 +1,138 @@
+/* Jira settings tab. Layout only — colors, buttons and hints come from the
+   shared `settings-*` classes in SettingsDialog.css, and the inputs from
+   `clone-modal-input`. */
+
+.jira-tab .settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.jira-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.jira-field-label {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.jira-field .settings-hint {
+  margin: 0;
+}
+
+.jira-token-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.jira-token-row .clone-modal-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.jira-icon-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.jira-icon-btn:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+  background: var(--bg-2);
+}
+
+.jira-icon-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.jira-test-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.jira-test-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-ui-sm);
+}
+
+.jira-test-result .ok {
+  color: var(--green);
+}
+
+.jira-test-result .error {
+  color: var(--red-tag);
+}
+
+/* Свёрнутый блок «Дополнительно» — тот же вид, что на вкладке провайдеров
+   LLM, но со своими классами: у той вкладки собственный CSS-файл, и импорт
+   чужого ради четырёх правил связал бы вкладки между собой. */
+.jira-tab .settings-card.jira-advanced {
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.jira-advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px;
+  border: none;
+  background: none;
+  color: var(--text-0);
+  font: inherit;
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jira-advanced-toggle:hover {
+  background: var(--bg-2);
+}
+
+.jira-advanced-hint {
+  margin-left: auto;
+  font-size: var(--font-ui-sm);
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+.jira-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.jira-cert-input {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+}

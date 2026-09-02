@@ -476,6 +476,7 @@ function App() {
   const [standardsSettingsSignal, setStandardsSettingsSignal] = useState(0);
   const [llmSettingsSignal, setLlmSettingsSignal] = useState(0);
   const [credentialsSettingsSignal, setCredentialsSettingsSignal] = useState(0);
+  const [jiraSettingsSignal, setJiraSettingsSignal] = useState(0);
 
 
 
@@ -710,6 +711,7 @@ function App() {
         openStandardsSettingsSignal={standardsSettingsSignal}
         openLlmSettingsSignal={llmSettingsSignal}
         openCredentialsSettingsSignal={credentialsSettingsSignal}
+        openJiraSettingsSignal={jiraSettingsSignal}
       />
       <div className="workspace">
         <div className={mainClassName}>
@@ -998,6 +1000,9 @@ function App() {
                   }
                 : null
             }
+            jira={{
+              onOpenSettings: () => setJiraSettingsSignal((n) => n + 1),
+            }}
             assistant={{
               onOpenSettings: () => setLlmSettingsSignal((n) => n + 1),
               specsRepoInfo: specsRepo.info,

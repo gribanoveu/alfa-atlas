@@ -8,7 +8,10 @@ pub const DEFAULT_EXTERNAL_HEIGHT: f64 = 160.0;
 pub const MIN_SIDEBAR_WIDTH: f64 = 160.0;
 pub const MAX_SIDEBAR_WIDTH: f64 = 480.0;
 pub const MIN_RIGHT_WIDTH: f64 = 200.0;
-pub const MAX_RIGHT_WIDTH: f64 = 672.0;
+/// 672 + 25%. Must stay in step with `PANEL_LAYOUT_LIMITS.rightWidth.max`
+/// in `src/lib/projectLayout.ts` — both sides clamp independently, so a
+/// value raised only here would be undone by the frontend on the next save.
+pub const MAX_RIGHT_WIDTH: f64 = 840.0;
 pub const MIN_BOTTOM_HEIGHT: f64 = 120.0;
 pub const MAX_BOTTOM_HEIGHT: f64 = 480.0;
 pub const MIN_EXTERNAL_HEIGHT: f64 = 80.0;
