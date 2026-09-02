@@ -6,7 +6,11 @@
 .artifacts-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  /* Never horizontally: every row truncates, so a horizontal scrollbar can
+     only mean something has overflowed and pushed the row actions out of
+     view. */
+  overflow-x: hidden;
   background: var(--bg-1);
 }
 
@@ -20,13 +24,24 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
 }
 
+/* `width: 0` and `overflow: hidden`, not just `min-width: 0`. This is a
+   `<button>`, and a button's content box does not shrink below its
+   content the way a `div`'s does — with only `min-width: 0` the title and
+   subtitle keep their full width and, since the button itself does not
+   clip, paint straight over the status and the delete icon to their right.
+   `width: 0` makes the flex basis the whole width calculation, and
+   `overflow: hidden` guarantees nothing escapes the button whatever the
+   engine decides about its intrinsic size. */
 .artifacts-list-main {
-  flex: 1;
+  flex: 1 1 0;
+  width: 0;
   min-width: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 2px;
