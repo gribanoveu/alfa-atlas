@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Check, CheckCircle2, ChevronDown, ChevronRight, Save, XCircle } from "lucide-react";
 import { useJiraSettings } from "../../hooks/useJiraSettings";
+import { JiraProjectPicker } from "../Jira/JiraProjectPicker";
 import { CERT_PLACEHOLDER } from "./certField";
 import "../Welcome/CloneRepoModal.css";
 import "./JiraTab.css";
@@ -64,6 +65,15 @@ export function JiraTab() {
               : "Только корень инстанса, без /rest/... и без пути к проекту."}
           </p>
         </label>
+
+        <JiraProjectPicker
+          projectKey={settings.projectKey}
+          projectName={settings.projectName}
+          disabled={busy}
+          onPick={(project) =>
+            void commit({ projectKey: project.key, projectName: project.name })
+          }
+        />
 
         <label className="jira-field">
           <span className="jira-field-label">Токен</span>

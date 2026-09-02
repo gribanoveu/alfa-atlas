@@ -444,6 +444,7 @@ pub fn run() {
             commands::jira::jira_delete_token,
             commands::jira::jira_current_user,
             commands::jira::jira_attach_web_links,
+            commands::jira::jira_list_projects,
             commands::chat_history::chat_list,
             commands::chat_history::chat_load_messages,
             commands::chat_history::chat_save,

@@ -6,7 +6,7 @@
 //! comes back out, only a boolean `jira_has_token` status.
 
 use crate::domain::jira::{
-    JiraLinkOutcome, JiraSettings, JiraSettingsView, JiraUser, JiraWebLink,
+    JiraLinkOutcome, JiraProject, JiraSettings, JiraSettingsView, JiraUser, JiraWebLink,
 };
 use crate::infra::jira_credentials_store;
 use crate::services::jira_config;
@@ -66,6 +66,19 @@ pub async fn jira_attach_web_links(
 ) -> Result<Vec<JiraLinkOutcome>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         jira_config::attach_web_links(&issue_key, &links).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Projects for the picker. `recent_only` is the default: the instance has
+/// thousands of projects, and the ten the user last worked in are what they
+/// almost always want. The full list is fetched once when they start
+/// searching and filtered in the UI.
+#[tauri::command]
+pub async fn jira_list_projects(recent_only: bool) -> Result<Vec<JiraProject>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        jira_config::list_projects(recent_only).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

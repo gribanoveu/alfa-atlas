@@ -202,3 +202,13 @@
   font-size: var(--font-ui-sm);
   color: var(--red-tag);
 }
+
+/* Separated from the account block above it: the identity is what the panel
+   reports, the project is something the reader changes. */
+.jira-panel-project {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}

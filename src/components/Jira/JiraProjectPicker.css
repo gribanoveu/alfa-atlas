@@ -1,0 +1,158 @@
+/* Self-contained on purpose: this picker renders both inside the settings
+   dialog and inside the right dock, so it carries its own field, input and
+   button styles rather than borrowing the settings sheet's. */
+
+.jira-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.jira-picker-label {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.jira-picker-hint {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.jira-picker-error {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+  color: var(--red-tag);
+  overflow-wrap: anywhere;
+}
+
+.jira-picker-input {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+  font-family: inherit;
+  min-width: 0;
+}
+
+.jira-picker-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.jira-picker-btn {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.jira-picker-btn:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+  background: var(--bg-2);
+}
+
+.jira-picker-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Project picker. Closed it is one line ("WOWTAX — Бухгалтерия НИБ"); open
+   it is a search box over a short list, because the instance has thousands
+   of projects and a plain <select> would be a scroll bar, not a choice. */
+.jira-project-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.jira-project-current {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+}
+
+.jira-project-key {
+  flex: none;
+  font-weight: 600;
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+}
+
+.jira-project-name {
+  min-width: 0;
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jira-project-empty {
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+}
+
+.jira-project-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.jira-project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.jira-project-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jira-project-option:hover {
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+
+.jira-project-option.is-active {
+  border-color: var(--accent-dim);
+  background: var(--bg-2);
+}

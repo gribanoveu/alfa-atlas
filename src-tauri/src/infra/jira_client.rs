@@ -15,7 +15,7 @@
 use gouqi::{Credentials, Error as GouqiError, Jira};
 use reqwest::blocking::Client;
 
-use crate::domain::jira::{JiraError, JiraSettings, JiraUser, JiraWebLink};
+use crate::domain::jira::{JiraError, JiraProject, JiraSettings, JiraUser, JiraWebLink};
 
 /// `trusted_cert_pem` replaces the built-in roots entirely when present —
 /// an instance either needs its own CA trusted or it doesn't, and mixing
@@ -75,6 +75,36 @@ pub fn current_user(jira: &Jira) -> Result<JiraUser, JiraError> {
     })
 }
 
+/// How many recently-used projects to ask for. Ten is what the picker shows
+/// before anyone types; the endpoint has no notion of "all recent", so this
+/// is a request parameter rather than a display limit.
+const RECENT_PROJECTS: usize = 10;
+
+/// The projects this token can see.
+///
+/// `recent_only` is the difference between a usable list and an unusable
+/// one: this instance answers the unfiltered call with ~2300 projects,
+/// while `?recent=` returns the handful the user actually works in — the
+/// right thing to show before they type anything. The full list is fetched
+/// only when they search, and filtered on the frontend.
+///
+/// Not `/issue/createmeta`, which would additionally prove the user may
+/// *create* an issue in each project: Jira 10 answers it with 404 unless
+/// `projectKeys` is given, so it cannot enumerate. A project the user
+/// cannot create in therefore stays in the list, and the create call is
+/// what reports it.
+pub fn list_projects(jira: &Jira, recent_only: bool) -> Result<Vec<JiraProject>, JiraError> {
+    let endpoint = if recent_only {
+        format!("/project?recent={RECENT_PROJECTS}")
+    } else {
+        "/project".to_string()
+    };
+    let raw: Vec<JiraProject> = jira.get("api", &endpoint).map_err(map_error)?;
+    // An archived project still answers `/project` but cannot take a new
+    // issue, so offering one would only produce a failure at publish time.
+    Ok(raw.into_iter().filter(|p| !p.archived).collect())
+}
+
 /// `POST /rest/api/latest/issue/{key}/remotelink` — attaches one Web Link.
 ///
 /// Idempotent by `globalId` (see `JiraWebLink::to_payload`): attaching the
@@ -113,7 +143,7 @@ mod tests {
     fn settings() -> JiraSettings {
         JiraSettings {
             base_url: "https://jira.example.com".to_string(),
-            trusted_cert_pem: None,
+            ..Default::default()
         }
     }
 
@@ -179,6 +209,7 @@ mod tests {
             let settings = JiraSettings {
                 base_url: base_url.clone(),
                 trusted_cert_pem: pem.map(str::to_string),
+                ..Default::default()
             };
             let outcome = connect(&settings, token.clone()).and_then(|jira| current_user(&jira));
             match outcome {

@@ -5,6 +5,12 @@ import { invoke } from "@tauri-apps/api/core";
 export type JiraSettings = {
   /** Instance root, e.g. `https://jira.example.com` — no `/rest/...` path. */
   baseUrl: string;
+  /** The project new issues are created in, remembered between sessions.
+   *  Empty until the user picks one. */
+  projectKey: string;
+  /** Display name for `projectKey` — a cache, never an identity: only the
+   *  key is ever sent to Jira. */
+  projectName: string;
   /** PEM bundle replacing the public trust roots for Jira requests. */
   trustedCertPem: string | null;
 };
@@ -85,4 +91,19 @@ export function jiraAttachWebLinks(
   links: JiraWebLink[],
 ): Promise<JiraLinkOutcome[]> {
   return invoke<JiraLinkOutcome[]>("jira_attach_web_links", { issueKey, links });
+}
+
+/** Mirrors `domain::jira::JiraProject`. `key` is the identity (it is what
+ *  an issue key is built from); `name` is display only. */
+export type JiraProject = {
+  key: string;
+  name: string;
+  archived: boolean;
+};
+
+/** Projects the token can see. `recentOnly` is the default because the
+ *  instance has thousands of them and the ten most recently used are what
+ *  someone almost always wants; the full list is for searching. */
+export function jiraListProjects(recentOnly: boolean): Promise<JiraProject[]> {
+  return invoke<JiraProject[]>("jira_list_projects", { recentOnly });
 }

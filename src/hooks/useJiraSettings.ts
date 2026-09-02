@@ -81,7 +81,10 @@ export function useJiraSettings() {
     setView((previous) => (previous ? { ...previous, settings: next } : previous));
   }, []);
 
-  const commit = useCallback(async () => {
+  /** `patch` is for choices with no intermediate state — picking a project
+   *  from a list is one act, not typing that later settles on blur. */
+  const commit = useCallback(async (patch?: Partial<JiraSettings>) => {
+    if (patch) setField(patch);
     const next = draft.current;
     if (!next) return;
     if (saved.current && shallowEqual(saved.current, next)) return;
@@ -103,7 +106,7 @@ export function useJiraSettings() {
     } finally {
       setBusy(false);
     }
-  }, [adopt]);
+  }, [adopt, setField]);
 
   /** Вызывается по потере фокуса и по Enter, а не только кнопкой: токен,
    * набранный и оставленный в поле, иначе молча пропадал. Пустая строка
@@ -179,5 +182,10 @@ export function useJiraSettings() {
 }
 
 function shallowEqual(a: JiraSettings, b: JiraSettings): boolean {
-  return a.baseUrl === b.baseUrl && a.trustedCertPem === b.trustedCertPem;
+  return (
+    a.baseUrl === b.baseUrl &&
+    a.projectKey === b.projectKey &&
+    a.projectName === b.projectName &&
+    a.trustedCertPem === b.trustedCertPem
+  );
 }

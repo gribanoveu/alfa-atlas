@@ -37,6 +37,13 @@ pub struct JiraSettings {
     /// Instance root, e.g. `https://jira.example.com` — *not* a `/rest/...`
     /// path; the client appends `rest/api/latest/...` itself.
     pub base_url: String,
+    /// The project new issues are created in, remembered between sessions —
+    /// e.g. `WOWTAX`. Empty until the user picks one.
+    pub project_key: String,
+    /// Display name for `project_key`, refreshed whenever a project is
+    /// picked. A cache, never an identity: only the key is ever sent to
+    /// Jira, so a stale name here cannot address the wrong project.
+    pub project_name: String,
     /// PEM bundle whose certificates *replace* the public trust roots for
     /// Jira requests — the same escape hatch the LLM providers have, for an
     /// internal instance behind a corporate CA. `None` falls back to the
@@ -87,6 +94,22 @@ pub struct JiraUser {
 // backend-side and inlining it as a `data:` URI, which costs a second HTTP
 // round trip per check and a base64 blob through IPC. Not worth it for
 // decoration; the panel shows the name instead.
+
+/// One project from `GET /rest/api/latest/project`.
+///
+/// `key` is the identity — it is what appears in an issue key (`WOWTAX-1`)
+/// and what every API call takes. `name` is display only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraProject {
+    pub key: String,
+    pub name: String,
+    /// Archived projects still answer `/project` but cannot take a new
+    /// issue; carried so the client can drop them rather than offering a
+    /// choice that fails at publish time.
+    #[serde(default)]
+    pub archived: bool,
+}
 
 /// One link to attach to an issue as a Jira **Web Link** — what the UI
 /// calls «Link → Web link» and the API calls a remote link. Distinct from

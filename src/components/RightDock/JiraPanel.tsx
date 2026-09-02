@@ -1,5 +1,7 @@
 import { AlertTriangle, CheckCircle2, RefreshCw, Settings2, Ticket } from "lucide-react";
 import { useJiraConnection } from "../../hooks/useJiraConnection";
+import { useJiraProject } from "../../hooks/useJiraProject";
+import { JiraProjectPicker } from "../Jira/JiraProjectPicker";
 import "./JiraPanel.css";
 
 const MISSING_TEXT: Record<"instance" | "token", string> = {
@@ -17,6 +19,7 @@ export type JiraPanelProps = {
  * round trip all worked. */
 export function JiraPanel({ onOpenSettings }: JiraPanelProps) {
   const { state, refresh } = useJiraConnection();
+  const project = useJiraProject();
 
   const busy = state.kind === "loading";
   // Одна строка под именем вместо подписанных полей: у Server всегда есть
@@ -108,6 +111,24 @@ export function JiraPanel({ onOpenSettings }: JiraPanelProps) {
 
             {!state.user.active ? (
               <p className="jira-panel-inactive">Пользователь отключён в Jira</p>
+            ) : null}
+
+            {/* The active project is switched here as well as in Settings:
+                it changes with the task at hand, not with the setup, and
+                sending someone into a settings dialog to do it would be the
+                wrong weight for something this routine. */}
+            {project.ready ? (
+              <div className="jira-panel-project">
+                <JiraProjectPicker
+                  projectKey={project.projectKey}
+                  projectName={project.projectName}
+                  disabled={project.busy}
+                  onPick={(picked) => void project.pick(picked)}
+                />
+                {project.error ? (
+                  <p className="jira-panel-notice-text">{project.error}</p>
+                ) : null}
+              </div>
             ) : null}
           </div>
         ) : null}

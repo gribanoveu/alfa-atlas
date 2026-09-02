@@ -10,7 +10,8 @@
 //! moment a request is made.
 
 use crate::domain::jira::{
-    JiraError, JiraLinkOutcome, JiraPreset, JiraSettings, JiraSettingsView, JiraUser, JiraWebLink,
+    JiraError, JiraLinkOutcome, JiraPreset, JiraProject, JiraSettings, JiraSettingsView, JiraUser,
+    JiraWebLink,
 };
 use crate::domain::settings::SettingsError;
 use crate::infra::{
@@ -46,6 +47,10 @@ pub fn save_jira_settings(settings: JiraSettings) -> Result<(), SettingsError> {
     let mut all = settings_store::load().unwrap_or_default();
     all.jira = JiraSettings {
         base_url: settings.base_url.trim().trim_end_matches('/').to_string(),
+        // Upper-cased because Jira project keys are, and a key typed in the
+        // wrong case would address nothing.
+        project_key: settings.project_key.trim().to_uppercase(),
+        project_name: settings.project_name.trim().to_string(),
         trusted_cert_pem: settings
             .trusted_cert_pem
             .as_deref()
@@ -62,6 +67,10 @@ pub fn resolve(settings: &JiraSettings, preset: &JiraPreset) -> JiraSettings {
         base_url: non_empty(&settings.base_url)
             .or_else(|| preset.base_url.as_deref().and_then(non_empty))
             .unwrap_or_default(),
+        // No manifest counterpart: which project someone files tickets in
+        // is a personal choice, not something a build can preset.
+        project_key: settings.project_key.clone(),
+        project_name: settings.project_name.clone(),
         trusted_cert_pem: settings
             .trusted_cert_pem
             .as_deref()
@@ -83,6 +92,20 @@ pub fn current_user() -> Result<JiraUser, JiraError> {
 
     let jira = jira_client::connect(&settings, token)?;
     jira_client::current_user(&jira)
+}
+
+/// The projects the stored token can see — the recent handful by default,
+/// the full list when the user is searching. Blocking; callers run it on a
+/// blocking thread.
+pub fn list_projects(recent_only: bool) -> Result<Vec<JiraProject>, JiraError> {
+    let stored = load_jira_settings().map_err(|e| JiraError::Settings(e.to_string()))?;
+    let settings = resolve(&stored, llm_provider_manifest::jira_preset());
+    if !settings.is_addressable() {
+        return Err(JiraError::NotConfigured);
+    }
+    let token = jira_credentials_store::get_token().ok_or(JiraError::MissingToken)?;
+    let jira = jira_client::connect(&settings, token)?;
+    jira_client::list_projects(&jira, recent_only)
 }
 
 /// Attaches every link to `issue_key` as a Jira Web Link.
@@ -144,6 +167,7 @@ mod tests {
             save_jira_settings(JiraSettings {
                 base_url: "  https://jira.example.com/  ".to_string(),
                 trusted_cert_pem: Some("   ".to_string()),
+                ..Default::default()
             })
             .unwrap();
 
@@ -152,6 +176,34 @@ mod tests {
             // Whitespace is not an override — the build preset stays in play.
             assert_eq!(loaded.trusted_cert_pem, None);
         });
+    }
+
+    /// Jira project keys are upper-case; one typed in the wrong case would
+    /// address nothing, and the picker is not the only way in — the field
+    /// accepts typing too.
+    #[test]
+    fn the_remembered_project_key_is_upper_cased() {
+        with_temp_home(|| {
+            save_jira_settings(JiraSettings {
+                base_url: "https://jira.example.com".to_string(),
+                project_key: "  wowtax ".to_string(),
+                project_name: "  Бухгалтерия  ".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+            let loaded = load_jira_settings().unwrap();
+            assert_eq!(loaded.project_key, "WOWTAX");
+            assert_eq!(loaded.project_name, "Бухгалтерия");
+        });
+    }
+
+    /// The manifest has no say here: which project someone files tickets in
+    /// is personal, so an empty choice stays empty rather than inheriting.
+    #[test]
+    fn the_project_choice_has_no_build_default() {
+        let resolved = resolve(&JiraSettings::default(), &preset());
+        assert_eq!(resolved.project_key, "");
     }
 
     #[test]
@@ -167,6 +219,7 @@ mod tests {
             &JiraSettings {
                 base_url: "https://jira.mine.example".to_string(),
                 trusted_cert_pem: Some("MY PEM".to_string()),
+                ..Default::default()
             },
             &preset(),
         );
@@ -200,7 +253,7 @@ mod tests {
         with_temp_home(|| {
             save_jira_settings(JiraSettings {
                 base_url: "https://jira.example.com".to_string(),
-                trusted_cert_pem: None,
+                ..Default::default()
             })
             .unwrap();
 
