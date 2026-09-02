@@ -51,7 +51,14 @@ const METHOD_SPEC: BundledSkill = BundledSkill {
     ],
 };
 
-pub const BUNDLED_SKILLS: &[BundledSkill] = &[OPENAPI_SPECS_LAYOUT, METHOD_SPEC];
+const JIRA_TASK_DESCRIPTION: BundledSkill = BundledSkill {
+    name: "jira-task-description",
+    skill_md: include_str!("../../assets/skills/jira-task-description/SKILL.md"),
+    files: &[],
+};
+
+pub const BUNDLED_SKILLS: &[BundledSkill] =
+    &[OPENAPI_SPECS_LAYOUT, METHOD_SPEC, JIRA_TASK_DESCRIPTION];
 
 pub fn bundled_skill(name: &str) -> Option<&'static BundledSkill> {
     BUNDLED_SKILLS.iter().find(|s| s.name == name)

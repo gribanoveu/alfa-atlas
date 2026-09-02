@@ -358,6 +358,26 @@ mod tests {
                     "openapi-specs-layout not found by {query:?}"
                 );
             }
+            // Первые три — дословно те формулировки, которые системный
+            // промпт обещает роутеру (`SKILLS_ROUTER_HINT` в
+            // `src/lib/assistantConfig.ts`). Поиск не умеет стемминг, так
+            // что обещание держится только на совпадении отдельных слов
+            // («тикет», «задачу», «таск»); если описание скилла перепишут,
+            // сломается здесь, а не в бою.
+            for query in [
+                "составь тикет",
+                "оформи задачу",
+                "накидай таск",
+                "написать задачу в Jira",
+                "acceptance criteria",
+                "definition of done",
+                "user story",
+            ] {
+                assert!(
+                    search_hits(query).contains(&"jira-task-description".to_string()),
+                    "jira-task-description not found by {query:?}"
+                );
+            }
         });
     }
 
@@ -367,6 +387,7 @@ mod tests {
             let catalog = enabled_catalog().unwrap();
             assert!(catalog.iter().any(|s| s.name == "method-spec"));
             assert!(catalog.iter().any(|s| s.name == "openapi-specs-layout"));
+            assert!(catalog.iter().any(|s| s.name == "jira-task-description"));
         });
     }
 

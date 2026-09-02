@@ -55,7 +55,11 @@ When answering genuinely needs source code, call \`requestFullRepoAccess\` with 
 /** Compact router hint — skills catalog is never inlined into the prompt. */
 const SKILLS_ROUTER_HINT = `## Skills
 
-Specialized workflows (writing or filling REST/Thrift method documentation, OpenAPI specs layout, and any user-installed packs) live behind the \`skill\` tool. Before that kind of work, call \`skill\` with \`op: "search"\` and a short query, then \`op: "load"\` a match and follow it. Do not skip this for those tasks. Ordinary AsciiDoc authoring does not need a skill — do not search for one just because the request mentions documentation in general. Empty search queries are rejected.`;
+Specialized workflows (writing or filling REST/Thrift method documentation, OpenAPI specs layout, drafting a Jira ticket description, and any user-installed packs) live behind the \`skill\` tool. Before that kind of work, call \`skill\` with \`op: "search"\` and a short query, then \`op: "load"\` a match and follow it. Do not skip this for those tasks.
+
+Writing a tracker ticket is one of them: «составь тикет», «оформи задачу», «накидай таск», or a request for Acceptance Criteria / DoD / User Story — including when the user only describes a problem and never names Jira, but is clearly preparing a ticket. Search before drafting the text, not after.
+
+Ordinary AsciiDoc authoring does not need a skill — do not search for one just because the request mentions documentation in general. Empty search queries are rejected.`;
 
 /** Applies in every mode: a `visualize` call is display-only, so nothing
  *  about it depends on write access or on whether a plan is in flight. It
