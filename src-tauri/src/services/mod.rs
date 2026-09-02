@@ -47,4 +47,5 @@ pub mod text_diff;
 pub mod window_settings;
 pub mod workspace_index;
 pub mod workspace_state;
+pub mod git_browse;
 pub mod git_clone;

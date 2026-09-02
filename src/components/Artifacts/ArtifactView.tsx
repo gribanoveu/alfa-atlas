@@ -10,6 +10,7 @@ import {
 } from "../../lib/artifacts";
 import { toMessage } from "../../lib/errors";
 import { HttpRequestBuilder } from "./HttpRequestBuilder";
+import { JiraTicketBuilder } from "./JiraTicketBuilder";
 import "./ArtifactView.css";
 
 type ArtifactViewProps = {
@@ -183,6 +184,8 @@ export function ArtifactView({
 
       {record.content.kind === "httpRequest" ? (
         <HttpRequestBuilder spec={record.content} onChange={updateContent} />
+      ) : record.content.kind === "jiraTicket" ? (
+        <JiraTicketBuilder spec={record.content} onChange={updateContent} />
       ) : null}
     </div>
   );

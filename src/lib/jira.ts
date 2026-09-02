@@ -58,3 +58,31 @@ export function deleteJiraToken(): Promise<void> {
 export function jiraCurrentUser(): Promise<JiraUser> {
   return invoke<JiraUser>("jira_current_user");
 }
+
+/** Mirrors `domain::jira::JiraWebLink` — one link to attach to an issue as
+ *  a Jira Web Link (the issue's own Links panel), as opposed to the same URL
+ *  sitting in the description text. Real tickets carry both. */
+export type JiraWebLink = {
+  url: string;
+  /** Shown in the Links panel; falls back to the URL when empty. */
+  title: string;
+};
+
+/** Mirrors `domain::jira::JiraLinkOutcome`. Reported per link because the
+ *  interesting case is partial: some attach, one fails on a typo in the
+ *  issue key. */
+export type JiraLinkOutcome = {
+  url: string;
+  /** `null` on success; the reason otherwise. */
+  error: string | null;
+};
+
+/** Attaches `links` to `issueKey`. Idempotent per link — Jira identifies a
+ *  remote link by its URL and updates rather than duplicates — so a retry
+ *  after a partial failure is safe. */
+export function jiraAttachWebLinks(
+  issueKey: string,
+  links: JiraWebLink[],
+): Promise<JiraLinkOutcome[]> {
+  return invoke<JiraLinkOutcome[]>("jira_attach_web_links", { issueKey, links });
+}

@@ -26,6 +26,7 @@
 use std::sync::LazyLock;
 
 use crate::domain::embeddings::EmbeddingPreset;
+use crate::domain::git_browse::GitPreset;
 use crate::domain::jira::JiraPreset;
 use crate::domain::llm::LlmProviderPreset;
 use crate::domain::metrics::MetricsPreset;
@@ -60,6 +61,11 @@ struct SystemProvidersManifest {
     /// configures both by hand). Never a token: that identifies a person.
     #[serde(default)]
     jira: JiraPreset,
+    /// How the corporate git host builds browse links. Same rebrand story
+    /// as `llm`; omitting it means links are built only for hosts that are
+    /// recognisable on their own (`github.com`) — never guessed.
+    #[serde(default)]
+    git: GitPreset,
 }
 
 static PARSED: LazyLock<SystemProvidersManifest> = LazyLock::new(|| {
@@ -87,6 +93,12 @@ pub fn metrics_preset() -> Option<&'static MetricsPreset> {
 /// `jira` section — a valid state, not an error.
 pub fn jira_preset() -> &'static JiraPreset {
     &PARSED.jira
+}
+
+/// Build-supplied git-forge declaration. `forge: None` when the manifest
+/// ships no `git` section — a valid state, not an error.
+pub fn git_preset() -> &'static GitPreset {
+    &PARSED.git
 }
 
 pub fn rate_limit_presets() -> &'static [RateLimitPreset] {

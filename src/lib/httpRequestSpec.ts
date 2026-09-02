@@ -1,4 +1,4 @@
-import type { ArtifactContent, HttpRequestSpec, ParamSpec } from "./artifacts";
+import type { HttpRequestSpec, ParamSpec } from "./artifacts";
 
 /** Pure helpers for the HTTP-request artifact builder. Rendering to AsciiDoc
  *  deliberately lives in Rust (`domain::artifact_render`) so the preview and
@@ -144,8 +144,4 @@ export function describeHttpRequest(spec: HttpRequestSpec): string {
   if (!method) return path;
   if (!path) return method;
   return `${method} ${path}`;
-}
-
-export function contentAsHttpRequest(content: ArtifactContent): HttpRequestSpec {
-  return content;
 }

@@ -58,6 +58,21 @@ pub fn resolve(repo_root: &Path) -> RepositoryIdentity {
     }
 }
 
+/// The default remote's URL, exactly as git stores it — scheme, port and
+/// `.git` intact.
+///
+/// Deliberately separate from `resolve`: that one's `canonical_url` exists
+/// to be hashed into a cache folder name and therefore throws away
+/// precisely the parts a browse link needs (see `domain::git_browse`).
+/// Never fails — a path that is not a repository, or one with no remote,
+/// is a normal state and yields `None`.
+pub fn remote_url(repo_root: &Path) -> Option<String> {
+    let repo = Repository::open(repo_root).ok()?;
+    let name = default_remote_name(&repo).ok()?;
+    let remote = repo.find_remote(&name).ok()?;
+    remote.url().ok().map(str::to_string)
+}
+
 /// Normalizes a git remote URL so equivalent remotes collapse to the same
 /// string regardless of protocol — `git@github.com:org/repo.git`,
 /// `ssh://git@github.com/org/repo.git`, and `https://github.com/org/repo`

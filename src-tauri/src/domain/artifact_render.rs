@@ -23,7 +23,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::artifact::{
-    ArtifactContent, ErrorSpec, HttpRequestSpec, ParamSpec, ResponseSpec,
+    ArtifactContent, ErrorSpec, HttpRequestSpec, JiraTicketSpec, ParamSpec, ResponseSpec,
+    TicketLink,
 };
 
 /// Placeholder for an empty cell — the templates use `-`, and the standards
@@ -52,10 +53,24 @@ pub struct RenderedHttpRequest {
     pub response_adoc: String,
 }
 
+/// Rendered ticket. One field on purpose: unlike an HTTP request — whose
+/// pieces land in different sections of a document — a ticket is pasted
+/// into Jira's description box whole, so splitting it into fragments would
+/// only give the caller a way to paste half of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderedJiraTicket {
+    /// Jira **wiki markup** — what the `description` field of a Jira
+    /// Server/DC issue actually stores, and what the REST v2 API accepts.
+    /// Deliberately not Markdown: see `render_jira_ticket`.
+    pub wiki: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RenderedArtifact {
     HttpRequest(RenderedHttpRequest),
+    JiraTicket(RenderedJiraTicket),
 }
 
 pub fn render(content: &ArtifactContent) -> RenderedArtifact {
@@ -63,8 +78,184 @@ pub fn render(content: &ArtifactContent) -> RenderedArtifact {
         ArtifactContent::HttpRequest(spec) => {
             RenderedArtifact::HttpRequest(render_http_request(spec))
         }
+        ArtifactContent::JiraTicket(spec) => {
+            RenderedArtifact::JiraTicket(render_jira_ticket(spec))
+        }
     }
 }
+
+// ---- Jira ticket -------------------------------------------------------
+
+/// Renders a ticket as **Jira wiki markup**, not Markdown.
+///
+/// Not a style preference: this instance is Jira Server (API v2), whose
+/// `description` field stores wiki markup. Markdown lands there literally —
+/// `##` stays visible text and `- [ ]` is never a checkbox. The exact shape
+/// below is copied from a real ticket in this tracker, so a generated
+/// description sits next to hand-written ones without looking foreign:
+///
+/// ```text
+/// *3. Что входит в задачу*
+///  - Реализация флоу оплаты взноса из календаря
+///
+/// *6. Критерии приемки* *- AC* *(функционал работает)*
+///  - Пользователь может отметить взнос оплаченным
+/// ```
+///
+/// Sections are numbered, and the numbers are assigned **after** empty ones
+/// are dropped, so they always run 1..n. A fixed numbering with holes
+/// ("…6, 8, 9") reads as a mistake, and the number is a within-description
+/// reading aid rather than a stable identifier.
+pub fn render_jira_ticket(spec: &JiraTicketSpec) -> RenderedJiraTicket {
+    let mut out = Sections::default();
+
+    out.prose("Почему задача существует", &spec.why);
+    out.prose("Что должно измениться после задачи", &spec.outcome);
+    out.bullets("Что входит в задачу", &spec.in_scope);
+    out.bullets("Что не входит в задачу", &spec.out_of_scope);
+    out.prose("Техническое решение", &spec.solution);
+    out.acceptance_criteria(&spec.acceptance_criteria);
+    out.bullets(
+        "Критерии выполнения - DoD (задача завершена правильно)",
+        &spec.definition_of_done,
+    );
+    out.bullets("Риски", &spec.risks);
+    out.links(&spec.links);
+
+    RenderedJiraTicket { wiki: out.finish() }
+}
+
+/// Accumulates rendered sections and hands out their numbers. Numbering is
+/// the only reason this is a type rather than a chain of free functions:
+/// each section has to know how many non-empty ones came before it.
+#[derive(Default)]
+struct Sections {
+    blocks: Vec<String>,
+}
+
+impl Sections {
+    fn next_number(&self) -> usize {
+        self.blocks.len() + 1
+    }
+
+    /// `*7. Заголовок*` — a bold run, not a heading. Jira Server has no
+    /// heading in this template; the real tickets use bold + a number.
+    fn heading(&self, text: &str) -> String {
+        format!("*{}. {}*", self.next_number(), text)
+    }
+
+    /// Every `push_*` is a no-op for empty input — the
+    /// `jira-task-description` skill is explicit that an empty section is
+    /// worse than a missing one, and that has to hold for a half-written
+    /// ticket too, not only a finished one.
+    fn prose(&mut self, heading: &str, body: &str) {
+        let body = body.trim();
+        if body.is_empty() {
+            return;
+        }
+        let heading = self.heading(heading);
+        self.blocks.push(format!("{heading}\n{body}"));
+    }
+
+    fn bullets(&mut self, heading: &str, items: &[String]) {
+        let lines = bullet_lines(items);
+        if lines.is_empty() {
+            return;
+        }
+        let heading = self.heading(heading);
+        self.blocks.push(format!("{heading}\n{}", lines.join("\n")));
+    }
+
+    /// The one section whose heading is not a single bold run — reproduced
+    /// verbatim from the tracker, where it reads
+    /// `*6. Критерии приемки* *- AC* *(функционал работает)*`.
+    fn acceptance_criteria(&mut self, items: &[String]) {
+        let lines = bullet_lines(items);
+        if lines.is_empty() {
+            return;
+        }
+        let n = self.next_number();
+        self.blocks.push(format!(
+            "*{n}. Критерии приемки* *- AC* *(функционал работает)*\n{}",
+            lines.join("\n")
+        ));
+    }
+
+    /// Grouped by type under a bold sub-heading (`*GIT*`, `*FIGMA*`), the
+    /// way the tracker's own tickets carry them. A link with a title becomes
+    /// a wiki link (`[текст|url]`); without one, the bare URL, which is what
+    /// hand-written tickets contain.
+    fn links(&mut self, links: &[TicketLink]) {
+        let usable: Vec<&TicketLink> = links.iter().filter(|l| !l.url.trim().is_empty()).collect();
+        if usable.is_empty() {
+            return;
+        }
+
+        let mut body = Vec::<String>::new();
+        // Untyped links first, as plain lines: there is no sub-heading to
+        // file them under, and inventing one would put a label in the
+        // ticket that nobody wrote.
+        for link in usable.iter().filter(|l| l.kind.trim().is_empty()) {
+            body.push(wiki_link(link));
+        }
+        // Groups keep first-appearance order rather than being sorted —
+        // the author's order is meaningful (design before code, usually).
+        let mut seen = Vec::<String>::new();
+        for link in usable.iter().filter(|l| !l.kind.trim().is_empty()) {
+            let kind = flatten(&link.kind).to_uppercase();
+            if !seen.contains(&kind) {
+                seen.push(kind);
+            }
+        }
+        for kind in seen {
+            let group: Vec<String> = usable
+                .iter()
+                .filter(|l| flatten(&l.kind).to_uppercase() == kind)
+                .map(|l| wiki_link(l))
+                .collect();
+            body.push(format!("*{kind}*\n{}", group.join("\n")));
+        }
+
+        let heading = self.heading("Ссылки");
+        self.blocks.push(format!("{heading}\n\n{}", body.join("\n\n")));
+    }
+
+    fn finish(self) -> String {
+        self.blocks.join("\n\n")
+    }
+}
+
+/// ` - пункт` — leading space and a hyphen, matching the tracker. Jira also
+/// accepts `*` for a bullet, but `*` starts a bold run and the two are
+/// easy to confuse when a line is edited by hand.
+///
+/// Blank entries are dropped: the builder's row editor leaves one behind on
+/// every "add row" click.
+fn bullet_lines(items: &[String]) -> Vec<String> {
+    items
+        .iter()
+        .map(|item| flatten(item))
+        .filter(|item| !item.is_empty())
+        .map(|item| format!(" - {item}"))
+        .collect()
+}
+
+fn wiki_link(link: &TicketLink) -> String {
+    let url = flatten(&link.url);
+    let title = flatten(&link.title);
+    if title.is_empty() {
+        url
+    } else {
+        format!("[{title}|{url}]")
+    }
+}
+
+/// Collapses whitespace so a value typed across lines stays on one bullet
+/// or inside one table cell.
+fn flatten(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 
 pub fn render_http_request(spec: &HttpRequestSpec) -> RenderedHttpRequest {
     RenderedHttpRequest {
@@ -737,5 +928,115 @@ mod tests {
         assert_eq!(first_value("NIB/ABM/BAAS"), "NIB");
         assert_eq!(first_value("INVOICE, ORDER"), "INVOICE");
         assert_eq!(first_value("-"), "");
+    }
+
+    // ---- Jira ticket ---------------------------------------------------
+
+    fn ticket() -> JiraTicketSpec {
+        JiraTicketSpec {
+            why: "Бухгалтер не видит, какие взносы уже оплачены.".into(),
+            outcome: "Пользователь может отметить взнос оплаченным.".into(),
+            in_scope: vec!["Кнопка «Оплачено» в карточке взноса".into()],
+            out_of_scope: vec!["Интеграция с банком".into()],
+            solution: "Использовать endpoint wlbuh-enp-api/change-payments".into(),
+            acceptance_criteria: vec!["Пользователь видит статус без перезагрузки".into()],
+            definition_of_done: vec!["Добавлены UI-тесты".into()],
+            risks: vec!["Проблема с округлением копеек".into()],
+            links: vec![TicketLink {
+                kind: "figma".into(),
+                url: "https://figma/x".into(),
+                title: String::new(),
+            }],
+        }
+    }
+
+    /// The whole point of the rewrite: Jira Server stores wiki markup, and
+    /// Markdown would land in the description as visible text.
+    #[test]
+    fn ticket_uses_wiki_markup_and_never_markdown() {
+        let wiki = render_jira_ticket(&ticket()).wiki;
+        assert!(!wiki.contains("##"), "markdown heading leaked: {wiki}");
+        assert!(!wiki.contains("- [ ]"), "markdown checkbox leaked: {wiki}");
+        assert!(!wiki.contains("|---|"), "markdown table rule leaked: {wiki}");
+        assert!(wiki.starts_with("*1. Почему задача существует*\n"), "{wiki}");
+        assert!(wiki.contains("\n - Кнопка «Оплачено» в карточке взноса"), "{wiki}");
+    }
+
+    /// Section names and the heading shape are copied from a real ticket in
+    /// this tracker, so a generated description reads like a hand-written
+    /// one rather than merely being valid markup.
+    #[test]
+    fn ticket_headings_match_the_tracker() {
+        let wiki = render_jira_ticket(&ticket()).wiki;
+        for heading in [
+            "*1. Почему задача существует*",
+            "*2. Что должно измениться после задачи*",
+            "*3. Что входит в задачу*",
+            "*4. Что не входит в задачу*",
+            "*5. Техническое решение*",
+            "*6. Критерии приемки* *- AC* *(функционал работает)*",
+            "*7. Критерии выполнения - DoD (задача завершена правильно)*",
+            "*8. Риски*",
+            "*9. Ссылки*",
+        ] {
+            assert!(wiki.contains(heading), "missing {heading} in:\n{wiki}");
+        }
+    }
+
+    /// A gap in the numbering ("…7, 9, 10") reads as a mistake, so numbers
+    /// are assigned after the empty sections are dropped.
+    #[test]
+    fn ticket_numbers_sections_after_dropping_the_empty_ones() {
+        let spec = JiraTicketSpec {
+            why: "Проблема".into(),
+            acceptance_criteria: vec!["Пользователь видит X".into()],
+            ..Default::default()
+        };
+        let wiki = render_jira_ticket(&spec).wiki;
+        assert!(wiki.starts_with("*1. Почему задача существует*"), "{wiki}");
+        assert!(wiki.contains("*2. Критерии приемки*"), "{wiki}");
+        assert!(!wiki.contains("Что должно измениться"), "empty section rendered: {wiki}");
+        assert!(!wiki.contains("Риски"), "empty section rendered: {wiki}");
+    }
+
+    /// Grouped under a bold sub-heading, the way the tracker's own tickets
+    /// carry them — not one flat list of URLs.
+    #[test]
+    fn ticket_groups_links_by_type_and_uppercases_it() {
+        let spec = JiraTicketSpec {
+            links: vec![
+                TicketLink { kind: "git".into(), url: "https://git/a".into(), title: String::new() },
+                TicketLink {
+                    kind: "GIT".into(),
+                    url: "https://git/b".into(),
+                    title: "Спека".into(),
+                },
+                TicketLink { kind: String::new(), url: "https://bare".into(), title: String::new() },
+            ],
+            ..Default::default()
+        };
+        let wiki = render_jira_ticket(&spec).wiki;
+        // Same type in two spellings is one group.
+        assert_eq!(wiki.matches("*GIT*").count(), 1, "{wiki}");
+        assert!(wiki.contains("*GIT*\nhttps://git/a\n[Спека|https://git/b]"), "{wiki}");
+        // A link with no type has no sub-heading to file it under.
+        assert!(wiki.contains("\n\nhttps://bare"), "{wiki}");
+    }
+
+    #[test]
+    fn ticket_drops_blank_list_entries_and_rows() {
+        let spec = JiraTicketSpec {
+            in_scope: vec!["Реальный пункт".into(), "   ".into(), String::new()],
+            links: vec![TicketLink { kind: "GIT".into(), url: "  ".into(), title: String::new() }],
+            ..Default::default()
+        };
+        let wiki = render_jira_ticket(&spec).wiki;
+        assert_eq!(wiki.matches("\n - ").count(), 1, "blank entries rendered: {wiki}");
+        assert!(!wiki.contains("Ссылки"), "link without a URL rendered: {wiki}");
+    }
+
+    #[test]
+    fn an_entirely_empty_ticket_renders_nothing_rather_than_bare_headings() {
+        assert_eq!(render_jira_ticket(&JiraTicketSpec::default()).wiki, "");
     }
 }

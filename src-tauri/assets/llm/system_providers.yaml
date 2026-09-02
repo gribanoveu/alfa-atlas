@@ -43,6 +43,16 @@ jira:
     /kg=
     -----END CERTIFICATE-----
 
+# Как корпоративный git-хост строит ссылки на файлы. Нужно, чтобы из адреса
+# remote собрать ссылку вида
+# https://git.moscow.alfaintra.net/projects/CORP-WLBUH/repos/corp-wlbuh-enp-api/browse/<путь>
+# — такие лежат в разделе «Ссылки» реальных задач.
+# Без этой секции ссылки строятся только для хостов, опознаваемых сами по
+# себе (github.com): host/group/repo выглядит одинаково у всех форджей, и
+# угадывание дало бы правдоподобную ссылку в никуда.
+git:
+  forge: bitbucketServer
+
 llm:
   - id: alfagen
     label: AlfaGen

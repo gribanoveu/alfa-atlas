@@ -1002,6 +1002,26 @@ export const ARTIFACT_CONTEXT_LIMIT = 10;
  *
  * Drafts are excluded: a half-filled form is not something the model should
  * write documentation from. */
+/** First non-blank line — a tool-result label is one line, and a ticket
+ *  section is prose that may be several. */
+function firstLine(text: string): string {
+  return text.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
+}
+
+/** Tells the model how to address a file in the repository's web interface.
+ *
+ * A template rather than a list of links: any file may need one, and asking
+ * for them one round trip at a time would be absurd. It matters most for a
+ * ticket's «Ссылки» section, where the alternative is the model inventing a
+ * URL that looks right and resolves nowhere.
+ *
+ * `null` (no remote, or a host with no known link scheme) omits the block
+ * entirely — saying nothing is what stops the model from guessing. */
+export function buildRepositoryLinkContextBlock(template: string | null): string | null {
+  if (!template) return null;
+  return `[Repository] A file in this repository is addressable at \`${template}\`, where \`{path}\` is its repository-relative path. Use this whenever a link to a file is called for — above all in a ticket's links section. Never write a repository URL any other way, and never invent one: if a file's path is not known, do not link it.`;
+}
+
 export function buildArtifactsContextBlock(artifacts: ArtifactSummary[]): string | null {
   const ready = artifacts.filter((a) => a.status === "ready").slice(0, ARTIFACT_CONTEXT_LIMIT);
   if (ready.length === 0) return null;
@@ -1009,7 +1029,7 @@ export function buildArtifactsContextBlock(artifacts: ArtifactSummary[]): string
     const subtitle = a.subtitle.trim();
     return `- \`${a.id}\` (${a.kind}) «${a.title}»${subtitle ? ` — ${subtitle}` : ""}`;
   });
-  return `[Artifacts] The user has filled in these artifacts for this repository. Each one holds facts that are not in the repo (request/response shapes, example payloads, error codes), together with ready-made AsciiDoc. Read one with \`artifact\` \`op: "read"\` when it is relevant to what you are writing — do not re-ask for information an artifact already answers, and do not invent values it could have told you. To have a new one filled in, call \`requestArtifact\`.
+  return `[Artifacts] Structured documents stored for this repository. An \`httpRequest\` was filled in by the user and holds facts that are not in the repo (request/response shapes, example payloads, error codes) plus ready-made AsciiDoc; a \`jiraTicket\` is a task description you authored. Read one with \`artifact\` \`op: "read"\` when it is relevant — do not re-ask for information an artifact already answers, and do not invent values it could have told you. To refine a ticket listed here, \`artifact\` \`op: "update"\` on its id rather than creating a second one. To have a new \`httpRequest\` filled in, call \`requestArtifact\`.
 
 ${lines.join("\n")}`;
 }
@@ -1190,10 +1210,18 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : null;
       return title ? `Просит собрать артефакт: ${title}…` : "Просит собрать артефакт…";
     }
-    case "artifact":
+    case "artifact": {
       if (args.op === "list") return "Смотрит список артефактов…";
       if (args.op === "read") return "Читает артефакт…";
+      const written = typeof args.title === "string" && args.title.trim() ? args.title.trim() : null;
+      if (args.op === "create") {
+        return written ? `Составляет тикет: ${written}…` : "Составляет тикет…";
+      }
+      if (args.op === "update") {
+        return written ? `Правит тикет: ${written}…` : "Правит тикет…";
+      }
       return "Работает с артефактами…";
+    }
     case "todo":
       if (args.op === "write") return "Обновляет список задач…";
       if (args.op === "update") return "Отмечает задачу в списке…";
@@ -1406,9 +1434,12 @@ export function describeToolResult(
     }
     case "artifact": {
       const { artifact } = block.result.result;
-      const subtitle = artifact.content.kind === "httpRequest"
-        ? describeHttpRequest(artifact.content)
-        : "";
+      const subtitle =
+        artifact.content.kind === "httpRequest"
+          ? describeHttpRequest(artifact.content)
+          : // Mirrors `ArtifactRecord::subtitle` for a ticket: the target
+            // state says what it is for, the problem is the fallback.
+            firstLine(artifact.content.outcome) || firstLine(artifact.content.why);
       return subtitle ? `${artifact.title} — ${subtitle}` : artifact.title;
     }
     case "artifactList": {

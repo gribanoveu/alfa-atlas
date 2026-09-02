@@ -7,7 +7,7 @@ import {
   type BodySpec,
   type ErrorSpec,
   type ParamSpec,
-  type RenderedArtifact,
+  type RenderedHttpRequest,
   type ResponseSpec,
 } from "../../lib/artifacts";
 import { toMessage } from "../../lib/errors";
@@ -19,8 +19,12 @@ import {
   missingPathParams,
 } from "../../lib/httpRequestSpec";
 
+/** Narrowed to its own variant — `ArtifactView` dispatches on
+ *  `content.kind`, so this component only ever sees an httpRequest. */
+type HttpRequestSpecContent = Extract<ArtifactContent, { kind: "httpRequest" }>;
+
 type HttpRequestBuilderProps = {
-  spec: ArtifactContent;
+  spec: HttpRequestSpecContent;
   onChange: (content: ArtifactContent) => void;
 };
 
@@ -66,7 +70,7 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
   const [outerTab, setOuterTab] = useState<OuterTabId>("builder");
   const [section, setSection] = useState<SectionId>("path");
   const [previewTab, setPreviewTab] = useState<PreviewTabId>("inputParams");
-  const [rendered, setRendered] = useState<RenderedArtifact | null>(null);
+  const [rendered, setRendered] = useState<RenderedHttpRequest | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -80,7 +84,10 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
         try {
           const next = await artifactRender(spec);
           if (!cancelled) {
-            setRendered(next);
+            // The renderer is keyed by content kind, so this branch always
+            // holds — narrowing here rather than casting keeps that true by
+            // construction if a third kind ever arrives.
+            setRendered(next.kind === "httpRequest" ? next : null);
             setPreviewError(null);
           }
         } catch (e) {
@@ -95,7 +102,7 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
   }, [spec]);
 
   const patch = useCallback(
-    (changes: Partial<ArtifactContent>) => onChange({ ...spec, ...changes }),
+    (changes: Partial<HttpRequestSpecContent>) => onChange({ ...spec, ...changes }),
     [onChange, spec],
   );
 
@@ -340,7 +347,7 @@ function MethodSelect({ value, onChange }: { value: string; onChange: (method: s
   );
 }
 
-function SectionCount({ id, spec }: { id: SectionId; spec: ArtifactContent }) {
+function SectionCount({ id, spec }: { id: SectionId; spec: HttpRequestSpecContent }) {
   const count =
     id === "path"
       ? spec.pathParams.length

@@ -9,7 +9,9 @@
 //! only as something fetched from `infra::jira_credentials_store` at the
 //! moment a request is made.
 
-use crate::domain::jira::{JiraError, JiraPreset, JiraSettings, JiraSettingsView, JiraUser};
+use crate::domain::jira::{
+    JiraError, JiraLinkOutcome, JiraPreset, JiraSettings, JiraSettingsView, JiraUser, JiraWebLink,
+};
 use crate::domain::settings::SettingsError;
 use crate::infra::{
     jira_client, jira_credentials_store, llm_provider_manifest, settings_store,
@@ -81,6 +83,40 @@ pub fn current_user() -> Result<JiraUser, JiraError> {
 
     let jira = jira_client::connect(&settings, token)?;
     jira_client::current_user(&jira)
+}
+
+/// Attaches every link to `issue_key` as a Jira Web Link.
+///
+/// Never stops at the first failure: one bad URL must not silently drop the
+/// links after it, and the caller shows the user exactly which ones landed.
+/// Blocking; callers run it on a blocking thread.
+pub fn attach_web_links(
+    issue_key: &str,
+    links: &[JiraWebLink],
+) -> Result<Vec<JiraLinkOutcome>, JiraError> {
+    let issue_key = issue_key.trim();
+    if issue_key.is_empty() {
+        return Err(JiraError::MissingIssueKey);
+    }
+
+    let stored = load_jira_settings().map_err(|e| JiraError::Settings(e.to_string()))?;
+    let settings = resolve(&stored, llm_provider_manifest::jira_preset());
+    if !settings.is_addressable() {
+        return Err(JiraError::NotConfigured);
+    }
+    let token = jira_credentials_store::get_token().ok_or(JiraError::MissingToken)?;
+    let jira = jira_client::connect(&settings, token)?;
+
+    Ok(links
+        .iter()
+        .filter(|link| !link.url.trim().is_empty())
+        .map(|link| JiraLinkOutcome {
+            url: link.url.trim().to_string(),
+            error: jira_client::attach_web_link(&jira, issue_key, link)
+                .err()
+                .map(|e| e.to_string()),
+        })
+        .collect())
 }
 
 /// Trimmed, or `None` when blank — the single rule for "this field carries

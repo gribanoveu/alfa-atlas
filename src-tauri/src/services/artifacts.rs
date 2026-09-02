@@ -28,6 +28,8 @@ fn seed_repo_path_default(content: &mut ArtifactContent, repo_root: &str) {
             spec.path = format!("/{}/api/", repo_folder_name(repo_root));
         }
         ArtifactContent::HttpRequest(_) => {}
+        // Nothing about a ticket is derivable from the repository path.
+        ArtifactContent::JiraTicket(_) => {}
     }
 }
 
@@ -89,16 +91,104 @@ pub fn create_draft(
 fn default_title(kind: ArtifactKind) -> String {
     match kind {
         ArtifactKind::HttpRequest => "Новый HTTP-запрос".to_string(),
+        ArtifactKind::JiraTicket => "Новый тикет".to_string(),
     }
+}
+
+/// The assistant authoring an artifact outright, rather than asking the user
+/// to fill one in: `create_agent` writes finished content, `update_agent`
+/// rewrites it.
+///
+/// Guarded by `ArtifactKind::is_agent_authored`, so the model cannot reach
+/// for this to invent an HTTP request table — see that method's doc comment.
+/// Created `Ready` rather than `Draft`: the content is complete when it
+/// arrives, and `Draft` means "the user is still filling this in".
+pub fn create_agent(
+    kind: ArtifactKind,
+    title: String,
+    content: ArtifactContent,
+    chat_id: Option<String>,
+) -> Result<ArtifactRecord, ArtifactError> {
+    ensure_agent_authored(kind)?;
+    if content.kind() != kind {
+        return Err(ArtifactError::Invalid(
+            "artifact kind does not match its content".into(),
+        ));
+    }
+    let (repo_id, repo_root) = open_repo_id()?;
+    let title = title.trim();
+    let record = artifact_store::stamp_new(ArtifactRecord {
+        id: Uuid::new_v4().to_string(),
+        kind,
+        title: if title.is_empty() {
+            default_title(kind)
+        } else {
+            title.to_string()
+        },
+        purpose: None,
+        status: ArtifactStatus::Ready,
+        content,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+        chat_id,
+        repo_root: Some(repo_root),
+    });
+    artifact_store::save(&repo_id, &record)?;
+    Ok(record)
+}
+
+/// Whole-content replacement, not a merge: a model rewriting one section
+/// sends the whole ticket back, and a field-wise merge would make "remove
+/// this risk" impossible to express. `title` is left alone when `None`.
+pub fn update_agent(
+    artifact_id: &str,
+    title: Option<String>,
+    content: ArtifactContent,
+) -> Result<ArtifactRecord, ArtifactError> {
+    let (repo_id, _) = open_repo_id()?;
+    let stored = artifact_store::get(&repo_id, artifact_id)?;
+    ensure_agent_authored(stored.kind)?;
+    if content.kind() != stored.kind {
+        return Err(ArtifactError::Invalid(format!(
+            "artifact {artifact_id} is a {:?}, cannot be updated with different content",
+            stored.kind
+        )));
+    }
+
+    let title = title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or(stored.title);
+    let record = artifact_store::stamp_updated(ArtifactRecord {
+        id: stored.id,
+        kind: stored.kind,
+        title,
+        purpose: stored.purpose,
+        status: stored.status,
+        content,
+        created_at_ms: stored.created_at_ms,
+        updated_at_ms: 0,
+        chat_id: stored.chat_id,
+        repo_root: stored.repo_root,
+    });
+    artifact_store::save(&repo_id, &record)?;
+    Ok(record)
+}
+
+fn ensure_agent_authored(kind: ArtifactKind) -> Result<(), ArtifactError> {
+    if kind.is_agent_authored() {
+        return Ok(());
+    }
+    Err(ArtifactError::Invalid(format!(
+        "artifacts of kind {kind:?} are filled in by the user — use requestArtifact instead of writing one"
+    )))
 }
 
 /// Persist edits. Only `title`, `status` and `content` are taken from
 /// `incoming`; everything else is preserved from the stored record.
 pub fn save(incoming: ArtifactRecord) -> Result<ArtifactRecord, ArtifactError> {
-    // Unreachable while `ArtifactKind` has a single variant — kept because
-    // it stops being unreachable the moment a second one is added, and a
-    // record whose tag disagrees with its payload would otherwise be
-    // persisted and later render as the wrong kind.
+    // A record whose tag disagrees with its payload would be persisted and
+    // later render as the wrong kind.
     if incoming.kind != incoming.content.kind() {
         return Err(ArtifactError::Invalid(
             "artifact kind does not match its content".into(),
@@ -182,7 +272,7 @@ mod tests {
         let mut content =
             ArtifactContent::HttpRequest(HttpRequestSpec { path: String::new(), ..Default::default() });
         seed_repo_path_default(&mut content, "/repos/corp-wlbuh-ausn-api");
-        let ArtifactContent::HttpRequest(spec) = content;
+        let ArtifactContent::HttpRequest(spec) = content else { panic!("seeded content must stay an httpRequest") };
         assert_eq!(spec.path, "/corp-wlbuh-ausn-api/api/");
     }
 
@@ -191,7 +281,7 @@ mod tests {
         let mut content =
             ArtifactContent::HttpRequest(HttpRequestSpec { path: "   ".into(), ..Default::default() });
         seed_repo_path_default(&mut content, "/repos/corp-wlbuh-ausn-api");
-        let ArtifactContent::HttpRequest(spec) = content;
+        let ArtifactContent::HttpRequest(spec) = content else { panic!("seeded content must stay an httpRequest") };
         assert_eq!(spec.path, "/corp-wlbuh-ausn-api/api/");
     }
 
@@ -204,7 +294,7 @@ mod tests {
             ..Default::default()
         });
         seed_repo_path_default(&mut content, "/repos/corp-wlbuh-ausn-api");
-        let ArtifactContent::HttpRequest(spec) = content;
+        let ArtifactContent::HttpRequest(spec) = content else { panic!("seeded content must stay an httpRequest") };
         assert_eq!(spec.path, "/v1/documents");
     }
 }

@@ -13,7 +13,7 @@ use crate::domain::git::{
     GitStashEntry, GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::domain::project_config::ProbeResult;
-use crate::services::{git_clone, git_credentials, git_ops};
+use crate::services::{git_browse, git_clone, git_credentials, git_ops};
 
 /// Rejects a branch-switching command while a full `embedding_sync` walk is
 /// in flight — see `FullSyncActiveSlot`'s doc comment for why this only
@@ -453,6 +453,24 @@ pub fn git_stash_apply(
 #[tauri::command]
 pub fn git_stash_drop(repo_root: String, stash_id: String) -> Result<(), String> {
     git_ops::stash_drop(&repo_root, &stash_id).map_err(|e| e.to_string())
+}
+
+/// A web address for `path` in the open repository, or `null` when there is
+/// none to be had (no project, no remote, or a host this build has no link
+/// scheme for). `Ok(None)` rather than an error: a repository without a web
+/// address is a normal state, and callers omit the link instead of
+/// reporting a fault.
+#[tauri::command]
+pub fn git_browse_url(path: String, branch: Option<String>) -> Option<String> {
+    git_browse::url_for(&path, branch.as_deref())
+}
+
+/// The same link with `{path}` left in place of the file — the form the
+/// assistant is given, so it can address any file without one round trip
+/// per link.
+#[tauri::command]
+pub fn git_browse_template(branch: Option<String>) -> Option<String> {
+    git_browse::template(branch.as_deref())
 }
 
 #[tauri::command]

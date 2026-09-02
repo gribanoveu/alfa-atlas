@@ -40,6 +40,8 @@ import { AssistantToolApprovalGroup } from "./AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "./AssistantToolCallBlock";
 import { AssistantUserMessage } from "./AssistantUserMessage";
 import { AssistantPlanCard, isPlanToolBlock } from "./AssistantPlanCard";
+import { openArtifactTab } from "../../lib/artifactTabs";
+import { AssistantTicketCard, isTicketToolBlock } from "./AssistantTicketCard";
 import { AssistantVisualCard, isVisualToolBlock } from "./AssistantVisualCard";
 import { openVisualTab } from "../../lib/visuals";
 import { TodoProgressWidget } from "./TodoProgressWidget";
@@ -1181,6 +1183,12 @@ export function AssistantConversation({
                               );
                             }}
                             onStartPlan={startPlan}
+                          />
+                        ) : isTicketToolBlock(item.block) ? (
+                          <AssistantTicketCard
+                            key={item.block.id}
+                            block={item.block}
+                            onOpenArtifact={openArtifactTab}
                           />
                         ) : isVisualToolBlock(item.block) ? (
                           <AssistantVisualCard

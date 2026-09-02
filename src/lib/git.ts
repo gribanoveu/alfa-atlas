@@ -496,3 +496,21 @@ export function gitGenerateKey(): Promise<AppKeyStatus> {
 export function gitImportKey(sourcePath: string): Promise<AppKeyStatus> {
   return invoke<AppKeyStatus>("git_import_key", { sourcePath });
 }
+
+/** A web address for `path` in the open repository, or `null` when there is
+ *  none — no project, no remote, or a host this build has no link scheme
+ *  for. Not an error: a local-only repository simply has no web address,
+ *  and callers omit the link rather than showing a broken one.
+ *
+ *  The repository is resolved on the backend, like `artifactList` — every
+ *  caller means the project that is currently open. */
+export function gitBrowseUrl(path: string, branch?: string | null): Promise<string | null> {
+  return invoke<string | null>("git_browse_url", { path, branch: branch ?? null });
+}
+
+/** The same link with `{path}` left in place of the file — what the
+ *  assistant is given so it can address any file without a round trip per
+ *  link. */
+export function gitBrowseTemplate(branch?: string | null): Promise<string | null> {
+  return invoke<string | null>("git_browse_template", { branch: branch ?? null });
+}

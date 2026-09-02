@@ -14,6 +14,7 @@ import {
   buildActiveFileContextBlock,
   buildActivePlanContextBlock,
   buildArtifactsContextBlock,
+  buildRepositoryLinkContextBlock,
   buildCompactionSummaryBlock,
   buildHistoryCompactionPrompt,
   buildModeChangeNotice,
@@ -30,6 +31,7 @@ import {
   PAUSE_ONLY_TOOLS,
   TOOL_APPROVAL_TIMEOUT_MS,
 } from "../lib/assistantConfig";
+import { gitBrowseTemplate } from "../lib/git";
 import { toMessage } from "../lib/errors";
 import type { SpecsRepoInfo } from "../lib/openapi";
 import {
@@ -1248,6 +1250,19 @@ export function useLlmChat(
         artifactsBlock = null;
       }
 
+      // A template, not a list of links: any file may need one, and the
+      // alternative is the model inventing a URL that looks right. Absent
+      // for a repository with no web address, which omits the block.
+      let repoLinkBlock: string | null = null;
+      try {
+        repoLinkBlock = buildRepositoryLinkContextBlock(await gitBrowseTemplate());
+      } catch (e) {
+        // Never worth failing a turn over — the block is an aid, and its
+        // absence only means the model must not link files.
+        console.error("Не удалось определить адрес репозитория", e);
+        repoLinkBlock = null;
+      }
+
       let memoryBlock: string | null = null;
       try {
         memoryBlock = buildMemoryContextBlock(await getMemoryWake());
@@ -1303,6 +1318,7 @@ export function useLlmChat(
         ...(todoBlock ? [{ role: "system" as const, content: todoBlock, toolCallId: null }] : []),
         ...(activePlanBlock ? [{ role: "system" as const, content: activePlanBlock, toolCallId: null }] : []),
         ...(artifactsBlock ? [{ role: "system" as const, content: artifactsBlock, toolCallId: null }] : []),
+        ...(repoLinkBlock ? [{ role: "system" as const, content: repoLinkBlock, toolCallId: null }] : []),
         { role: "user", content: userText, toolCallId: null },
       ];
 

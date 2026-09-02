@@ -10,7 +10,9 @@
 //! `artifact` is an ordinary read: one wire tool, two operations, dispatched
 //! on `op` the same way `todo` is.
 
-use crate::domain::ai_tools::{ArtifactReadArgs, ToolError, ToolResult};
+use crate::domain::ai_tools::{
+    ArtifactCreateArgs, ArtifactReadArgs, ArtifactUpdateArgs, ToolError, ToolResult,
+};
 use crate::domain::artifact::ArtifactRecord;
 use crate::domain::artifact_render;
 use crate::domain::llm::LlmToolDefinition;
@@ -33,6 +35,20 @@ pub(super) fn artifact_list() -> Result<ToolResult, ToolError> {
 
 pub(super) fn artifact_read(args: ArtifactReadArgs) -> Result<ToolResult, ToolError> {
     let record = crate::services::artifacts::get(&args.id)?;
+    Ok(artifact_result(record))
+}
+
+/// The assistant writing an artifact itself. Rejected for kinds the user
+/// owns — see `ArtifactKind::is_agent_authored`.
+pub(super) fn artifact_create(args: ArtifactCreateArgs) -> Result<ToolResult, ToolError> {
+    let record =
+        crate::services::artifacts::create_agent(args.kind, args.title, args.content, None)?;
+    Ok(artifact_result(record))
+}
+
+pub(super) fn artifact_update(args: ArtifactUpdateArgs) -> Result<ToolResult, ToolError> {
+    let record =
+        crate::services::artifacts::update_agent(&args.id, args.title, args.content)?;
     Ok(artifact_result(record))
 }
 
@@ -75,19 +91,33 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "artifact".to_string(),
         description:
-            "Read artifacts the user has already filled in for this repository. `op: \"list\"` returns id, kind, title and a one-line summary of every finished artifact; `op: \"read\"` returns one artifact in full, together with its ready-made AsciiDoc (parameter tables, curl example, response examples, error table). Artifacts persist across conversations, so use this when the user refers to a request they described earlier, or when the artifact list in your context mentions one relevant to the document you are writing. To have a *new* one filled in, use `requestArtifact` instead."
+            "Work with artifacts — structured documents stored for this repository and kept across conversations. `op: \"list\"` returns id, kind, title and a one-line summary of every one; `op: \"read\"` returns one in full together with its rendered output (AsciiDoc tables for an httpRequest, Jira wiki markup for a jiraTicket).\n\n`op: \"create\"` and `op: \"update\"` are how you write a document *you* author — today that means `jiraTicket`, a Jira task description. Create one whenever the user asks you to draft a ticket, task or story; the user gets an editable tab and the ready-to-paste description. Refine it with `update` on the same id instead of creating a second artifact — `content` replaces the stored content wholesale, so send the whole ticket back, including the parts you are not changing. Read it first if you no longer have it.\n\nSend plain text in every field: section headings, numbering, bullets and the link grouping are all produced by the renderer, in this tracker's own wiki-markup format. Do not write Markdown (`##`, `- [ ]`, `|---|`) or Jira markup by hand — it would be rendered as literal text.\n\nAn `httpRequest` cannot be created or updated this way: its content is facts about a real endpoint that only the user has, so use `requestArtifact` to have them fill it in."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",
             "properties": {
                 "op": {
                     "type": "string",
-                    "enum": ["list", "read"],
-                    "description": "\"list\" for the summaries, \"read\" for one artifact in full."
+                    "enum": ["list", "read", "create", "update"],
+                    "description": "\"list\" for the summaries, \"read\" for one in full, \"create\" to author a new one, \"update\" to rewrite one you authored."
                 },
                 "id": {
                     "type": "string",
-                    "description": "Artifact id. Required for op \"read\", ignored for \"list\"."
+                    "description": "Artifact id. Required for \"read\" and \"update\"."
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": ["jiraTicket"],
+                    "description": "Required for \"create\" and \"update\" — says how to read `content`."
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Short name, in the user's language. Required for \"create\"; for \"update\" omit it to keep the current one."
+                },
+                "content": {
+                    "type": "object",
+                    "description": "The document body, as plain text in every field. For \"jiraTicket\": `why` (why the task exists — the problem, not the solution), `outcome` (target state, phrased «Пользователь может …»), `inScope`/`outOfScope` (string arrays), `solution` (technical approach, if known), `acceptanceCriteria` and `definitionOfDone` (string arrays, one checkable statement per entry), `risks` (string array), `links` (array of {kind, url, title} — `kind` is normally GIT, CONFLUENCE or FIGMA and becomes a sub-heading; `title` is optional). Every field is optional and an empty one is simply not rendered — omit a section rather than filling it with a placeholder. Follow the `jira-task-description` skill for what belongs in each.",
+                    "additionalProperties": true
                 }
             },
             "required": ["op"]

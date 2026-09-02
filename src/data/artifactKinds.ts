@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { FileInput } from "lucide-react";
+import { FileInput, Ticket } from "lucide-react";
 import type { ArtifactKind } from "../lib/artifacts";
 
 /** One entry per artifact kind — the single place its "start a new one" UI
@@ -26,5 +26,13 @@ export const ARTIFACT_KINDS: ArtifactKindDef[] = [
     cardTitle: "Конструктор HTTP-запроса",
     cardDescription: "Метод, параметры, тело и ответы — с готовым AsciiDoc для документации",
     icon: FileInput,
+  },
+  {
+    id: "jiraTicket",
+    newLabel: "Новый тикет",
+    cardTitle: "Описание задачи для Jira",
+    cardDescription:
+      "Обоснование, скоуп, AC и DoD — с готовым Markdown для описания задачи",
+    icon: Ticket,
   },
 ];

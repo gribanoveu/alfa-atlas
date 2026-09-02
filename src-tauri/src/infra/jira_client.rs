@@ -15,7 +15,7 @@
 use gouqi::{Credentials, Error as GouqiError, Jira};
 use reqwest::blocking::Client;
 
-use crate::domain::jira::{JiraError, JiraSettings, JiraUser};
+use crate::domain::jira::{JiraError, JiraSettings, JiraUser, JiraWebLink};
 
 /// `trusted_cert_pem` replaces the built-in roots entirely when present —
 /// an instance either needs its own CA trusted or it doesn't, and mixing
@@ -73,6 +73,23 @@ pub fn current_user(jira: &Jira) -> Result<JiraUser, JiraError> {
         account_id: user.account_id.or(user.name).or(user.key),
         active: user.active,
     })
+}
+
+/// `POST /rest/api/latest/issue/{key}/remotelink` — attaches one Web Link.
+///
+/// Idempotent by `globalId` (see `JiraWebLink::to_payload`): attaching the
+/// same URL again updates that link instead of adding a duplicate, so a
+/// retry after a partial failure is safe.
+pub fn attach_web_link(jira: &Jira, issue_key: &str, link: &JiraWebLink) -> Result<(), JiraError> {
+    // The response body carries the created link's id, which nothing here
+    // needs — `IgnoredAny` avoids inventing a type to throw away.
+    jira.post::<serde::de::IgnoredAny, _>(
+        "api",
+        &format!("/issue/{issue_key}/remotelink"),
+        link.to_payload(),
+    )
+    .map(|_| ())
+    .map_err(map_error)
 }
 
 /// Collapses gouqi's error surface into the two cases the UI distinguishes:

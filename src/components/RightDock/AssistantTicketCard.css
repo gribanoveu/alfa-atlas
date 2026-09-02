@@ -1,0 +1,79 @@
+/* Chat card for an artifact the assistant wrote itself. Shell matches the
+   plan and visualization cards — an eyebrow plus one clickable row that
+   opens the tab. */
+
+.ticket-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+  min-width: 0;
+}
+
+.ticket-card.is-error {
+  border-color: color-mix(in srgb, var(--red-tag) 45%, var(--border));
+}
+
+.ticket-card-eyebrow {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.ticket-card-message {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ticket-card-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ticket-card-open:hover {
+  border-color: var(--accent-dim);
+  background: var(--bg-2);
+}
+
+.ticket-card-icon {
+  flex: none;
+  color: var(--text-2);
+}
+
+.ticket-card-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ticket-card-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-card-subtitle {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

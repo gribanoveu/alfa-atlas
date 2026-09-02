@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 // src-tauri/src/domain/. Kept in sync by hand — there is no codegen here.
 
 /** Mirrors `domain::artifact::ArtifactKind`. */
-export type ArtifactKind = "httpRequest";
+export type ArtifactKind = "httpRequest" | "jiraTicket";
 
 /** Mirrors `domain::artifact::ArtifactStatus`. */
 export type ArtifactStatus = "draft" | "ready";
@@ -12,6 +12,7 @@ export type ArtifactStatus = "draft" | "ready";
 /** Russian label per kind — the Rust side deliberately carries no UI copy. */
 export const ARTIFACT_KIND_LABELS: Record<ArtifactKind, string> = {
   httpRequest: "HTTP-запрос",
+  jiraTicket: "Тикет Jira",
 };
 
 /** Mirrors `domain::artifact::ParamSpec` — one row of a parameter table,
@@ -59,8 +60,33 @@ export type HttpRequestSpec = {
   notes: string | null;
 };
 
+/** Mirrors `domain::artifact::TicketLink`. */
+export type TicketLink = {
+  kind: string;
+  url: string;
+  title: string;
+};
+
+/** Mirrors `domain::artifact::JiraTicketSpec`. Field order is the section
+ *  order the `jira-task-description` skill fixes. Nothing is nullable: for a
+ *  ticket section "absent" and "empty" mean the same thing, and an empty one
+ *  is simply not rendered. */
+export type JiraTicketSpec = {
+  why: string;
+  outcome: string;
+  inScope: string[];
+  outOfScope: string[];
+  solution: string;
+  acceptanceCriteria: string[];
+  definitionOfDone: string[];
+  risks: string[];
+  links: TicketLink[];
+};
+
 /** Mirrors `domain::artifact::ArtifactContent` (internally tagged). */
-export type ArtifactContent = { kind: "httpRequest" } & HttpRequestSpec;
+export type ArtifactContent =
+  | ({ kind: "httpRequest" } & HttpRequestSpec)
+  | ({ kind: "jiraTicket" } & JiraTicketSpec);
 
 /** Mirrors `domain::artifact::ArtifactRecord`. */
 export type ArtifactRecord = {
@@ -98,8 +124,17 @@ export type RenderedHttpRequest = {
   responseAdoc: string;
 };
 
+/** Mirrors `domain::artifact_render::RenderedJiraTicket`. */
+export type RenderedJiraTicket = {
+  /** Jira **wiki markup** — what a Jira Server/DC `description` actually
+   * stores. Not Markdown: `##` would land in the ticket as visible text. */
+  wiki: string;
+};
+
 /** Mirrors `domain::artifact_render::RenderedArtifact`. */
-export type RenderedArtifact = { kind: "httpRequest" } & RenderedHttpRequest;
+export type RenderedArtifact =
+  | ({ kind: "httpRequest" } & RenderedHttpRequest)
+  | ({ kind: "jiraTicket" } & RenderedJiraTicket);
 
 export function artifactList(): Promise<ArtifactSummary[]> {
   return invoke<ArtifactSummary[]>("artifact_list");
@@ -162,6 +197,19 @@ export function emptyArtifactContent(kind: ArtifactKind): ArtifactContent {
         responses: [],
         errors: [],
         notes: null,
+      };
+    case "jiraTicket":
+      return {
+        kind: "jiraTicket",
+        why: "",
+        outcome: "",
+        inScope: [],
+        outOfScope: [],
+        solution: "",
+        acceptanceCriteria: [],
+        definitionOfDone: [],
+        risks: [],
+        links: [],
       };
   }
 }

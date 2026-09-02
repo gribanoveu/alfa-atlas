@@ -201,6 +201,8 @@ pub fn execute_tool(
         }),
         ToolCall::ArtifactList(_) => artifact::artifact_list(),
         ToolCall::ArtifactRead(args) => artifact::artifact_read(args),
+        ToolCall::ArtifactCreate(args) => artifact::artifact_create(args),
+        ToolCall::ArtifactUpdate(args) => artifact::artifact_update(args),
         ToolCall::CreatePlan(args) => plans::create_plan(args),
         ToolCall::UpdatePlan(args) => plans::update_plan(args),
         ToolCall::ReadPlan(args) => plans::read_plan(args),

@@ -8,7 +8,8 @@
 //! tool that fans out into two `ToolCall` variants.
 
 use crate::domain::ai_tools::{
-    ArtifactListArgs, ArtifactReadArgs, AskUserArgs, CheckArgs, CreateDirectoryArgs,
+    ArtifactCreateArgs, ArtifactListArgs, ArtifactReadArgs, ArtifactUpdateArgs, AskUserArgs,
+    CheckArgs, CreateDirectoryArgs,
     CreatePlanArgs, DeleteDirectoryArgs,
     DeleteFileArgs, EditFileArgs, GetAsciidocTemplatesArgs, GitBlameArgs, GitDiffArgs,
     GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
@@ -166,29 +167,87 @@ pub(super) fn parse_request_artifact_call(input: &str) -> Result<ToolCall, Strin
     }))
 }
 
-/// One wire tool, two operations — same shape as `parse_todo_call`.
+/// One wire tool, four operations — same shape as `parse_todo_call`.
+///
+/// `content` gets the same `kind`-injection treatment as
+/// `requestArtifact`'s `prefill` (see above), with one difference: here it
+/// is load-bearing, so a `content` that still fails to deserialize is an
+/// error rather than something to silently drop. Writing an artifact whose
+/// body quietly went missing is worse than losing the turn.
 pub(super) fn parse_artifact_call(input: &str) -> Result<ToolCall, String> {
     #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
     struct RawArtifactArgs {
         op: String,
         #[serde(default)]
         id: Option<String>,
+        #[serde(default)]
+        kind: Option<ArtifactKind>,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        content: Option<serde_json::Value>,
     }
 
     let raw: RawArtifactArgs = lenient_json_object(input)?;
     match raw.op.as_str() {
         "list" => Ok(ToolCall::ArtifactList(ArtifactListArgs {})),
         "read" => {
-            let id = raw
-                .id
-                .filter(|id| !id.trim().is_empty())
-                .ok_or_else(|| "op \"read\" requires `id`".to_string())?;
+            let id = require_id(raw.id, "read")?;
             Ok(ToolCall::ArtifactRead(ArtifactReadArgs { id }))
         }
+        "create" => {
+            let kind = raw
+                .kind
+                .ok_or_else(|| "op \"create\" requires `kind`".to_string())?;
+            let title = raw
+                .title
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| "op \"create\" requires a non-empty `title`".to_string())?;
+            let content = artifact_content(raw.content, kind, "create")?;
+            Ok(ToolCall::ArtifactCreate(ArtifactCreateArgs { kind, title, content }))
+        }
+        "update" => {
+            let id = require_id(raw.id, "update")?;
+            // `kind` is optional here — the stored artifact already knows
+            // its own, and `services::artifacts::update_agent` rejects a
+            // mismatch. Asking for it again would only add a field the
+            // model can get wrong.
+            let kind = raw.kind.ok_or_else(|| {
+                "op \"update\" requires `kind` so `content` can be read".to_string()
+            })?;
+            let content = artifact_content(raw.content, kind, "update")?;
+            Ok(ToolCall::ArtifactUpdate(ArtifactUpdateArgs {
+                id,
+                title: raw.title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+                content,
+            }))
+        }
         other => Err(format!(
-            "unknown artifact op: \"{other}\" (expected \"list\" or \"read\")"
+            "unknown artifact op: \"{other}\" (expected \"list\", \"read\", \"create\" or \"update\")"
         )),
     }
+}
+
+fn require_id(id: Option<String>, op: &str) -> Result<String, String> {
+    id.filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| format!("op \"{op}\" requires `id`"))
+}
+
+fn artifact_content(
+    content: Option<serde_json::Value>,
+    kind: ArtifactKind,
+    op: &str,
+) -> Result<crate::domain::artifact::ArtifactContent, String> {
+    let mut value = content.ok_or_else(|| format!("op \"{op}\" requires `content`"))?;
+    let tag = serde_json::to_value(kind)
+        .map_err(|e| format!("could not encode artifact kind: {e}"))?;
+    value
+        .as_object_mut()
+        .ok_or_else(|| "`content` must be an object".to_string())?
+        .insert("kind".to_string(), tag);
+    serde_json::from_value(value).map_err(|e| format!("`content` does not match `kind`: {e}"))
 }
 
 pub(super) const ASK_USER_MAX_QUESTIONS: usize = 4;
@@ -966,6 +1025,7 @@ mod tests {
                         assert_eq!(spec.method, "POST");
                         assert_eq!(spec.path, "/v1/documents");
                     }
+                    other => panic!("expected an httpRequest prefill, got {other:?}"),
                 }
             }
             other => panic!("expected RequestArtifact, got {other:?}"),
@@ -1019,6 +1079,76 @@ mod tests {
         match parse_tool_call(&read).expect("parse read") {
             ToolCall::ArtifactRead(args) => assert_eq!(args.id, "abc"),
             other => panic!("expected ArtifactRead, got {other:?}"),
+        }
+    }
+
+    /// `content` arrives without the `kind` discriminator — the model is
+    /// told `kind` once, at the top level, and repeating it inside would be
+    /// a redundant field whose omission would otherwise fail the call.
+    #[test]
+    fn parse_tool_call_reads_an_artifact_create_without_a_kind_tag_in_content() {
+        let call = LlmToolCall {
+            id: "1".into(),
+            name: "artifact".to_string(),
+            arguments: r#"{"op":"create","kind":"jiraTicket","title":"Экспорт в CSV",
+                "content":{"why":"Нет выгрузки","acceptanceCriteria":["Пользователь скачивает CSV"]}}"#
+                .to_string(),
+        };
+        match parse_tool_call(&call).expect("parse create") {
+            ToolCall::ArtifactCreate(args) => {
+                assert_eq!(args.kind, ArtifactKind::JiraTicket);
+                assert_eq!(args.title, "Экспорт в CSV");
+                match args.content {
+                    crate::domain::artifact::ArtifactContent::JiraTicket(spec) => {
+                        assert_eq!(spec.why, "Нет выгрузки");
+                        assert_eq!(spec.acceptance_criteria.len(), 1);
+                    }
+                    other => panic!("expected a jiraTicket, got {other:?}"),
+                }
+            }
+            other => panic!("expected ArtifactCreate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_reads_an_artifact_update_and_keeps_an_absent_title_absent() {
+        let call = LlmToolCall {
+            id: "1".into(),
+            name: "artifact".to_string(),
+            arguments: r#"{"op":"update","id":"abc","kind":"jiraTicket","content":{"why":"Уточнено"}}"#
+                .to_string(),
+        };
+        match parse_tool_call(&call).expect("parse update") {
+            ToolCall::ArtifactUpdate(args) => {
+                assert_eq!(args.id, "abc");
+                assert_eq!(args.title, None);
+            }
+            other => panic!("expected ArtifactUpdate, got {other:?}"),
+        }
+    }
+
+    /// Unlike `requestArtifact`'s optional `prefill`, `content` is
+    /// load-bearing: writing an artifact whose body silently went missing
+    /// is worse than failing the call.
+    #[test]
+    fn parse_tool_call_rejects_a_write_without_usable_content() {
+        for arguments in [
+            r#"{"op":"create","kind":"jiraTicket","title":"X"}"#,
+            r#"{"op":"create","kind":"jiraTicket","title":"X","content":"не объект"}"#,
+            r#"{"op":"create","kind":"jiraTicket","title":" ","content":{}}"#,
+            r#"{"op":"update","kind":"jiraTicket","content":{}}"#,
+            r#"{"op":"update","id":"abc","content":{}}"#,
+        ] {
+            let call = LlmToolCall {
+                id: "1".into(),
+                name: "artifact".to_string(),
+                arguments: arguments.to_string(),
+            };
+            let err = parse_tool_call(&call).expect_err(arguments);
+            assert!(
+                matches!(err, ToolError::InvalidArguments { ref tool, .. } if tool == "artifact"),
+                "unexpected error for {arguments}: {err:?}"
+            );
         }
     }
 

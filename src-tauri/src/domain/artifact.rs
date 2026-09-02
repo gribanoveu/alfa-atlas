@@ -16,12 +16,32 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Which shape an artifact's content takes. One variant today; the enum
-/// exists so adding the second one is a local change.
+/// Which shape an artifact's content takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ArtifactKind {
     HttpRequest,
+    JiraTicket,
+}
+
+impl ArtifactKind {
+    /// Whether the assistant may author and rewrite this kind itself
+    /// (`artifact` `op: "create"`/`"update"`), rather than only asking the
+    /// user to fill it in.
+    ///
+    /// `HttpRequest` is deliberately excluded. It exists precisely because
+    /// the request/response shape of a method is *not* in the repository —
+    /// letting the model write one would produce exactly the plausible,
+    /// invented parameter table that `requestArtifact` was introduced to
+    /// prevent. A ticket is the opposite case: its content is the model's
+    /// own prose, synthesized from what the user just said, and there is
+    /// nothing to fabricate.
+    pub fn is_agent_authored(self) -> bool {
+        match self {
+            ArtifactKind::HttpRequest => false,
+            ArtifactKind::JiraTicket => true,
+        }
+    }
 }
 
 /// `Draft` while the user is still filling it in; `Ready` once they pressed
@@ -166,18 +186,62 @@ pub struct HttpRequestSpec {
     pub notes: Option<String>,
 }
 
+/// One entry of the ticket's «Ссылки» block. `kind` is free text (`GIT`,
+/// `CONFLUENCE`, `FIGMA`, …) because Jira's own link types are per-instance
+/// and this list is copy material, not an API payload.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TicketLink {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+/// A Jira ticket description. The field order *is* the section order the
+/// `jira-task-description` skill mandates, and every field defaults so a
+/// partially-filled ticket from the model deserializes rather than failing
+/// the whole call.
+///
+/// Empty fields are not rendered at all — per the same skill, a heading with
+/// nothing under it is worse than a missing one. That is why nothing here is
+/// `Option`: "absent" and "empty" mean the same thing for a ticket section,
+/// and one representation avoids the model having to choose between `null`
+/// and `""`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct JiraTicketSpec {
+    /// «Почему задача существует» — the problem, without the solution.
+    pub why: String,
+    /// «Что должно измениться» — target state as «Пользователь может …».
+    pub outcome: String,
+    pub in_scope: Vec<String>,
+    pub out_of_scope: Vec<String>,
+    /// «Техническое решение» — endpoint/approach, when known.
+    pub solution: String,
+    /// Checklist items; rendered as `- [ ]`.
+    pub acceptance_criteria: Vec<String>,
+    pub definition_of_done: Vec<String>,
+    pub risks: Vec<String>,
+    pub links: Vec<TicketLink>,
+}
+
 /// The kind-specific payload. Internally tagged so the JSON on disk is
 /// self-describing and a future kind can be added without a migration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ArtifactContent {
     HttpRequest(HttpRequestSpec),
+    JiraTicket(JiraTicketSpec),
 }
 
 impl ArtifactContent {
     pub fn kind(&self) -> ArtifactKind {
         match self {
             ArtifactContent::HttpRequest(_) => ArtifactKind::HttpRequest,
+            ArtifactContent::JiraTicket(_) => ArtifactKind::JiraTicket,
         }
     }
 
@@ -185,6 +249,7 @@ impl ArtifactContent {
     pub fn empty_for(kind: ArtifactKind) -> Self {
         match kind {
             ArtifactKind::HttpRequest => ArtifactContent::HttpRequest(HttpRequestSpec::default()),
+            ArtifactKind::JiraTicket => ArtifactContent::JiraTicket(JiraTicketSpec::default()),
         }
     }
 }
@@ -253,8 +318,30 @@ impl ArtifactRecord {
                     (false, false) => format!("{} {}", method.to_uppercase(), path),
                 }
             }
+            // The target state, since that is the one line that says what
+            // the ticket is *for*; «Почему» describes the problem and reads
+            // as a worse label in a list. Falls back to the problem when the
+            // outcome has not been written yet.
+            ArtifactContent::JiraTicket(spec) => {
+                let outcome = spec.outcome.trim();
+                if outcome.is_empty() {
+                    first_line(spec.why.trim())
+                } else {
+                    first_line(outcome)
+                }
+            }
         }
     }
+}
+
+/// Summary text is a single-line label; a multi-paragraph section would
+/// otherwise break the list row.
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 #[derive(Debug, Error)]
@@ -321,6 +408,63 @@ mod tests {
         let json = serde_json::to_value(ArtifactContent::HttpRequest(HttpRequestSpec::default()))
             .expect("serialize");
         assert_eq!(json.get("kind").and_then(|k| k.as_str()), Some("httpRequest"));
+    }
+
+    /// The rule that keeps the model from inventing an endpoint's parameter
+    /// table — see `ArtifactKind::is_agent_authored`.
+    #[test]
+    fn only_the_ticket_kind_may_be_authored_by_the_assistant() {
+        assert!(ArtifactKind::JiraTicket.is_agent_authored());
+        assert!(!ArtifactKind::HttpRequest.is_agent_authored());
+    }
+
+    #[test]
+    fn a_partial_ticket_deserializes_with_defaults() {
+        // What a model realistically sends first: the two prose sections and
+        // a couple of criteria, nothing else.
+        let spec: JiraTicketSpec = serde_json::from_str(
+            r#"{"why":"Нет отчёта","acceptanceCriteria":["Пользователь видит отчёт"]}"#,
+        )
+        .expect("deserialize");
+        assert_eq!(spec.why, "Нет отчёта");
+        assert_eq!(spec.acceptance_criteria.len(), 1);
+        assert!(spec.outcome.is_empty());
+        assert!(spec.links.is_empty());
+    }
+
+    #[test]
+    fn ticket_content_is_internally_tagged_by_kind() {
+        let json = serde_json::to_value(ArtifactContent::JiraTicket(JiraTicketSpec::default()))
+            .expect("serialize");
+        assert_eq!(json.get("kind").and_then(|k| k.as_str()), Some("jiraTicket"));
+    }
+
+    #[test]
+    fn ticket_subtitle_prefers_the_outcome_and_stays_one_line() {
+        let record = |spec: JiraTicketSpec| ArtifactRecord {
+            id: "t".into(),
+            kind: ArtifactKind::JiraTicket,
+            title: "Тикет".into(),
+            purpose: None,
+            status: ArtifactStatus::Ready,
+            content: ArtifactContent::JiraTicket(spec),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            chat_id: None,
+            repo_root: None,
+        };
+
+        let filled = record(JiraTicketSpec {
+            why: "Проблема".into(),
+            outcome: "Пользователь может X\nвторая строка".into(),
+            ..Default::default()
+        });
+        assert_eq!(filled.to_summary().subtitle, "Пользователь может X");
+
+        // Before the outcome is written, the problem is the only label there
+        // is — better than a blank row in the artifacts list.
+        let early = record(JiraTicketSpec { why: "Проблема".into(), ..Default::default() });
+        assert_eq!(early.to_summary().subtitle, "Проблема");
     }
 
     #[test]

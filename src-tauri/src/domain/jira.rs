@@ -88,6 +88,52 @@ pub struct JiraUser {
 // round trip per check and a base64 blob through IPC. Not worth it for
 // decoration; the panel shows the name instead.
 
+/// One link to attach to an issue as a Jira **Web Link** — what the UI
+/// calls «Link → Web link» and the API calls a remote link. Distinct from
+/// the same URL sitting in the description text: real tickets carry both,
+/// and only the attached one shows up in the issue's Links panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraWebLink {
+    pub url: String,
+    /// Shown in the Links panel. Falls back to the URL when absent — an
+    /// untitled link renders as a bare address rather than as nothing.
+    #[serde(default)]
+    pub title: String,
+}
+
+impl JiraWebLink {
+    /// The payload `POST /rest/api/2/issue/{key}/remotelink` takes.
+    ///
+    /// `globalId` is the URL: Jira treats it as the link's identity and
+    /// *updates* a link that already has it instead of adding a second one.
+    /// Without it, attaching the same links twice — a second click, a
+    /// re-run after a failure partway through — silently duplicates every
+    /// one of them.
+    pub fn to_payload(&self) -> serde_json::Value {
+        let url = self.url.trim();
+        let title = self.title.trim();
+        serde_json::json!({
+            "globalId": url,
+            "object": {
+                "url": url,
+                "title": if title.is_empty() { url } else { title },
+            }
+        })
+    }
+}
+
+/// What `attach_web_links` did — reported per link, because a partial
+/// failure is the interesting case: some links attach, one 404s on a typo
+/// in the issue key, and the user needs to know which.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraLinkOutcome {
+    pub url: String,
+    /// `None` on success; the reason otherwise.
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Error)]
 pub enum JiraError {
     #[error("Jira не настроена: укажите адрес инстанса в настройках")]
@@ -104,4 +150,38 @@ pub enum JiraError {
     Request(String),
     #[error("Не удалось прочитать настройки Jira: {0}")]
     Settings(String),
+    #[error("Не указан ключ задачи")]
+    MissingIssueKey,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Jira identifies a remote link by `globalId` and updates rather than
+    /// duplicates when it recognises one — which is what makes attaching the
+    /// same set twice (a second click, a retry after a partial failure)
+    /// safe. The URL is the natural identity.
+    #[test]
+    fn a_web_link_is_identified_by_its_url() {
+        let link = JiraWebLink {
+            url: " https://git.example.net/x ".to_string(),
+            title: "документация".to_string(),
+        };
+        let payload = link.to_payload();
+        assert_eq!(payload["globalId"], "https://git.example.net/x");
+        assert_eq!(payload["object"]["url"], "https://git.example.net/x");
+        assert_eq!(payload["object"]["title"], "документация");
+    }
+
+    /// An untitled link shows as its address rather than as a blank row in
+    /// the issue's Links panel.
+    #[test]
+    fn an_untitled_link_falls_back_to_its_address() {
+        let link = JiraWebLink {
+            url: "https://git.example.net/x".to_string(),
+            title: "   ".to_string(),
+        };
+        assert_eq!(link.to_payload()["object"]["title"], "https://git.example.net/x");
+    }
 }

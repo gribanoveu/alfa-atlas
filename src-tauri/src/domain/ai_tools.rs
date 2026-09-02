@@ -668,6 +668,34 @@ pub struct ArtifactReadArgs {
     pub id: String,
 }
 
+/// Args for `artifact` `op: "create"` — the assistant authoring one itself
+/// rather than asking the user to fill it in. Only kinds whose content is
+/// the model's own prose are accepted; see
+/// `ArtifactKind::is_agent_authored`.
+///
+/// `content` is typed but the model need not repeat the `kind`
+/// discriminator inside it — `parse::parse_artifact_call` injects the
+/// authoritative top-level `kind`, exactly as it does for
+/// `requestArtifact`'s `prefill`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactCreateArgs {
+    pub kind: crate::domain::artifact::ArtifactKind,
+    pub title: String,
+    pub content: crate::domain::artifact::ArtifactContent,
+}
+
+/// Args for `artifact` `op: "update"`. `content` replaces the stored
+/// content wholesale — see `services::artifacts::update_agent`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactUpdateArgs {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub content: crate::domain::artifact::ArtifactContent,
+}
+
 /// Which engine renders a `VisualContent::Diagram`. Both already exist in
 /// the webview (`src/components/AsciiDocPreview/mermaidRenderer.ts` and
 /// `plantumlRenderer.ts`), which is the whole constraint on this enum: a
@@ -763,6 +791,8 @@ pub enum ToolCall {
     RequestArtifact(RequestArtifactArgs),
     ArtifactList(ArtifactListArgs),
     ArtifactRead(ArtifactReadArgs),
+    ArtifactCreate(ArtifactCreateArgs),
+    ArtifactUpdate(ArtifactUpdateArgs),
     Skill(SkillArgs),
     CreatePlan(CreatePlanArgs),
     UpdatePlan(UpdatePlanArgs),
@@ -795,9 +825,11 @@ impl ToolCall {
             ToolCall::GetAsciidocTemplates(_) => ToolName::GetAsciidocTemplates,
             ToolCall::AskUser(_) => ToolName::AskUser,
             ToolCall::RequestArtifact(_) => ToolName::RequestArtifact,
-            // One wire tool, two operations — same shape as `todo`.
+            // One wire tool, four operations — same shape as `todo`.
             ToolCall::ArtifactList(_) => ToolName::Artifact,
             ToolCall::ArtifactRead(_) => ToolName::Artifact,
+            ToolCall::ArtifactCreate(_) => ToolName::Artifact,
+            ToolCall::ArtifactUpdate(_) => ToolName::Artifact,
             ToolCall::Skill(_) => ToolName::Skill,
             ToolCall::CreatePlan(_) => ToolName::CreatePlan,
             ToolCall::UpdatePlan(_) => ToolName::UpdatePlan,
