@@ -1,6 +1,5 @@
-import { Loader2 } from "lucide-react";
-
 import type { ChatMessage } from "../../lib/chatBlocks";
+import { AssistantLoadingBars } from "./AssistantLoadingBars";
 
 /** The two faces of one history-compaction pass (see
  * `src/lib/contextCompaction.ts`), keyed off `compactionRunning`.
@@ -24,7 +23,7 @@ export function AssistantCompactionNotice({ message }: { message: ChatMessage })
         <div className="assistant-plan-card-header">
           <span className="assistant-plan-card-eyebrow">Контекст</span>
           <div className="assistant-plan-card-title assistant-plan-card-title-live">
-            <Loader2 className="assistant-chat-tool-spinner" size={15} aria-hidden />
+            <AssistantLoadingBars />
             {text}
           </div>
         </div>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
 import { AlertCircle, ArrowDown, ChevronUp, Clock3, FileText, FolderGit2, Send, Sparkles, Square, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
@@ -764,6 +764,7 @@ export function AssistantConversation({
   // since it drives the floating button's visibility.
   const pinnedToBottomRef = useRef(true);
   const didMountScrollRef = useRef(false);
+  const followFrameRef = useRef<number | null>(null);
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
 
   // Model picker — reads the catalog saved in Settings (`knownModels`).
@@ -777,14 +778,19 @@ export function AssistantConversation({
   // Sticks the transcript to its bottom edge as new messages/deltas arrive,
   // the way Cursor/ChatGPT do — but only while the user hasn't scrolled up
   // to read something earlier (`pinnedToBottomRef`, kept current by
-  // `handleMessagesScroll` below). The very first paint for this
-  // conversation (mount, or a chat switch — this component remounts via
-  // `key={chatId}`) jumps instantly instead of animating from the top of a
-  // potentially long restored history; every following-along update after
-  // that animates, since deltas arrive many times a second and repeatedly
-  // retargeting a `behavior: "smooth"` scroll is what gives the streaming
-  // text its continuous "catching up" motion instead of a jittery snap per
-  // token.
+  // `handleMessagesScroll` below). Follow-up work is coalesced into one
+  // animation frame: repeatedly starting independent smooth scrolls for
+  // every streamed token makes the browser fight the user's wheel gesture.
+  const scheduleFollowToBottom = useCallback(() => {
+    if (!pinnedToBottomRef.current || followFrameRef.current !== null) return;
+    followFrameRef.current = requestAnimationFrame(() => {
+      followFrameRef.current = null;
+      const el = messagesRef.current;
+      if (!el || !pinnedToBottomRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    });
+  }, []);
+
   useEffect(() => {
     const el = messagesRef.current;
     if (!el) return;
@@ -793,19 +799,60 @@ export function AssistantConversation({
       didMountScrollRef.current = true;
       return;
     }
-    if (pinnedToBottomRef.current) {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-    }
-  }, [messages]);
+    scheduleFollowToBottom();
+  }, [messages, scheduleFollowToBottom]);
 
-  const SCROLL_BOTTOM_THRESHOLD_PX = 48;
+  // A tool card can grow after `messages` has already been updated (for
+  // example when a tool result or a streamed block gets rendered). Observe
+  // message bubbles so those layout changes keep the transcript pinned too.
+  useEffect(() => {
+    const el = messagesRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(scheduleFollowToBottom);
+    observer.observe(el);
+    for (const child of Array.from(el.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [messages.length, scheduleFollowToBottom]);
+
+  useEffect(() => {
+    return () => {
+      if (followFrameRef.current !== null) {
+        cancelAnimationFrame(followFrameRef.current);
+      }
+    };
+  }, []);
+
+  // Keep the follow mode detached until the viewport is genuinely at the
+  // bottom. A large threshold makes a downward wheel gesture re-attach early,
+  // so the next streamed delta pulls the message out from under the cursor.
+  const SCROLL_BOTTOM_THRESHOLD_PX = 4;
 
   const handleMessagesScroll = () => {
     const el = messagesRef.current;
     if (!el) return;
-    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX;
-    pinnedToBottomRef.current = pinned;
-    setShowJumpToBottom(!pinned);
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_BOTTOM_THRESHOLD_PX;
+    if (atBottom) {
+      // Re-attach when the user or the follow loop reaches the bottom. A
+      // content resize can make `atBottom` false without moving scrollTop;
+      // that must not detach an already pinned transcript.
+      pinnedToBottomRef.current = true;
+      setShowJumpToBottom(false);
+    }
+  };
+
+  const handleMessagesWheel = (event: WheelEvent<HTMLDivElement>) => {
+    if (event.deltaY > 0) {
+      setShowJumpToBottom(false);
+      return;
+    }
+    if (event.deltaY === 0) return;
+    pinnedToBottomRef.current = false;
+    setShowJumpToBottom(true);
+    if (followFrameRef.current !== null) {
+      cancelAnimationFrame(followFrameRef.current);
+      followFrameRef.current = null;
+    }
   };
 
   const handleJumpToBottom = () => {
@@ -985,7 +1032,13 @@ export function AssistantConversation({
     <>
       <TodoProgressWidget tasks={todos} onClearAll={sending ? undefined : clearTodos} />
       {activePlanId ? <PlanProgressWidget planId={activePlanId} refreshKey={messages.length} /> : null}
-      <div className="assistant-chat-messages" ref={messagesRef} onScroll={handleMessagesScroll}>
+      <div className="assistant-chat-scroll-shell">
+        <div
+          className="assistant-chat-messages"
+          ref={messagesRef}
+          onScroll={handleMessagesScroll}
+          onWheel={handleMessagesWheel}
+        >
         {messages.length === 0 ? (
           <div className="assistant-chat-placeholder">
             <Sparkles className="assistant-chat-placeholder-icon" size={20} strokeWidth={1.5} aria-hidden />
@@ -1183,6 +1236,7 @@ export function AssistantConversation({
             );
           })
         )}
+        </div>
         {showJumpToBottom ? (
           <button
             type="button"

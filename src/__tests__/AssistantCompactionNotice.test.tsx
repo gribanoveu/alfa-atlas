@@ -23,7 +23,7 @@ describe("AssistantCompactionNotice", () => {
     expect(screen.getByRole("status")).toBeTruthy();
     expect(screen.getByText(COMPACTION_RUNNING_NOTICE_TEXT)).toBeTruthy();
     expect(container.querySelector(".assistant-compaction-card")).toBeTruthy();
-    expect(container.querySelector(".assistant-chat-tool-spinner")).toBeTruthy();
+    expect(container.querySelector(".assistant-loading-bars")).toBeTruthy();
   });
 
   test("collapses to the pill once the pass has settled", () => {

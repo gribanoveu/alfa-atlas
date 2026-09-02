@@ -627,6 +627,13 @@
    Message list
    ========================================================= */
 
+.assistant-chat-scroll-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .assistant-chat-messages {
   position: relative;
   flex: 1;
@@ -635,9 +642,8 @@
   flex-direction: column;
   gap: 18px;
   overflow-y: auto;
-  padding: 12px 10px 16px;
+  padding: 12px 10px 28px;
   scrollbar-gutter: stable;
-  scroll-behavior: smooth;
 }
 
 .assistant-chat-messages:has(.assistant-chat-placeholder) {
@@ -657,10 +663,10 @@
    `AssistantConversation`'s `pinnedToBottom`/`showJumpToBottom` state), so
    auto-follow doesn't fight someone who scrolled up to re-read something. */
 .assistant-scroll-to-bottom {
-  position: sticky;
-  align-self: center;
-  bottom: 4px;
-  margin-top: auto;
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
   z-index: 5;
 
   display: flex;
@@ -692,11 +698,11 @@
 @keyframes assistant-scroll-to-bottom-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translate(-50%, 4px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate(-50%, 0);
   }
 }
 
@@ -2408,40 +2414,83 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
 
 
 /* =========================================================
-   Spinner
+   Loading bars
    ========================================================= */
 
-.assistant-chat-tool-spinner {
+/* Three bars in a staggered wave, used wherever a card is waiting on
+   something (a tool call, a diagram render, a history compaction).
+
+   Chosen over a rotating icon because rotation is the hard case at this
+   size: the arc lands on a fresh sub-pixel offset every frame and reads as
+   a wobble. These only scale along one axis from a fixed baseline, so
+   nothing can drift off-centre. */
+.assistant-loading-bars {
   flex: none;
 
-  /* Must equal the `size` every call site passes to the icon. The arc is
-     centred in its own 24-unit viewBox, so the spin is geometrically true;
-     what made it read as a wobble was rendering a 13px icon into a 15px
-     box, which put the stroke on a fractional grid and re-rasterised it at
-     a slightly different offset every frame. */
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+
   width: 15px;
   height: 15px;
 
   color: var(--accent);
-
-  animation: assistant-chat-spin 0.8s linear infinite;
-  /* Stated rather than left to the default: this is the one property whose
-     silent change would turn the spin back into a wobble. */
-  transform-origin: 50% 50%;
-  /* Rasterise once and let the compositor turn it, instead of redrawing a
-     1.25px stroke on the main thread 60 times a second. */
-  will-change: transform;
 }
 
-@keyframes assistant-chat-spin {
-  /* Explicit, so the animation can never interpolate from some inherited
-     transform instead of from zero. */
-  from {
-    transform: rotate(0deg);
+.assistant-loading-bars > span {
+  width: 3px;
+  height: 100%;
+
+  background: currentColor;
+  border-radius: 1px;
+
+  /* Scaled from the bottom, so the row of bars keeps a common baseline
+     instead of each one breathing around its own middle. */
+  transform-origin: 50% 100%;
+  animation: assistant-loading-bar 0.9s ease-in-out infinite;
+}
+
+/* The stagger is what makes it read as motion rather than a pulse. */
+.assistant-loading-bars > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.assistant-loading-bars > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes assistant-loading-bar {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+    opacity: 0.55;
   }
 
-  to {
-    transform: rotate(360deg);
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+/* Still has to say "busy" without moving: the bars hold the uneven heights
+   mid-wave would give them, rather than collapsing into a flat, finished
+   looking row. */
+@media (prefers-reduced-motion: reduce) {
+  .assistant-loading-bars > span {
+    animation: none;
+    opacity: 0.75;
+  }
+
+  .assistant-loading-bars > span:nth-child(1) {
+    transform: scaleY(0.5);
+  }
+
+  .assistant-loading-bars > span:nth-child(2) {
+    transform: scaleY(1);
+  }
+
+  .assistant-loading-bars > span:nth-child(3) {
+    transform: scaleY(0.7);
   }
 }
 

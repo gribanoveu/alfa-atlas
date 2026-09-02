@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+
 import type { ToolCallBlock } from "../../lib/chatBlocks";
 import { visualFromBlock, type Visual } from "../../lib/visuals";
 import { useDiagramTheme } from "../../lib/diagramTheme";
 import { renderDiagram } from "../../lib/diagramRender";
+import { AssistantLoadingBars } from "./AssistantLoadingBars";
 
 /** Title to show before the call settles — the result is not there yet, so
  *  this is the only place the title exists. */
@@ -81,7 +82,7 @@ function VisualPreview({
   if (state.kind === "loading") {
     return (
       <div className="assistant-visual-preview is-loading">
-        <Loader2 className="assistant-chat-tool-spinner" size={15} aria-hidden />
+        <AssistantLoadingBars />
       </div>
     );
   }
@@ -129,7 +130,7 @@ export function AssistantVisualCard({
         <div className="assistant-plan-card-header">
           <span className="assistant-plan-card-eyebrow">Визуализация</span>
           <div className="assistant-plan-card-title assistant-plan-card-title-live">
-            <Loader2 className="assistant-chat-tool-spinner" size={15} aria-hidden />
+            <AssistantLoadingBars />
             Рисую схему…
           </div>
         </div>

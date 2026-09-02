@@ -1,9 +1,10 @@
-import { AlertCircle, Bot, Check, ChevronDown, ChevronRight, Clock, File, Folder, Loader2 } from "lucide-react";
+import { AlertCircle, Bot, Check, ChevronDown, ChevronRight, Clock, File, Folder } from "lucide-react";
 import { useState } from "react";
 import { describeMatchSource, describeToolActivity, describeToolResult, formatToolArguments } from "../../lib/assistantConfig";
 import type { FileDiffStats, Task, ToolResult, TodoStatus } from "../../lib/aiTools";
 import { normalizeSemanticSearchResult } from "../../lib/aiTools";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
+import { AssistantLoadingBars } from "./AssistantLoadingBars";
 
 /** A file's content can be arbitrarily large — this caps how much of it the
  * expanded detail view renders, purely as a rendering safeguard (the model
@@ -133,7 +134,7 @@ export function AssistantToolCallBlock({ block }: AssistantToolCallBlockProps) {
       >
         <Chevron className="assistant-tool-call-chevron" size={12} aria-hidden />
         {block.status === "running" ? (
-          <Loader2 className="assistant-tool-call-icon assistant-chat-tool-spinner" size={15} aria-hidden />
+          <AssistantLoadingBars />
         ) : block.status === "done" ? (
           <Check className="assistant-tool-call-icon" size={13} aria-hidden />
         ) : block.status === "pendingApproval" ? (
