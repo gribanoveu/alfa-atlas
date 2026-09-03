@@ -41,8 +41,38 @@ pub(super) const MAX_TOP_K: usize = 50;
 
 /// Cap on how many characters of matched text land in a `ToolMatch.snippet`
 /// — keeps a large chunk's (up to 16KB) full text from blowing up the
-/// response payload.
+/// response payload. What `preview: true` asks for.
 pub(super) const SNIPPET_MAX_CHARS: usize = 500;
+
+/// The default cap, applied once to the finished result set.
+///
+/// The whole `ToolResult` is serialized into the model's context
+/// (`services::llm_chat`), so ten matches at `SNIPPET_MAX_CHARS` cost
+/// upwards of a thousand tokens per search — spent on text the model
+/// usually re-reads through `readFile` anyway before saying anything about
+/// it. What actually decides *which* hit to open is the path, the heading
+/// breadcrumb in `qualified_name`, and the tier that found it; the snippet
+/// only has to be enough to recognize a wrong turn.
+///
+/// Deliberately not zero, which is what an agent-only tool would do: this
+/// same payload renders in the assistant panel, where the snippet is the
+/// only thing a *person* can read without opening the file.
+pub(super) const SNIPPET_COMPACT_CHARS: usize = 160;
+
+/// Shortens every snippet to the compact budget unless the caller asked for
+/// the full preview. Applied to the finished, ranked, truncated list rather
+/// than threaded through each tier: the tiers all build snippets the same
+/// way, and one pass over at most `MAX_TOP_K` results is cheaper to read
+/// than a budget parameter on four functions.
+pub(super) fn apply_snippet_budget(mut matches: Vec<ToolMatch>, preview: bool) -> Vec<ToolMatch> {
+    if preview {
+        return matches;
+    }
+    for m in &mut matches {
+        m.snippet = truncate_to(&m.snippet, SNIPPET_COMPACT_CHARS);
+    }
+    matches
+}
 
 /// Boosts (multiplicatively, via `RELATED_FILE_BOOST`) every match whose
 /// file is in `related`, re-sorts descending by the (possibly boosted)
@@ -132,6 +162,26 @@ pub(super) fn is_semantic_ready(deps: &EmbeddingDeps) -> bool {
     }
     embedded_count(&deps.embedding_index, &attached.store, &attached.index_root)
         .is_ok_and(|n| n > 0)
+}
+
+/// Whether a persisted index exists but was written by an incompatible
+/// `CHUNK_VERSION`/`INDEX_VERSION` — its chunk ranges no longer describe
+/// what is on disk, so `lexical_matches` and `is_semantic_ready` both
+/// refuse to read it and every recall tier comes back empty.
+///
+/// Reported rather than left implicit because the two look identical from
+/// the outside: an empty search on a stale index is indistinguishable from
+/// an empty search on a repository that genuinely has nothing, and the
+/// advice for each is opposite ("re-sync" vs "rephrase"). Same reasoning as
+/// `SemanticSearchMeta::hidden_by_access_boundary`.
+///
+/// A store that will not attach at all reads as *not* stale — that is "no
+/// index", not "an unusable one", and the caller has nothing to suggest.
+pub(super) fn index_is_stale(deps: &EmbeddingDeps) -> bool {
+    matches!(
+        attach_current(&deps.chunk_index, &deps.index_store),
+        Ok(Some(attached)) if attached.stale
+    )
 }
 
 /// Embeds `query`, searches the resident `EmbeddingIndex`, and resolves
@@ -581,10 +631,14 @@ pub(super) fn read_symbol_snippet(scope_root: &Path, file_id: &FileId, symbol: &
 }
 
 pub(super) fn truncate_snippet(text: &str) -> String {
-    if text.len() <= SNIPPET_MAX_CHARS {
+    truncate_to(text, SNIPPET_MAX_CHARS)
+}
+
+fn truncate_to(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
         return text.to_string();
     }
-    let mut end = SNIPPET_MAX_CHARS;
+    let mut end = limit;
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
     }
@@ -1092,6 +1146,42 @@ mod tests {
         let fused = fuse_rrf(vec![semantic, lexical], 10);
 
         assert_eq!(fused[0].score, fused[1].score, "both are rank 1: {fused:#?}");
+    }
+
+    #[test]
+    fn snippet_budget_shortens_by_default_and_steps_aside_for_preview() {
+        let long = "я".repeat(SNIPPET_MAX_CHARS);
+        let make = || {
+            let mut m = sample_match("a.adoc", 1.0);
+            m.snippet = long.clone();
+            vec![m]
+        };
+
+        let compact = apply_snippet_budget(make(), false);
+        assert!(compact[0].snippet.chars().count() <= SNIPPET_COMPACT_CHARS + 1, "{}", compact[0].snippet.chars().count());
+        assert!(compact[0].snippet.ends_with('…'));
+
+        assert_eq!(apply_snippet_budget(make(), true)[0].snippet, long);
+    }
+
+    /// The cut is by bytes, so a multi-byte snippet must not be sliced
+    /// through the middle of a character.
+    #[test]
+    fn snippet_budget_cuts_on_a_character_boundary() {
+        let mut m = sample_match("a.adoc", 1.0);
+        m.snippet = "уведомление ".repeat(60);
+        let cut = apply_snippet_budget(vec![m], false);
+
+        assert!(cut[0].snippet.len() <= SNIPPET_COMPACT_CHARS + '…'.len_utf8());
+    }
+
+    #[test]
+    fn snippet_budget_leaves_a_snippet_already_under_the_cap_alone() {
+        let mut m = sample_match("a.adoc", 1.0);
+        m.snippet = "короткий фрагмент".to_string();
+        let untouched = apply_snippet_budget(vec![m], false);
+
+        assert_eq!(untouched[0].snippet, "короткий фрагмент");
     }
 
     #[test]

@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::domain::chunk_index::{ChunkBuildOptions, ChunkId};
+use crate::domain::chunk_index::ChunkBuildOptions;
 use crate::domain::embeddings::{
     EmbeddingIndexStatus, SyncPhase, SyncProgress, SyncStats, SyncTrigger,
 };
@@ -33,7 +33,6 @@ use crate::domain::workspace_index::DocumentId;
 use crate::infra::index_store::IndexStore;
 use crate::infra::{embedding_credentials_store, embedding_providers, workspace_scanner};
 use crate::services::chunk_builder::{ChunkBuilder, ChunkIndex};
-use crate::services::chunk_text;
 use crate::services::embedding_config;
 use crate::services::embedding_index::EmbeddingBuilder;
 use crate::services::embedding_state::{
@@ -103,45 +102,64 @@ fn load_persisted_symbols(store: &IndexStore) -> Result<HashMap<FileId, Reusable
         .collect())
 }
 
-/// Rebuilds `chunks_fts` for every already-persisted chunk, for stores that
-/// predate the BM25 tier (or whose `FTS_VERSION` moved). Without this an
-/// existing user's index would have complete `chunks`/`embeddings` and an
-/// empty full-text index, i.e. no lexical tier at all, until every file
-/// happened to change.
+/// Recomputes the derived half of every already-persisted chunk —
+/// `qualified_name` and the `chunks_fts` rows — for stores written before
+/// the running binary's `DERIVED_VERSION`. Two real cases so far: an index
+/// that predates the BM25 tier has complete `chunks`/`embeddings` and an
+/// empty full-text index; one that predates heading breadcrumbs has
+/// `qualified_name = NULL` on every documentation chunk. Neither fixes
+/// itself, because both are only rewritten when a file's content changes.
 ///
-/// Deliberately not a `CHUNK_VERSION` bump: that path
+/// Deliberately not a `CHUNK_VERSION`/`INDEX_VERSION` bump: that path
 /// (`index_store_ensure::repair_stale`) wipes the vectors too, making a
-/// search-tier improvement cost a full re-embed. Rebuilding from the source
-/// files instead costs one read per indexed file, once.
+/// search-tier improvement cost a full re-embed. Chunk identity is
+/// `file_hash` + byte range, and none of what this rewrites feeds it, so
+/// rebuilding costs one re-parse per indexed file and every embedding
+/// survives.
+///
+/// Files whose current content no longer matches what was indexed are
+/// skipped: their rebuilt chunks would carry different `ChunkId`s, and the
+/// sync's own diff re-chunks them a few lines below through the normal
+/// path anyway.
 ///
 /// Runs only from the full `sync` — the watcher's incremental path stays
-/// light, and a store it touches meanwhile just keeps its `fts_version`
-/// marker unset until the next full sync. Chunks whose text no longer
-/// resolves (the file moved or changed since the last sync) are skipped:
-/// the same sync re-chunks them further down, which writes their FTS rows
-/// through the normal path.
-fn backfill_fts(store: &IndexStore, chunk_index: &ChunkIndex, repo_root: &Path) -> Result<(), String> {
-    let mut by_file: HashMap<FileId, Vec<(ChunkId, Option<String>, String)>> = HashMap::new();
-    for metadata in chunk_index.all() {
-        let Ok(text) = chunk_text::resolve_text(repo_root, &metadata) else {
+/// light, and a store it touches meanwhile just keeps its marker unset
+/// until the next full sync.
+fn backfill_derived(
+    store: &IndexStore,
+    repo_index: &RepositoryIndex,
+    chunk_index: &ChunkIndex,
+) -> Result<(), String> {
+    let builder = ChunkBuilder::new();
+    let options = ChunkBuildOptions::default();
+    let mut rebuilt = 0usize;
+
+    for file_id in chunk_index.file_ids() {
+        let Some(indexed) = repo_index.get(&file_id) else {
             continue;
         };
-        by_file.entry(metadata.file_id.clone()).or_default().push((
-            metadata.id.clone(),
-            metadata.qualified_name.clone(),
-            text.to_string(),
-        ));
+        let unchanged = chunk_index
+            .file_hash_for(&file_id)
+            .is_some_and(|hash| hash == indexed.metadata.hash);
+        if !unchanged {
+            continue;
+        }
+        let Ok(chunks) = builder.build_file(repo_index, &file_id, &options) else {
+            continue;
+        };
+        store
+            .replace_derived_for_file(&file_id, &chunks)
+            .map_err(|e| e.to_string())?;
+        // The rebuilt names are what search reads out of `ChunkIndex`, so
+        // the resident copy has to move with the persisted one. Second,
+        // because it consumes the `Vec` the store needs the text from.
+        chunk_index.replace_for_file(&file_id, chunks);
+        rebuilt += 1;
     }
 
-    let files = by_file.len();
-    for (file_id, entries) in by_file {
-        store
-            .replace_fts_for_file(&file_id, &entries)
-            .map_err(|e| e.to_string())?;
-    }
-    store.mark_fts_current().map_err(|e| e.to_string())?;
-    if files > 0 {
-        eprintln!("[embedding-sync] rebuilt the full-text index for {files} file(s)");
+    store.mark_derived_current().map_err(|e| e.to_string())?;
+    if rebuilt > 0 {
+        eprintln!("[embedding-sync] rebuilt names and the full-text index for {rebuilt} file(s)");
     }
     Ok(())
 }
@@ -748,12 +766,13 @@ pub fn sync(session: &EmbeddingSession, progress: &ProgressSink) -> Result<SyncS
         return Ok(SyncStats::default());
     }
 
-    // Before the diff: an index carried over from a build without the BM25
-    // tier has chunks but no full-text rows. A no-op on a fresh project
-    // (nothing persisted to rebuild from) and on every sync after the
-    // first that marks the version current.
-    if store.fts_needs_backfill().map_err(|e| e.to_string())? {
-        backfill_fts(&store, &chunk_index, &index_root)?;
+    // Before the diff: an index carried over from an older build may have
+    // chunks with no full-text rows and no heading breadcrumbs, neither of
+    // which a content-hash diff would ever notice. A no-op on a fresh
+    // project (nothing persisted to rebuild from) and on every sync after
+    // the one that marks the version current.
+    if store.derived_needs_backfill().map_err(|e| e.to_string())? {
+        backfill_derived(&store, &repo_index, &chunk_index)?;
     }
 
     // A fresh project (nothing chunked yet, in this store or ever) is
@@ -1480,11 +1499,14 @@ mod tests {
     }
 
     #[test]
-    fn a_sync_leaves_the_full_text_index_searchable_and_marked_current() {
+    fn a_sync_names_documentation_chunks_and_leaves_them_searchable() {
         with_open_project(
-            "fts-after-sync",
-            &[("guide.adoc", "= Guide\n\nСроки рассмотрения уведомлений.\n")],
-            |root, session| {
+            "derived-after-sync",
+            &[(
+                "guide.adoc",
+                "= Уведомления\n\nintro\n\n== Сроки\n\nСроки рассмотрения уведомлений.\n",
+            )],
+            |_root, session| {
                 sync(session, &noop_progress()).unwrap();
 
                 let store = attach_current(&session.chunk_index, &session.index_store)
@@ -1493,17 +1515,27 @@ mod tests {
                     .store;
 
                 assert!(
-                    !store.fts_needs_backfill().unwrap(),
+                    !store.derived_needs_backfill().unwrap(),
                     "a completed sync should leave nothing to backfill"
                 );
-                assert_eq!(store.search_bm25("\"уведом\"*", 10).unwrap().len(), 1);
+                let named: Vec<_> = store
+                    .load_all_chunks()
+                    .unwrap()
+                    .into_iter()
+                    .filter_map(|c| c.qualified_name)
+                    .collect();
+                assert!(
+                    named.contains(&"Уведомления > Сроки".to_string()),
+                    "documentation chunks should carry a heading breadcrumb: {named:?}"
+                );
+                assert_eq!(store.search_bm25("\"уведом\"*", 10).unwrap().len(), 2);
 
-                // The migration path for a store written before this tier
-                // existed. Running it over an already-indexed project is the
-                // sharpest check available: it must rebuild the rows, not
-                // add a second copy of each.
-                backfill_fts(&store, &session.chunk_index, root).unwrap();
-                assert_eq!(store.search_bm25("\"уведом\"*", 10).unwrap().len(), 1);
+                // The migration path for a store written by an older build.
+                // Running it over an already-indexed project is the sharpest
+                // check available: it must rebuild the rows, not add a
+                // second copy of each.
+                backfill_derived(&store, &session.repo_index, &session.chunk_index).unwrap();
+                assert_eq!(store.search_bm25("\"уведом\"*", 10).unwrap().len(), 2);
             },
         );
     }

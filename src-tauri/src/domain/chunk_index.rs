@@ -217,6 +217,131 @@ pub fn qualified_name_for(anchor: &Symbol, all_symbols: &[Symbol]) -> Option<Str
         .map(|enclosing| format!("{}.{}", enclosing.name, anchor.name))
 }
 
+/// One heading, paired with the depth [`heading_level`] derived for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionHeading {
+    pub start_byte: u32,
+    pub level: u8,
+    pub name: String,
+}
+
+/// Separator between breadcrumb components. A space on both sides so
+/// `unicode61` tokenizes the parts independently in `chunks_fts` — the
+/// breadcrumb is indexed as its words, not as one opaque string.
+const BREADCRUMB_SEPARATOR: &str = " > ";
+
+/// Longest breadcrumb kept, and how many components. Over either limit the
+/// *outermost* components are dropped rather than the innermost: the file
+/// path already says which document a chunk is in, so the part worth
+/// keeping is where inside it.
+const MAX_BREADCRUMB_CHARS: usize = 200;
+const MAX_BREADCRUMB_COMPONENTS: usize = 5;
+
+/// The character a heading of `language` repeats to encode its depth.
+/// `None` for languages whose sections aren't line-prefixed this way — they
+/// simply get no breadcrumb rather than a guessed one.
+fn heading_marker(language: Language) -> Option<char> {
+    match language {
+        Language::AsciiDoc => Some('='),
+        Language::Markdown => Some('#'),
+        _ => None,
+    }
+}
+
+/// Depth of the heading beginning at `start_byte`, read straight off the
+/// source line: `== Errors` is 2, `### Errors` is 3.
+///
+/// Derived from the text rather than carried on `Symbol` deliberately.
+/// `Symbol` is persisted (`IndexStore`'s `symbols` table) and reused across
+/// runs whenever a file's hash is unchanged, so a new field on it would
+/// need a schema migration *and* a way to refill it for every already-
+/// indexed file — while the level is right there in the content the chunk
+/// builder has already read. Both indexers point `start_byte` at the marker
+/// run (`AsciiDocIndexer` uses the tree-sitter title node's start;
+/// `MarkdownIndexer` uses pulldown-cmark's heading range), so this reads
+/// what they saw.
+///
+/// `None` when the line doesn't start with a marker run followed by a
+/// space — a Markdown setext heading (`Title` underlined with `===`) is the
+/// real case. Such a heading is left out of the ancestry rather than
+/// assigned a made-up depth.
+pub fn heading_level(content: &str, start_byte: u32, language: Language) -> Option<u8> {
+    let marker = heading_marker(language)?;
+    let line = content.get(start_byte as usize..)?.lines().next()?;
+    // Both markers are ASCII, so a count of leading marker chars is also a
+    // byte offset — `line[depth..]` cannot split a character.
+    let depth = line.chars().take_while(|c| *c == marker).count();
+    if depth == 0 || depth > 6 || !line[depth..].starts_with(' ') {
+        return None;
+    }
+    Some(depth as u8)
+}
+
+/// The file's `Section` symbols that carry a derivable depth, in document
+/// order. `symbols` must already be sorted by `start_byte` — the caller
+/// (`ChunkBuilder::build_file`) sorts once for every strategy.
+pub fn section_headings(symbols: &[Symbol], content: &str, language: Language) -> Vec<SectionHeading> {
+    symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Section)
+        .filter_map(|s| {
+            Some(SectionHeading {
+                start_byte: s.start_byte,
+                level: heading_level(content, s.start_byte, language)?,
+                name: s.name.clone(),
+            })
+        })
+        .collect()
+}
+
+/// `Уведомления > Порядок подачи > Сроки` — the heading trail leading to
+/// `anchor`, walking back through the nearest preceding heading of each
+/// shallower depth.
+///
+/// This is what fills `ChunkMetadata::qualified_name` for documentation,
+/// where it used to be `None` for every chunk: it is both the model's only
+/// way to tell two chunks of one long document apart before reading them,
+/// and the `qualified_name` column that `IndexStore::search_bm25` weights
+/// four times the body text — a column that was empty for the entire
+/// AsciiDoc corpus this application exists to search.
+///
+/// An anchor with no derivable depth (so absent from `headings`) still gets
+/// its own name back rather than `None`: a section title alone is worth
+/// indexing, it just cannot contribute or receive ancestry.
+pub fn section_breadcrumb(anchor: &Symbol, headings: &[SectionHeading]) -> Option<String> {
+    if anchor.name.is_empty() {
+        return None;
+    }
+    let Some(position) = headings.iter().position(|h| h.start_byte == anchor.start_byte) else {
+        return Some(anchor.name.clone());
+    };
+
+    let mut trail: Vec<&str> = vec![headings[position].name.as_str()];
+    let mut level = headings[position].level;
+    for heading in headings[..position].iter().rev() {
+        if heading.level < level {
+            trail.push(heading.name.as_str());
+            level = heading.level;
+            if level == 1 {
+                break;
+            }
+        }
+    }
+    trail.reverse();
+
+    while trail.len() > MAX_BREADCRUMB_COMPONENTS
+        || (trail.len() > 1 && joined_chars(&trail) > MAX_BREADCRUMB_CHARS)
+    {
+        trail.remove(0);
+    }
+    Some(trail.join(BREADCRUMB_SEPARATOR))
+}
+
+fn joined_chars(trail: &[&str]) -> usize {
+    trail.iter().map(|part| part.chars().count()).sum::<usize>()
+        + BREADCRUMB_SEPARATOR.len() * trail.len().saturating_sub(1)
+}
+
 pub fn chunk_hash(file_hash: blake3::Hash, start_byte: u32, end_byte: u32) -> blake3::Hash {
     let mut hasher = blake3::Hasher::new();
     hasher.update(file_hash.as_bytes());
@@ -352,6 +477,89 @@ mod tests {
             start_byte,
             end_byte,
         }
+    }
+
+    /// The AsciiDoc fixture every breadcrumb test below reads from, with
+    /// the byte offset each title starts at.
+    const DOC: &str = "= Уведомления\n\nintro\n\n== Порядок подачи\n\nbody\n\n=== Сроки\n\ntext\n\n== Реестр\n\nend\n";
+
+    fn doc_sections() -> Vec<Symbol> {
+        let mut out = Vec::new();
+        for title in ["= Уведомления", "== Порядок подачи", "=== Сроки", "== Реестр"] {
+            let start = DOC.find(title).unwrap() as u32;
+            let name = title.trim_start_matches(['=', ' ']).to_string();
+            out.push(sym(&name, SymbolKind::Section, start, start + title.len() as u32));
+        }
+        out
+    }
+
+    #[test]
+    fn heading_level_counts_the_marker_run_of_each_language() {
+        assert_eq!(heading_level("= Title\n", 0, Language::AsciiDoc), Some(1));
+        assert_eq!(heading_level("=== Deep\n", 0, Language::AsciiDoc), Some(3));
+        assert_eq!(heading_level("## Deep\n", 0, Language::Markdown), Some(2));
+        // The marker run must be followed by a space — `==foo` is not a
+        // heading, and a Markdown setext title carries no marker at all.
+        assert_eq!(heading_level("==foo\n", 0, Language::AsciiDoc), None);
+        assert_eq!(heading_level("Title\n=====\n", 0, Language::Markdown), None);
+        // Wrong marker for the language, and a language with no headings.
+        assert_eq!(heading_level("# Title\n", 0, Language::AsciiDoc), None);
+        assert_eq!(heading_level("= Title\n", 0, Language::Java), None);
+        // Out-of-range or mid-character offsets report no level, never panic.
+        assert_eq!(heading_level("= Ты\n", 99, Language::AsciiDoc), None);
+        assert_eq!(heading_level("= Ты\n", 3, Language::AsciiDoc), None);
+    }
+
+    #[test]
+    fn breadcrumb_walks_back_through_each_shallower_heading() {
+        let sections = doc_sections();
+        let headings = section_headings(&sections, DOC, Language::AsciiDoc);
+
+        // `=== Сроки` sits under `== Порядок подачи` under `= Уведомления`.
+        assert_eq!(
+            section_breadcrumb(&sections[2], &headings).unwrap(),
+            "Уведомления > Порядок подачи > Сроки"
+        );
+        // `== Реестр` skips the deeper sibling branch entirely.
+        assert_eq!(
+            section_breadcrumb(&sections[3], &headings).unwrap(),
+            "Уведомления > Реестр"
+        );
+        // The document title has no ancestry of its own.
+        assert_eq!(section_breadcrumb(&sections[0], &headings).unwrap(), "Уведомления");
+    }
+
+    /// A heading whose depth cannot be read (setext, or a language with no
+    /// marker) must still name itself — it is the `qualified_name` column
+    /// BM25 weights four times, so dropping it costs real ranking.
+    #[test]
+    fn breadcrumb_falls_back_to_the_bare_name_for_a_heading_with_no_derivable_depth() {
+        let orphan = sym("Приложение", SymbolKind::Section, 500, 520);
+        let headings = section_headings(&doc_sections(), DOC, Language::AsciiDoc);
+
+        assert_eq!(section_breadcrumb(&orphan, &headings).unwrap(), "Приложение");
+        assert_eq!(section_breadcrumb(&orphan, &[]).unwrap(), "Приложение");
+        assert!(section_breadcrumb(&sym("", SymbolKind::Section, 0, 0), &headings).is_none());
+    }
+
+    #[test]
+    fn breadcrumb_drops_outer_components_to_stay_within_the_caps() {
+        // Six nested levels, one over MAX_BREADCRUMB_COMPONENTS.
+        let mut content = String::new();
+        let mut sections = Vec::new();
+        for level in 1..=6 {
+            let title = format!("{} L{level}\n\n", "=".repeat(level));
+            let start = content.len() as u32;
+            content.push_str(&title);
+            sections.push(sym(&format!("L{level}"), SymbolKind::Section, start, start + 4));
+        }
+        let headings = section_headings(&sections, &content, Language::AsciiDoc);
+
+        let crumb = section_breadcrumb(sections.last().unwrap(), &headings).unwrap();
+        assert_eq!(crumb.split(BREADCRUMB_SEPARATOR).count(), MAX_BREADCRUMB_COMPONENTS);
+        // The innermost heading survives; the outermost is what gave way.
+        assert!(crumb.ends_with("L6"), "{crumb}");
+        assert!(!crumb.contains("L1"), "{crumb}");
     }
 
     #[test]

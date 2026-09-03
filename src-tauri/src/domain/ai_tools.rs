@@ -99,6 +99,13 @@ pub struct SemanticSearchArgs {
     /// `query` itself.
     #[serde(default, deserialize_with = "flexible_args::opt_string_list")]
     pub fts: Option<Vec<String>>,
+    /// Ask for the full-length snippet on each match instead of the
+    /// compact default (see `services::ai_tools::search`'s
+    /// `SNIPPET_COMPACT_CHARS`). Off unless the caller has a reason: the
+    /// snippets are serialized straight into the model's context, and the
+    /// long form pays for text a `readFile` would fetch more precisely.
+    #[serde(default, deserialize_with = "flexible_args::opt_bool")]
+    pub preview: Option<bool>,
 }
 
 /// Exact regex content search across files under the tool scope root —
@@ -612,6 +619,23 @@ pub struct ToolMatch {
     pub source: MatchSource,
 }
 
+/// Why a search lost one of its tiers. Kept apart from the message text so
+/// the UI can react to the cause instead of parsing prose written for the
+/// model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DegradedKind {
+    /// The query could not be embedded — the provider errored, or is
+    /// inside the cooldown a recent failure opened. Fixed by restoring
+    /// access to the endpoint.
+    EmbeddingProvider,
+    /// The persisted index was written by an incompatible
+    /// `CHUNK_VERSION`/`INDEX_VERSION`, so its chunk ranges no longer
+    /// describe these files and *both* recall tiers refuse to read it.
+    /// Fixed by re-syncing, and by nothing the model can do.
+    StaleIndex,
+}
+
 /// Diagnostics attached to a settled `SemanticSearch` — which cascade tiers
 /// ran, which tokens were extracted from the query, and an optional Russian
 /// hint when the search looks weak (for the model and the UI).
@@ -623,13 +647,17 @@ pub struct SemanticSearchMeta {
     pub extracted_tokens: Vec<String>,
     pub weak: bool,
     pub hint: Option<String>,
-    /// Set when the cascade could not run the tier it should have —
-    /// today only "the embedding provider was unreachable, so this is
-    /// symbol + lexical only". `None` is the ordinary case, including a
-    /// plain lexical search on a project whose index simply isn't built:
-    /// this field means *lost capability*, not *cheap tier*. The text is
-    /// read by both the model (it replaces `hint`) and the UI.
+    /// Set when the cascade could not run a tier it should have had.
+    /// `None` is the ordinary case, including a plain lexical search on a
+    /// project whose index simply isn't built: this field means *lost
+    /// capability*, not *cheap tier*. The text is model-facing (it replaces
+    /// `hint`); the UI writes its own wording from `degraded_kind`.
     pub degraded: Option<String>,
+    /// Which capability was lost, as data rather than as prose — the UI
+    /// tells the user what to do about it, and "the embedding endpoint is
+    /// unreachable" and "your index predates this build" call for opposite
+    /// actions. Always `Some` exactly when `degraded` is.
+    pub degraded_kind: Option<DegradedKind>,
     /// How many otherwise-ranked hits were dropped because they sit
     /// outside the documentation root (`ToolScope::allows_search_result`).
     /// Always `0` in Full-repo mode, where nothing is filtered.

@@ -27,15 +27,19 @@ use crate::domain::repo_index::{FileId, FileMetadata, ImportRef, Language, Symbo
 const DB_FILE_NAME: &str = "chunks.db";
 pub const VECTORS_FILE_NAME: &str = "vectors.usearch";
 
-/// Bump whenever the FTS schema or tokenizer changes in a way that makes
-/// already-indexed rows wrong. Deliberately *not* folded into
-/// `CHUNK_VERSION`/`INDEX_VERSION`: those invalidate the whole store,
-/// vectors included, and re-embedding a repository costs hours — a
-/// full-text index can be rebuilt from the source files in seconds, so it
-/// carries its own version and its own repair (see
-/// `embedding_sync::backfill_fts`).
-const FTS_VERSION: &str = "1";
-const META_FTS_VERSION: &str = "fts_version";
+/// Version of the store's *derived* content — everything recomputable from
+/// the source files alone: `chunks.qualified_name` and the `chunks_fts`
+/// index. Bump whenever the FTS tokenizer or the way a chunk is named
+/// changes, so already-indexed rows get rebuilt.
+///
+/// Deliberately separate from `CHUNK_VERSION`/`INDEX_VERSION`: those
+/// invalidate the whole store, vectors included, and re-embedding a
+/// repository costs hours. Nothing here feeds `chunk_hash` (which is
+/// `file_hash` + byte range + `CHUNK_VERSION`), so a rebuild is one read
+/// per file and every embedding stays valid — see
+/// `embedding_sync::backfill_derived`.
+const DERIVED_VERSION: &str = "1";
+const META_DERIVED_VERSION: &str = "derived_version";
 
 const SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -295,45 +299,57 @@ impl IndexStore {
         Ok(())
     }
 
-    /// Re-indexes `file_id`'s existing chunks for full-text search without
-    /// touching `chunks` itself. The backfill path (see
-    /// `embedding_sync::backfill_fts`): an index written before this tier
-    /// existed already has correct chunk rows and, more to the point,
-    /// `embeddings` rows that took hours to compute — going through
-    /// `replace_chunks_for_file` would cascade those away for nothing.
+    /// Rewrites the derived half of `file_id`'s rows — each chunk's
+    /// `qualified_name` and its `chunks_fts` entry — from freshly built
+    /// chunks, leaving the identity and hash columns of `chunks` alone and,
+    /// crucially, not touching `embeddings`.
     ///
-    /// `entries` is `(chunk_id, qualified_name, text)`, in any order; ids
-    /// that no longer have a `chunks` row are indexed but left unlinked,
-    /// and the next `replace_chunks_for_file` for the file clears them.
-    pub fn replace_fts_for_file(
+    /// The backfill path (see `embedding_sync::backfill_derived`): an index
+    /// written before the BM25 tier, or before documentation chunks were
+    /// named, already has correct chunk rows and `embeddings` rows that
+    /// took hours to compute. `replace_chunks_for_file` would cascade those
+    /// away for nothing, because it deletes the chunk rows they hang off.
+    ///
+    /// `chunks` may legitimately not line up with what is persisted — a
+    /// file edited since the last sync rebuilds to different byte ranges,
+    /// and so different `ChunkId`s. Those are dropped rather than inserted
+    /// unlinked: an FTS row no `chunks` row points at could never be found
+    /// again to delete. The sync's own diff re-chunks such a file straight
+    /// after this, through the normal path.
+    pub fn replace_derived_for_file(
         &self,
         file_id: &FileId,
-        entries: &[(ChunkId, Option<String>, String)],
+        chunks: &[Chunk],
     ) -> Result<(), IndexStoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
         purge_fts_rows(&tx, file_id)?;
-        for (chunk_id, qualified_name, text) in entries {
-            let fts_rowid = insert_fts_row(&tx, chunk_id, qualified_name.as_deref(), text)?;
-            tx.execute(
-                "UPDATE chunks SET fts_rowid = ?1 WHERE chunk_id = ?2",
-                params![fts_rowid, chunk_id.0],
+        for chunk in chunks {
+            let meta = &chunk.metadata;
+            let fts_rowid =
+                insert_fts_row(&tx, &meta.id, meta.qualified_name.as_deref(), &chunk.text)?;
+            let linked = tx.execute(
+                "UPDATE chunks SET qualified_name = ?1, fts_rowid = ?2 WHERE chunk_id = ?3",
+                params![meta.qualified_name, fts_rowid, meta.id.0],
             )?;
+            if linked == 0 {
+                tx.execute("DELETE FROM chunks_fts WHERE rowid = ?1", params![fts_rowid])?;
+            }
         }
         tx.commit()?;
         Ok(())
     }
 
-    /// Whether `chunks_fts` predates the running binary's `FTS_VERSION` —
-    /// true for any index written before this tier existed, and after any
-    /// tokenizer change. The caller rebuilds and then calls
-    /// `mark_fts_current`.
-    pub fn fts_needs_backfill(&self) -> Result<bool, IndexStoreError> {
-        Ok(self.read_meta(META_FTS_VERSION)?.as_deref() != Some(FTS_VERSION))
+    /// Whether the store's derived content predates the running binary's
+    /// `DERIVED_VERSION` — true for any index written before the BM25 tier
+    /// existed, and after any change to naming or tokenization. The caller
+    /// rebuilds and then calls `mark_derived_current`.
+    pub fn derived_needs_backfill(&self) -> Result<bool, IndexStoreError> {
+        Ok(self.read_meta(META_DERIVED_VERSION)?.as_deref() != Some(DERIVED_VERSION))
     }
 
-    pub fn mark_fts_current(&self) -> Result<(), IndexStoreError> {
-        self.write_meta(META_FTS_VERSION, FTS_VERSION)
+    pub fn mark_derived_current(&self) -> Result<(), IndexStoreError> {
+        self.write_meta(META_DERIVED_VERSION, DERIVED_VERSION)
     }
 
     /// The BM25 tier: ranks `chunks_fts` against an FTS5 `MATCH` expression
@@ -1013,35 +1029,63 @@ mod tests {
             .upsert_embedding(&chunk.metadata.id, chunk.metadata.hash)
             .unwrap();
 
-        store
-            .replace_fts_for_file(
-                &file_id,
-                &[(chunk.metadata.id.clone(), None, "текст чанка".to_string())],
-            )
-            .unwrap();
+        // Same chunk, now carrying the heading breadcrumb a build without
+        // documentation naming never wrote.
+        let named =
+            sample_chunk_with_text("a.json", 0, 10, "текст чанка", Some("Уведомления > Сроки"));
+        store.replace_derived_for_file(&file_id, &[named]).unwrap();
 
         // The whole reason this is a separate write path from
         // `replace_chunks_for_file`: that one cascades embeddings away.
         assert_eq!(store.load_all_embedding_hashes().unwrap().len(), 1);
-        assert_eq!(store.load_all_chunks().unwrap().len(), 1);
-        // Exactly one row, not the original plus a duplicate.
+        let chunks = store.load_all_chunks().unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].qualified_name.as_deref(), Some("Уведомления > Сроки"));
+        // Exactly one row, not the original plus a duplicate — and the new
+        // name is searchable.
         assert_eq!(store.search_bm25("\"чанка\"*", 10).unwrap().len(), 1);
+        assert_eq!(store.search_bm25("\"уведом\"*", 10).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A chunk id with no `chunks` row (the file changed since it was
+    /// indexed) must not leave an FTS row behind: nothing would point at it
+    /// again, so nothing could ever delete it.
+    #[test]
+    fn backfilling_an_unknown_chunk_leaves_no_orphan_fts_row() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        let file_id = FileId("a.json".to_string());
+        index_chunks(
+            &store,
+            "a.json",
+            &[sample_chunk_with_text("a.json", 0, 10, "известный чанк", None)],
+        );
+
+        // Different byte range, so a different `ChunkId` than the one
+        // persisted above.
+        let stray = sample_chunk_with_text("a.json", 40, 60, "посторонний текст", None);
+        store.replace_derived_for_file(&file_id, &[stray]).unwrap();
+
+        assert!(store.search_bm25("\"посторонний\"*", 10).unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn fts_version_gates_the_backfill_until_it_is_marked_current() {
+    fn derived_version_gates_the_backfill_until_it_is_marked_current() {
         let dir = fixture_dir();
         let store = IndexStore::open(&dir).unwrap();
 
-        assert!(store.fts_needs_backfill().unwrap());
-        store.mark_fts_current().unwrap();
-        assert!(!store.fts_needs_backfill().unwrap());
+        assert!(store.derived_needs_backfill().unwrap());
+        store.mark_derived_current().unwrap();
+        assert!(!store.derived_needs_backfill().unwrap());
 
         // A wipe clears `meta` too, so a rebuilt store asks again.
         store.wipe().unwrap();
-        assert!(store.fts_needs_backfill().unwrap());
+        assert!(store.derived_needs_backfill().unwrap());
 
         std::fs::remove_dir_all(&dir).ok();
     }

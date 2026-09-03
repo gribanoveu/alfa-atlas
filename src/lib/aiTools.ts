@@ -59,11 +59,17 @@ export type SemanticSearchMeta = {
   extractedTokens: string[];
   weak: boolean;
   hint: string | null;
-  /** Non-null when the cascade lost a tier it should have had — today only
-   * "the embedding provider was unreachable, so this is symbol + lexical
-   * only". A plain lexical search on a project with no index is *not*
-   * degraded: this marks lost capability, not a cheap tier. */
+  /** Non-null when the cascade lost a tier it should have had. A plain
+   * lexical search on a project with no index is *not* degraded: this
+   * marks lost capability, not a cheap tier. The text is written for the
+   * model — the UI phrases its own message from `degradedKind`. */
   degraded: string | null;
+  /** Which capability was lost. `"embeddingProvider"` means the endpoint
+   * could not be reached; `"staleIndex"` means the stored index predates
+   * this build and *both* recall tiers refused it — opposite problems with
+   * opposite fixes, which is why the UI branches on this rather than on
+   * the message. Absent in chats recorded before the field existed. */
+  degradedKind?: "embeddingProvider" | "staleIndex" | null;
   /** Ranked hits dropped because they sit outside the documentation root.
    * `0` in Full-repo mode, and absent (treated as `0`) in chats recorded
    * before this field existed. */
@@ -108,6 +114,7 @@ export function normalizeSemanticSearchResult(
         // degradation reporting entirely — absence of the field is not
         // evidence the search was degraded.
         degraded: null,
+        degradedKind: null,
         hiddenByAccessBoundary: 0,
       },
     };

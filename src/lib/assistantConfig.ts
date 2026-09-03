@@ -1,4 +1,11 @@
-import type { AiAccessMode, ConversationMode, LlmToolDefinition, MatchSource, Task } from "./aiTools";
+import type {
+  AiAccessMode,
+  ConversationMode,
+  LlmToolDefinition,
+  MatchSource,
+  SemanticSearchMeta,
+  Task,
+} from "./aiTools";
 import { normalizeSemanticSearchResult } from "./aiTools";
 import type { ChatMessage, ToolCallBlock } from "./chatBlocks";
 import type { SpecsRepoInfo } from "./openapi";
@@ -1071,7 +1078,7 @@ export function describeToolResult(
       const hidden = meta.hiddenByAccessBoundary ?? 0;
       const hiddenSuffix = hidden > 0 ? ` · вне доступа: ${hidden}` : "";
       if (matches.length === 0) {
-        if (meta.degraded) return `Результатов: 0 · без семантики${hiddenSuffix}`;
+        if (meta.degraded) return `Результатов: 0 · ${describeDegraded(meta)}${hiddenSuffix}`;
         return meta.weak ? `Результатов: 0 · слабый поиск${hiddenSuffix}` : `Результатов: 0${hiddenSuffix}`;
       }
       const counts = new Map<MatchSource, number>();
@@ -1087,7 +1094,11 @@ export function describeToolResult(
       // A degraded search is worth saying on the collapsed line: its
       // results are a *narrower* search, not a weaker query, and that
       // difference changes how much the answer built on them is worth.
-      const weakSuffix = meta.degraded ? " · без семантики" : meta.weak ? " · слабый поиск" : "";
+      const weakSuffix = meta.degraded
+        ? ` · ${describeDegraded(meta)}`
+        : meta.weak
+          ? " · слабый поиск"
+          : "";
       return `Результатов: ${matches.length} (${breakdown})${weakSuffix}${hiddenSuffix}`;
     }
     case "grepResults": {
@@ -1224,6 +1235,16 @@ export function describeToolResult(
     default:
       return "Готово";
   }
+}
+
+// Which capability a degraded search lost, in two words for the collapsed
+// tool line. A missing `degradedKind` is a transcript recorded before the
+// field existed, when the provider case was the only one that set
+// `degraded` at all.
+function describeDegraded(meta: SemanticSearchMeta): string {
+  return (meta.degradedKind ?? "embeddingProvider") === "staleIndex"
+    ? "индекс устарел"
+    : "без семантики";
 }
 
 // Short, inline-breakdown label for `describeToolResult`'s

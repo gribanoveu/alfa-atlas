@@ -584,7 +584,7 @@ mod tests {
         let parsed = parse_tool_call(&call).unwrap();
         assert_eq!(
             parsed,
-            ToolCall::SemanticSearch(SemanticSearchArgs { query: "auth flow".to_string(), top_k: Some(5), fts: None })
+            ToolCall::SemanticSearch(SemanticSearchArgs { query: "auth flow".to_string(), top_k: Some(5), fts: None, preview: None })
         );
     }
 
@@ -621,6 +621,7 @@ mod tests {
             ToolCall::SemanticSearch(SemanticSearchArgs {
                 query: "сроки рассмотрения".to_string(),
                 top_k: None,
+                preview: None,
                 fts: Some(vec!["срок".to_string(), "рассмотрение".to_string()]),
             })
         );
@@ -653,6 +654,7 @@ mod tests {
                     query: "searchTransactions поиск транзакций".to_string(),
                     top_k: Some(12),
                     fts: None,
+                    preview: None,
                 }),
             ),
             (

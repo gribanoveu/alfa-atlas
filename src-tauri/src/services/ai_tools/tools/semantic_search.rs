@@ -4,7 +4,7 @@
 //! tool wrapper around it: budget, readiness check, and the `meta` block
 //! that tells the model how much to trust what came back.
 
-use crate::domain::ai_tools::{MatchSource, SemanticSearchArgs, SemanticSearchMeta, SemanticSearchPayload, ToolError, ToolScope};
+use crate::domain::ai_tools::{DegradedKind, MatchSource, SemanticSearchArgs, SemanticSearchMeta, SemanticSearchPayload, ToolError, ToolScope};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::search_query::{SearchMetaInput, extract_search_tokens, weak_search_hint};
 
@@ -12,8 +12,8 @@ use crate::services::embedding_state::embedding_outage_active;
 
 use super::super::EmbeddingDeps;
 use super::super::search::{
-    DEFAULT_TOP_K, MAX_TOP_K, apply_related_boost, fuse_rrf, is_semantic_ready, lexical_matches,
-    related_files, semantic_matches, symbol_matches,
+    DEFAULT_TOP_K, MAX_TOP_K, apply_related_boost, apply_snippet_budget, fuse_rrf, index_is_stale,
+    is_semantic_ready, lexical_matches, related_files, semantic_matches, symbol_matches,
 };
 
 /// Entry point: an exact symbol-name hit (cheapest, always tried) is
@@ -45,7 +45,7 @@ pub(super) fn semantic_search(
     let mut results = symbol_matches(&deps.repo_index, scope, &args.query, top_k, &mut hidden);
 
     let mut tiers_used = vec!["symbol".to_string()];
-    let mut degraded: Option<String> = None;
+    let mut degraded: Option<(DegradedKind, String)> = None;
     let remaining = top_k.saturating_sub(results.len());
     if remaining > 0 {
         let related = deps
@@ -112,6 +112,19 @@ pub(super) fn semantic_search(
         results.extend(apply_related_boost(tier_results, &related, remaining));
     }
 
+    // Outranks whatever the tier match concluded: with the persisted
+    // chunking incompatible, both recall tiers refused to read the index,
+    // so whatever the embedding provider was doing never got a chance to
+    // matter. Checked unconditionally — the recall tiers are dark even on
+    // the search where the symbol tier alone filled the budget.
+    if index_is_stale(deps) {
+        degraded = Some(degraded_note(&DegradedReason::IndexStale));
+    }
+
+    // Ranking is finished, so this is the last chance to decide how much
+    // of each hit actually travels into the model's context.
+    let results = apply_snippet_budget(results, args.preview.unwrap_or(false));
+
     let symbol_hits = results
         .iter()
         .filter(|m| m.source == MatchSource::Symbol)
@@ -133,6 +146,10 @@ pub(super) fn semantic_search(
     // which is actively wrong when the index is fine and the provider is
     // unreachable — the model would keep re-searching for a tier that
     // cannot come back this turn.
+    let (degraded_kind, degraded) = match degraded {
+        Some((kind, note)) => (Some(kind), Some(note)),
+        None => (None, None),
+    };
     let hint = degraded.clone().or(hint);
 
     Ok(SemanticSearchPayload {
@@ -144,6 +161,7 @@ pub(super) fn semantic_search(
             weak,
             hint,
             degraded,
+            degraded_kind,
             hidden_by_access_boundary: hidden,
         },
     })
@@ -177,22 +195,45 @@ enum DegradedReason {
     SemanticFailed(String),
     /// Skipped without trying, inside the cooldown from a recent failure.
     ProviderCoolingDown,
+    /// The persisted index is incompatible with this build, so neither
+    /// recall tier would read it — a strictly worse position than either
+    /// provider problem, and the only one the model cannot work around.
+    IndexStale,
 }
 
-/// What the model reads instead of a silent quality drop. Says which tier
-/// is missing, that the results are still usable, and what to do instead —
-/// specifically *not* "search again", since a retry cannot restore the
-/// semantic tier within this turn.
-fn degraded_note(reason: &DegradedReason) -> String {
+/// What the model reads instead of a silent quality drop: which tier is
+/// missing, whether what came back is still usable, and what to do
+/// instead — specifically *not* "search again", since no retry restores a
+/// missing tier within this turn.
+///
+/// Returns the `DegradedKind` alongside the text so the UI can say its own
+/// thing about the same cause; the two must not be assembled separately.
+fn degraded_note(reason: &DegradedReason) -> (DegradedKind, String) {
     let cause = match reason {
         DegradedReason::SemanticFailed(err) => format!("не удалось обратиться к провайдеру эмбеддингов ({err})"),
         DegradedReason::ProviderCoolingDown => {
             "провайдер эмбеддингов недоступен (недавняя ошибка запроса)".to_string()
         }
+        // Both recall tiers are dark here, so the advice cannot be "narrow
+        // the query" — there is nothing to narrow it against. `grep` reads
+        // the files directly and is the one search that still works.
+        DegradedReason::IndexStale => {
+            return (
+                DegradedKind::StaleIndex,
+                "Индекс проекта несовместим с текущей версией приложения, поэтому поиск по смыслу и по тексту \
+                 сейчас не работает — ниже только совпадения по именам символов, если они есть. \
+                 Повторный поиск не поможет и переформулировка тоже: нужна синхронизация индекса \
+                 (Настройки → Эмбеддинги). Пока её нет, ищите через grep и readFile."
+                    .to_string(),
+            );
+        }
     };
-    format!(
-        "Семантический ярус отключён: {cause}. Результаты ниже — только точные имена и текст. \
-         Повторный такой же поиск не поможет: уточняйте query точными именами (camelCase) или используйте grep."
+    (
+        DegradedKind::EmbeddingProvider,
+        format!(
+            "Семантический ярус отключён: {cause}. Результаты ниже — только точные имена и текст. \
+             Повторный такой же поиск не поможет: уточняйте query точными именами (camelCase) или используйте grep."
+        ),
     )
 }
 
@@ -219,6 +260,10 @@ pub(super) fn definition() -> LlmToolDefinition {
                     "type": ["integer", "null"],
                     "minimum": 1,
                     "description": "Max number of results, default 10, capped at 50."
+                },
+                "preview": {
+                    "type": ["boolean", "null"],
+                    "description": "Return the full-length snippet of every match instead of the short default. Leave unset: path + qualifiedName (the heading breadcrumb, or Class.method) already say which hit to open, and readFile — with outline:true first, then a line range — reads the part you actually need. Set it only when you must compare several candidates verbatim and opening them one by one would cost more."
                 }
             },
             "required": ["query"]
@@ -269,6 +314,7 @@ mod tests {
                         query: "сроки рассмотрения уведомлений".to_string(),
                         top_k: None,
                         fts: None,
+                        preview: None,
                     }),
                     &deps,
                     &[],
@@ -302,14 +348,47 @@ mod tests {
 
     #[test]
     fn the_degraded_note_names_the_cause_and_steers_away_from_a_retry() {
-        let note = degraded_note(&DegradedReason::SemanticFailed(
+        let (kind, note) = degraded_note(&DegradedReason::SemanticFailed(
             "semantic search failed: http error: io: failed to lookup address information".into(),
         ));
+        assert_eq!(kind, DegradedKind::EmbeddingProvider);
         assert!(note.contains("failed to lookup address information"), "{note}");
         assert!(note.contains("grep"), "should offer a usable alternative: {note}");
         assert!(note.contains("не поможет"), "should discourage an identical retry: {note}");
 
-        let cooling = degraded_note(&DegradedReason::ProviderCoolingDown);
+        let (kind, cooling) = degraded_note(&DegradedReason::ProviderCoolingDown);
+        assert_eq!(kind, DegradedKind::EmbeddingProvider);
         assert!(cooling.contains("недоступен"), "{cooling}");
+    }
+
+    /// A stale index is the one degradation the model can do nothing about,
+    /// so its note must not read like the others — "rephrase the query" is
+    /// the advice `weak_search_hint` would otherwise give for the empty
+    /// result it produces, and it would send the model in circles.
+    #[test]
+    fn the_stale_index_note_asks_for_a_sync_rather_than_a_better_query() {
+        let (kind, note) = degraded_note(&DegradedReason::IndexStale);
+
+        assert_eq!(kind, DegradedKind::StaleIndex);
+        assert!(note.contains("синхронизация"), "should name the actual fix: {note}");
+        assert!(note.contains("grep"), "should offer what still works: {note}");
+        assert!(
+            note.contains("переформулировка тоже"),
+            "should rule out rephrasing explicitly: {note}"
+        );
+        assert!(
+            !note.contains("camelCase"),
+            "must not repeat the ordinary refine-your-query advice: {note}"
+        );
+    }
+
+    /// The two causes have opposite fixes, so nothing downstream may have
+    /// to tell them apart by reading the prose.
+    #[test]
+    fn every_degraded_reason_carries_a_distinct_kind() {
+        assert_ne!(
+            degraded_note(&DegradedReason::ProviderCoolingDown).0,
+            degraded_note(&DegradedReason::IndexStale).0
+        );
     }
 }

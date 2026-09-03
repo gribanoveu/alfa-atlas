@@ -330,9 +330,11 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
       // the wire, see `tools::semantic_search::degraded_note`), so the user
       // gets their own phrasing here — and the ordinary hint is suppressed,
       // since the degradation is both the cause and the only useful advice.
-      const degradedText = meta.degraded
-        ? "Семантический поиск был недоступен — показаны совпадения только по именам и тексту. Проверьте доступ к провайдеру эмбеддингов."
-        : null;
+      const degradedText = !meta.degraded
+        ? null
+        : (meta.degradedKind ?? "embeddingProvider") === "staleIndex"
+          ? "Индекс проекта устарел — поиск по смыслу и по тексту не работал, показаны только совпадения по именам. Синхронизируйте индекс в настройках эмбеддингов."
+          : "Семантический поиск был недоступен — показаны совпадения только по именам и тексту. Проверьте доступ к провайдеру эмбеддингов.";
       const hintText =
         degradedText ??
         meta.hint ??

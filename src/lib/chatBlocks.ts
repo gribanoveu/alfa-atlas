@@ -825,8 +825,13 @@ export function toolLedger(blocks: MessageBlock[]): string {
 }
 
 /** Whether this conversation's *most recent* search ran without the
- * semantic tier, i.e. the embedding API could not be reached (see
+ * semantic tier because the embedding API could not be reached (see
  * `services::ai_tools::tools::semantic_search`'s degraded path).
+ *
+ * Specifically that cause, not any degradation: a stale index also
+ * degrades a search, but the banner this drives tells the user to check
+ * their embeddings endpoint, which for a stale index is wrong advice about
+ * a working endpoint.
  *
  * Derived from the transcript rather than tracked as its own state: the
  * transcript already records what actually happened, so this can't drift,
@@ -844,7 +849,11 @@ export function searchIsDegraded(messages: ChatMessage[]): boolean {
       const block = message.blocks[j];
       if (block === undefined || block.type !== "toolCall") continue;
       if (block.status !== "done" || block.result?.tool !== "semanticSearchResults") continue;
-      return normalizeSemanticSearchResult(block.result.result).meta.degraded !== null;
+      const { meta } = normalizeSemanticSearchResult(block.result.result);
+      // A chat recorded before `degradedKind` existed only ever set
+      // `degraded` for the provider case, so treating a missing kind as
+      // that cause keeps those transcripts reading the way they did.
+      return meta.degraded !== null && (meta.degradedKind ?? "embeddingProvider") === "embeddingProvider";
     }
   }
   return false;

@@ -10,10 +10,10 @@ use std::sync::Arc;
 use dashmap::DashMap;
 
 use crate::domain::chunk_index::{
-    chunk_hash, finalize_ordinals, qualified_name_for, split_oversized_chunks, Chunk,
-    ChunkBuildOptions, ChunkId, ChunkMetadata, ChunkStrategy,
+    chunk_hash, finalize_ordinals, qualified_name_for, section_breadcrumb, section_headings,
+    split_oversized_chunks, Chunk, ChunkBuildOptions, ChunkId, ChunkMetadata, ChunkStrategy,
 };
-use crate::domain::repo_index::{FileId, Language, RepoIndexError};
+use crate::domain::repo_index::{FileId, Language, RepoIndexError, SymbolKind};
 use crate::infra::chunk_strategies;
 use crate::services::repo_index::RepositoryIndex;
 
@@ -67,6 +67,9 @@ impl ChunkBuilder {
 
         let file_hash = indexed.metadata.hash;
         let language = indexed.metadata.language;
+        // Computed once per file, not per span: every section chunk walks
+        // the same heading list to find its ancestry.
+        let headings = section_headings(&symbols, &content, language);
 
         let chunks: Vec<Chunk> = spans
             .into_iter()
@@ -94,10 +97,17 @@ impl ChunkBuilder {
                 }
                 let text = content[span.start_byte as usize..span.end_byte as usize].to_string();
                 let hash = chunk_hash(file_hash, span.start_byte, span.end_byte);
-                let qualified_name = span
-                    .anchor_symbol
-                    .as_ref()
-                    .and_then(|anchor| qualified_name_for(anchor, &symbols));
+                // Two different notions of "what encloses this chunk":
+                // code nests by byte range (a method inside its class),
+                // documentation nests by heading depth, which no byte range
+                // expresses — both indexers give a section symbol the span
+                // of its title line, not of its content.
+                let qualified_name = span.anchor_symbol.as_ref().and_then(|anchor| {
+                    match anchor.kind {
+                        SymbolKind::Section => section_breadcrumb(anchor, &headings),
+                        _ => qualified_name_for(anchor, &symbols),
+                    }
+                });
                 Some(Chunk {
                     metadata: ChunkMetadata {
                         id: ChunkId(format!(
@@ -216,14 +226,6 @@ impl ChunkIndex {
 
     pub fn get(&self, id: &ChunkId) -> Option<ChunkMetadata> {
         self.chunks.get(id).map(|entry| entry.value().clone())
-    }
-
-    /// Every chunk's metadata, across every file — what a lexical (no
-    /// embeddings) search fallback scans. No secondary index by content;
-    /// this is a full scan, same cost class as `chunk_ids()` just with the
-    /// full `ChunkMetadata` instead of only the key.
-    pub fn all(&self) -> Vec<ChunkMetadata> {
-        self.chunks.iter().map(|entry| entry.value().clone()).collect()
     }
 
     /// Any one stored chunk's `file_hash` for `file_id` (every chunk of a
