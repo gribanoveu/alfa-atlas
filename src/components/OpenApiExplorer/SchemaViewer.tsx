@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { isRefMarker, type JsonValue, type RefMarker } from "./openApiModel";
+import { compatibleExampleForSchema } from "./requestBuilder";
 import "./OpenApiExplorer.css";
 
 type SchemaViewerProps = {
@@ -73,8 +74,7 @@ export function SchemaViewer({ schema, name, depth = 0, required = false }: Sche
   const anyOf = asSchemaArray(s.anyOf);
   const enumValues = asSchemaArray(s.enum);
   const description = typeof s.description === "string" ? s.description : null;
-  const example = s.example ?? (asSchemaArray(s.examples)?.[0] ?? undefined);
-
+  const example = compatibleExampleForSchema(s);
   const hasChildren = Boolean(properties || items || allOf || oneOf || anyOf);
 
   return (

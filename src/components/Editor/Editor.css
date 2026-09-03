@@ -54,6 +54,17 @@
   -webkit-user-select: none;
 }
 
+/* A tab is sized by its label, and most labels are file names. An artifact
+   is titled with a sentence, so without a cap one tab stretches the strip
+   and pushes every other tab out of reach. `ch` rather than px so the cap
+   follows the user's font size. */
+.tab-title {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tab.active {
   background: var(--bg-editor);
   color: var(--text-0);

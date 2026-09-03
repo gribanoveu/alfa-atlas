@@ -154,8 +154,12 @@ export function EditorTabs({
               className={`tab ${active ? "active" : ""}`}
               onClick={() => onSelect(tab.id)}
               onContextMenu={(event) => openContextMenu(event, tab.id)}
+              // The label is capped, so the full one has to be reachable
+              // somewhere — a file tab's title is a name, but an artifact's
+              // is a sentence the user wrote.
+              title={tab.title}
             >
-              {tab.title}
+              <span className="tab-title">{tab.title}</span>
               {tab.dirty ? <span className="dot-mod tab-dot" /> : null}
               <span
                 className="close"

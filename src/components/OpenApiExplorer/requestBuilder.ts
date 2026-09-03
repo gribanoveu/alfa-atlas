@@ -6,6 +6,56 @@ export function paramKey(location: string, name: string): string {
   return `${location}:${name}`;
 }
 
+type SchemaKind = "string" | "integer" | "number" | "boolean" | "object" | "array" | "null" | "any";
+
+function valueKind(value: unknown): SchemaKind {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  if (typeof value === "number") return Number.isInteger(value) ? "integer" : "number";
+  if (typeof value === "string") return "string";
+  if (typeof value === "boolean") return "boolean";
+  if (typeof value === "object") return "object";
+  return "any";
+}
+
+function schemaKind(s: JsonValue): SchemaKind | SchemaKind[] {
+  if (Array.isArray(s.type)) {
+    return s.type.filter((type): type is SchemaKind =>
+      typeof type === "string" &&
+      ["string", "integer", "number", "boolean", "object", "array", "null"].includes(type),
+    );
+  }
+  if (typeof s.type === "string") return s.type as SchemaKind;
+  if (s.properties) return "object";
+  if (s.items) return "array";
+  return "any";
+}
+
+function exampleMatchesSchema(s: JsonValue, example: unknown): boolean {
+  const actual = valueKind(example);
+  if (actual === "null") return s.nullable === true || schemaKind(s) === "null";
+  const declared = schemaKind(s);
+  if (Array.isArray(declared)) return declared.includes(actual);
+  if (declared === "number") return actual === "number" || actual === "integer";
+  return declared === "any" || declared === actual;
+}
+
+/** Returns an explicit example only when it has the same JSON shape as the
+ * schema. Generated OpenAPI documents occasionally leave a scalar example
+ * next to a resolved object `$ref`; using that value would make the example
+ * disagree with the contract and hide all of the object's fields. */
+export function compatibleExampleForSchema(schema: unknown): unknown | undefined {
+  if (isRefMarker(schema)) return undefined;
+  const s = asObject(schema);
+  if (!s) return undefined;
+  const example = s.example !== undefined
+    ? s.example
+    : Array.isArray(s.examples) && s.examples.length > 0
+      ? s.examples[0]
+      : undefined;
+  return example !== undefined && exampleMatchesSchema(s, example) ? example : undefined;
+}
+
 /** Generates a plausible starting value for a schema: its `example`/`default`
  * if declared, otherwise a type-appropriate skeleton (empty string, 0, `{}`
  * with skeleton properties, etc). Safe against cycles because the resolver
@@ -15,8 +65,8 @@ export function skeletonForSchema(schema: unknown): unknown {
   if (isRefMarker(schema)) return null;
   const s = asObject(schema);
   if (!s) return null;
-  if (s.example !== undefined) return s.example;
-  if (Array.isArray(s.examples) && s.examples.length > 0) return s.examples[0];
+  const example = compatibleExampleForSchema(s);
+  if (example !== undefined) return example;
   if (s.default !== undefined) return s.default;
   if (Array.isArray(s.enum) && s.enum.length > 0) return s.enum[0];
 
