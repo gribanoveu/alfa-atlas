@@ -20,7 +20,7 @@ use crate::domain::ai_tools::{MatchSource, ToolError, ToolMatch, ToolScope};
 use crate::domain::chunk_index::qualified_name_for;
 use crate::domain::repo_index::{FileId, Symbol};
 use crate::domain::search_query::{
-    MatchTightness, extract_search_tokens, fts5_query, path_segment_matches,
+    MatchTightness, extract_search_tokens, fts5_query, fts5_query_from_terms, path_segment_matches,
     symbol_name_matches_token,
 };
 use crate::infra::{embedding_credentials_store, embedding_providers};
@@ -263,6 +263,12 @@ const BM25_MAX_CANDIDATES: usize = 500;
 /// whenever chunks have been indexed — including when no embedding provider
 /// is configured at all, which is what makes it the fallback tier.
 ///
+/// `fts` is the model's own list of literal terms
+/// (`SemanticSearchArgs::fts`); `None`, or a list that tokenizes to
+/// nothing, falls back to tokenizing `query`. The fallback matters: a model
+/// that sends `fts: ["…"]` full of punctuation would otherwise lose this
+/// tier outright, having asked for *more* precision, not less.
+///
 /// Infallible by signature on purpose: this is what the cascade degrades
 /// *to*, so a store that won't attach, a project that isn't open, or a
 /// malformed `MATCH` all report no results rather than failing a search
@@ -271,10 +277,14 @@ pub(super) fn lexical_matches(
     deps: &EmbeddingDeps,
     scope: &ToolScope,
     query: &str,
+    fts: Option<&[String]>,
     top_k: usize,
     hidden: &mut u32,
 ) -> Vec<ToolMatch> {
-    let Some(fts_query) = fts5_query(query) else {
+    let Some(fts_query) = fts
+        .and_then(fts5_query_from_terms)
+        .or_else(|| fts5_query(query))
+    else {
         return Vec::new();
     };
 
@@ -923,7 +933,7 @@ mod tests {
             ],
             AiAccessMode::FullRepo,
             |deps, scope| {
-                let matches = lexical_matches(deps, scope, "порядок подачи уведомления", 10, &mut 0);
+                let matches = lexical_matches(deps, scope, "порядок подачи уведомления", None, 10, &mut 0);
 
                 assert_eq!(matches[0].path, "dense.adoc", "{matches:#?}");
                 assert_eq!(matches[0].source, MatchSource::Lexical);
@@ -944,10 +954,57 @@ mod tests {
             AiAccessMode::FullRepo,
             |deps, scope| {
                 // No ASCII identifier anywhere in the query.
-                let matches = lexical_matches(deps, scope, "сроки рассмотрения", 10, &mut 0);
+                let matches = lexical_matches(deps, scope, "сроки рассмотрения", None, 10, &mut 0);
 
                 assert_eq!(matches.len(), 1, "{matches:#?}");
                 assert!(matches[0].snippet.contains("Сроки"));
+            },
+        );
+    }
+
+    /// `fts` is what the model wants matched literally, so it replaces the
+    /// query's own words rather than being added to them — otherwise the
+    /// filler it deliberately left out would go on diluting the ranking.
+    #[test]
+    fn lexical_matches_searches_the_model_supplied_terms_instead_of_the_query() {
+        with_synced_project(
+            "bm25-fts-arg",
+            &[
+                ("deadlines.adoc", "= Сроки\n\nСроки рассмотрения заявки.\n"),
+                ("registry.adoc", "= Реестр\n\nВедение реестра уведомлений.\n"),
+            ],
+            AiAccessMode::FullRepo,
+            |deps, scope| {
+                let query = "где написано про сроки рассмотрения";
+
+                let from_query = lexical_matches(deps, scope, query, None, 10, &mut 0);
+                assert_eq!(from_query[0].path, "deadlines.adoc", "{from_query:#?}");
+
+                // Same query, but the model says the word that matters is
+                // `реестр` — a word the query never contained.
+                let terms = ["реестр".to_string()];
+                let from_terms = lexical_matches(deps, scope, query, Some(&terms), 10, &mut 0);
+
+                assert_eq!(from_terms.len(), 1, "{from_terms:#?}");
+                assert_eq!(from_terms[0].path, "registry.adoc");
+            },
+        );
+    }
+
+    /// A model that asks for more precision and sends unusable terms must
+    /// not end up with less: losing this tier entirely would be the worst
+    /// possible answer to `fts: ["—"]`.
+    #[test]
+    fn lexical_matches_falls_back_to_the_query_when_the_terms_tokenize_to_nothing() {
+        with_synced_project(
+            "bm25-fts-empty",
+            &[("guide.adoc", "= Guide\n\nСроки рассмотрения заявки.\n")],
+            AiAccessMode::FullRepo,
+            |deps, scope| {
+                let terms = ["—".to_string(), "?".to_string()];
+                let matches = lexical_matches(deps, scope, "сроки рассмотрения", Some(&terms), 10, &mut 0);
+
+                assert_eq!(matches.len(), 1, "{matches:#?}");
             },
         );
     }
@@ -959,8 +1016,8 @@ mod tests {
             &[("guide.adoc", "= Guide\n\nтекст\n")],
             AiAccessMode::FullRepo,
             |deps, scope| {
-                assert!(lexical_matches(deps, scope, "", 10, &mut 0).is_empty());
-                assert!(lexical_matches(deps, scope, " — ?! ", 10, &mut 0).is_empty());
+                assert!(lexical_matches(deps, scope, "", None, 10, &mut 0).is_empty());
+                assert!(lexical_matches(deps, scope, " — ?! ", None, 10, &mut 0).is_empty());
             },
         );
     }
@@ -976,7 +1033,7 @@ mod tests {
             AiAccessMode::DocsOnly,
             |deps, scope| {
                 let mut hidden = 0;
-                let matches = lexical_matches(deps, scope, "уведомления", 10, &mut hidden);
+                let matches = lexical_matches(deps, scope, "уведомления", None, 10, &mut hidden);
 
                 assert_eq!(matches.len(), 1, "{matches:#?}");
                 assert_eq!(matches[0].path, "guide.adoc");
@@ -992,7 +1049,7 @@ mod tests {
 
         // No open project, so no store to rank against — the tier the whole
         // cascade degrades to must degrade quietly itself.
-        assert!(lexical_matches(&EmbeddingDeps::empty(), &scope, "needle", 10, &mut 0).is_empty());
+        assert!(lexical_matches(&EmbeddingDeps::empty(), &scope, "needle", None, 10, &mut 0).is_empty());
 
         fs::remove_dir_all(&repo).ok();
     }

@@ -66,8 +66,16 @@ pub(super) fn semantic_search(
         // Always run: one indexed SQLite query, and its exact-term evidence
         // is worth fusing in even when the semantic tier is healthy — an
         // identifier or a Russian term the embedding model blurred is
-        // precisely what BM25 is good at.
-        let lexical = lexical_matches(deps, scope, &args.query, fetch_k, &mut hidden);
+        // precisely what BM25 is good at. `args.fts`, when the model sent
+        // it, is what this tier searches instead of the whole query.
+        let lexical = lexical_matches(
+            deps,
+            scope,
+            &args.query,
+            args.fts.as_deref(),
+            fetch_k,
+            &mut hidden,
+        );
         tiers_used.push("lexical".to_string());
 
         let tier = choose_tier(is_semantic_ready(deps), embedding_outage_active());
@@ -193,7 +201,7 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "semanticSearch".to_string(),
         description:
-            "Default search tool — use this first whenever you need to find something in the project and the exact file or line is not already known. Searches via symbol lookup (exact + stem) plus a fusion of semantic similarity and BM25 full-text ranking, so exact wording (Russian included) and meaning both count. One strong first query beats several vague repeats — guess camelCase names justified by words in the question (уведомления→Notification/getNotifications, не выдумывать Patent если пользователь не сказал «патент») plus Russian business context; do not send only a lone plain word. Refine with real operation/class names only after a hit reveals them. A second call is only for a new identifier learned from readFile — prefer at most two searches per request. After results, readFile at most 2–3 entry files (adoc + owning *Service); do not listFiles the parent or open mappers/siblings until needed. If meta.hint is present, follow it on the next search. Verify with readFile before precise claims; use grep only for exhaustive exact line matches."
+            "Default search tool — use this first whenever you need to find something in the project and the exact file or line is not already known. Searches via symbol lookup (exact + stem) plus a fusion of semantic similarity and BM25 full-text ranking, so exact wording (Russian included) and meaning both count — pass fts alongside query to say which words must match literally. One strong first query beats several vague repeats — guess camelCase names justified by words in the question (уведомления→Notification/getNotifications, не выдумывать Patent если пользователь не сказал «патент») plus Russian business context; do not send only a lone plain word. Refine with real operation/class names only after a hit reveals them. A second call is only for a new identifier learned from readFile — prefer at most two searches per request. After results, readFile at most 2–3 entry files (adoc + owning *Service); do not listFiles the parent or open mappers/siblings until needed. If meta.hint is present, follow it on the next search. Verify with readFile before precise claims; use grep only for exhaustive exact line matches."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -201,6 +209,11 @@ pub(super) fn definition() -> LlmToolDefinition {
                 "query": {
                     "type": "string",
                     "description": "Search query: English camelCase justified by the question's own words (getNotifications from «уведомления», not invented domain prefixes) + Russian business context. Prefer identifiers over a lone plain word. Strong first query — refine only with new names from readFile."
+                },
+                "fts": {
+                    "type": ["array", "null"],
+                    "items": { "type": "string" },
+                    "description": "Literal words to match as text, alongside query's meaning — the load-bearing terms of the question, in the wording the documents themselves would use. Include Russian domain terms as written (уведомление, срок, заявка) and any identifier you expect verbatim. Omit filler (как, где, нужно) and anything you are only guessing at: a wrong term here costs ranking, it does not just miss. Leave unset to reuse query's own words."
                 },
                 "topK": {
                     "type": ["integer", "null"],
@@ -255,6 +268,7 @@ mod tests {
                     ToolCall::SemanticSearch(SemanticSearchArgs {
                         query: "сроки рассмотрения уведомлений".to_string(),
                         top_k: None,
+                        fts: None,
                     }),
                     &deps,
                     &[],

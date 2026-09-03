@@ -256,6 +256,7 @@ mod tests {
             ToolCall::SemanticSearch(SemanticSearchArgs {
                 query: "intro".to_string(),
                 top_k: None,
+                fts: None,
             }),
             &EmbeddingDeps::empty(),
             &[],

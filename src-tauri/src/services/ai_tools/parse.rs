@@ -584,7 +584,7 @@ mod tests {
         let parsed = parse_tool_call(&call).unwrap();
         assert_eq!(
             parsed,
-            ToolCall::SemanticSearch(SemanticSearchArgs { query: "auth flow".to_string(), top_k: Some(5) })
+            ToolCall::SemanticSearch(SemanticSearchArgs { query: "auth flow".to_string(), top_k: Some(5), fts: None })
         );
     }
 
@@ -608,6 +608,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_tool_call_reads_the_fts_term_list_in_either_spelling() {
+        let listed = parse_tool_call(&LlmToolCall {
+            id: "1".into(),
+            name: "semanticSearch".into(),
+            arguments: r#"{"query":"сроки рассмотрения","fts":["срок","рассмотрение"]}"#.into(),
+        })
+        .unwrap();
+        assert_eq!(
+            listed,
+            ToolCall::SemanticSearch(SemanticSearchArgs {
+                query: "сроки рассмотрения".to_string(),
+                top_k: None,
+                fts: Some(vec!["срок".to_string(), "рассмотрение".to_string()]),
+            })
+        );
+
+        // Same leniency the quoted-number fields get: a bare string where a
+        // list was asked for is unambiguous, so it must not fail the call.
+        let bare = parse_tool_call(&LlmToolCall {
+            id: "2".into(),
+            name: "semanticSearch".into(),
+            arguments: r#"{"query":"сроки","fts":"срок"}"#.into(),
+        })
+        .unwrap();
+        let ToolCall::SemanticSearch(args) = bare else {
+            panic!("expected SemanticSearch, got {bare:?}");
+        };
+        assert_eq!(args.fts, Some(vec!["срок".to_string()]));
+    }
+
     /// Every quoted-number call from one real transcript, verbatim. Each
     /// of these previously failed with `invalid type: string ...`, costing
     /// a round trip and (twice) the parameter itself — see
@@ -621,6 +652,7 @@ mod tests {
                 ToolCall::SemanticSearch(SemanticSearchArgs {
                     query: "searchTransactions поиск транзакций".to_string(),
                     top_k: Some(12),
+                    fts: None,
                 }),
             ),
             (

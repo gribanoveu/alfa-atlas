@@ -85,6 +85,20 @@ pub struct SemanticSearchArgs {
     /// to a hard maximum regardless of what's requested.
     #[serde(default, deserialize_with = "flexible_args::opt_usize")]
     pub top_k: Option<usize>,
+    /// Literal terms for the BM25 tier, supplied by the model separately
+    /// from `query` — the identifiers, field names and Russian wording it
+    /// wants matched as text rather than as meaning.
+    ///
+    /// Exists because the two tiers want different inputs from the same
+    /// question: the semantic tier is embedded whole and does better with a
+    /// full natural-language sentence, while full-text ranking wants the
+    /// few load-bearing words out of it. Deriving both from one string
+    /// means guessing which words matter; the model already knows.
+    ///
+    /// `None` keeps the previous behaviour — the BM25 tier tokenizes
+    /// `query` itself.
+    #[serde(default, deserialize_with = "flexible_args::opt_string_list")]
+    pub fts: Option<Vec<String>>,
 }
 
 /// Exact regex content search across files under the tool scope root —

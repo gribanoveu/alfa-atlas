@@ -156,6 +156,19 @@ pub fn fts5_query(query: &str) -> Option<String> {
     Some(terms.join(" OR "))
 }
 
+/// [`fts5_query`] over terms the model listed explicitly
+/// (`SemanticSearchArgs::fts`) instead of over the free-text query.
+///
+/// The terms go through the same tokenizer rather than being trusted
+/// verbatim: they still need the stem-prefix treatment to survive Russian
+/// inflection, still need quoting so a term like `NEAR` cannot parse as an
+/// operator, and a model that answers with a phrase (`"порядок подачи"`)
+/// rather than single words should get both words searched, not one term
+/// that matches nothing.
+pub fn fts5_query_from_terms(terms: &[String]) -> Option<String> {
+    fts5_query(&terms.join(" "))
+}
+
 /// True when any extracted token looks like camelCase/PascalCase (not just
 /// a plain English word like `notifications`).
 pub fn has_identifier_token(tokens: &[String]) -> bool {
@@ -578,6 +591,32 @@ mod tests {
         assert!(fts.contains("\"near\"*"), "{fts}");
         // A bare leading digit is an FTS5 syntax error, not just a miss.
         assert!(fts.contains("\"2fa\""), "{fts}");
+    }
+
+    #[test]
+    fn fts5_query_from_terms_gives_model_supplied_terms_the_same_treatment() {
+        let terms = ["уведомления".to_string(), "getNotifications".to_string()];
+        let fts = fts5_query_from_terms(&terms).unwrap();
+
+        // Stemmed and prefixed like any other term — a term trusted
+        // verbatim would miss `уведомлений`.
+        assert!(fts.contains("\"уведом\"*"), "{fts}");
+        assert!(fts.contains("\"getnot\"*"), "{fts}");
+        assert!(fts.contains(" OR "), "{fts}");
+    }
+
+    #[test]
+    fn fts5_query_from_terms_splits_a_phrase_into_its_words() {
+        // A model that answers with a phrase should still get both words
+        // searched, not one term that matches nothing.
+        let fts = fts5_query_from_terms(&["порядок подачи".to_string()]).unwrap();
+        assert!(fts.contains("\"порядо\"*") && fts.contains("\"подачи\"*"), "{fts}");
+    }
+
+    #[test]
+    fn fts5_query_from_terms_is_none_when_the_terms_are_unusable() {
+        assert!(fts5_query_from_terms(&[]).is_none());
+        assert!(fts5_query_from_terms(&["—".to_string(), "?".to_string()]).is_none());
     }
 
     #[test]

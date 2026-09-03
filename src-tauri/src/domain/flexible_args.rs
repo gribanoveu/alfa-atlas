@@ -1,6 +1,6 @@
-//! Type coercion for the numeric and boolean fields of tool arguments —
-//! the one place that decides how forgiving `parse_tool_call` is about the
-//! *shape* of a scalar the model sent.
+//! Type coercion for the numeric, boolean and string-list fields of tool
+//! arguments — the one place that decides how forgiving `parse_tool_call`
+//! is about the *shape* of a value the model sent.
 //!
 //! Motivation is a real, repeatedly observed failure mode: a model calls
 //! `readFile` with `{"path": "...", "startLine": "1", "endLine": "90"}` —
@@ -24,6 +24,8 @@
 //! - `null`, omitted, `""`, `"null"`, `"none"`, `"undefined"` → `None`
 //! - `true`, `"true"`, `"yes"`, `"1"`, `1` → `Some(true)` (and the
 //!   corresponding falsey spellings → `Some(false)`)
+//! - `["a", "b"]`, `"a"`, `["a", 12]` → `Some(vec!["a", ...])`; `[]`,
+//!   `[""]` → `None`
 //! - `"abc"`, `12.5`, `-3`, `[]`, `{}` → an error whose message names the
 //!   value and the expected spelling, because guessing here would silently
 //!   change what the model asked for.
@@ -110,6 +112,69 @@ where
     D: Deserializer<'de>,
 {
     opt_bool(deserializer).map(|v| v.unwrap_or(false))
+}
+
+/// `Option<Vec<String>>` that also accepts a single bare string, and
+/// tolerates numbers among the entries.
+///
+/// Same failure class as a quoted number, one shape up: a model asked for a
+/// list of search terms answers `"fts": "уведомления"` about as often as
+/// `["уведомления"]`, and a plain `Option<Vec<String>>` rejects the whole
+/// call over it. A lone string becomes a one-entry list rather than being
+/// split on any separator — the one consumer
+/// (`domain::search_query::fts5_query_from_terms`) re-tokenizes entries
+/// anyway, so guessing at commas here could only be wrong.
+///
+/// Blank entries are dropped and an all-blank list reads as absent, so
+/// `[]` and `[""]` mean the same thing as omitting the field.
+pub fn opt_string_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    let Some(value) = value else { return Ok(None) };
+
+    let raw = match value {
+        Value::Null => return Ok(None),
+        Value::String(s) => {
+            if NULLISH.contains(&s.trim().to_ascii_lowercase().as_str()) {
+                return Ok(None);
+            }
+            vec![s]
+        }
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    Value::String(s) => out.push(s),
+                    // A year or an error code is a perfectly good search
+                    // term; only its spelling is unusual.
+                    Value::Number(n) => out.push(n.to_string()),
+                    Value::Null => continue,
+                    other => {
+                        return Err(D::Error::custom(format!(
+                            "expected a list of strings, but one entry is {}",
+                            describe(&other)
+                        )))
+                    }
+                }
+            }
+            out
+        }
+        other => {
+            return Err(D::Error::custom(format!(
+                "expected a list of strings, got {} — send it as [\"term\", \"term\"]",
+                describe(&other)
+            )))
+        }
+    };
+
+    let cleaned: Vec<String> = raw
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Ok((!cleaned.is_empty()).then_some(cleaned))
 }
 
 /// Shared body of [`opt_u32`] / [`opt_usize`]: one non-negative integer,
@@ -315,5 +380,51 @@ mod tests {
     fn rejects_an_ambiguous_boolean_string() {
         let err = parse(r#"{"caseInsensitive":"maybe"}"#).unwrap_err();
         assert!(err.contains("boolean"), "unexpected message: {err}");
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct ListProbe {
+        #[serde(default, deserialize_with = "super::opt_string_list")]
+        fts: Option<Vec<String>>,
+    }
+
+    fn parse_list(json: &str) -> Result<Option<Vec<String>>, String> {
+        serde_json::from_str::<ListProbe>(json)
+            .map(|p| p.fts)
+            .map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn accepts_a_string_list_and_the_lone_string_a_model_sends_instead() {
+        assert_eq!(
+            parse_list(r#"{"fts":["уведомление","срок"]}"#).unwrap(),
+            Some(vec!["уведомление".to_string(), "срок".to_string()])
+        );
+        assert_eq!(
+            parse_list(r#"{"fts":"уведомление"}"#).unwrap(),
+            Some(vec!["уведомление".to_string()])
+        );
+        // A year or an error code is a fine search term, oddly spelled.
+        assert_eq!(
+            parse_list(r#"{"fts":["ГОСТ",2024]}"#).unwrap(),
+            Some(vec!["ГОСТ".to_string(), "2024".to_string()])
+        );
+    }
+
+    #[test]
+    fn treats_an_empty_or_blank_list_as_absent() {
+        assert_eq!(parse_list("{}").unwrap(), None);
+        assert_eq!(parse_list(r#"{"fts":null}"#).unwrap(), None);
+        assert_eq!(parse_list(r#"{"fts":""}"#).unwrap(), None);
+        assert_eq!(parse_list(r#"{"fts":[]}"#).unwrap(), None);
+        assert_eq!(parse_list(r#"{"fts":["", "  "]}"#).unwrap(), None);
+    }
+
+    #[test]
+    fn rejects_a_list_shape_that_cannot_be_read_as_terms() {
+        let err = parse_list(r#"{"fts":{"term":"a"}}"#).unwrap_err();
+        assert!(err.contains("list of strings"), "unexpected message: {err}");
+        assert!(parse_list(r#"{"fts":[["nested"]]}"#).is_err());
+        assert!(parse_list(r#"{"fts":[true]}"#).is_err());
     }
 }
