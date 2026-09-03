@@ -41,7 +41,14 @@ import { useEditorTabActions } from "./hooks/useEditorTabActions";
 import { useEditorTabs } from "./hooks/useEditorTabs";
 import { useSpecsRepo } from "./hooks/useSpecsRepo";
 import { useOpenApiBundle } from "./hooks/useOpenApiBundle";
-import { OpenApiExplorer } from "./components/OpenApiExplorer/OpenApiExplorer";
+import { useOpenApiExplorerState } from "./hooks/useOpenApiExplorerState";
+import {
+  OpenApiExplorer,
+  type SpecSourceTarget,
+} from "./components/OpenApiExplorer/OpenApiExplorer";
+import { findSpecLine } from "./components/OpenApiExplorer/sourceMap";
+import { writeExportFile } from "./lib/chatExport";
+import { save } from "@tauri-apps/plugin-dialog";
 import { UtilityView } from "./components/Utilities/UtilityView";
 import { utilityTabId } from "./data/utilities";
 import { artifactTabId, createAndOpenArtifact } from "./lib/artifactTabs";
@@ -95,6 +102,7 @@ import {
   isAsciiDocPath,
   lineEndingLabelFor,
 } from "./lib/supportedFiles";
+import { isJsonPath, isYamlPath } from "./lib/fileExtensions";
 import {
   isUnderDocsRoot,
   toDocsRelativePath,
@@ -166,6 +174,9 @@ function App() {
   });
 
   const specsRepo = useSpecsRepo(project.repoRoot);
+  // Вид Explorer'а — псевдовкладка, её компонент размонтируется при закрытии;
+  // состояние (выбранная операция, форма запроса, секреты) держим здесь.
+  const openApiExplorerState = useOpenApiExplorerState(project.repoRoot);
   const tabs = useEditorTabActions({ editor, specsRepo });
   const {
     openApiTabOpen,
@@ -202,12 +213,15 @@ function App() {
     specEntryDocsPath !== null &&
     activeFilePath === specEntryDocsPath;
 
-  // Любой файл спецификации (входной документ или фрагмент из schemas/,
-  // operations/, …) даёт в полосе вкладок кнопку «API Explorer».
+  // Кнопка «API Explorer» в полосе вкладок — только на самих файлах
+  // спецификации: входной документ или фрагмент из schemas/, operations/, ….
+  // Не на любом YAML в проекте (нужен распознанный specs-репозиторий) и не на
+  // соседях по папке вроде README.md — им рендер открывать неоткуда.
   const inSpecsTree = useMemo(() => {
     if (!specsRepo.info || !activeFilePath || !project.repoRoot || !project.docsRoot) {
       return false;
     }
+    if (!isYamlPath(activeFilePath) && !isJsonPath(activeFilePath)) return false;
     const repoRelative = toRepoRelativePath(
       activeFilePath,
       project.repoRoot,
@@ -216,11 +230,22 @@ function App() {
     return repoRelative.replace(/\\/g, "/").startsWith("specs/");
   }, [specsRepo.info, activeFilePath, project.repoRoot, project.docsRoot]);
 
+  const activeSpecRepoPath = useMemo(() => {
+    if (!inSpecsTree || !activeFilePath || !project.repoRoot || !project.docsRoot) {
+      return null;
+    }
+    return toRepoRelativePath(activeFilePath, project.repoRoot, project.docsRoot).replace(
+      /\\/g,
+      "/",
+    );
+  }, [inSpecsTree, activeFilePath, project.repoRoot, project.docsRoot]);
+
   const openApiBundle = useOpenApiBundle(
     project.repoRoot,
     specsRepo.info?.entryFile ?? null,
-    // Резолв бандла стоит дорого, поэтому для файловой вкладки платим за него
-    // только когда рендер действительно виден.
+    // Резолв бандла стоит дорого, поэтому платим за него только когда рендер
+    // действительно виден. Диагностики спецификации на него не завязаны — их
+    // считает бэкенд в общем проходе (`services::openapi_lint`).
     openApiTabOpen || (specEntryActive && viewMode.viewMode !== "source"),
   );
 
@@ -480,6 +505,66 @@ function App() {
     openDocumentReference,
     openXref,
   } = useDocNavigation({ editor, project, layout, workspaceIndex, monacoInstance });
+
+  /** Мост «рендер → исходник»: в многофайловой спеке ручка живёт в отдельном
+   * файле, и по собранному документу его не найти — путь приходит из карты
+   * источников, а строку внутри файла ищем текстом (номеров строк резолвер не
+   * хранит, см. `findSpecLine`). */
+  const openSpecSource = useCallback(
+    async (target: SpecSourceTarget) => {
+      const { repoRoot, docsRoot } = project;
+      if (!repoRoot || !docsRoot) return;
+      if (!isUnderDocsRoot(target.file, repoRoot, docsRoot)) {
+        setFolderError(
+          `Файл ${target.file} лежит вне открытой папки документации — откройте репозиторий целиком.`,
+        );
+        return;
+      }
+      const relative = toDocsRelativePath(target.file, repoRoot, docsRoot);
+      let line = 1;
+      try {
+        line = findSpecLine(await readProjectFile(docsRoot, relative), target.searchKeys);
+      } catch {
+        // Файл не прочитался — всё равно открываем его с начала.
+      }
+      await openDocsSearchHit(relative, line);
+    },
+    [project, openDocsSearchHit],
+  );
+
+  /** Обратное направление: показать в Explorer'е операцию из открытого файла. */
+  const [specRevealSource, setSpecRevealSource] = useState<{
+    file: string;
+    nonce: number;
+  } | null>(null);
+  const revealSpecInExplorer = useCallback(() => {
+    openApiExplorerTab();
+    if (activeSpecRepoPath) {
+      setSpecRevealSource((prev) => ({
+        file: activeSpecRepoPath,
+        nonce: (prev?.nonce ?? 0) + 1,
+      }));
+    }
+  }, [openApiExplorerTab, activeSpecRepoPath]);
+
+  const exportOpenApiBundle = useCallback(
+    async (json: string) => {
+      const name = specsRepo.info?.title
+        ? `${specsRepo.info.title.replace(/[^\w.-]+/g, "-")}.json`
+        : "openapi-bundle.json";
+      const path = await save({
+        defaultPath: name,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!path) return;
+      try {
+        await writeExportFile(path, json);
+      } catch (e) {
+        setFolderError(toMessage(e));
+      }
+    },
+    [specsRepo.info],
+  );
   const standards = useStandardsCheck(project.docsRoot, {
     active: hasProject,
   });
@@ -875,12 +960,16 @@ function App() {
                     bundle={openApiBundle.bundle}
                     loading={openApiBundle.loading}
                     error={openApiBundle.error}
+                    state={openApiExplorerState}
+                    onOpenSource={(target) => void openSpecSource(target)}
+                    revealSource={specRevealSource}
+                    onExportBundle={(json) => void exportOpenApiBundle(json)}
                   />
                 ) : undefined
               }
               specEntryPath={specEntryDocsPath}
               inSpecsTree={inSpecsTree}
-              onOpenApiExplorer={openApiExplorerTab}
+              onOpenApiExplorer={revealSpecInExplorer}
               utilityView={
                 activeUtility ? <UtilityView utilityId={activeUtility} /> : undefined
               }

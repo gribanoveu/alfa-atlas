@@ -14,9 +14,21 @@ export type RefDiagnostic = {
   reason: string;
 };
 
+/** Откуда в собранный документ попал узел по адресу `pointer` — пишется на
+ * каждой границе `$ref`. Источник произвольного узла ищется по самому
+ * длинному `pointer`-префиксу, см. `sourceForPointer`. */
+export type SourceRef = {
+  pointer: string;
+  /** Путь относительно корня репозитория. */
+  file: string;
+  /** JSON Pointer внутри файла; пустой — ссылка на файл целиком. */
+  fragment: string;
+};
+
 export type OpenApiBundleResult = {
   document: Record<string, unknown>;
   diagnostics: RefDiagnostic[];
+  sources: SourceRef[];
 };
 
 export function detectSpecsRepo(repoRoot: string): Promise<SpecsRepoInfo | null> {

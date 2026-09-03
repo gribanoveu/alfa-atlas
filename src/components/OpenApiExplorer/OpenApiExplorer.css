@@ -776,9 +776,10 @@
 
 /* --- Авторизация ---------------------------------------------------- */
 
-/* Липкая шапка: секреты общие на всю спеку, и состояние «заполнено/нет»
-   должно быть видно, на какой бы операции пользователь ни находился. */
-.oas-auth {
+/* Липкая шапка: секреты общие на всю спеку, а список проблем относится к
+   документу целиком — и то и другое должно быть видно, на какой бы операции
+   пользователь ни находился. */
+.oas-main-head {
   position: sticky;
   top: -16px;
   z-index: 2;
@@ -786,6 +787,10 @@
   padding: 10px 24px;
   background: var(--bg-editor);
   border-bottom: 1px solid var(--border);
+}
+
+.oas-main-head > * + * {
+  margin-top: 8px;
 }
 
 .oas-auth-bar {
@@ -955,4 +960,174 @@
 .oas-try-auth-missing span {
   flex: 1;
   min-width: 0;
+}
+
+/* --- Навигация: свёртка групп, вторая строка, deprecated ------------- */
+
+.oas-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 6px;
+}
+
+.oas-nav-count {
+  flex: 1;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.68);
+}
+
+.oas-nav-action {
+  background: transparent;
+  border: none;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.68);
+  cursor: pointer;
+}
+
+.oas-nav-action:hover {
+  color: var(--text-0);
+}
+
+.oas-nav-group-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.oas-nav-group-count {
+  margin-left: auto;
+  color: var(--text-2);
+  font-weight: 400;
+}
+
+.oas-nav-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+}
+
+.oas-nav-item-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.68);
+}
+
+.oas-nav-item.is-deprecated .oas-nav-item-path {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+/* --- Операция: deprecated, внешние ссылки, свои серверы, исходник ---- */
+
+.oas-op-path.is-deprecated {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.oas-op-deprecated {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--orange);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--orange) 10%, transparent);
+  color: var(--orange);
+  font-size: calc(var(--font-preview) * 0.79);
+}
+
+.oas-op-source-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-1);
+  font-size: calc(var(--font-preview) * 0.79);
+}
+
+.oas-op-source-btn:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.oas-op-external {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: calc(var(--font-preview) * 0.79);
+  cursor: pointer;
+}
+
+.oas-op-external:hover {
+  text-decoration: underline;
+}
+
+.oas-op-servers {
+  margin-bottom: 10px;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.79);
+}
+
+.oas-op-servers code {
+  margin-right: 6px;
+  color: var(--text-0);
+}
+
+/* --- История запусков ------------------------------------------------ */
+
+.oas-try-history {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.oas-try-history-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: calc(var(--font-preview) * 0.79);
+}
+
+.oas-try-history-time {
+  flex: none;
+  color: var(--text-2);
+}
+
+.oas-try-history-url {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+/* Рекурсивная ссылка — это тип, а не поломка: нейтральный акцентный вид,
+   в отличие от красного `.oas-ref-badge` у неразрешённых ссылок. */
+.oas-ref-recursive {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: calc(var(--font-preview) * 0.72);
 }

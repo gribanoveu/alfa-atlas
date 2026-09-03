@@ -1,14 +1,21 @@
-import { useState } from "react";
-import { Lock } from "lucide-react";
-import { asObject, isRefMarker, parseParameters, type JsonValue } from "./openApiModel";
+import { ExternalLink, FileCode2, Lock } from "lucide-react";
+import { openPath } from "@tauri-apps/plugin-opener";
+import type { OpenApiExplorerState } from "../../hooks/useOpenApiExplorerState";
+import { operationKey } from "../../hooks/useOpenApiExplorerState";
+import {
+  asObject,
+  effectiveParameters,
+  effectiveServers,
+  externalDocsOf,
+  isRefMarker,
+  namedExamples,
+  type JsonValue,
+} from "./openApiModel";
 import { JsonExample } from "./JsonExample";
 import { SchemaViewer, SchemaTypeInline } from "./SchemaViewer";
 import { TryItOut } from "./TryItOut";
-import {
-  resolveOperationSecurity,
-  type AuthValues,
-  type SecurityScheme,
-} from "./security";
+import { resolveOperationSecurity, type SecurityScheme } from "./security";
+import type { SpecSourceTarget } from "./OpenApiExplorer";
 import "./OpenApiExplorer.css";
 
 type OperationViewProps = {
@@ -17,9 +24,10 @@ type OperationViewProps = {
   operation: JsonValue;
   document: JsonValue;
   securitySchemes: SecurityScheme[];
-  authValues: AuthValues;
-  /** Раскрыть панель авторизации — из подсказки «токен не заполнен». */
-  onRequestAuth: () => void;
+  state: OpenApiExplorerState;
+  /** Файл, из которого операция попала в сборку; `null` — источник неизвестен. */
+  sourceFile: string | null;
+  onOpenSource?: (target: SpecSourceTarget) => void;
 };
 
 function contentEntries(content: unknown): [string, unknown][] {
@@ -34,18 +42,29 @@ export function OperationView({
   operation,
   document,
   securitySchemes,
-  authValues,
-  onRequestAuth,
+  state,
+  sourceFile,
+  onOpenSource,
 }: OperationViewProps) {
-  const [tryItOutOpen, setTryItOutOpen] = useState(false);
-  const security = resolveOperationSecurity(document, operation);
+  const key = operationKey(path, method);
+  const tryItOutOpen = state.tryOpen.has(key);
   const summary = typeof operation.summary === "string" ? operation.summary : null;
   const description =
     typeof operation.description === "string" ? operation.description : null;
   const operationId =
     typeof operation.operationId === "string" ? operation.operationId : null;
+  const deprecated = operation.deprecated === true;
 
-  const parameters = parseParameters(operation);
+  const security = resolveOperationSecurity(document, operation);
+  const parameters = effectiveParameters(document, path, operation);
+  const externalDocs = externalDocsOf(operation);
+  // Серверы показываем отдельной строкой только когда операция или её path
+  // item их переопределяют — иначе это просто повтор корневого списка.
+  const operationServers = effectiveServers(document, path, operation);
+  const rootServers = effectiveServers(document, path, null);
+  const overridesServers =
+    operationServers.length > 0 &&
+    JSON.stringify(operationServers) !== JSON.stringify(rootServers);
 
   const requestBody = asObject(operation.requestBody);
   const responses = asObject(operation.responses);
@@ -54,15 +73,36 @@ export function OperationView({
     <div className="oas-op">
       <div className="oas-op-header">
         <span className={`oas-method-badge oas-method-${method}`}>{method}</span>
-        <span className="oas-op-path">{path}</span>
+        <span className={`oas-op-path${deprecated ? " is-deprecated" : ""}`}>{path}</span>
+        {sourceFile && onOpenSource ? (
+          <button
+            type="button"
+            className="oas-op-source-btn"
+            onClick={() =>
+              onOpenSource({
+                file: sourceFile,
+                searchKeys: [operationId, path].filter((k): k is string => Boolean(k)),
+              })
+            }
+            title={`Открыть исходник: ${sourceFile}`}
+          >
+            <FileCode2 size={13} aria-hidden />
+            Исходник
+          </button>
+        ) : null}
         <button
           type="button"
           className={`oas-try-toggle ${tryItOutOpen ? "active" : ""}`}
-          onClick={() => setTryItOutOpen((o) => !o)}
+          onClick={() => state.toggleTryOpen(key)}
         >
           {tryItOutOpen ? "Отмена" : "Try it out"}
         </button>
       </div>
+      {deprecated ? (
+        <div className="oas-op-deprecated">
+          Операция помечена как deprecated — не используйте её в новых интеграциях.
+        </div>
+      ) : null}
       {summary ? <div className="oas-op-summary">{summary}</div> : null}
       {security.declared ? (
         <div className="oas-op-security">
@@ -75,6 +115,25 @@ export function OperationView({
       ) : null}
       {operationId ? <div className="oas-op-id">operationId: {operationId}</div> : null}
       {description ? <p className="oas-op-description">{description}</p> : null}
+      {externalDocs ? (
+        <button
+          type="button"
+          className="oas-op-external"
+          onClick={() => void openPath(externalDocs.url).catch(() => {})}
+          title={externalDocs.url}
+        >
+          <ExternalLink size={12} aria-hidden />
+          {externalDocs.description ?? "Внешняя документация"}
+        </button>
+      ) : null}
+      {overridesServers ? (
+        <div className="oas-op-servers">
+          Свои серверы:{" "}
+          {operationServers.map((server) => (
+            <code key={server.url}>{server.url}</code>
+          ))}
+        </div>
+      ) : null}
 
       {tryItOutOpen ? (
         <TryItOut
@@ -83,8 +142,7 @@ export function OperationView({
           operation={operation}
           document={document}
           securitySchemes={securitySchemes}
-          authValues={authValues}
-          onRequestAuth={onRequestAuth}
+          state={state}
         />
       ) : null}
 
@@ -123,16 +181,9 @@ export function OperationView({
           <h3 className="oas-section-title">
             Тело запроса{requestBody.required ? " (обязательно)" : ""}
           </h3>
-          {contentEntries(requestBody.content).map(([mediaType, mediaObj]) => {
-            const schema = asObject(mediaObj)?.schema;
-            return (
-              <div key={mediaType} className="oas-media-block">
-                <div className="oas-media-type">{mediaType}</div>
-                <SchemaViewer schema={schema} />
-                <JsonExample schema={schema} />
-              </div>
-            );
-          })}
+          {contentEntries(requestBody.content).map(([mediaType, mediaObj]) => (
+            <MediaBlock key={mediaType} mediaType={mediaType} media={mediaObj} />
+          ))}
         </section>
       ) : null}
 
@@ -163,22 +214,44 @@ export function OperationView({
                     <span className="oas-response-desc">{respDescription}</span>
                   ) : null}
                 </div>
-                {entries.map(([mediaType, mediaObj]) => {
-                  const schema = asObject(mediaObj)?.schema;
-                  if (schema === undefined) return null;
-                  return (
-                    <div key={mediaType} className="oas-media-block">
-                      <div className="oas-media-type">{mediaType}</div>
-                      <SchemaViewer schema={schema} />
-                      <JsonExample schema={schema} />
-                    </div>
-                  );
-                })}
+                {entries.map(([mediaType, mediaObj]) => (
+                  <MediaBlock key={mediaType} mediaType={mediaType} media={mediaObj} />
+                ))}
               </div>
             );
           })}
         </section>
       ) : null}
+    </div>
+  );
+}
+
+/** Схема media type плюс объявленные в спеке именованные примеры. Сгенерённый
+ * из схемы JSON остаётся: он показывает форму целиком, тогда как примеры —
+ * конкретные случаи, которые автор счёл важными. */
+function MediaBlock({ mediaType, media }: { mediaType: string; media: unknown }) {
+  const mediaObj = asObject(media);
+  const schema = mediaObj?.schema;
+  const examples = mediaObj ? namedExamples(mediaObj) : [];
+
+  if (schema === undefined && examples.length === 0) return null;
+
+  return (
+    <div className="oas-media-block">
+      <div className="oas-media-type">{mediaType}</div>
+      {schema !== undefined ? (
+        <>
+          <SchemaViewer schema={schema} />
+          <JsonExample schema={schema} />
+        </>
+      ) : null}
+      {examples.map((example) => (
+        <JsonExample
+          key={example.name}
+          value={example.value}
+          title={`Пример: ${example.summary ?? example.name}`}
+        />
+      ))}
     </div>
   );
 }

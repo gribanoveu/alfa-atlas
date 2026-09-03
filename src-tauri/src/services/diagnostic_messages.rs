@@ -104,3 +104,175 @@ mod tests {
         }
     }
 }
+
+// --- Правила OpenAPI (`openapi_lint`) --------------------------------------
+
+pub fn oas_no_servers(lang: ErrorLanguage) -> String {
+    match lang {
+        ErrorLanguage::Ru => {
+            "в спецификации не объявлено ни одного сервера — «Try it out» некуда отправлять запрос"
+                .to_string()
+        }
+        ErrorLanguage::En => "no servers declared — Try it out has nowhere to send a request".to_string(),
+    }
+}
+
+pub fn oas_relative_server_url(lang: ErrorLanguage, url: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => format!("адрес сервера не абсолютный: {url}"),
+        ErrorLanguage::En => format!("server url is not absolute: {url}"),
+    }
+}
+
+pub fn oas_duplicate_operation_id(
+    lang: ErrorLanguage,
+    id: &str,
+    method: &str,
+    path: &str,
+) -> String {
+    match lang {
+        ErrorLanguage::Ru => {
+            format!("operationId «{id}» уже занят операцией {method} {path}")
+        }
+        ErrorLanguage::En => format!("operationId \"{id}\" is already used by {method} {path}"),
+    }
+}
+
+pub fn oas_missing_operation_id(lang: ErrorLanguage) -> String {
+    match lang {
+        ErrorLanguage::Ru => {
+            "у операции нет operationId — по нему генерируются клиенты".to_string()
+        }
+        ErrorLanguage::En => "operation has no operationId — client generators rely on it".to_string(),
+    }
+}
+
+pub fn oas_missing_description(lang: ErrorLanguage) -> String {
+    match lang {
+        ErrorLanguage::Ru => "у операции нет ни summary, ни description".to_string(),
+        ErrorLanguage::En => "operation has neither summary nor description".to_string(),
+    }
+}
+
+pub fn oas_missing_tags(lang: ErrorLanguage) -> String {
+    match lang {
+        ErrorLanguage::Ru => "у операции нет тега — в списке она попадёт в группу «Other»".to_string(),
+        ErrorLanguage::En => "operation has no tag — it lands in the \"Other\" group".to_string(),
+    }
+}
+
+pub fn oas_duplicate_parameter(lang: ErrorLanguage, name: &str, location: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => format!("параметр «{name}» ({location}) объявлен дважды"),
+        ErrorLanguage::En => format!("parameter \"{name}\" ({location}) is declared twice"),
+    }
+}
+
+pub fn oas_parameter_without_schema(lang: ErrorLanguage, name: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => format!("у параметра «{name}» не объявлена схема"),
+        ErrorLanguage::En => format!("parameter \"{name}\" has no schema"),
+    }
+}
+
+pub fn oas_undeclared_path_parameter(lang: ErrorLanguage, name: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => {
+            format!("путь содержит {{{name}}}, но такого path-параметра нет в parameters")
+        }
+        ErrorLanguage::En => {
+            format!("path template has {{{name}}} but no such path parameter is declared")
+        }
+    }
+}
+
+pub fn oas_unused_path_parameter(lang: ErrorLanguage, name: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => {
+            format!("path-параметр «{name}» объявлен, но в шаблоне пути его нет")
+        }
+        ErrorLanguage::En => {
+            format!("path parameter \"{name}\" is declared but missing from the path template")
+        }
+    }
+}
+
+pub fn oas_optional_path_parameter(lang: ErrorLanguage, name: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => format!("path-параметр «{name}» должен быть required: true"),
+        ErrorLanguage::En => format!("path parameter \"{name}\" must be required: true"),
+    }
+}
+
+pub fn oas_no_responses(lang: ErrorLanguage) -> String {
+    match lang {
+        ErrorLanguage::Ru => "у операции не объявлено ни одного ответа".to_string(),
+        ErrorLanguage::En => "operation declares no responses".to_string(),
+    }
+}
+
+pub fn oas_no_success_response(lang: ErrorLanguage) -> String {
+    match lang {
+        ErrorLanguage::Ru => "нет ни одного успешного ответа (2xx)".to_string(),
+        ErrorLanguage::En => "no success response (2xx) declared".to_string(),
+    }
+}
+
+pub fn oas_no_error_response(lang: ErrorLanguage) -> String {
+    match lang {
+        ErrorLanguage::Ru => "не описано ни одной ошибки (4xx/5xx)".to_string(),
+        ErrorLanguage::En => "no error response (4xx/5xx) described".to_string(),
+    }
+}
+
+pub fn oas_response_without_description(lang: ErrorLanguage, status: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => format!("у ответа {status} нет description"),
+        ErrorLanguage::En => format!("response {status} has no description"),
+    }
+}
+
+pub fn oas_media_without_schema(lang: ErrorLanguage, subject: &str, media: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => format!("для {subject} ({media}) не объявлена схема"),
+        ErrorLanguage::En => format!("no schema declared for {subject} ({media})"),
+    }
+}
+
+pub fn oas_empty_enum(lang: ErrorLanguage, subject: &str, media: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => format!("пустой enum в схеме {subject} ({media})"),
+        ErrorLanguage::En => format!("empty enum in the {subject} schema ({media})"),
+    }
+}
+
+pub fn oas_request_body_without_content(lang: ErrorLanguage) -> String {
+    match lang {
+        ErrorLanguage::Ru => "у тела запроса не объявлено ни одного media type".to_string(),
+        ErrorLanguage::En => "request body declares no media type".to_string(),
+    }
+}
+
+pub fn oas_undeclared_security_scheme(lang: ErrorLanguage, id: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => {
+            format!("схема авторизации «{id}» не объявлена в components.securitySchemes")
+        }
+        ErrorLanguage::En => {
+            format!("security scheme \"{id}\" is not declared in components.securitySchemes")
+        }
+    }
+}
+
+pub fn oas_unresolved_ref(lang: ErrorLanguage, reference: &str, reason: &str) -> String {
+    match lang {
+        ErrorLanguage::Ru => format!("не удалось разрешить $ref «{reference}»: {reason}"),
+        ErrorLanguage::En => format!("could not resolve $ref \"{reference}\": {reason}"),
+    }
+}
+
+/// Префикс, которым к сообщению правила приписывается операция: находки
+/// раскладываются по файлам, а в файле-фрагменте операция одна не всегда.
+pub fn oas_operation_prefix(method: &str, path: &str) -> String {
+    format!("{method} {path}: ")
+}

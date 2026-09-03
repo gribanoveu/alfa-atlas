@@ -5,7 +5,7 @@
 //! for a single document and its reverse-dependents (documents that include or
 //! xref it). Results are written back into the index via `set_diagnostics`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::domain::settings::ErrorLanguage;
@@ -14,7 +14,7 @@ use crate::domain::workspace_index::{
 };
 use crate::infra::settings_store;
 use crate::services::diagnostic_messages as msgs;
-use crate::services::openapi;
+use crate::services::{openapi, openapi_lint};
 use crate::services::workspace_index::WorkspaceIndex;
 
 /// The `GeneralPrefs` entries that affect one diagnostics pass. Read once per
@@ -59,9 +59,12 @@ pub(crate) fn current_error_language() -> ErrorLanguage {
 /// Recompute diagnostics for every document in the index.
 pub fn run_all(index: &WorkspaceIndex) {
     let prefs = DiagnosticsPrefs::load();
+    // Спека собирается и проверяется один раз на весь проход: правила
+    // считаются по собранному документу, а не по отдельному файлу.
+    let spec = openapi_diagnostics(index, prefs);
     let docs = index.documents_iter();
     for d in &docs {
-        let diags = diagnose_one_merged(index, &d.id, prefs);
+        let diags = diagnose_one_merged(index, &d.id, prefs, &spec);
         index.set_diagnostics(&d.id, diags);
     }
 }
@@ -69,11 +72,29 @@ pub fn run_all(index: &WorkspaceIndex) {
 /// Recompute diagnostics for `doc` and every document that depends on it.
 pub fn run_for(index: &WorkspaceIndex, doc: &DocumentId) {
     let prefs = DiagnosticsPrefs::load();
+
+    // Файлы спецификации связаны не через include/xref, а через `$ref`, и в
+    // сборке участвуют все сразу: правка одного фрагмента может убрать или
+    // добавить находку в соседнем. Обход по зависимостям этого не выразит,
+    // поэтому для спеки пересчитываем весь набор и раскладываем по её файлам.
+    if is_spec_document(doc) {
+        let spec = openapi_diagnostics(index, prefs);
+        for d in &index.documents_iter() {
+            if !is_spec_document(&d.id) {
+                continue;
+            }
+            let diags = diagnose_one_merged(index, &d.id, prefs, &spec);
+            index.set_diagnostics(&d.id, diags);
+        }
+        return;
+    }
+
+    let spec = HashMap::new();
     let mut queue: Vec<DocumentId> = vec![doc.clone()];
     let mut seen: HashSet<DocumentId> = HashSet::new();
     seen.insert(doc.clone());
     while let Some(current) = queue.pop() {
-        let diags = diagnose_one_merged(index, &current, prefs);
+        let diags = diagnose_one_merged(index, &current, prefs, &spec);
         index.set_diagnostics(&current, diags);
         for dep in index.dependents_of(&current) {
             if seen.insert(dep.clone()) {
@@ -88,7 +109,12 @@ pub fn run_for(index: &WorkspaceIndex, doc: &DocumentId) {
 /// `DetachedHeaderAttributes`. Both are computed from one document's own text,
 /// are orthogonal to include/xref/image checks, and must survive `run_all` at
 /// the end of an async build.
-fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId, prefs: DiagnosticsPrefs) -> Vec<Diagnostic> {
+fn diagnose_one_merged(
+    index: &WorkspaceIndex,
+    doc: &DocumentId,
+    prefs: DiagnosticsPrefs,
+    spec: &HashMap<DocumentId, Vec<Diagnostic>>,
+) -> Vec<Diagnostic> {
     let mut diags = diagnose_one(index, doc, prefs);
     diags.extend(
         index
@@ -96,6 +122,9 @@ fn diagnose_one_merged(index: &WorkspaceIndex, doc: &DocumentId, prefs: Diagnost
             .into_iter()
             .filter(|d| d.kind.is_document_local()),
     );
+    if let Some(found) = spec.get(doc) {
+        diags.extend(found.iter().cloned());
+    }
     diags
 }
 
@@ -421,4 +450,140 @@ mod tests {
         assert!(diags.is_empty(), "got: {:?}", diags);
         fs::remove_dir_all(&root).ok();
     }
+}
+/// Файл спецификации: под `specs/` и в формате, который умеет читать сборщик.
+fn is_spec_document(doc: &DocumentId) -> bool {
+    let path = doc.0.replace('\\', "/");
+    if !path.starts_with("specs/") {
+        return false;
+    }
+    matches!(
+        path.rsplit('.').next(),
+        Some("yaml") | Some("yml") | Some("json")
+    )
+}
+
+/// Ищет запись карты источников, покрывающую `pointer`: точное совпадение
+/// выигрывает у предка, предок — у корневой записи. Записи должны быть
+/// отсортированы от самого длинного указателя к самому короткому.
+fn source_for_pointer<'a>(
+    sources: &'a [crate::domain::openapi::SourceRef],
+    pointer: &str,
+) -> Option<&'a crate::domain::openapi::SourceRef> {
+    sources.iter().find(|entry| {
+        entry.pointer.is_empty()
+            || pointer == entry.pointer
+            || pointer.starts_with(&format!("{}/", entry.pointer))
+    })
+}
+
+/// Проблемы спецификации, разложенные по файлам-исходникам.
+///
+/// Считаются по собранному документу, поэтому проход один на весь `specs/`, а
+/// не на каждый файл. Адрес находки внутри сборки сам по себе бесполезен —
+/// в многофайловой спеке нужно назвать конкретный файл, — поэтому её положение
+/// восстанавливается через карту источников (`SourceRef`), а строка внутри
+/// файла ищется текстом (`openapi_lint::find_spec_line`).
+fn openapi_diagnostics(
+    index: &WorkspaceIndex,
+    prefs: DiagnosticsPrefs,
+) -> HashMap<DocumentId, Vec<Diagnostic>> {
+    let mut out: HashMap<DocumentId, Vec<Diagnostic>> = HashMap::new();
+
+    let Some(repo_root) = index.repo_root() else {
+        return out;
+    };
+    let Ok(Some(info)) = openapi::detect_specs_repo(&repo_root) else {
+        return out;
+    };
+    let Ok(bundle) = openapi::load_openapi_bundle(
+        &repo_root,
+        &info.entry_file,
+        prefs.openapi_ref_fallback,
+    ) else {
+        return out;
+    };
+
+    let mut sources = bundle.sources.clone();
+    sources.sort_by(|a, b| b.pointer.len().cmp(&a.pointer.len()));
+
+    let mut texts: HashMap<String, String> = HashMap::new();
+    let mut line_of = |file: &str, keys: &[String]| -> u32 {
+        let text = texts.entry(file.to_string()).or_insert_with(|| {
+            std::fs::read_to_string(repo_root.join(file)).unwrap_or_default()
+        });
+        if text.is_empty() {
+            1
+        } else {
+            openapi_lint::find_spec_line(text, keys)
+        }
+    };
+
+    // Неразрешённые `$ref` резолвер уже назвал вместе с файлом-источником.
+    for diagnostic in &bundle.diagnostics {
+        let file = diagnostic.referenced_from.clone();
+        let line = line_of(&file, &[diagnostic.reference.clone()]);
+        out.entry(DocumentId(file.clone()))
+            .or_default()
+            .push(Diagnostic {
+                kind: DiagnosticKind::OpenapiRef,
+                message: msgs::oas_unresolved_ref(
+                    prefs.lang,
+                    &diagnostic.reference,
+                    &diagnostic.reason,
+                ),
+                document: DocumentId(file),
+                line,
+                column: 1,
+                severity: Severity::Error,
+            });
+    }
+
+    for finding in openapi_lint::lint(&bundle.document, prefs.lang) {
+        let Some(source) = source_for_pointer(&sources, &finding.pointer) else {
+            continue;
+        };
+        let mut keys: Vec<String> = Vec::new();
+        if let Some(last) = source.fragment.rsplit('/').find(|s| !s.is_empty()) {
+            keys.push(last.replace("~1", "/").replace("~0", "~"));
+        }
+        if let Some(operation) = &finding.operation {
+            let pointer = openapi_lint::operation_pointer(&operation.path, &operation.method);
+            if let Some(id) = bundle
+                .document
+                .pointer(&pointer)
+                .and_then(|op| op.get("operationId"))
+                .and_then(|v| v.as_str())
+            {
+                keys.push(id.to_string());
+            }
+            keys.push(operation.path.clone());
+        }
+
+        let file = source.file.clone();
+        let line = line_of(&file, &keys);
+        let message = match &finding.operation {
+            Some(operation) => format!(
+                "{}{}",
+                msgs::oas_operation_prefix(&operation.method.to_uppercase(), &operation.path),
+                finding.message
+            ),
+            None => finding.message.clone(),
+        };
+        out.entry(DocumentId(file.clone()))
+            .or_default()
+            .push(Diagnostic {
+                kind: DiagnosticKind::OpenapiRule,
+                message,
+                document: DocumentId(file),
+                line,
+                column: 1,
+                severity: finding.severity,
+            });
+    }
+
+    for diagnostics in out.values_mut() {
+        diagnostics.sort_by_key(|d| d.line);
+    }
+    out
 }

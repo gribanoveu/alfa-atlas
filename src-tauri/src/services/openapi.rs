@@ -7,7 +7,9 @@ use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
-use crate::domain::openapi::{OpenApiBundleResult, OpenApiError, RefDiagnostic, SpecsRepoInfo};
+use crate::domain::openapi::{
+    OpenApiBundleResult, OpenApiError, RefDiagnostic, SourceRef, SpecsRepoInfo,
+};
 use crate::domain::paths;
 use crate::infra::common_spec_assets;
 
@@ -189,12 +191,29 @@ pub fn load_openapi_bundle(
         resolved_cache: RefCell::new(HashMap::new()),
         in_progress: RefCell::new(HashSet::new()),
         diagnostics: RefCell::new(Vec::new()),
+        // Корневая запись: всё, что объявлено прямо во входном документе,
+        // ищется по префиксу и находит именно её.
+        sources: RefCell::new(vec![SourceRef {
+            pointer: String::new(),
+            file: entry_file_relative.to_string(),
+            fragment: String::new(),
+        }]),
+        cycle_components: RefCell::new(HashMap::new()),
+        taken_component_names: RefCell::new(
+            root_value
+                .pointer("/components/schemas")
+                .and_then(|v| v.as_object())
+                .map(|map| map.keys().cloned().collect())
+                .unwrap_or_default(),
+        ),
         enable_ref_fallback,
     };
-    let document = resolver.walk(&root_value, &entry_path, "");
+    let mut document = resolver.walk(&root_value, &entry_path, "");
+    resolver.inject_cycle_components(&mut document);
     Ok(OpenApiBundleResult {
         document,
         diagnostics: resolver.diagnostics.into_inner(),
+        sources: resolver.sources.into_inner(),
     })
 }
 
@@ -332,12 +351,128 @@ struct Resolver {
     /// (file, pointer) pairs currently being resolved, for cycle detection.
     in_progress: RefCell<HashSet<(PathBuf, String)>>,
     diagnostics: RefCell<Vec<RefDiagnostic>>,
+    /// Куда в исходных файлах ведёт каждая успешно разрешённая граница
+    /// `$ref` — см. [`SourceRef`].
+    sources: RefCell<Vec<SourceRef>>,
+    /// Цели, на которых замкнулась рекурсия: (файл, фрагмент) -> имя, под
+    /// которым схема вынесена в `components/schemas` собранного документа.
+    cycle_components: RefCell<HashMap<(PathBuf, String), String>>,
+    /// Имена, уже занятые в `components/schemas` входного документа, — чтобы
+    /// вынесенная схема не затёрла объявленную вручную.
+    taken_component_names: RefCell<HashSet<String>>,
     /// Whether a missing well-known common-spec bundle should fall back to
     /// the app's bundled default copy instead of reporting "file not found".
     enable_ref_fallback: bool,
 }
 
+/// Имя компонента из цели ссылки: последний сегмент фрагмента
+/// (`#/components/schemas/Node` -> `Node`), иначе — имя файла без расширения
+/// (`schemas/node.yaml` -> `node`). Символы вне допустимого для ключа
+/// `components/schemas` набора заменяются подчёркиванием.
+fn component_base_name(file: &Path, fragment: &str) -> String {
+    let raw = fragment
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .map(|segment| segment.replace("~1", "/").replace("~0", "~"))
+        .or_else(|| {
+            file.file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "Schema".to_string());
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    if cleaned.is_empty() {
+        "Schema".to_string()
+    } else {
+        cleaned
+    }
+}
+
 impl Resolver {
+    /// Имя, под которым рекурсивная цель живёт в `components/schemas`.
+    /// Стабильно для одной и той же цели и не конфликтует ни с уже
+    /// объявленными схемами, ни с другой вынесенной целью.
+    fn component_name_for(&self, key: &(PathBuf, String)) -> String {
+        if let Some(name) = self.cycle_components.borrow().get(key) {
+            return name.clone();
+        }
+        let base = component_base_name(&key.0, &key.1);
+        let mut candidate = base.clone();
+        let mut suffix = 2;
+        while self.taken_component_names.borrow().contains(&candidate) {
+            candidate = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+        self.taken_component_names
+            .borrow_mut()
+            .insert(candidate.clone());
+        self.cycle_components
+            .borrow_mut()
+            .insert(key.clone(), candidate.clone());
+        candidate
+    }
+
+    /// Кладёт разрешённые тела рекурсивных схем в `components/schemas`
+    /// собранного документа. Вызывается после обхода: к этому моменту внешнее
+    /// раскрытие цели уже завершилось и лежит в `resolved_cache` — вместе с
+    /// внутренней ссылкой на саму себя, которую мы там и оставили.
+    fn inject_cycle_components(&self, document: &mut Value) {
+        let pending: Vec<((PathBuf, String), String)> = self
+            .cycle_components
+            .borrow()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if pending.is_empty() {
+            return;
+        }
+        for (key, name) in pending {
+            // Цель может остаться неразрешённой — например, когда ссылка
+            // ведёт на сам входной документ, который никогда не проходит
+            // через `resolve_ref`. Тела для неё нет, но ссылку в никуда
+            // оставлять нельзя: кладём заглушку, чтобы документ остался
+            // структурно целым, и сообщаем об этом отдельной диагностикой.
+            let resolved = self.resolved_cache.borrow().get(&key).cloned();
+            let body = match resolved {
+                Some(value) => (*value).clone(),
+                None => {
+                    self.diagnostics.borrow_mut().push(RefDiagnostic {
+                        pointer: format!("/components/schemas/{name}"),
+                        reference: format!("{}#{}", display_relative(&self.repo_root, &key.0), key.1),
+                        referenced_from: display_relative(&self.repo_root, &key.0),
+                        reason: "circular reference could not be materialized".to_string(),
+                    });
+                    json!({ "description": "рекурсивная ссылка: тело не раскрыто" })
+                }
+            };
+            let components = document
+                .as_object_mut()
+                .expect("bundled document is an object")
+                .entry("components")
+                .or_insert_with(|| json!({}));
+            let Some(components) = components.as_object_mut() else {
+                continue;
+            };
+            let schemas = components
+                .entry("schemas")
+                .or_insert_with(|| json!({}));
+            if let Some(schemas) = schemas.as_object_mut() {
+                schemas.insert(name, body);
+            }
+        }
+    }
+
+    fn record_source(&self, doc_pointer: &str, target_file: &Path, fragment: &str) {
+        self.sources.borrow_mut().push(SourceRef {
+            pointer: doc_pointer.to_string(),
+            file: display_relative(&self.repo_root, target_file),
+            fragment: fragment.to_string(),
+        });
+    }
+
     fn load_file(&self, path: &Path) -> Result<Rc<Value>, ()> {
         if let Some(v) = self.file_cache.borrow().get(path) {
             return Ok(v.clone());
@@ -379,15 +514,21 @@ impl Resolver {
         let cache_key = (target_file.clone(), frag.to_string());
 
         if self.in_progress.borrow().contains(&cache_key) {
-            self.diagnostics.borrow_mut().push(RefDiagnostic {
-                pointer: doc_pointer.to_string(),
-                reference: ref_str.to_string(),
-                referenced_from: display_relative(&self.repo_root, current_file),
-                reason: "circular reference".to_string(),
-            });
-            return json!({ "$ref": ref_str, "circular": true });
+            // Рекурсивная схема (`Node.children: [Node]`, дерево, связный
+            // список) — законная и очень частая конструкция OpenAPI, а не
+            // ошибка спеки: генераторы кода разбирают её без вопросов.
+            // Инлайнить её нельзя — раскрытие не завершится, — поэтому цель
+            // выносим в `components/schemas` и оставляем здесь нормальную
+            // внутреннюю ссылку. Так собранный документ остаётся валидным
+            // OpenAPI: его можно отдать генератору или Swagger UI как есть.
+            let name = self.component_name_for(&cache_key);
+            return json!({ "$ref": format!("#/components/schemas/{name}") });
         }
         if let Some(cached) = self.resolved_cache.borrow().get(&cache_key) {
+            // Кэш отдаёт готовое поддерево, но источник у этой позиции в
+            // сборке свой — без записи здесь второе и последующие вхождения
+            // одной схемы остались бы без исходника.
+            self.record_source(doc_pointer, &target_file, frag);
             return (**cached).clone();
         }
 
@@ -412,6 +553,7 @@ impl Resolver {
         };
         let target_node = target_node.clone();
 
+        self.record_source(doc_pointer, &target_file, frag);
         self.in_progress.borrow_mut().insert(cache_key.clone());
         // Further relative $refs inside the target resolve relative to
         // where the target file lives, not the original referrer.
@@ -523,6 +665,9 @@ mod tests {
             resolved_cache: RefCell::new(HashMap::new()),
             in_progress: RefCell::new(HashSet::new()),
             diagnostics: RefCell::new(Vec::new()),
+            sources: RefCell::new(Vec::new()),
+            cycle_components: RefCell::new(HashMap::new()),
+            taken_component_names: RefCell::new(HashSet::new()),
             enable_ref_fallback: false,
         };
         let text = fs::read_to_string(root.join("specs/responses/all.yaml")).unwrap();
@@ -531,6 +676,224 @@ mod tests {
         let diagnostics = resolver.diagnostics.into_inner();
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].reason, "file not found");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn records_the_source_file_of_every_resolved_ref() {
+        let root = temp_dir();
+        fs::create_dir_all(root.join("specs/operations")).unwrap();
+        fs::create_dir_all(root.join("specs/schemas")).unwrap();
+        fs::write(
+            root.join("specs/api.yaml"),
+            concat!(
+                "openapi: 3.0.3\n",
+                "info:\n  title: t\n  version: '1'\n",
+                "paths:\n",
+                "  /pets:\n",
+                "    get:\n      $ref: './operations/listPets.yaml'\n",
+                "    post:\n      $ref: './operations/createPet.yaml'\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("specs/operations/listPets.yaml"),
+            "operationId: listPets\nresponses:\n  '200':\n    description: ok\n    content:\n      application/json:\n        schema:\n          $ref: '../schemas/all.yaml#/Pet'\n",
+        )
+        .unwrap();
+        // Вторая операция ссылается на ту же схему — источник должен быть
+        // записан и для неё, несмотря на кэш разрешённых поддеревьев.
+        fs::write(
+            root.join("specs/operations/createPet.yaml"),
+            "operationId: createPet\nrequestBody:\n  content:\n    application/json:\n      schema:\n        $ref: '../schemas/all.yaml#/Pet'\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("specs/schemas/all.yaml"),
+            "Pet:\n  type: object\n  properties:\n    name:\n      type: string\n",
+        )
+        .unwrap();
+
+        let result = load_openapi_bundle(&root, "specs/api.yaml", false).unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+        let source_of = |pointer: &str| {
+            result
+                .sources
+                .iter()
+                .find(|s| s.pointer == pointer)
+                .unwrap_or_else(|| panic!("no source recorded for {pointer}"))
+        };
+
+        assert_eq!(source_of("").file, "specs/api.yaml");
+        assert_eq!(source_of("/paths/~1pets/get").file, "specs/operations/listPets.yaml");
+        assert_eq!(source_of("/paths/~1pets/get").fragment, "");
+
+        let schema = source_of("/paths/~1pets/get/responses/200/content/application~1json/schema");
+        assert_eq!(schema.file, "specs/schemas/all.yaml");
+        assert_eq!(schema.fragment, "/Pet");
+
+        let reused =
+            source_of("/paths/~1pets/post/requestBody/content/application~1json/schema");
+        assert_eq!(reused.file, "specs/schemas/all.yaml");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Спека с рекурсивной схемой: `Node.parent` и `Node.children[]` ведут на
+    /// сам `Node`. Совершенно легальный OpenAPI — генераторы кода собирают из
+    /// него рекурсивный тип, — поэтому диагностики быть не должно, а сборка
+    /// обязана остаться валидным документом, годным для генератора.
+    fn setup_recursive_repo() -> PathBuf {
+        let root = temp_dir();
+        fs::create_dir_all(root.join("specs/operations")).unwrap();
+        fs::create_dir_all(root.join("specs/schemas")).unwrap();
+        fs::write(
+            root.join("specs/api.yaml"),
+            "openapi: 3.0.3\ninfo:\n  title: t\n  version: '1'\npaths:\n  /nodes:\n    get:\n      $ref: './operations/listNodes.yaml'\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("specs/operations/listNodes.yaml"),
+            "operationId: listNodes\nresponses:\n  '200':\n    description: ok\n    content:\n      application/json:\n        schema:\n          $ref: '../schemas/all.yaml#/Node'\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("specs/schemas/all.yaml"),
+            concat!(
+                "Node:\n",
+                "  type: object\n",
+                "  properties:\n",
+                "    name:\n      type: string\n",
+                "    parent:\n      $ref: '#/Node'\n",
+                "    children:\n      type: array\n      items:\n        $ref: '#/Node'\n",
+            ),
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn recursive_schema_is_hoisted_instead_of_being_reported_as_broken() {
+        let root = setup_recursive_repo();
+        let result = load_openapi_bundle(&root, "specs/api.yaml", false).unwrap();
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "рекурсия — не ошибка спеки, got {:?}",
+            result.diagnostics
+        );
+
+        let schema = result
+            .document
+            .pointer("/paths/~1nodes/get/responses/200/content/application~1json/schema")
+            .unwrap();
+        // Внешняя схема развёрнута как обычно...
+        assert_eq!(schema.pointer("/properties/name/type").unwrap(), "string");
+        // ...а рекурсивные позиции стали нормальными внутренними ссылками.
+        assert_eq!(
+            schema.pointer("/properties/parent/$ref").unwrap(),
+            "#/components/schemas/Node"
+        );
+        assert_eq!(
+            schema.pointer("/properties/children/items/$ref").unwrap(),
+            "#/components/schemas/Node"
+        );
+        // Ссылки ведут на реально существующий узел с телом схемы.
+        let hoisted = result
+            .document
+            .pointer("/components/schemas/Node")
+            .expect("рекурсивная схема вынесена в components/schemas");
+        assert_eq!(hoisted.pointer("/properties/name/type").unwrap(), "string");
+        assert_eq!(
+            hoisted.pointer("/properties/parent/$ref").unwrap(),
+            "#/components/schemas/Node"
+        );
+        // Нестандартных ключей вроде `circular` в документе не остаётся.
+        assert!(!serde_json::to_string(&result.document)
+            .unwrap()
+            .contains("\"circular\""));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Собирает все `$ref`, оставшиеся в документе после сборки.
+    fn collect_refs(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(Value::String(r)) = map.get("$ref") {
+                    out.push(r.clone());
+                }
+                for v in map.values() {
+                    collect_refs(v, out);
+                }
+            }
+            Value::Array(arr) => {
+                for v in arr {
+                    collect_refs(v, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Главное требование к сборке: её можно отдать генератору кода или
+    /// Swagger UI как один файл. Значит, каждая оставшаяся ссылка обязана
+    /// разрешаться внутри самого документа — наружу не должно вести ничего.
+    #[test]
+    fn bundled_recursive_spec_is_self_contained() {
+        let root = setup_recursive_repo();
+        let result = load_openapi_bundle(&root, "specs/api.yaml", false).unwrap();
+
+        let mut refs = Vec::new();
+        collect_refs(&result.document, &mut refs);
+        assert!(!refs.is_empty(), "рекурсия должна оставить ссылки");
+
+        for reference in refs {
+            assert!(
+                reference.starts_with("#/"),
+                "внешняя ссылка {reference} осталась в сборке"
+            );
+            assert!(
+                resolve_pointer(&result.document, reference.trim_start_matches('#')).is_some(),
+                "ссылка {reference} никуда не ведёт"
+            );
+        }
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn hoisted_schema_does_not_clobber_one_declared_in_the_entry_document() {
+        let root = setup_recursive_repo();
+        fs::write(
+            root.join("specs/api.yaml"),
+            concat!(
+                "openapi: 3.0.3\ninfo:\n  title: t\n  version: '1'\n",
+                "components:\n  schemas:\n    Node:\n      type: string\n",
+                "paths:\n  /nodes:\n    get:\n      $ref: './operations/listNodes.yaml'\n",
+            ),
+        )
+        .unwrap();
+
+        let result = load_openapi_bundle(&root, "specs/api.yaml", false).unwrap();
+        assert_eq!(
+            result.document.pointer("/components/schemas/Node/type").unwrap(),
+            "string",
+            "объявленная вручную схема должна уцелеть"
+        );
+        assert_eq!(
+            result
+                .document
+                .pointer("/paths/~1nodes/get/responses/200/content/application~1json/schema/properties/parent/$ref")
+                .unwrap(),
+            "#/components/schemas/Node_2"
+        );
+        assert!(result
+            .document
+            .pointer("/components/schemas/Node_2/properties/name")
+            .is_some());
+
         fs::remove_dir_all(&root).ok();
     }
 
@@ -547,3 +910,4 @@ mod tests {
         )));
     }
 }
+

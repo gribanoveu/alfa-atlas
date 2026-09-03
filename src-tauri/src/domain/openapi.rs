@@ -30,11 +30,31 @@ pub struct RefDiagnostic {
     pub reason: String,
 }
 
+/// Откуда в собранный документ попал узел по адресу `pointer`. Пишется на
+/// каждой границе `$ref`, поэтому источник произвольного узла — это запись с
+/// самым длинным `pointer`-префиксом от него (узлы, объявленные прямо во
+/// входном документе, попадают под корневую запись).
+///
+/// Нужен и вьюеру («открыть исходник операции» — в многофайловой спеке иначе
+/// не найти, в каком из сотни файлов лежит ручка), и правилам валидации,
+/// которым надо назвать конкретный файл, а не адрес внутри сборки.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceRef {
+    /// JSON Pointer в собранном документе.
+    pub pointer: String,
+    /// Файл-источник относительно корня репозитория.
+    pub file: String,
+    /// JSON Pointer внутри файла-источника; пустой — ссылка на файл целиком.
+    pub fragment: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenApiBundleResult {
     pub document: serde_json::Value,
     pub diagnostics: Vec<RefDiagnostic>,
+    pub sources: Vec<SourceRef>,
 }
 
 #[derive(Debug, Error)]

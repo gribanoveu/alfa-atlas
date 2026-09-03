@@ -142,3 +142,7 @@
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
 }
+
+.problems-item.info .problems-item-icon {
+  color: var(--text-2);
+}

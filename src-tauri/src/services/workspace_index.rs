@@ -684,6 +684,9 @@ impl WorkspaceIndex {
                 match d.severity {
                     Severity::Error => stats.errors += 1,
                     Severity::Warning => stats.warnings += 1,
+                    // Замечания OpenAPI не поднимают счётчик предупреждений в
+                    // статусной строке: это подсказки, а не проблемы сборки.
+                    Severity::Info => {}
                 }
             }
         }

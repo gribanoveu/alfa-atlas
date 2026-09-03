@@ -9,7 +9,10 @@ export type DocumentType =
   | "plantUml"
   | "mermaid";
 
-export type Severity = "error" | "warning";
+/** `info` бэкенд не присылает — так помечаются замечания правил OpenAPI,
+ * которые считаются на фронте (`validate.ts`): «нет тега», «нет description».
+ * Их полезно видеть в списке, но они не должны выглядеть как проблемы. */
+export type Severity = "error" | "warning" | "info";
 
 export type DiagnosticKind =
   | "missingInclude"
@@ -20,7 +23,11 @@ export type DiagnosticKind =
   | "circularInclude"
   | "parseError"
   /** Атрибуты шапки отделены от заголовка пустой строкой — `:toc:` не действует. */
-  | "detachedHeaderAttributes";
+  | "detachedHeaderAttributes"
+  /** Нарушение правил OpenAPI; считается на фронте по собранной спеке. */
+  | "openapiRule"
+  /** `$ref` в спеке, который сборщик не смог разрешить. */
+  | "openapiRef";
 
 export type Document = {
   id: string;

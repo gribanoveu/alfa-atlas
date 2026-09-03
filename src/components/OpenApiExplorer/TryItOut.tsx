@@ -1,24 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { toMessage } from "../../lib/errors";
-import { parseParameters, primaryRequestBodyMedia, type JsonValue } from "./openApiModel";
+import type { OpenApiExplorerState, TryItOutForm } from "../../hooks/useOpenApiExplorerState";
+import { operationKey } from "../../hooks/useOpenApiExplorerState";
+import {
+  effectiveParameters,
+  effectiveServers,
+  primaryRequestBodyMedia,
+  type JsonValue,
+} from "./openApiModel";
 import {
   buildCurl,
   buildRequest,
-  listServerUrls,
   paramKey,
   scalarSkeleton,
   skeletonForSchema,
-  type ParamValues,
 } from "./requestBuilder";
 import {
   credentialsFor,
   isFilled,
   resolveOperationSecurity,
-  type AuthValues,
   type SecurityScheme,
 } from "./security";
-import { executeRequest, type ExecutedResponse } from "./requestExecutor";
+import { executeRequest } from "./requestExecutor";
 import { ResponseBodyView } from "./ResponseBodyView";
 import { ServerSelect } from "./ServerSelect";
 import "./OpenApiExplorer.css";
@@ -29,8 +33,7 @@ type TryItOutProps = {
   operation: JsonValue;
   document: JsonValue;
   securitySchemes: SecurityScheme[];
-  authValues: AuthValues;
-  onRequestAuth: () => void;
+  state: OpenApiExplorerState;
 };
 
 export function TryItOut({
@@ -39,49 +42,55 @@ export function TryItOut({
   operation,
   document,
   securitySchemes,
-  authValues,
-  onRequestAuth,
+  state,
 }: TryItOutProps) {
-  const parameters = useMemo(() => parseParameters(operation), [operation]);
+  const key = operationKey(path, method);
+  const parameters = useMemo(
+    () => effectiveParameters(document, path, operation),
+    [document, path, operation],
+  );
   const bodyMedia = useMemo(() => primaryRequestBodyMedia(operation), [operation]);
-  const serverUrls = useMemo(() => listServerUrls(document), [document]);
+  const serverUrls = useMemo(
+    () => effectiveServers(document, path, operation).map((s) => s.url),
+    [document, path, operation],
+  );
   const hasBody = bodyMedia !== null;
+
+  const [executing, setExecuting] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  // Форма живёт в состоянии Explorer'а: возврат к операции (или закрытие и
+  // повторное открытие вкладки) не должен стирать уже введённые значения.
+  // Первое открытие получает скелет, посчитанный из схем.
+  const initialForm = useMemo<TryItOutForm>(() => {
+    const paramValues: TryItOutForm["paramValues"] = {};
+    for (const p of parameters) {
+      paramValues[paramKey(p.in, p.name)] = scalarSkeleton(p.schema);
+    }
+    return {
+      paramValues,
+      bodyText:
+        bodyMedia?.schema !== undefined
+          ? JSON.stringify(skeletonForSchema(bodyMedia.schema), null, 2)
+          : "",
+    };
+  }, [parameters, bodyMedia]);
+
+  const form = state.forms[key] ?? initialForm;
+  const baseUrl = state.baseUrlOverride ?? serverUrls[0] ?? "";
 
   const security = useMemo(
     () => resolveOperationSecurity(document, operation),
     [document, operation],
   );
   const credentials = useMemo(
-    () => credentialsFor(securitySchemes, authValues, security.schemeIds),
-    [securitySchemes, authValues, security.schemeIds],
+    () => credentialsFor(securitySchemes, state.authValues, security.schemeIds),
+    [securitySchemes, state.authValues, security.schemeIds],
   );
-  const missingSchemeIds = security.schemeIds.filter((id) => !isFilled(authValues[id]));
-
-  const [baseUrl, setBaseUrl] = useState(serverUrls[0] ?? "");
-  const [paramValues, setParamValues] = useState<ParamValues>({});
-  const [bodyText, setBodyText] = useState("");
-  const [executing, setExecuting] = useState(false);
-  const [response, setResponse] = useState<ExecutedResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  // Reset the form whenever the selected operation changes.
-  useEffect(() => {
-    setBaseUrl(serverUrls[0] ?? "");
-    const initial: ParamValues = {};
-    for (const p of parameters) {
-      initial[paramKey(p.in, p.name)] = scalarSkeleton(p.schema);
-    }
-    setParamValues(initial);
-    setBodyText(
-      bodyMedia?.schema !== undefined
-        ? JSON.stringify(skeletonForSchema(bodyMedia.schema), null, 2)
-        : "",
-    );
-    setResponse(null);
-    setError(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, method]);
+  const missingSchemeIds = security.schemeIds.filter(
+    (id) => !isFilled(state.authValues[id]),
+  );
 
   const request = useMemo(
     () =>
@@ -89,31 +98,47 @@ export function TryItOut({
         baseUrl,
         path,
         method,
-        paramValues,
+        paramValues: form.paramValues,
         paramEntries: parameters,
         bodyMediaType: bodyMedia?.mediaType ?? null,
-        bodyText,
+        bodyText: form.bodyText,
         hasBody,
         auth: credentials,
       }),
-    [baseUrl, path, method, paramValues, parameters, bodyMedia, bodyText, hasBody, credentials],
+    [baseUrl, path, method, form, parameters, bodyMedia, hasBody, credentials],
   );
 
   const curl = useMemo(() => buildCurl(request), [request]);
 
+  const runs = state.history[key] ?? [];
+  const latest = runs[0] ?? null;
+
   const setParam = (location: string, name: string, value: string) => {
-    setParamValues((prev) => ({ ...prev, [paramKey(location, name)]: value }));
+    state.setForm(key, {
+      ...form,
+      paramValues: { ...form.paramValues, [paramKey(location, name)]: value },
+    });
   };
 
   const handleExecute = async () => {
     setExecuting(true);
-    setError(null);
     try {
       const result = await executeRequest(request);
-      setResponse(result);
+      state.pushRun(key, {
+        at: Date.now(),
+        method: request.method,
+        url: request.url,
+        response: result,
+        error: null,
+      });
     } catch (e) {
-      setResponse(null);
-      setError(toMessage(e));
+      state.pushRun(key, {
+        at: Date.now(),
+        method: request.method,
+        url: request.url,
+        response: null,
+        error: toMessage(e),
+      });
     } finally {
       setExecuting(false);
     }
@@ -138,13 +163,12 @@ export function TryItOut({
     (groups[p.in] ?? (groups[p.in] = [])).push(p);
   }
 
-  const statusClass = response
-    ? response.status < 300
+  const statusClassOf = (status: number) =>
+    status < 300
       ? "oas-try-status-ok"
-      : response.status < 500
+      : status < 500
         ? "oas-try-status-warn"
-        : "oas-try-status-error"
-    : "";
+        : "oas-try-status-error";
 
   return (
     <div className="oas-try">
@@ -153,7 +177,11 @@ export function TryItOut({
         <div className="oas-try-server-stack">
           <div className="oas-try-server-field">
             <span className="oas-try-server-field-label">Выбрать из спецификации</span>
-            <ServerSelect servers={serverUrls} value={baseUrl} onSelect={setBaseUrl} />
+            <ServerSelect
+              servers={serverUrls}
+              value={baseUrl}
+              onSelect={state.setBaseUrlOverride}
+            />
           </div>
           <div className="oas-try-server-field">
             <span className="oas-try-server-field-label">Итоговый адрес запроса</span>
@@ -161,7 +189,7 @@ export function TryItOut({
               type="text"
               className="oas-try-input"
               value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
+              onChange={(e) => state.setBaseUrlOverride(e.target.value)}
               placeholder="https://host"
             />
           </div>
@@ -193,7 +221,11 @@ export function TryItOut({
                 {security.optional ? "Не заполнено" : "Требуется, но не заполнено"}:{" "}
                 {missingSchemeIds.join(", ")} — запрос уйдёт без этих данных.
               </span>
-              <button type="button" className="oas-try-copy-btn" onClick={onRequestAuth}>
+              <button
+                type="button"
+                className="oas-try-copy-btn"
+                onClick={() => state.setAuthOpen(true)}
+              >
                 Заполнить
               </button>
             </div>
@@ -216,7 +248,7 @@ export function TryItOut({
                 <input
                   type="text"
                   className="oas-try-input"
-                  value={paramValues[paramKey(p.in, p.name)] ?? ""}
+                  value={form.paramValues[paramKey(p.in, p.name)] ?? ""}
                   onChange={(e) => setParam(p.in, p.name, e.target.value)}
                   placeholder={p.description ?? ""}
                 />
@@ -231,8 +263,8 @@ export function TryItOut({
           <div className="oas-try-group-title">Тело запроса ({bodyMedia?.mediaType})</div>
           <textarea
             className="oas-try-body"
-            value={bodyText}
-            onChange={(e) => setBodyText(e.target.value)}
+            value={form.bodyText}
+            onChange={(e) => state.setForm(key, { ...form, bodyText: e.target.value })}
             spellCheck={false}
             rows={10}
           />
@@ -256,24 +288,37 @@ export function TryItOut({
         <button type="button" className="oas-try-copy-btn" onClick={() => void handleCopyCurl()}>
           {copied ? "Скопировано" : "Копировать"}
         </button>
+        {runs.length > 1 ? (
+          <button
+            type="button"
+            className="oas-try-copy-btn"
+            onClick={() => setHistoryOpen((o) => !o)}
+          >
+            {historyOpen ? "Скрыть историю" : `История (${runs.length})`}
+          </button>
+        ) : null}
       </div>
 
-      {error ? (
-        <div className="oas-try-error">{error}</div>
-      ) : response ? (
+      {latest?.error ? (
+        <div className="oas-try-error">{latest.error}</div>
+      ) : latest?.response ? (
         <div className="oas-try-response">
           <div className="oas-try-response-header">
-            <span className={`oas-try-status ${statusClass}`}>
-              {response.status} {response.statusText}
+            <span className={`oas-try-status ${statusClassOf(latest.response.status)}`}>
+              {latest.response.status} {latest.response.statusText}
             </span>
-            <span className="oas-try-duration">{Math.round(response.durationMs)} мс</span>
+            <span className="oas-try-duration">
+              {Math.round(latest.response.durationMs)} мс
+            </span>
           </div>
-          {Object.keys(response.headers).length > 0 ? (
+          {Object.keys(latest.response.headers).length > 0 ? (
             <details className="oas-try-headers">
-              <summary>Заголовки ответа ({Object.keys(response.headers).length})</summary>
+              <summary>
+                Заголовки ответа ({Object.keys(latest.response.headers).length})
+              </summary>
               <table className="oas-try-headers-table">
                 <tbody>
-                  {Object.entries(response.headers).map(([k, v]) => (
+                  {Object.entries(latest.response.headers).map(([k, v]) => (
                     <tr key={k}>
                       <td className="oas-try-header-name">{k}</td>
                       <td>{v}</td>
@@ -283,7 +328,35 @@ export function TryItOut({
               </table>
             </details>
           ) : null}
-          <ResponseBodyView body={response.body} />
+          <ResponseBodyView body={latest.response.body} />
+        </div>
+      ) : null}
+
+      {historyOpen && runs.length > 1 ? (
+        <div className="oas-try-history">
+          <div className="oas-try-group-title">Предыдущие запуски</div>
+          {runs.slice(1).map((run) => (
+            <div key={run.at} className="oas-try-history-row">
+              <span className="oas-try-history-time">
+                {new Date(run.at).toLocaleTimeString()}
+              </span>
+              {run.response ? (
+                <span className={`oas-try-status ${statusClassOf(run.response.status)}`}>
+                  {run.response.status}
+                </span>
+              ) : (
+                <span className="oas-try-status oas-try-status-error">ошибка</span>
+              )}
+              <span className="oas-try-history-url" title={run.url}>
+                {run.url}
+              </span>
+              {run.response ? (
+                <span className="oas-try-duration">
+                  {Math.round(run.response.durationMs)} мс
+                </span>
+              ) : null}
+            </div>
+          ))}
         </div>
       ) : null}
     </div>

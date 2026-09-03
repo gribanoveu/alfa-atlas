@@ -32,6 +32,7 @@ pub mod memory_pipeline;
 pub mod metrics;
 pub mod metrics_session;
 pub mod openapi;
+pub mod openapi_lint;
 pub mod plans;
 pub mod project_layout;
 pub mod project_open;

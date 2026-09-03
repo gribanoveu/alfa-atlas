@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
-import { Lock } from "lucide-react";
+import { useEffect, useMemo } from "react";
+import { ChevronDown, ChevronRight, Download, Lock } from "lucide-react";
 import type { OpenApiBundleResult } from "../../lib/openapi";
+import type { OpenApiExplorerState } from "../../hooks/useOpenApiExplorerState";
 import {
   collectOperations,
   getOperation,
@@ -10,33 +11,46 @@ import {
   type OperationSummary,
 } from "./openApiModel";
 import { OperationView } from "./OperationView";
-import { DiagnosticsBanner } from "./DiagnosticsBanner";
 import { AuthPanel } from "./AuthPanel";
-import {
-  collectSecuritySchemes,
-  resolveOperationSecurity,
-  type AuthValue,
-  type AuthValues,
-} from "./security";
+import { collectSecuritySchemes, resolveOperationSecurity } from "./security";
+import { buildSourceIndex, operationPointer, sourceForPointer } from "./sourceMap";
 import "./OpenApiExplorer.css";
+
+export type SpecSourceTarget = {
+  /** Путь файла относительно корня репозитория. */
+  file: string;
+  /** Подсказки для поиска строки внутри файла, от точной к грубой. */
+  searchKeys: string[];
+};
 
 type OpenApiExplorerProps = {
   bundle: OpenApiBundleResult | null;
   loading: boolean;
   error: string | null;
+  state: OpenApiExplorerState;
+  /** Открыть файл-исходник (в редакторе, с прокруткой к нужной строке). */
+  onOpenSource?: (target: SpecSourceTarget) => void;
+  /** Запрос «показать операцию из этого файла» — приходит из полосы вкладок,
+   * когда открыт фрагмент спеки. `nonce` делает повторный запрос заметным. */
+  revealSource?: { file: string; nonce: number } | null;
+  /** Сохранить собранный документ в файл. */
+  onExportBundle?: (json: string) => void;
 };
 
 function opKey(op: OperationSummary): string {
   return `${op.method} ${op.path}`;
 }
 
-export function OpenApiExplorer({ bundle, loading, error }: OpenApiExplorerProps) {
-  const [filter, setFilter] = useState("");
-  const [selected, setSelected] = useState<{ path: string; method: string } | null>(null);
-  // Секреты — на всю спецификацию и только в памяти вкладки: на диск их не
-  // пишем, а переключение операции не должно заставлять вводить токен заново.
-  const [authValues, setAuthValues] = useState<AuthValues>({});
-  const [authOpen, setAuthOpen] = useState(false);
+export function OpenApiExplorer({
+  bundle,
+  loading,
+  error,
+  state,
+  onOpenSource,
+  revealSource = null,
+  onExportBundle,
+}: OpenApiExplorerProps) {
+  const { filter, setFilter, selected, setSelected } = state;
 
   const document = bundle?.document as JsonValue | undefined;
 
@@ -53,7 +67,10 @@ export function OpenApiExplorer({ bundle, loading, error }: OpenApiExplorerProps
     () => (document ? collectSecuritySchemes(document) : []),
     [document],
   );
-
+  const sourceIndex = useMemo(
+    () => buildSourceIndex(bundle?.sources ?? []),
+    [bundle?.sources],
+  );
   // Замочек в списке считаем один раз на документ: `security` может прийти и
   // от корня спеки, так что по самой операции этого не видно.
   const securedOperations = useMemo(() => {
@@ -68,10 +85,26 @@ export function OpenApiExplorer({ bundle, loading, error }: OpenApiExplorerProps
     return secured;
   }, [document, operations]);
 
-  const setAuthValue = useCallback((schemeId: string, value: AuthValue) => {
-    setAuthValues((prev) => ({ ...prev, [schemeId]: value }));
-  }, []);
-  const clearAuth = useCallback(() => setAuthValues({}), []);
+  /** Файл-исходник операции — для «показать в Explorer» из полосы вкладок и
+   * для подписи находок валидации. */
+  const sourceFileOfOperation = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const op of operations) {
+      const source = sourceForPointer(sourceIndex, operationPointer(op.path, op.method));
+      if (source) map.set(opKey(op), source.file);
+    }
+    return map;
+  }, [operations, sourceIndex]);
+
+  // Обратное направление моста «исходник ↔ рендер»: пользователь стоит в
+  // `operations/listPets.yaml` и просит показать эту ручку в рендере.
+  useEffect(() => {
+    if (!revealSource) return;
+    const match = operations.find(
+      (op) => sourceFileOfOperation.get(opKey(op)) === revealSource.file,
+    );
+    if (match) setSelected({ path: match.path, method: match.method });
+  }, [revealSource, operations, sourceFileOfOperation, setSelected]);
 
   // `selected` can point at an operation that no longer exists after the
   // spec reloads (endpoint deleted from disk) — falls back to the first
@@ -109,6 +142,8 @@ export function OpenApiExplorer({ bundle, loading, error }: OpenApiExplorerProps
   const description = typeof info.description === "string" ? info.description : null;
   const servers = Array.isArray(document.servers) ? document.servers : [];
 
+  const allTags = [...grouped.keys()];
+
   return (
     <div className="oas-explorer">
       <div className="oas-nav">
@@ -123,56 +158,106 @@ export function OpenApiExplorer({ bundle, loading, error }: OpenApiExplorerProps
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
+        <div className="oas-nav-actions">
+          <span className="oas-nav-count">операций: {filtered.length}</span>
+          <button
+            type="button"
+            className="oas-nav-action"
+            onClick={() =>
+              state.setAllTagsCollapsed(allTags, state.collapsedTags.size < allTags.length)
+            }
+          >
+            {state.collapsedTags.size < allTags.length ? "Свернуть все" : "Развернуть все"}
+          </button>
+        </div>
         <div className="oas-nav-groups">
-          {[...grouped.entries()].map(([tag, ops]) => (
-            <div key={tag} className="oas-nav-group">
-              <div className="oas-nav-group-title">{tag}</div>
-              {ops.map((op) => {
-                const isActive =
-                  activeSelection?.path === op.path && activeSelection?.method === op.method;
-                return (
-                  <button
-                    key={opKey(op)}
-                    type="button"
-                    className={`oas-nav-item ${isActive ? "active" : ""}`}
-                    onClick={() => setSelected({ path: op.path, method: op.method })}
-                  >
-                    <span className={`oas-method-badge oas-method-${op.method}`}>
-                      {op.method}
-                    </span>
-                    <span className="oas-nav-item-path">{op.path}</span>
-                    {securedOperations.has(opKey(op)) ? (
-                      <Lock
-                        size={11}
-                        className="oas-nav-item-lock"
-                        aria-label="требует авторизации"
-                      />
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+          {[...grouped.entries()].map(([tag, ops]) => {
+            const collapsed = state.collapsedTags.has(tag);
+            return (
+              <div key={tag} className="oas-nav-group">
+                <button
+                  type="button"
+                  className="oas-nav-group-title"
+                  onClick={() => state.toggleTag(tag)}
+                  aria-expanded={!collapsed}
+                >
+                  {collapsed ? (
+                    <ChevronRight size={12} aria-hidden />
+                  ) : (
+                    <ChevronDown size={12} aria-hidden />
+                  )}
+                  {tag}
+                  <span className="oas-nav-group-count">{ops.length}</span>
+                </button>
+                {collapsed
+                  ? null
+                  : ops.map((op) => {
+                      const isActive =
+                        activeSelection?.path === op.path &&
+                        activeSelection?.method === op.method;
+                      return (
+                        <button
+                          key={opKey(op)}
+                          type="button"
+                          className={`oas-nav-item ${isActive ? "active" : ""}${
+                            op.deprecated ? " is-deprecated" : ""
+                          }`}
+                          onClick={() => setSelected({ path: op.path, method: op.method })}
+                          title={op.summary ?? op.path}
+                        >
+                          <span className={`oas-method-badge oas-method-${op.method}`}>
+                            {op.method}
+                          </span>
+                          <span className="oas-nav-item-text">
+                            <span className="oas-nav-item-path">{op.path}</span>
+                            {op.summary ? (
+                              <span className="oas-nav-item-summary">{op.summary}</span>
+                            ) : null}
+                          </span>
+                          {securedOperations.has(opKey(op)) ? (
+                            <Lock
+                              size={11}
+                              className="oas-nav-item-lock"
+                              aria-label="требует авторизации"
+                            />
+                          ) : null}
+                        </button>
+                      );
+                    })}
+              </div>
+            );
+          })}
           {grouped.size === 0 ? (
             <div className="panel-empty">Ничего не найдено</div>
           ) : null}
         </div>
       </div>
       <div className="oas-main">
-        <AuthPanel
-          schemes={securitySchemes}
-          values={authValues}
-          onChange={setAuthValue}
-          onClear={clearAuth}
-          open={authOpen}
-          onToggle={() => setAuthOpen((o) => !o)}
-          activeSchemeIds={
-            activeOperation ? resolveOperationSecurity(document, activeOperation).schemeIds : []
-          }
-        />
-        {bundle && bundle.diagnostics.length > 0 ? (
-          <DiagnosticsBanner diagnostics={bundle.diagnostics} />
-        ) : null}
+        <div className="oas-main-head">
+          <AuthPanel
+            schemes={securitySchemes}
+            values={state.authValues}
+            onChange={state.setAuthValue}
+            onClear={state.clearAuth}
+            open={state.authOpen}
+            onToggle={() => state.setAuthOpen(!state.authOpen)}
+            activeSchemeIds={
+              activeOperation ? resolveOperationSecurity(document, activeOperation).schemeIds : []
+            }
+            trailing={
+              onExportBundle ? (
+                <button
+                  type="button"
+                  className="oas-auth-clear"
+                  onClick={() => onExportBundle(JSON.stringify(document, null, 2))}
+                  title="Сохранить собранную спецификацию одним файлом"
+                >
+                  <Download size={12} aria-hidden /> Экспорт
+                </button>
+              ) : null
+            }
+          />
+        </div>
         {description ? <p className="oas-info-description">{description}</p> : null}
         {servers.length > 0 && !activeOperation ? (
           <div className="oas-servers">
@@ -197,8 +282,14 @@ export function OpenApiExplorer({ bundle, loading, error }: OpenApiExplorerProps
             operation={activeOperation}
             document={document}
             securitySchemes={securitySchemes}
-            authValues={authValues}
-            onRequestAuth={() => setAuthOpen(true)}
+            state={state}
+            sourceFile={
+              sourceForPointer(
+                sourceIndex,
+                operationPointer(activeSelection.path, activeSelection.method),
+              )?.file ?? null
+            }
+            onOpenSource={onOpenSource}
           />
         ) : operations.length === 0 ? (
           <div className="panel-empty">В спецификации нет операций</div>

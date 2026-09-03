@@ -319,6 +319,7 @@ fn severity_word(severity: Severity) -> &'static str {
     match severity {
         Severity::Error => "ошибка",
         Severity::Warning => "предупреждение",
+        Severity::Info => "замечание",
     }
 }
 

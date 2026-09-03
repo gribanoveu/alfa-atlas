@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertCircle, AlertTriangle } from "lucide-react";
+import { AlertCircle, AlertTriangle, Info } from "lucide-react";
 import type { Diagnostic } from "../../lib/workspaceIndex";
 import "./ProblemsPanel.css";
 
@@ -104,7 +104,11 @@ export function ProblemsPanel({
             <ul className="problems-list">
               {group.items.map((d, i) => {
                 const Icon =
-                  d.severity === "error" ? AlertCircle : AlertTriangle;
+                  d.severity === "error"
+                    ? AlertCircle
+                    : d.severity === "warning"
+                      ? AlertTriangle
+                      : Info;
                 return (
                   <li key={`${d.document}-${d.line}-${d.column}-${i}`}>
                     <button

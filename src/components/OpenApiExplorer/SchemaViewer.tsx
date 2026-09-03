@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { isRefMarker, type JsonValue, type RefMarker } from "./openApiModel";
+import {
+  isRefMarker,
+  localSchemaRefName,
+  type JsonValue,
+  type RefMarker,
+} from "./openApiModel";
 import { compatibleExampleForSchema } from "./requestBuilder";
 import "./OpenApiExplorer.css";
 
@@ -42,6 +47,20 @@ function RefBadge({ marker }: { marker: RefMarker }) {
   );
 }
 
+/** Рекурсивная схема: сборщик вынес её тело в `components/schemas`, здесь
+ * осталась ссылка. Это нормальная конструкция, а не поломка, поэтому и
+ * выглядит она как ссылка на тип, а не как предупреждение. */
+function RecursiveRefBadge({ name }: { name: string }) {
+  return (
+    <span
+      className="oas-ref-recursive"
+      title={`Рекурсивная ссылка на схему ${name} (вынесена в components/schemas)`}
+    >
+      ↻ {name}
+    </span>
+  );
+}
+
 export function SchemaViewer({ schema, name, depth = 0, required = false }: SchemaViewerProps) {
   const [collapsed, setCollapsed] = useState(depth >= 2);
 
@@ -50,6 +69,21 @@ export function SchemaViewer({ schema, name, depth = 0, required = false }: Sche
       <div className="oas-schema-row" style={{ paddingLeft: depth * 14 }}>
         {name ? <span className="oas-schema-name">{name}</span> : null}
         <RefBadge marker={schema} />
+      </div>
+    );
+  }
+
+  const recursiveRef = localSchemaRefName(schema);
+  if (recursiveRef) {
+    return (
+      <div className="oas-schema-row" style={{ paddingLeft: depth * 14 }}>
+        {name ? (
+          <span className="oas-schema-name">
+            {name}
+            {required ? <span className="oas-schema-required">*</span> : null}
+          </span>
+        ) : null}
+        <RecursiveRefBadge name={recursiveRef} />
       </div>
     );
   }
@@ -165,6 +199,10 @@ export function SchemaViewer({ schema, name, depth = 0, required = false }: Sche
 export function SchemaTypeInline({ schema }: { schema: unknown }) {
   if (isRefMarker(schema)) {
     return <RefBadge marker={schema} />;
+  }
+  const recursiveRef = localSchemaRefName(schema);
+  if (recursiveRef) {
+    return <RecursiveRefBadge name={recursiveRef} />;
   }
   const s = asObject(schema);
   if (!s) return <span className="oas-schema-empty">—</span>;

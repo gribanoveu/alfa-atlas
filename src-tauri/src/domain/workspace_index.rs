@@ -132,6 +132,10 @@ pub struct Table {
 pub enum Severity {
     Error,
     Warning,
+    /// Замечание правил OpenAPI («нет тега», «нет description»): в списке
+    /// проблем видно, но выглядеть как поломка не должно. AsciiDoc-правила
+    /// эту степень не используют.
+    Info,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +152,10 @@ pub enum DiagnosticKind {
     /// `domain::asciidoc_header`. Как и `ParseError`, вычисляется из текста
     /// одного документа, а не из связей между документами.
     DetachedHeaderAttributes,
+    /// Нарушение правила OpenAPI — см. `services::openapi_lint`.
+    OpenapiRule,
+    /// `$ref` в спецификации, который сборщик не смог разрешить.
+    OpenapiRef,
 }
 
 impl DiagnosticKind {

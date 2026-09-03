@@ -20,6 +20,8 @@ type AuthPanelProps = {
   /** Схемы текущей операции — помечаем их, чтобы в длинном списке было видно,
    * какое поле влияет на кнопку «Выполнить» прямо сейчас. */
   activeSchemeIds: string[];
+  /** Дополнительные кнопки в той же полосе (экспорт бандла). */
+  trailing?: React.ReactNode;
 };
 
 /** Аналог кнопки Authorize в Swagger UI: одни и те же секреты на всю
@@ -34,10 +36,22 @@ export function AuthPanel({
   open,
   onToggle,
   activeSchemeIds,
+  trailing,
 }: AuthPanelProps) {
   const [reveal, setReveal] = useState(false);
 
-  if (schemes.length === 0) return null;
+  // Спека без securitySchemes — полосу всё равно рисуем: в ней живут общие
+  // действия вроде экспорта бандла.
+  if (schemes.length === 0) {
+    return trailing ? (
+      <div className="oas-auth">
+        <div className="oas-auth-bar">
+          <span className="oas-auth-status">Авторизация в спецификации не объявлена</span>
+          {trailing}
+        </div>
+      </div>
+    ) : null;
+  }
 
   const filled = schemes.filter((s) => isFilled(values[s.id]));
   const activeFilled = activeSchemeIds.filter((id) => isFilled(values[id]));
@@ -80,6 +94,7 @@ export function AuthPanel({
             Сбросить
           </button>
         ) : null}
+        {trailing}
       </div>
 
       {open ? (
