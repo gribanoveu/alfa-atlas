@@ -16,14 +16,21 @@ function makeEditor(tabs: { id: string; title: string; dirty: boolean }[] = []) 
   };
 }
 
-function render(editor: EditorStub, title: string | null = "Мой API") {
-  return renderHook(() =>
-    useEditorTabActions({
-      // The hook only reads these few members; the real hooks are far
-      // larger and none of the rest is reachable from here.
-      editor: editor as never,
-      specsRepo: { info: title ? ({ title } as never) : null },
-    }),
+function render(
+  editor: EditorStub,
+  title: string | null = "Мой API",
+  repoRoot: string | null = "/repo/a",
+) {
+  return renderHook(
+    (props: { repoRoot: string | null }) =>
+      useEditorTabActions({
+        // The hook only reads these few members; the real hooks are far
+        // larger and none of the rest is reachable from here.
+        editor: editor as never,
+        specsRepo: { info: title ? ({ title } as never) : null },
+        repoRoot: props.repoRoot,
+      }),
+    { initialProps: { repoRoot } },
   );
 }
 
@@ -32,6 +39,35 @@ function visual(id: string, title: string, source = "flowchart TD"): Visual {
 }
 
 describe("useEditorTabActions", () => {
+  test("switching projects closes the tabs that belong to the old repository", () => {
+    const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
+    const { result, rerender } = render(editor);
+
+    act(() => result.current.openArtifactTab("art-1"));
+    act(() => result.current.openVisualTab(visual("v1", "Схема")));
+    act(() => result.current.openApiExplorerTab());
+    act(() => result.current.openUtilityTab("unixtime"));
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual([
+      "a.adoc",
+      "openapi",
+      "utility:unixtime",
+      "artifact:art-1",
+      "visual:v1",
+    ]);
+
+    rerender({ repoRoot: "/repo/b" });
+
+    // Артефакт хранится по репозиторию, визуализация пришла из чата прошлого
+    // проекта, Explorer описывает прошлую спеку — все три закрываются.
+    // Конвертер к проекту не привязан и остаётся.
+    expect(result.current.displayTabs.map((t) => t.id)).toEqual([
+      "a.adoc",
+      "utility:unixtime",
+    ]);
+    expect(result.current.activeKind).toBe("file");
+  });
+
+
   test("the strip shows file tabs only until the API Explorer is opened", () => {
     const editor = makeEditor([{ id: "a.adoc", title: "a", dirty: false }]);
     const { result } = render(editor);

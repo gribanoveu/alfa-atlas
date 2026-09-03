@@ -3,10 +3,13 @@ import { Check, ExternalLink, Loader2, Save, Send, Upload } from "lucide-react";
 import type { ArtifactReadyDetail } from "../RightDock/AssistantArtifactCard";
 import {
   ARTIFACT_KIND_LABELS,
+  ARTIFACT_UPDATED_EVENT,
   artifactGet,
+  decideArtifactUpdate,
   artifactSave,
   type ArtifactContent,
   type ArtifactRecord,
+  type ArtifactUpdatedDetail,
 } from "../../lib/artifacts";
 import {
   getJiraSettings,
@@ -56,6 +59,8 @@ export function ArtifactView({
   const [confirming, setConfirming] = useState(false);
   const [target, setTarget] = useState<{ projectKey: string; issueTypeName: string } | null>(null);
   const [issueUrl, setIssueUrl] = useState<string | null>(null);
+  // Версия ассистента, придержанная из-за несохранённых правок пользователя.
+  const [agentUpdate, setAgentUpdate] = useState<ArtifactRecord | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -94,6 +99,48 @@ export function ArtifactView({
       if (savedTimerRef.current !== null) clearTimeout(savedTimerRef.current);
     };
   }, []);
+
+  // Слушатель живёт весь срок вкладки, а `dirty`/`record` меняются на каждый
+  // ввод — держим их в ref, чтобы не переподписываться на каждое нажатие.
+  const dirtyRef = useRef(dirty);
+  const recordRef = useRef<ArtifactRecord | null>(record);
+  useEffect(() => {
+    dirtyRef.current = dirty;
+    recordRef.current = record;
+  }, [dirty, record]);
+
+  const adoptRecord = useCallback(
+    (incoming: ArtifactRecord) => {
+      setRecord(incoming);
+      setDirty(false);
+      setJustSaved(false);
+      setSent(incoming.status === "ready");
+      setAgentUpdate(null);
+      onTitleChange(incoming.id, incoming.title);
+    },
+    [onTitleChange],
+  );
+
+  // Ассистент правит артефакт своим инструментом — открытая вкладка должна
+  // показать это сразу, а не после закрытия и повторного открытия.
+  useEffect(() => {
+    const onUpdated = (event: Event) => {
+      const incoming = (event as CustomEvent<ArtifactUpdatedDetail>).detail?.artifact;
+      if (!incoming || incoming.id !== artifactId) return;
+      switch (decideArtifactUpdate(incoming, recordRef.current, dirtyRef.current)) {
+        case "adopt":
+          adoptRecord(incoming);
+          break;
+        case "hold":
+          setAgentUpdate(incoming);
+          break;
+        case "ignore":
+          break;
+      }
+    };
+    window.addEventListener(ARTIFACT_UPDATED_EVENT, onUpdated);
+    return () => window.removeEventListener(ARTIFACT_UPDATED_EVENT, onUpdated);
+  }, [artifactId, adoptRecord]);
 
   const updateContent = useCallback((content: ArtifactContent) => {
     setRecord((prev) => (prev ? { ...prev, content } : prev));
@@ -326,6 +373,31 @@ export function ArtifactView({
               onClick={() => void handlePublish()}
             >
               Создать задачу
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {agentUpdate ? (
+        <div className="artifact-agent-update">
+          <span>
+            Ассистент изменил артефакт, пока вы его правили. Ваши изменения не сохранены —
+            выберите, чью версию оставить.
+          </span>
+          <div className="artifact-agent-update-actions">
+            <button
+              type="button"
+              className="artifact-btn"
+              onClick={() => setAgentUpdate(null)}
+            >
+              Оставить свою
+            </button>
+            <button
+              type="button"
+              className="artifact-btn primary"
+              onClick={() => adoptRecord(agentUpdate)}
+            >
+              Показать версию ассистента
             </button>
           </div>
         </div>

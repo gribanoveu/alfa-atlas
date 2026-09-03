@@ -107,7 +107,11 @@ import {
   type ToolCallDecision,
 } from "../lib/llm";
 import { playNeedAnswerSound, playTaskDoneSound } from "../lib/assistantSounds";
-import { artifactList } from "../lib/artifacts";
+import {
+  artifactList,
+  ARTIFACT_UPDATED_EVENT,
+  type ArtifactUpdatedDetail,
+} from "../lib/artifacts";
 import { planGet, type PlanRecord } from "../lib/plans";
 import { estimateTokenCount } from "../lib/tokens";
 
@@ -755,6 +759,21 @@ export function useLlmChat(
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void listenLlmToolResult(({ turnId, id, result, error: toolError }) => {
+      if (result?.tool === "artifact") {
+        // Вкладка артефакта читает запись один раз при открытии, поэтому
+        // правку ассистента она сама не увидит — до сих пор её приходилось
+        // закрывать и открывать заново. Результат вызова уже несёт свежую
+        // запись целиком; чья это версия и новее ли она, решает сама вкладка.
+        //
+        // Намеренно до проверки хода: запись на диске уже произошла, и от
+        // того, успел ли пользователь переключить чат, она не отменяется.
+        // От применения устаревшей записи защищает сравнение версий.
+        window.dispatchEvent(
+          new CustomEvent<ArtifactUpdatedDetail>(ARTIFACT_UPDATED_EVENT, {
+            detail: { artifact: result.result.artifact },
+          }),
+        );
+      }
       if (turnId !== activeTurnIdRef.current) return;
       const toolName = toolNamesRef.current.get(id);
       if (toolName) {

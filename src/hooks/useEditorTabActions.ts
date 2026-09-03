@@ -16,6 +16,8 @@ import type { useEditorTabs } from "./useEditorTabs";
 type Deps = {
   editor: ReturnType<typeof useEditorTabs>;
   specsRepo: { info: SpecsRepoInfo | null };
+  /** Корень открытого репозитория: часть псевдо-вкладок привязана к нему. */
+  repoRoot: string | null;
 };
 
 /** Which pane the editor column shows: a real file tab, or one of the
@@ -34,7 +36,7 @@ export type EditorPaneKind = "file" | "openapi" | "utility" | "artifact" | "visu
  * Also carries the menu's Undo/Redo, which need the live Monaco instance.
  * That is a ref rather than state on purpose: swapping editors must not
  * re-render the app, only leave the right pointer behind for the next click. */
-export function useEditorTabActions({ editor, specsRepo }: Deps) {
+export function useEditorTabActions({ editor, specsRepo, repoRoot }: Deps) {
   const [openApiTabOpen, setOpenApiTabOpen] = useState(false);
   const [openUtilities, setOpenUtilities] = useState<UtilityId[]>([]);
   const [activeUtility, setActiveUtility] = useState<UtilityId | null>(null);
@@ -56,6 +58,29 @@ export function useEditorTabActions({ editor, specsRepo }: Deps) {
   const [openVisuals, setOpenVisuals] = useState<Visual[]>([]);
   const [activeVisualId, setActiveVisualId] = useState<string | null>(null);
   const [activeKind, setActiveKind] = useState<EditorPaneKind>("file");
+
+  // Смена проекта закрывает псевдо-вкладки, привязанные к репозиторию.
+  //
+  // Артефакты хранятся по репозиториям (`services::artifacts` резолвит их
+  // через `repository_scope::open_repository`), поэтому в другом проекте
+  // открытая вкладка артефакта не находит запись и показывает ошибку
+  // загрузки вместо содержимого. Визуализация приходит из чата, а чаты тоже
+  // заведены по `repo_root`, так что она относится к разговору из прошлого
+  // проекта. API Explorer описывает спеку прошлого репозитория.
+  //
+  // Сброс живёт здесь, а не в `closeProject`, чтобы срабатывать на любом
+  // пути смены проекта, а не только на кнопке в шапке. Утилиты (конвертеры)
+  // от проекта не зависят и остаются открытыми.
+  useEffect(() => {
+    setOpenApiTabOpen(false);
+    setOpenArtifacts([]);
+    setActiveArtifact(null);
+    setArtifactTitles({});
+    setArtifactDirty({});
+    setOpenVisuals([]);
+    setActiveVisualId(null);
+    setActiveKind("file");
+  }, [repoRoot]);
 
   // Any real file tab becoming active (open/select/restore-on-load) hands
   // focus back to the file view — the pseudo-tabs stay active only when the

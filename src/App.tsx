@@ -177,7 +177,7 @@ function App() {
   // Вид Explorer'а — псевдовкладка, её компонент размонтируется при закрытии;
   // состояние (выбранная операция, форма запроса, секреты) держим здесь.
   const openApiExplorerState = useOpenApiExplorerState(project.repoRoot);
-  const tabs = useEditorTabActions({ editor, specsRepo });
+  const tabs = useEditorTabActions({ editor, specsRepo, repoRoot: project.repoRoot });
   const {
     openApiTabOpen,
     setOpenApiTabOpen,

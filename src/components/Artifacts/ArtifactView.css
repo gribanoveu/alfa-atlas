@@ -621,3 +621,24 @@
   display: flex;
   gap: 8px;
 }
+
+/* Ассистент изменил артефакт, пока пользователь его правил: показываем выбор
+   вместо тихой замены содержимого под руками. */
+.artifact-agent-update {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--yellow) 55%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--yellow) 10%, var(--bg-1));
+  font-size: var(--font-ui-sm);
+  line-height: 1.5;
+}
+
+.artifact-agent-update-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}

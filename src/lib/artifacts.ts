@@ -140,6 +140,42 @@ export type RenderedArtifact =
   | ({ kind: "httpRequest" } & RenderedHttpRequest)
   | ({ kind: "jiraTicket" } & RenderedJiraTicket);
 
+/**
+ * Ассистент создал или изменил артефакт своим инструментом `artifact`.
+ *
+ * Вкладка артефакта читает запись один раз при открытии, а бэкенд о записи
+ * артефактов событий не шлёт (сервисы здесь намеренно не знают про
+ * `AppHandle`). Зато результат вызова инструмента и так доезжает до фронта со
+ * свежей записью целиком — `useLlmChat` перекладывает её в это событие, а
+ * открытая вкладка на него подписана. Тот же приём, что и с
+ * `atlas-artifact-ready`, только в обратную сторону.
+ */
+export const ARTIFACT_UPDATED_EVENT = "atlas-artifact-updated";
+
+export type ArtifactUpdatedDetail = { artifact: ArtifactRecord };
+
+/** Что делать открытой вкладке с записью, пришедшей от ассистента. */
+export type ArtifactUpdateDecision =
+  /** Не наш артефакт или версия не новее — вкладку не трогаем. */
+  | "ignore"
+  /** Правок пользователя нет: показываем версию ассистента сразу. */
+  | "adopt"
+  /** Есть несохранённые правки: молча их потерять нельзя, спрашиваем. */
+  | "hold";
+
+export function decideArtifactUpdate(
+  incoming: ArtifactRecord,
+  current: ArtifactRecord | null,
+  dirty: boolean,
+): ArtifactUpdateDecision {
+  if (current && incoming.id !== current.id) return "ignore";
+  // Тот же инструмент отдаёт запись и на чтение (`artifact read`), и после
+  // записи — различаем их по версии, иначе обычное чтение выглядело бы как
+  // правка и зря пугало бы пользователя баннером.
+  if (current && incoming.updatedAtMs <= current.updatedAtMs) return "ignore";
+  return dirty ? "hold" : "adopt";
+}
+
 export function artifactList(): Promise<ArtifactSummary[]> {
   return invoke<ArtifactSummary[]>("artifact_list");
 }
