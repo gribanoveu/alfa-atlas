@@ -225,24 +225,51 @@ fn diagnose_one(index: &WorkspaceIndex, doc: &DocumentId, prefs: DiagnosticsPref
         }
     }
 
-    // Circular include (DFS from this doc).
-    if let Some(cycle) = detect_cycle(index, doc) {
-        out.push(Diagnostic {
-            kind: DiagnosticKind::CircularInclude,
-            message: msgs::circular_include(lang, &cycle),
-            document: doc.clone(),
-            line: 1,
-            column: 1,
-            severity: Severity::Error,
-        });
+    // Циклический include (DFS от этого документа) — только для AsciiDoc.
+    //
+    // В `.adoc` цикл `include::` означает бесконечное раскрытие, то есть
+    // настоящую ошибку вёрстки. В YAML/JSON рёбра графа строит `$ref`
+    // (`infra::parsers::ref_utils`), а для спецификации цикл ссылок —
+    // штатная конструкция: файлы-«бочки» ссылаются друг на друга, а
+    // рекурсивные схемы (`Node.children: [Node]`) ссылаются сами на себя.
+    // Сборщик разрешает это, вынося цель в `components/schemas`, и если
+    // разрешить всё-таки не удалось — сообщает об этом сам
+    // (`openapi::Resolver`). Ругаться здесь значит помечать исправный
+    // спек-репозиторий десятками ошибок.
+    if is_asciidoc_document(doc) {
+        if let Some(cycle) = detect_cycle(index, doc) {
+            out.push(Diagnostic {
+                kind: DiagnosticKind::CircularInclude,
+                message: msgs::circular_include(lang, &cycle.chain),
+                document: doc.clone(),
+                line: cycle.line,
+                column: cycle.column,
+                severity: Severity::Error,
+            });
+        }
     }
 
     out
 }
 
+fn is_asciidoc_document(doc: &DocumentId) -> bool {
+    let path = doc.0.to_ascii_lowercase();
+    path.ends_with(".adoc") || path.ends_with(".asciidoc")
+}
+
+/// Найденный цикл: сама цепочка для сообщения и позиция того `include::` в
+/// исходном документе, с которого она начинается. Раньше диагностика всегда
+/// вставала на 1:1, и перейти из панели «Проблемы» к виновной строке было
+/// нельзя — при нескольких include в файле это заметная разница.
+pub struct IncludeCycle {
+    pub chain: Vec<String>,
+    pub line: u32,
+    pub column: u32,
+}
+
 /// DFS over the include graph from `start`, tracking the current chain.
 /// Returns the chain as a `Vec<DocumentId>` if a cycle is found.
-fn detect_cycle(index: &WorkspaceIndex, start: &DocumentId) -> Option<Vec<String>> {
+fn detect_cycle(index: &WorkspaceIndex, start: &DocumentId) -> Option<IncludeCycle> {
     fn dfs(
         index: &WorkspaceIndex,
         current: &DocumentId,
@@ -272,11 +299,29 @@ fn detect_cycle(index: &WorkspaceIndex, start: &DocumentId) -> Option<Vec<String
 
     let mut chain = Vec::new();
     let mut on_chain = HashSet::new();
-    dfs(index, start, &mut chain, &mut on_chain).map(|c| {
-        c.into_iter()
+    let cycle = dfs(index, start, &mut chain, &mut on_chain)?;
+
+    // Позиция берётся у первого include в самом документе, ведущего в цикл:
+    // именно его правка цикл и разрывает.
+    let next = cycle.get(1).or_else(|| cycle.first());
+    let (line, column) = next
+        .and_then(|target| {
+            index
+                .find_includes(start)
+                .into_iter()
+                .find(|inc| inc.path == target.0)
+                .map(|inc| (inc.line, inc.column))
+        })
+        .unwrap_or((1, 1));
+
+    Some(IncludeCycle {
+        chain: cycle
+            .into_iter()
             .map(|d| d.0.clone())
             .chain(std::iter::once(start.0.clone()))
-            .collect()
+            .collect(),
+        line,
+        column,
     })
 }
 
@@ -307,6 +352,73 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("alfa-atlas-diag-{nanos}-{n}"));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Spec repo с двумя настоящими находками: у операции нет 4xx, а тело
+    /// запроса объявлено без схемы. Обе живут во фрагменте, а не во входном
+    /// документе, — как в реальном многофайловом репозитории.
+    fn repo_with_lint_findings() -> PathBuf {
+        let root = temp_dir();
+        fs::create_dir_all(root.join("specs").join("operations")).unwrap();
+        fs::create_dir_all(root.join("specs").join("schemas")).unwrap();
+        fs::write(
+            root.join("specs/api.yaml"),
+            concat!(
+                "openapi: 3.0.3\n",
+                "info:\n  title: t\n  version: '1'\n",
+                "servers:\n  - url: https://api.example.com\n",
+                "paths:\n",
+                "  /pets:\n",
+                "    post:\n      $ref: './operations/createPet.yaml'\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("specs/operations/createPet.yaml"),
+            concat!(
+                "tags:\n  - pets\n",
+                "summary: Создать питомца\n",
+                "operationId: createPet\n",
+                "requestBody:\n",
+                "  content:\n",
+                "    application/json: {}\n",
+                "responses:\n",
+                "  '201':\n",
+                "    description: Создан\n",
+            ),
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn openapi_findings_point_at_the_real_line_in_the_source_file() {
+        let root = repo_with_lint_findings();
+        let index = build(&root);
+        run_all(&index);
+
+        let doc = DocumentId("specs/operations/createPet.yaml".to_string());
+        let diagnostics: Vec<Diagnostic> = index
+            .get_diagnostics_for(&doc)
+            .into_iter()
+            .filter(|d| d.kind == DiagnosticKind::OpenapiRule)
+            .collect();
+
+        assert!(
+            !diagnostics.is_empty(),
+            "ожидались находки правил, получили: {:?}",
+            index.get_diagnostics_for(&doc)
+        );
+        assert!(
+            diagnostics.iter().all(|d| d.line > 1),
+            "находки должны указывать на строку операции, а не на начало файла: {:?}",
+            diagnostics
+                .iter()
+                .map(|d| (d.line, d.message.clone()))
+                .collect::<Vec<_>>()
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 
     fn build(root: &std::path::Path) -> Arc<WorkspaceIndex> {
@@ -382,6 +494,64 @@ mod tests {
         let idx = build(&root);
         let diags = idx.get_diagnostics();
         assert!(diags.iter().any(|d| d.kind == DiagnosticKind::CircularInclude));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn circular_include_points_at_the_line_that_closes_the_cycle() {
+        let root = temp_dir();
+        fs::write(
+            root.join("a.adoc"),
+            "= Заголовок\n\nТекст\n\ninclude::b.adoc[]\n",
+        )
+        .unwrap();
+        fs::write(root.join("b.adoc"), "include::a.adoc[]\n").unwrap();
+        let idx = build(&root);
+        let cycle = idx
+            .get_diagnostics()
+            .into_iter()
+            .find(|d| d.kind == DiagnosticKind::CircularInclude && d.document.0 == "a.adoc")
+            .expect("цикл должен быть найден");
+        assert_eq!(cycle.line, 5, "диагностика должна вести к самому include");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Файлы спецификации ссылаются друг на друга через `$ref`, и цикл среди
+    /// них — норма: и «бочки» вроде `all.yaml`, и рекурсивные схемы. Сборщик
+    /// с этим справляется, поэтому правило про циклический include (писанное
+    /// для `include::` в AsciiDoc) на них распространяться не должно —
+    /// иначе исправный спек-репозиторий помечается десятками ошибок.
+    #[test]
+    fn a_ref_cycle_between_spec_files_is_not_a_circular_include() {
+        let root = temp_dir();
+        fs::create_dir_all(root.join("specs").join("schemas")).unwrap();
+        fs::write(
+            root.join("specs/api.yaml"),
+            "openapi: 3.0.3\ninfo:\n  title: t\n  version: '1'\npaths: {}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("specs/schemas/all.yaml"),
+            "Pet:\n  $ref: './common.yaml#/Pet'\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("specs/schemas/common.yaml"),
+            "Pet:\n  $ref: './all.yaml#/Pet'\n",
+        )
+        .unwrap();
+
+        let idx = build(&root);
+        let cycles: Vec<Diagnostic> = idx
+            .get_diagnostics()
+            .into_iter()
+            .filter(|d| d.kind == DiagnosticKind::CircularInclude)
+            .collect();
+        assert!(
+            cycles.is_empty(),
+            "цикл $ref между файлами спеки — не ошибка, получили {:?}",
+            cycles.iter().map(|d| d.message.clone()).collect::<Vec<_>>()
+        );
         fs::remove_dir_all(&root).ok();
     }
 
@@ -587,3 +757,4 @@ fn openapi_diagnostics(
     }
     out
 }
+
