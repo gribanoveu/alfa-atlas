@@ -180,6 +180,36 @@ fn dedupe_repeat_result(
     }
 }
 
+/// Appended to a tool error from a round the provider cut off.
+///
+/// `finish_reason: "length"` means generation stopped because the response
+/// budget ran out (the provider's `max_tokens`, see
+/// `LlmProviderConfig::max_tokens`) — mid-sentence, and just as easily
+/// mid-`arguments`. The model is never told that budget exists, so the
+/// severed JSON comes back to it as a bare "invalid arguments" error, which
+/// invites the obvious wrong repair: send the same oversized call again.
+/// Naming the real cause is what makes a shorter retry the visible option.
+const TRUNCATED_ROUND_NOTE: &str = "Примечание: ответ модели был обрезан на середине — исчерпан лимит длины ответа (max_tokens), а не аргументы были составлены неверно. Повторите вызов компактнее: короче аргументы, меньше файлов или строк за один раз, при необходимости разбейте работу на несколько вызовов.";
+
+/// Adds `TRUNCATED_ROUND_NOTE` to a failed call from a truncated round.
+///
+/// Only to a *failed* one: a call whose arguments happened to close before
+/// the cut still executed correctly, and telling the model its successful
+/// result was somehow damaged would be worse than saying nothing.
+///
+/// Takes a plain `failed` flag rather than the outcome, because the two
+/// places a tool error is turned into `Tool`-role content don't share a
+/// type — the path-containment preflight rejects a call before there is any
+/// `Result<ToolResult, _>` to inspect, and severed arguments fail *there*
+/// (they no longer parse), which is exactly the case this note exists for.
+fn truncated_round_note(round_truncated: bool, failed: bool, content: String) -> String {
+    if round_truncated && failed {
+        format!("{content}\n\n{TRUNCATED_ROUND_NOTE}")
+    } else {
+        content
+    }
+}
+
 /// Appended to an empty search result in Docs-only mode.
 ///
 /// The model cannot see the boundary from the inside: `grep`/`listFiles`
@@ -540,7 +570,7 @@ fn run_tool_loop(
         // the same iteration.
         if ctx.cancel_flag.load(Ordering::SeqCst) {
             return Ok(ChatStreamOutcome::Cancelled(ChatDone {
-                result: ChatStreamResult { text: String::new(), reasoning: String::new(), usage: None, tool_calls: vec![] },
+                result: ChatStreamResult { text: String::new(), reasoning: String::new(), usage: None, tool_calls: vec![], truncated: false },
                 todos,
             }));
         }
@@ -550,6 +580,13 @@ fn run_tool_loop(
             ));
         }
         round += 1;
+
+        // Per-iteration, not per-turn: whether the *current* round's
+        // provider response ran out of response budget. A resumed round has
+        // no fresh provider response of its own, so it stays `false` there
+        // — the round that produced those calls already reported, and
+        // whatever note it earned is already in `history`.
+        let mut round_truncated = false;
 
         let (tool_calls, decisions): (Vec<LlmToolCall>, Vec<ToolCallDecision>) =
             if let Some((calls, decisions)) = resume.take() {
@@ -646,6 +683,7 @@ fn run_tool_loop(
                                             reasoning: String::new(),
                                             usage: None,
                                             tool_calls: vec![],
+                                            truncated: false,
                                         },
                                         todos,
                                     }));
@@ -656,6 +694,7 @@ fn run_tool_loop(
                         Err(error) => return Err(error.to_string()),
                     }
                 };
+                round_truncated = result.truncated;
                 if let Some(usage) = result.usage {
                     llm_rate_limit::record(ctx.provider_id, usage.prompt_tokens, usage.completion_tokens);
                     (ctx.events)(ChatEvent::RateLimitChanged);
@@ -750,7 +789,11 @@ fn run_tool_loop(
                         }));
                         history.push(LlmMessage {
                             role: LlmRole::Tool,
-                            content: Some(format!("Ошибка: {err_str}")),
+                            content: Some(truncated_round_note(
+                                round_truncated,
+                                true,
+                                format!("Ошибка: {err_str}"),
+                            )),
                             tool_call_id: Some(call.id.clone()),
                             tool_calls: vec![],
                         });
@@ -946,6 +989,7 @@ fn run_tool_loop(
                 Err(e) if e == "denied by user" => "Отклонено пользователем".to_string(),
                 Err(e) => format!("Ошибка: {e}"),
             };
+            let content = truncated_round_note(round_truncated, outcome.is_err(), content);
             let content = docs_boundary_note(&scope, &outcome, content);
             let content = dedupe_repeat_result(&mut results_this_turn, call, &outcome, content);
             // Before the diagnostics note, so a write reads as "here is what
@@ -1535,7 +1579,14 @@ mod tests {
             reasoning: String::new(),
             usage: None,
             tool_calls: calls,
+            truncated: false,
         }
+    }
+
+    /// The same round, but cut off by the response budget — what the
+    /// provider reports as `finish_reason: "length"`.
+    fn truncated_round(text: &str, calls: Vec<LlmToolCall>) -> ChatStreamResult {
+        ChatStreamResult { truncated: true, ..round(text, calls) }
     }
 
     fn tool_call(id: &str, name: &str, arguments: &str) -> LlmToolCall {
@@ -1861,6 +1912,72 @@ mod tests {
                 ("result".to_string(), "c1".to_string()),
             ]
         );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_call_severed_by_the_response_limit_says_so_instead_of_just_failing() {
+        // What a `max_tokens` cut looks like from here: generation stopped
+        // partway through `arguments`, so the JSON never closed. Without
+        // the note the model reads only "invalid arguments" and retries the
+        // same oversized call, burning another round on the same wall.
+        let root = fixture_repo("truncated-args");
+        let provider = ScriptedProvider::new(vec![
+            truncated_round("", vec![tool_call("c1", "readFile", r#"{"path":"int"#)]),
+            round("Готово.", vec![]),
+        ]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        let reply = provider.tool_reply("c1");
+        assert!(reply.starts_with("Ошибка:"), "{reply}");
+        assert!(reply.contains(TRUNCATED_ROUND_NOTE), "{reply}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_call_that_survived_the_cut_gets_no_truncation_note() {
+        // The cut landed after this call's arguments closed, so it ran
+        // normally — telling the model its own successful result was
+        // damaged would be worse than saying nothing at all.
+        let root = fixture_repo("truncated-but-valid");
+        let provider = ScriptedProvider::new(vec![
+            truncated_round("", vec![tool_call("c1", "readFile", r#"{"path":"intro.adoc"}"#)]),
+            round("Готово.", vec![]),
+        ]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        run(&provider, &root, &events, &cancel).unwrap();
+
+        let reply = provider.tool_reply("c1");
+        assert!(reply.contains("= Intro"), "{reply}");
+        assert!(!reply.contains(TRUNCATED_ROUND_NOTE), "{reply}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_truncated_final_round_reports_it_on_the_outcome() {
+        // The other half of the same signal: nothing is wrong with the
+        // *tools* here, the answer itself just stops mid-sentence. The flag
+        // is what lets the chat panel say so instead of presenting an
+        // unfinished reply as a finished one.
+        let root = fixture_repo("truncated-answer");
+        let provider = ScriptedProvider::new(vec![truncated_round("Начал отвеч", vec![])]);
+        let (events, _) = collector();
+        let cancel = ChatCancelFlag::new(false);
+
+        let outcome = run(&provider, &root, &events, &cancel).unwrap();
+
+        let ChatStreamOutcome::Done(done) = outcome else {
+            panic!("expected a finished turn");
+        };
+        assert!(done.result.truncated);
 
         std::fs::remove_dir_all(&root).ok();
     }

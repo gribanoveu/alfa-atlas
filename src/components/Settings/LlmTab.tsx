@@ -34,6 +34,21 @@ function uniqueProviderId(label: string, existingIds: string[]): string {
   return `${base}-${suffix}`;
 }
 
+/** The vocabulary OpenAI-compatible gateways actually accept for
+ * `reasoning_effort`. Kept as a UI-side list rather than a Rust enum on
+ * purpose: the backend stores a free string (see
+ * `domain::llm::LlmProviderConfig::reasoning_effort`), so a gateway with
+ * its own spelling stays reachable by hand-editing `settings.json` — and a
+ * value saved that way is added to this list on the fly below rather than
+ * silently replaced the first time the dropdown is opened. */
+const REASONING_EFFORT_OPTIONS: { value: string; label: string }[] = [
+  { value: "", label: "не отправлять" },
+  { value: "minimal", label: "minimal" },
+  { value: "low", label: "low" },
+  { value: "medium", label: "medium" },
+  { value: "high", label: "high" },
+];
+
 function effectiveTokenLimit(provider: ProviderDetailProps["provider"]) {
   return {
     context: provider.limit?.context ?? DEFAULT_PROVIDER_TOKEN_LIMIT.context,
@@ -97,6 +112,9 @@ function ProviderDetail({
   const [contextDraft, setContextDraft] = useState(String(effectiveTokenLimit(provider).context));
   const [outputDraft, setOutputDraft] = useState(String(effectiveTokenLimit(provider).output));
   const [temperatureDraft, setTemperatureDraft] = useState(provider.temperature?.toString() ?? "");
+  const [maxTokensDraft, setMaxTokensDraft] = useState(provider.maxTokens?.toString() ?? "");
+  const [effortSelectOpen, setEffortSelectOpen] = useState(false);
+  const effortSelectRef = useRef<HTMLDivElement>(null);
   const [newModelDraft, setNewModelDraft] = useState("");
   const [modelFilterDraft, setModelFilterDraft] = useState("");
   const [apiKeyInput, setApiKeyInput] = useState("");
@@ -133,6 +151,32 @@ function ProviderDetail({
   useEffect(() => {
     setTemperatureDraft(provider.temperature?.toString() ?? "");
   }, [provider.id, provider.temperature]);
+
+  useEffect(() => {
+    setMaxTokensDraft(provider.maxTokens?.toString() ?? "");
+  }, [provider.id, provider.maxTokens]);
+
+  useEffect(() => {
+    setEffortSelectOpen(false);
+  }, [provider.id]);
+
+  useEffect(() => {
+    if (!effortSelectOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!effortSelectRef.current?.contains(event.target as Node)) setEffortSelectOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setEffortSelectOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [effortSelectOpen]);
 
   useEffect(() => {
     if (!modelSelectOpen) return;
@@ -246,6 +290,44 @@ function ProviderDetail({
     if (parsed === provider.temperature) return;
     void updateProviderConfig(provider.id, { temperature: parsed });
   };
+
+  /** Same "empty means send nothing" contract as the temperature field: an
+   * absent `max_tokens` leaves the server's own default in place, which is
+   * not the same as any number we could put here. */
+  const handleSaveMaxTokens = () => {
+    const trimmed = maxTokensDraft.trim();
+    if (trimmed === "") {
+      if (provider.maxTokens !== null) void updateProviderConfig(provider.id, { maxTokens: null });
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      setMaxTokensDraft(provider.maxTokens?.toString() ?? "");
+      return;
+    }
+    if (parsed === provider.maxTokens) return;
+    void updateProviderConfig(provider.id, { maxTokens: parsed });
+  };
+
+  /** The empty option is not "medium by default" — it keeps
+   * `reasoning_effort` out of the request entirely, which is the only safe
+   * choice for a gateway that doesn't implement the key: those generally
+   * reject the whole request for carrying it rather than ignoring it. */
+  const handleSelectReasoningEffort = (value: string) => {
+    setEffortSelectOpen(false);
+    const next = value === "" ? null : value;
+    if (next === provider.reasoningEffort) return;
+    void updateProviderConfig(provider.id, { reasoningEffort: next });
+  };
+
+  /** The fixed vocabulary, plus whatever this provider is actually set to
+   * if that came from outside the list (a hand-edited `settings.json`, a
+   * gateway with its own spelling) — so opening the dropdown can never be
+   * the thing that loses a working value. */
+  const reasoningEffortOptions =
+    provider.reasoningEffort && !REASONING_EFFORT_OPTIONS.some((o) => o.value === provider.reasoningEffort)
+      ? [...REASONING_EFFORT_OPTIONS, { value: provider.reasoningEffort, label: provider.reasoningEffort }]
+      : REASONING_EFFORT_OPTIONS;
 
   const modelOptions = [
     { value: AUTO_MODEL_VALUE, label: AUTO_MODEL_LABEL },
@@ -572,6 +654,81 @@ function ProviderDetail({
           Ниже — предсказуемее и суше, выше — разнообразнее. Для документации подходит 0.2–0.4. Пустое
           поле означает, что параметр не отправляется вовсе: часть моделей с рассуждением отвергает
           запрос, в котором он есть.
+        </p>
+
+        <label className="llm-field">
+          <span className="llm-field-label">Лимит ответа</span>
+          <input
+            className="clone-modal-input"
+            type="number"
+            min={1}
+            step={256}
+            placeholder="не отправлять"
+            value={maxTokensDraft}
+            disabled={busy}
+            onChange={(event) => setMaxTokensDraft(event.target.value)}
+            onBlur={handleSaveMaxTokens}
+          />
+        </label>
+        <p className="settings-hint settings-hint-compact">
+          Уходит в запрос как <code>max_tokens</code> — в отличие от «Макс. ответ» в блоке
+          «Контекст», где число только информационное и нужно счётчику контекста. Ориентиры:
+          4000–8000 хватает на обычный ответ с вызовами инструментов, 16000 и выше — если ассистент
+          целиком переписывает большой <code>.adoc</code>. У модели с рассуждением в этот лимит
+          входят и сами размышления, так что запас нужен больше, иначе ответ оборвётся на полуслове.
+          Пустое поле — параметр не отправляется, и длину ограничивает только сам провайдер.
+        </p>
+
+        <div className="llm-field">
+          <span className="llm-field-label" id="reasoning-effort-label">
+            Усилие рассуждения
+          </span>
+          <div className="clone-select llm-model-select" ref={effortSelectRef}>
+            <button
+              type="button"
+              className={`clone-select-trigger${effortSelectOpen ? " is-open" : ""}`}
+              aria-haspopup="listbox"
+              aria-expanded={effortSelectOpen}
+              aria-labelledby="reasoning-effort-label"
+              disabled={busy}
+              onClick={() => setEffortSelectOpen((open) => !open)}
+            >
+              <span className="clone-select-value">
+                <span className="clone-select-path">
+                  {reasoningEffortOptions.find((o) => o.value === (provider.reasoningEffort ?? ""))
+                    ?.label ?? "не отправлять"}
+                </span>
+              </span>
+              <span className="clone-select-chevron" aria-hidden>
+                ▾
+              </span>
+            </button>
+            {effortSelectOpen ? (
+              <div className="clone-select-menu" role="listbox">
+                {reasoningEffortOptions.map((option) => {
+                  const active = option.value === (provider.reasoningEffort ?? "");
+                  return (
+                    <button
+                      key={option.value || "none"}
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      className={`clone-select-option${active ? " is-active" : ""}`}
+                      onClick={() => handleSelectReasoningEffort(option.value)}
+                    >
+                      <span className="clone-select-path">{option.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <p className="settings-hint settings-hint-compact">
+          <code>reasoning_effort</code> для моделей с рассуждением: чем ниже, тем короче модель
+          думает перед ответом и тем быстрее отвечает. «Не отправлять» вообще убирает параметр из
+          запроса — шлюз, который его не понимает, обычно отвергает весь запрос целиком, а не
+          игнорирует ключ, поэтому это и есть значение по умолчанию.
         </p>
       </section>
 

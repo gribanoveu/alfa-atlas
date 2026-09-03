@@ -1113,6 +1113,10 @@ export function AssistantConversation({
             }
             const failed = m.role === "assistant" && Boolean(m.failed);
             const stopped = m.role === "assistant" && Boolean(m.cancelled);
+            // Not folded into `failed`: the text above the note is a real
+            // partial answer, and the fix is a setting or a «продолжи», not
+            // a retry of the whole turn.
+            const truncated = m.role === "assistant" && Boolean(m.truncated);
             // Which blocks the model may still be writing into — not simply
             // "the last one": a provider that interleaves reasoning with its
             // answer leaves both blocks open at once, the reasoning one above.
@@ -1224,6 +1228,15 @@ export function AssistantConversation({
                         </div>
                       ) : null}
                       {stopped ? <div className="assistant-chat-cancelled-note">Остановлено пользователем</div> : null}
+                      {truncated ? (
+                        <div className="assistant-chat-truncated-note">
+                          <AlertCircle size={13} aria-hidden />
+                          <span>
+                            Ответ обрезан: исчерпан лимит длины ответа. Увеличьте «Лимит ответа» в
+                            настройках провайдера или попросите продолжить.
+                          </span>
+                        </div>
+                      ) : null}
                       {failed ? (
                         <div className="assistant-chat-error-card">
                           <AlertCircle size={13} aria-hidden />

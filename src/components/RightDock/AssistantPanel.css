@@ -1332,6 +1332,28 @@
   font-style: italic;
 }
 
+/* Same shape as the error card below, in a warning tone rather than a red
+   one: the answer above this note is real, it just stops early — the turn
+   did not fail. */
+.assistant-chat-truncated-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--orange);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--orange) 7%, var(--bg-0));
+  color: var(--orange);
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-chat-truncated-note svg {
+  flex: none;
+  margin-top: 1px;
+}
+
 
 /* =========================================================
    Provider retry status — transient notice while a dropped connection

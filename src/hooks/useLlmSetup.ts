@@ -102,9 +102,16 @@ export function useLlmSetup() {
   const updateProviderConfig = useCallback(
     async (
       providerId: string,
-      patch: Partial<Omit<LlmProviderConfig, "id" | "requestHeaders" | "temperature">> & {
+      patch: Partial<
+        Omit<
+          LlmProviderConfig,
+          "id" | "requestHeaders" | "temperature" | "maxTokens" | "reasoningEffort"
+        >
+      > & {
         requestHeaders?: Record<string, string> | null;
         temperature?: number | null;
+        maxTokens?: number | null;
+        reasoningEffort?: string | null;
       },
     ) => {
       const existing = settings?.providers.find((p) => p.id === providerId);
@@ -118,6 +125,8 @@ export function useLlmSetup() {
         limit: existing?.limit ?? null,
         requestHeaders: existing?.requestHeaders ?? null,
         temperature: existing?.temperature ?? null,
+        maxTokens: existing?.maxTokens ?? null,
+        reasoningEffort: existing?.reasoningEffort ?? null,
         ...patch,
       };
       setBusy(true);

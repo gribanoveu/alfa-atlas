@@ -102,6 +102,23 @@ pub struct LlmProviderConfig {
     /// some reasoning models reject any temperature but their own.
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// Upper bound on the reply's own length (`max_tokens` on the wire),
+    /// overriding the manifest's for a system provider — same "override
+    /// wins when `Some`" merge as the fields above. `None` on both layers
+    /// sends no cap at all, leaving whatever the server defaults to, which
+    /// on a reasoning model includes however long it decides to think.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// How hard a reasoning model should think before answering
+    /// (`reasoning_effort` on the wire — `"minimal"`/`"low"`/`"medium"`/
+    /// `"high"` as that gateway spells it). Deliberately a free string
+    /// rather than an enum: OpenAI-compatible gateways disagree on the
+    /// vocabulary, and a value this app has never heard of must still be
+    /// sendable without a rebuild. `None` on both layers sends nothing at
+    /// all — the only safe default, since a server that does not know the
+    /// key rejects the whole request rather than ignoring it.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 /// Persisted globally (`AppSettings.llm`) — provider configuration is not
@@ -237,6 +254,17 @@ pub struct LlmProviderPreset {
     /// know — keeps sending no temperature at all.
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// Response-length cap for this shipped provider (`max_tokens`). Set
+    /// here rather than as a global default for the same reason as
+    /// `temperature` — a custom provider, whose model we cannot know, keeps
+    /// sending no cap at all.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Reasoning effort for this shipped provider — see
+    /// `LlmProviderConfig::reasoning_effort` for why it is a free string
+    /// and why unset means the key is absent from the request.
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 /// The merged, ready-to-use view of one provider — a manifest preset (if
@@ -286,6 +314,12 @@ pub struct ResolvedLlmProvider {
     /// Merged sampling temperature; `None` means send no `temperature` at
     /// all, not "send the API default".
     pub temperature: Option<f32>,
+    /// Merged response-length cap; `None` means send no `max_tokens` at
+    /// all, not "send the API default".
+    pub max_tokens: Option<u32>,
+    /// Merged reasoning effort; `None` means the `reasoning_effort` key is
+    /// omitted from the request entirely.
+    pub reasoning_effort: Option<String>,
 }
 
 /// A chat message's speaker. `Tool` is needed even though nothing sends one
@@ -456,6 +490,21 @@ pub struct ChatStreamResult {
     /// frontend never actually observes a non-empty value here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<LlmToolCall>,
+    /// The provider stopped this round because it ran out of response
+    /// budget — `finish_reason: "length"` on the wire, i.e. the configured
+    /// `max_tokens` (or the server's own ceiling) was reached — rather than
+    /// because the model was done (`"stop"`/`"tool_calls"`).
+    ///
+    /// Worth carrying rather than dropping: the model is never told what
+    /// that budget is, so a cut-off round is indistinguishable from a
+    /// finished one by looking at `text`. Left unread it produces two
+    /// silent failures — a reply that stops mid-sentence and reads as
+    /// deliberate, and a tool call whose `arguments` JSON was severed
+    /// halfway and comes back as an unexplained parse error. `false` when
+    /// the provider omits `finish_reason` altogether; nothing here infers
+    /// truncation from the text itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub truncated: bool,
 }
 
 /// The `Done` payload: the same round result the frontend has always
@@ -957,6 +1006,7 @@ mod tests {
                 name: "listFiles".to_string(),
                 arguments: "{}".to_string(),
             }],
+            truncated: false,
         };
         let json = serde_json::to_string(&result).unwrap();
         let round_tripped: ChatStreamResult = serde_json::from_str(&json).unwrap();
@@ -966,8 +1016,26 @@ mod tests {
     #[test]
     fn chat_stream_result_omits_tool_calls_when_empty() {
         let result =
-            ChatStreamResult { text: "hi".to_string(), reasoning: String::new(), usage: None, tool_calls: vec![] };
+            ChatStreamResult { text: "hi".to_string(), reasoning: String::new(), usage: None, tool_calls: vec![], truncated: false };
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("toolCalls"), "expected no toolCalls key in {json}");
+    }
+
+    #[test]
+    fn chat_stream_result_omits_truncated_unless_it_is_true() {
+        // The wire shape the frontend already parses must not grow a
+        // `truncated: false` key on every ordinary turn — and a `true` one
+        // has to survive the round trip, since that is the only thing the
+        // "ответ обрезан" notice keys off.
+        let ordinary =
+            ChatStreamResult { text: "hi".to_string(), reasoning: String::new(), usage: None, tool_calls: vec![], truncated: false };
+        let json = serde_json::to_string(&ordinary).unwrap();
+        assert!(!json.contains("truncated"), "expected no truncated key in {json}");
+
+        let cut_off = ChatStreamResult { truncated: true, ..ordinary };
+        let json = serde_json::to_string(&cut_off).unwrap();
+        assert!(json.contains(r#""truncated":true"#), "{json}");
+        let round_tripped: ChatStreamResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, cut_off);
     }
 }

@@ -92,6 +92,25 @@ struct ChatCompletionRequest<'a> {
     /// absent, not that a default was sent on the caller's behalf.
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    /// Upper bound on the reply's own tokens, or nothing at all. Same
+    /// `skip_serializing_if` reasoning as `temperature`: unset has to mean
+    /// the key is absent, since a server's own default is not ours to
+    /// guess. Left unset, a reasoning model is free to spend as long as it
+    /// likes thinking before it answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    /// How hard a reasoning model should think, verbatim as the provider
+    /// spells it (`"minimal"`, `"low"`, `"high"`, …). Absent unless the
+    /// provider was explicitly configured with one — an OpenAI-compatible
+    /// gateway that doesn't implement the key generally rejects the whole
+    /// request rather than ignoring it, so this must never be sent
+    /// speculatively.
+    /// Owned rather than borrowed, unlike every other field here: the
+    /// value lives on the provider, not on the `ChatRequest` `'a` comes
+    /// from, and one small clone per request is not worth threading a
+    /// second lifetime through this struct for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -266,6 +285,12 @@ struct StreamToolCallFunctionDelta {
 struct StreamChoice {
     #[serde(default)]
     delta: StreamDelta,
+    /// Why generation stopped, on the one chunk that carries it: `"stop"`
+    /// (the model was done), `"tool_calls"`, or `"length"` — the response
+    /// budget ran out mid-sentence. `None` on every other chunk, and on
+    /// every chunk from a server that omits the field entirely.
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 /// Wire shape of the trailing `usage`-only chunk requested via
@@ -320,6 +345,10 @@ enum SseLine {
         reasoning: Option<String>,
         usage: Option<ChatUsage>,
         tool_calls: Vec<StreamToolCallDelta>,
+        /// The chunk's `finish_reason`, verbatim — see `StreamChoice`.
+        /// Only the final content chunk of a stream carries one, so this is
+        /// `None` for nearly every line.
+        finish_reason: Option<String>,
     },
     /// The terminal `data: [DONE]` line.
     Done,
@@ -348,18 +377,18 @@ fn parse_sse_line(line: &str) -> Result<SseLine, LlmError> {
     let chunk: StreamChunk =
         serde_json::from_str(data).map_err(|e| LlmError::Provider(e.to_string()))?;
     let usage = chunk.usage.map(ChatUsage::from);
-    let (delta, reasoning, tool_calls) = match chunk.choices.into_iter().next() {
+    let (delta, reasoning, tool_calls, finish_reason) = match chunk.choices.into_iter().next() {
         Some(choice) => {
             // A role-only first chunk often carries `"content":""` — treating
             // that as a real delta used to open an empty text block, which
             // hid both the typing dots and the "Модель думает…" card.
             let reasoning = choice.delta.reasoning_text();
             let content = choice.delta.content.filter(|s| !s.is_empty());
-            (content, reasoning, choice.delta.tool_calls)
+            (content, reasoning, choice.delta.tool_calls, choice.finish_reason)
         }
-        None => (None, None, Vec::new()),
+        None => (None, None, Vec::new(), None),
     };
-    Ok(SseLine::Chunk { delta, reasoning, usage, tool_calls })
+    Ok(SseLine::Chunk { delta, reasoning, usage, tool_calls, finish_reason })
 }
 
 /// Accumulates fragmented `delta.tool_calls` entries across an SSE stream,
@@ -455,6 +484,10 @@ pub struct OpenAiCompatibleProvider {
     request_headers: HashMap<String, String>,
     /// `None` means send no `temperature` — see `ChatCompletionRequest`.
     temperature: Option<f32>,
+    /// `None` means send no `max_tokens` — see `ChatCompletionRequest`.
+    max_tokens: Option<u32>,
+    /// `None` means send no `reasoning_effort` — see `ChatCompletionRequest`.
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiCompatibleProvider {
@@ -464,6 +497,8 @@ impl OpenAiCompatibleProvider {
         api_key: String,
         request_headers: HashMap<String, String>,
         temperature: Option<f32>,
+        max_tokens: Option<u32>,
+        reasoning_effort: Option<String>,
     ) -> Self {
         Self {
             agent,
@@ -471,6 +506,8 @@ impl OpenAiCompatibleProvider {
             api_key,
             request_headers,
             temperature,
+            max_tokens,
+            reasoning_effort,
         }
     }
 
@@ -528,6 +565,8 @@ impl OpenAiCompatibleProvider {
             stream,
             stream_options,
             temperature: self.temperature,
+            max_tokens: self.max_tokens,
+            reasoning_effort: self.reasoning_effort.clone(),
         }
     }
 
@@ -583,6 +622,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let mut reasoning_full = String::new();
         let mut usage = None;
         let mut tool_calls_acc = ToolCallAccumulator::default();
+        let mut truncated = false;
         for line in std::io::BufRead::lines(reader) {
             // Checked once per SSE line rather than only before the loop —
             // a chatty/looping model's response can take many seconds to
@@ -598,7 +638,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
             }
             let line = line.map_err(|e| LlmError::Http(e.to_string()))?;
             match parse_sse_line(&line)? {
-                SseLine::Chunk { delta, reasoning, usage: chunk_usage, tool_calls } => {
+                SseLine::Chunk { delta, reasoning, usage: chunk_usage, tool_calls, finish_reason } => {
                     if let Some(text) = delta {
                         on_delta(&text);
                         full.push_str(&text);
@@ -619,12 +659,25 @@ impl LlmProvider for OpenAiCompatibleProvider {
                             on_tool_call_delta(&id, name, arguments);
                         }
                     }
+                    // Latched rather than overwritten: only one chunk in a
+                    // stream carries a `finish_reason` at all, and a later
+                    // usage-only chunk arriving with `None` must not erase
+                    // what it said.
+                    if finish_reason.as_deref() == Some("length") {
+                        truncated = true;
+                    }
                 }
                 SseLine::Ignore => {}
                 SseLine::Done => break,
             }
         }
-        Ok(ChatStreamResult { text: full, reasoning: reasoning_full, usage, tool_calls: tool_calls_acc.finish() })
+        Ok(ChatStreamResult {
+            text: full,
+            reasoning: reasoning_full,
+            usage,
+            tool_calls: tool_calls_acc.finish(),
+            truncated,
+        })
     }
 
     fn list_models(&self) -> Result<Vec<LlmModelInfo>, LlmError> {
@@ -672,7 +725,56 @@ mod tests {
             "key".to_string(),
             HashMap::new(),
             temperature,
+            None,
+            None,
         )
+    }
+
+    /// Same helper for the two generation knobs that have no manifest
+    /// default anywhere — they only ever reach the wire when a provider was
+    /// explicitly configured with them.
+    fn provider_with_generation(
+        max_tokens: Option<u32>,
+        reasoning_effort: Option<&str>,
+    ) -> OpenAiCompatibleProvider {
+        OpenAiCompatibleProvider::new(
+            build_agent(None).unwrap(),
+            "https://api.example.com/v1".to_string(),
+            "key".to_string(),
+            HashMap::new(),
+            None,
+            max_tokens,
+            reasoning_effort.map(|s| s.to_string()),
+        )
+    }
+
+    #[test]
+    fn build_body_sends_max_tokens_when_the_provider_has_one() {
+        let p = provider_with_generation(Some(4096), None);
+        let request = ChatRequest { messages: vec![], tools: vec![], model: "m".to_string() };
+        let json = serde_json::to_string(&p.build_body(&request, true)).unwrap();
+        assert!(json.contains(r#""max_tokens":4096"#), "{json}");
+    }
+
+    #[test]
+    fn build_body_sends_reasoning_effort_verbatim_when_configured() {
+        let p = provider_with_generation(None, Some("low"));
+        let request = ChatRequest { messages: vec![], tools: vec![], model: "m".to_string() };
+        let json = serde_json::to_string(&p.build_body(&request, true)).unwrap();
+        assert!(json.contains(r#""reasoning_effort":"low""#), "{json}");
+    }
+
+    #[test]
+    fn build_body_omits_both_generation_knobs_when_unset() {
+        // The default for every provider today. A gateway that doesn't
+        // implement `reasoning_effort` rejects the whole request for
+        // carrying it, so "unset" must mean the key is absent — exactly the
+        // contract `temperature` already has.
+        let p = provider_with_generation(None, None);
+        let request = ChatRequest { messages: vec![], tools: vec![], model: "m".to_string() };
+        let json = serde_json::to_string(&p.build_body(&request, true)).unwrap();
+        assert!(!json.contains("max_tokens"), "{json}");
+        assert!(!json.contains("reasoning_effort"), "{json}");
     }
 
     #[test]
@@ -720,6 +822,8 @@ mod tests {
             stream: false,
             stream_options: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert_eq!(
@@ -747,6 +851,8 @@ mod tests {
             stream: false,
             stream_options: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
         };
         let json = serde_json::to_string(&body).unwrap();
         assert!(json.contains(r#""tool_choice":"auto""#));
@@ -860,7 +966,7 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"content":"Hel"}}]}"#;
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: Some("Hel".to_string()), reasoning: None, usage: None, tool_calls: vec![] }
+            SseLine::Chunk { delta: Some("Hel".to_string()), reasoning: None, usage: None, tool_calls: vec![], finish_reason: None }
         );
     }
 
@@ -869,7 +975,7 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"role":"assistant"}}]}"#;
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: None, reasoning: None, usage: None, tool_calls: vec![] }
+            SseLine::Chunk { delta: None, reasoning: None, usage: None, tool_calls: vec![], finish_reason: None }
         );
     }
 
@@ -883,6 +989,7 @@ mod tests {
                 reasoning: None,
                 usage: Some(ChatUsage { prompt_tokens: 67, completion_tokens: 2, total_tokens: 69 }),
                 tool_calls: vec![],
+                finish_reason: None,
             }
         );
     }
@@ -892,7 +999,15 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: None, reasoning: None, usage: None, tool_calls: vec![] }
+            // `"stop"` is reported like any other reason; only `"length"`
+            // means anything to the caller (see `ChatStreamResult::truncated`).
+            SseLine::Chunk {
+                delta: None,
+                reasoning: None,
+                usage: None,
+                tool_calls: vec![],
+                finish_reason: Some("stop".to_string()),
+            }
         );
     }
 
@@ -903,7 +1018,7 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"role":null,"content":null,"reasoning_content":" one"}}]}"#;
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: None, reasoning: Some(" one".to_string()), usage: None, tool_calls: vec![] }
+            SseLine::Chunk { delta: None, reasoning: Some(" one".to_string()), usage: None, tool_calls: vec![], finish_reason: None }
         );
     }
 
@@ -942,7 +1057,7 @@ mod tests {
         let line = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r";
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: Some("hi".to_string()), reasoning: None, usage: None, tool_calls: vec![] }
+            SseLine::Chunk { delta: Some("hi".to_string()), reasoning: None, usage: None, tool_calls: vec![], finish_reason: None }
         );
     }
 
@@ -963,9 +1078,23 @@ mod tests {
                         name: Some("read_file".to_string()),
                         arguments: Some(r#"{"path":"a.md"}"#.to_string()),
                     }),
-                }]
+                }],
+                finish_reason: None,
             }
         );
+    }
+
+    #[test]
+    fn parse_sse_line_reports_a_length_finish_reason() {
+        // The one signal that a reply was cut off by the response budget
+        // rather than finished — the model itself is never told what that
+        // budget is, so without this a truncated round is indistinguishable
+        // from a complete one.
+        let line = r#"data: {"choices":[{"delta":{"content":"…"},"finish_reason":"length"}]}"#;
+        let SseLine::Chunk { finish_reason, .. } = parse_sse_line(line).unwrap() else {
+            panic!("expected a chunk");
+        };
+        assert_eq!(finish_reason.as_deref(), Some("length"));
     }
 
     #[test]
@@ -979,7 +1108,7 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"content":"Hello","tool_calls":null}}]}"#;
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: Some("Hello".to_string()), reasoning: None, usage: None, tool_calls: vec![] }
+            SseLine::Chunk { delta: Some("Hello".to_string()), reasoning: None, usage: None, tool_calls: vec![], finish_reason: None }
         );
     }
 
@@ -1092,7 +1221,7 @@ mod tests {
         let line = r#"data: {"choices":[{"delta":{"role":"assistant","content":""}}]}"#;
         assert_eq!(
             parse_sse_line(line).unwrap(),
-            SseLine::Chunk { delta: None, reasoning: None, usage: None, tool_calls: vec![] }
+            SseLine::Chunk { delta: None, reasoning: None, usage: None, tool_calls: vec![], finish_reason: None }
         );
     }
 

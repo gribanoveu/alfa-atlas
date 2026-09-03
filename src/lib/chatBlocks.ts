@@ -162,6 +162,14 @@ export type ChatMessage =
        * `failed`: a cancelled turn is a deliberate user action, not an
        * error. */
       cancelled?: boolean;
+      /** Set when the provider cut this turn off because the response
+       * budget ran out (`ChatStreamResult.truncated` — `finish_reason:
+       * "length"`, i.e. the provider's configured `max_tokens`) instead of
+       * the model finishing its own sentence. Not a failure and not a
+       * cancellation: the text below it is real, it just stops early, and
+       * without the note under it an unfinished answer is indistinguishable
+       * from a complete one. */
+      truncated?: boolean;
       /** Real token usage for this turn, when the provider reported one on
        * the final SSE chunk — only ever set on a completed assistant
        * message. */

@@ -24,6 +24,8 @@ pub fn provider_for(
         api_key,
         resolved.request_headers.clone(),
         resolved.temperature,
+        resolved.max_tokens,
+        resolved.reasoning_effort.clone(),
     )))
 }
 
@@ -47,6 +49,8 @@ mod tests {
             limit: None,
             request_headers: HashMap::new(),
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
         }
     }
 

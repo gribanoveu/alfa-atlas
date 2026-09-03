@@ -36,6 +36,15 @@ export type LlmProviderConfig = {
    * for a custom provider that means no `temperature` is sent at all — some
    * reasoning models reject a request that carries one. */
   temperature: number | null;
+  /** Cap on the reply's own length (`max_tokens`). `null` = inherit, and
+   * with nothing on either layer no cap is sent at all — a reasoning model
+   * is then free to spend as long as it likes thinking. */
+  maxTokens: number | null;
+  /** How hard a reasoning model should think (`reasoning_effort`), spelled
+   * exactly as the gateway expects it — `"minimal"`, `"low"`, `"high"`, …
+   * `null` (the default everywhere) means the key is not sent: a gateway
+   * that doesn't implement it rejects the whole request for carrying it. */
+  reasoningEffort: string | null;
 };
 
 // Mirrors `domain::llm::ProviderTokenLimit` — provider-level token limits
@@ -122,6 +131,10 @@ export type ResolvedLlmProvider = {
   requestHeaders: Record<string, string>;
   /** Merged sampling temperature; `null` means none is sent. */
   temperature: number | null;
+  /** Merged response-length cap; `null` means no `max_tokens` is sent. */
+  maxTokens: number | null;
+  /** Merged reasoning effort; `null` means the key is omitted entirely. */
+  reasoningEffort: string | null;
 };
 
 /** Substituted with a fresh UUID on each request — mirrors Rust `$uuid`. */
@@ -223,6 +236,16 @@ export type ChatStreamResult = {
    * `llm:chat-stream-reasoning-delta` event, see `correctTrailingReasoning`
    * in `chatBlocks.ts`. */
   reasoning?: string;
+  /** `true` when the provider stopped this turn because the response budget
+   * ran out (`finish_reason: "length"` — the `max_tokens` configured for
+   * the provider, or the server's own ceiling) rather than because the
+   * model finished. The Rust side omits the key entirely when `false`
+   * (`skip_serializing_if`), hence optional here.
+   *
+   * The model is never told that budget exists, so a cut-off answer just
+   * stops mid-sentence and reads as deliberate — this flag is the only
+   * thing that lets the panel say otherwise, see `ChatMessage.truncated`. */
+  truncated?: boolean;
   usage: ChatUsage | null;
   todos: Task[];
 };

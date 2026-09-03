@@ -1003,7 +1003,7 @@ export function useLlmChat(
       // `stopChat` auto-denied but that never got its settling event, since
       // `run_tool_loop` returned before reaching it.
       const stoppedByUser = outcome.status === "cancelled";
-      const { text, reasoning, usage, todos: finalTodos } = outcome.value;
+      const { text, reasoning, usage, truncated, todos: finalTodos } = outcome.value;
       setTodos(finalTodos);
       setMessages((prev) =>
         prev.map((m) =>
@@ -1020,6 +1020,11 @@ export function useLlmChat(
                 liveKind: undefined,
                 usage: usage ?? undefined,
                 cancelled: stoppedByUser,
+                // Independent of `cancelled`: a stop and a budget cut are
+                // different reasons for the same unfinished text, and a
+                // turn the user stopped can also have been truncated in the
+                // round that was in flight.
+                truncated: truncated === true,
                 durationMs: Date.now() - turnStartedAt,
               }
             : m,

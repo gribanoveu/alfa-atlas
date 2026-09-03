@@ -62,6 +62,10 @@ pub fn resolve_provider(
         let known_models = over.map(|o| o.known_models.clone()).unwrap_or_default();
         let request_headers = resolve_request_headers(preset, over);
         let temperature = over.and_then(|o| o.temperature).or(preset.temperature);
+        let max_tokens = over.and_then(|o| o.max_tokens).or(preset.max_tokens);
+        let reasoning_effort = over
+            .and_then(|o| o.reasoning_effort.clone())
+            .or_else(|| preset.reasoning_effort.clone());
         return Ok(ResolvedLlmProvider {
             id: id.to_string(),
             label,
@@ -75,6 +79,8 @@ pub fn resolve_provider(
             limit,
             request_headers,
             temperature,
+            max_tokens,
+            reasoning_effort,
         });
     }
 
@@ -98,8 +104,12 @@ pub fn resolve_provider(
         limit: over.limit.or(Some(DEFAULT_PROVIDER_TOKEN_LIMIT)),
         request_headers: resolve_request_headers_from_override(over),
         // No manifest layer to fall back on, and no way to know what this
-        // provider's model accepts — unset stays unset.
+        // provider's model accepts — unset stays unset. The same goes for
+        // the two generation knobs below: an unknown gateway may reject a
+        // request merely for carrying `reasoning_effort` at all.
         temperature: over.temperature,
+        max_tokens: over.max_tokens,
+        reasoning_effort: over.reasoning_effort.clone(),
     })
 }
 
@@ -262,6 +272,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
             }],
             ..Default::default()
         };
@@ -343,6 +355,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -390,6 +404,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -416,6 +432,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -445,6 +463,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
             }],
             ..Default::default()
         };
@@ -469,6 +489,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
             }],
             ..Default::default()
         };
@@ -500,6 +522,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -529,6 +553,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -557,6 +583,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
             }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
@@ -601,6 +629,8 @@ mod tests {
             limit: None,
             request_headers: HashMap::new(),
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
         };
         let provider = FakeProvider { models: vec![], panics_on_list: true };
         let model = effective_model(&resolved, &provider).unwrap();
@@ -625,6 +655,8 @@ mod tests {
                 limit: None,
                 request_headers: HashMap::new(),
                 temperature: None,
+                max_tokens: None,
+                reasoning_effort: None,
             };
             let provider =
                 FakeProvider { models: vec!["model-a", "model-b"], panics_on_list: false };
@@ -656,6 +688,8 @@ mod tests {
             limit: None,
             request_headers: HashMap::new(),
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
         };
         let provider = FakeProvider { models: vec![], panics_on_list: false };
         assert!(effective_model(&resolved, &provider).is_err());
@@ -666,11 +700,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("First".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None, max_tokens: None, reasoning_effort: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None },
+            LlmProviderConfig { id: "a".to_string(), label: Some("Second".to_string()), base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None, max_tokens: None, reasoning_effort: None },
         );
         assert_eq!(settings.providers.len(), 1);
         assert_eq!(settings.providers[0].label.as_deref(), Some("Second"));
@@ -681,11 +715,11 @@ mod tests {
         let mut settings = LlmSettings::default();
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None },
+            LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None, max_tokens: None, reasoning_effort: None },
         );
         upsert_provider_config(
             &mut settings,
-            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None },
+            LlmProviderConfig { id: "b".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None, max_tokens: None, reasoning_effort: None },
         );
         assert_eq!(settings.providers.len(), 2);
     }
@@ -694,7 +728,7 @@ mod tests {
     fn remove_provider_config_clears_active_id_when_it_matches() {
         let mut settings = LlmSettings {
             active_provider_id: Some("a".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None, max_tokens: None, reasoning_effort: None }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
             tool_call_logging: true,
@@ -712,7 +746,7 @@ mod tests {
     fn remove_provider_config_leaves_active_id_alone_when_it_does_not_match() {
         let mut settings = LlmSettings {
             active_provider_id: Some("b".to_string()),
-            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None }],
+            providers: vec![LlmProviderConfig { id: "a".to_string(), label: None, base_url: None, model: None, trusted_cert_pem: None, known_models: vec![], limit: None, request_headers: None, temperature: None, max_tokens: None, reasoning_effort: None }],
             debug_logging: false,
             follow_up_suggestions_disabled: false,
             tool_call_logging: true,
@@ -763,6 +797,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
                 temperature: Some(0.9),
+                max_tokens: None,
+                reasoning_effort: None,
             }],
             ..LlmSettings::default()
         };
@@ -785,6 +821,8 @@ mod tests {
                 limit: None,
                 request_headers: None,
                 temperature: None,
+                max_tokens: None,
+                reasoning_effort: None,
             }],
             ..LlmSettings::default()
         };
@@ -803,6 +841,8 @@ mod tests {
             limit: None,
             request_headers: Some(HashMap::from([("systemId".into(), "sanduser".into())])),
             temperature: None,
+            max_tokens: None,
+            reasoning_effort: None,
         };
         let headers = resolve_request_headers(&preset, None);
         assert_eq!(headers.get("systemId").map(String::as_str), Some("sanduser"));
