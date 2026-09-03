@@ -1,4 +1,5 @@
 import { asObject, isRefMarker, type JsonValue } from "./openApiModel";
+import type { AppliedCredential } from "./security";
 
 export type ParamValues = Record<string, string>;
 
@@ -134,27 +135,55 @@ export function buildRequest(options: {
   bodyMediaType: string | null;
   bodyText: string;
   hasBody: boolean;
+  /** Подстановка из панели авторизации (`credentialsFor`). Параметр самой
+   * операции с тем же именем перекрывает её: он введён здесь и сейчас, а
+   * значит намеренно. */
+  auth?: AppliedCredential[];
 }): BuiltRequest {
-  const { baseUrl, path, method, paramValues, paramEntries, bodyMediaType, bodyText, hasBody } =
-    options;
+  const {
+    baseUrl,
+    path,
+    method,
+    paramValues,
+    paramEntries,
+    bodyMediaType,
+    bodyText,
+    hasBody,
+    auth = [],
+  } = options;
 
   let resolvedPath = path;
-  const query: string[] = [];
+  const queryPairs: [string, string][] = [];
   const headers: Record<string, string> = {};
+
+  for (const credential of auth) {
+    if (credential.in === "header") headers[credential.name] = credential.value;
+  }
 
   for (const { name, in: location } of paramEntries) {
     const value = paramValues[paramKey(location, name)] ?? "";
     if (location === "path") {
       resolvedPath = resolvedPath.split(`{${name}}`).join(encodeURIComponent(value));
     } else if (location === "query" && value !== "") {
-      query.push(`${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
+      queryPairs.push([name, value]);
     } else if (location === "header" && value !== "") {
       headers[name] = value;
     }
   }
 
+  for (const credential of auth) {
+    if (credential.in !== "query") continue;
+    if (queryPairs.some(([name]) => name === credential.name)) continue;
+    queryPairs.push([credential.name, credential.value]);
+  }
+
   let url = joinUrl(baseUrl, resolvedPath);
-  if (query.length > 0) url += `?${query.join("&")}`;
+  if (queryPairs.length > 0) {
+    const query = queryPairs.map(
+      ([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
+    );
+    url += `?${query.join("&")}`;
+  }
 
   if (hasBody && bodyText.trim() !== "") {
     headers["Content-Type"] = bodyMediaType ?? "application/json";

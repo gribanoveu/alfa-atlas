@@ -11,6 +11,13 @@ import {
   skeletonForSchema,
   type ParamValues,
 } from "./requestBuilder";
+import {
+  credentialsFor,
+  isFilled,
+  resolveOperationSecurity,
+  type AuthValues,
+  type SecurityScheme,
+} from "./security";
 import { executeRequest, type ExecutedResponse } from "./requestExecutor";
 import { ResponseBodyView } from "./ResponseBodyView";
 import { ServerSelect } from "./ServerSelect";
@@ -21,13 +28,34 @@ type TryItOutProps = {
   method: string;
   operation: JsonValue;
   document: JsonValue;
+  securitySchemes: SecurityScheme[];
+  authValues: AuthValues;
+  onRequestAuth: () => void;
 };
 
-export function TryItOut({ path, method, operation, document }: TryItOutProps) {
+export function TryItOut({
+  path,
+  method,
+  operation,
+  document,
+  securitySchemes,
+  authValues,
+  onRequestAuth,
+}: TryItOutProps) {
   const parameters = useMemo(() => parseParameters(operation), [operation]);
   const bodyMedia = useMemo(() => primaryRequestBodyMedia(operation), [operation]);
   const serverUrls = useMemo(() => listServerUrls(document), [document]);
   const hasBody = bodyMedia !== null;
+
+  const security = useMemo(
+    () => resolveOperationSecurity(document, operation),
+    [document, operation],
+  );
+  const credentials = useMemo(
+    () => credentialsFor(securitySchemes, authValues, security.schemeIds),
+    [securitySchemes, authValues, security.schemeIds],
+  );
+  const missingSchemeIds = security.schemeIds.filter((id) => !isFilled(authValues[id]));
 
   const [baseUrl, setBaseUrl] = useState(serverUrls[0] ?? "");
   const [paramValues, setParamValues] = useState<ParamValues>({});
@@ -66,8 +94,9 @@ export function TryItOut({ path, method, operation, document }: TryItOutProps) {
         bodyMediaType: bodyMedia?.mediaType ?? null,
         bodyText,
         hasBody,
+        auth: credentials,
       }),
-    [baseUrl, path, method, paramValues, parameters, bodyMedia, bodyText, hasBody],
+    [baseUrl, path, method, paramValues, parameters, bodyMedia, bodyText, hasBody, credentials],
   );
 
   const curl = useMemo(() => buildCurl(request), [request]);
@@ -138,6 +167,39 @@ export function TryItOut({ path, method, operation, document }: TryItOutProps) {
           </div>
         </div>
       </div>
+
+      {security.declared ? (
+        <div className="oas-try-group">
+          <div className="oas-try-group-title">Авторизация</div>
+          {credentials.length > 0 ? (
+            <ul className="oas-try-auth-list">
+              {credentials.map((credential) => (
+                <li key={`${credential.in}:${credential.name}`}>
+                  <code>{credential.name}</code>
+                  <span>
+                    {credential.in === "header"
+                      ? " — заголовок подставлен"
+                      : " — query-параметр подставлен"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {missingSchemeIds.length > 0 ? (
+            <div
+              className={`oas-try-auth-missing${security.optional ? "" : " is-required"}`}
+            >
+              <span>
+                {security.optional ? "Не заполнено" : "Требуется, но не заполнено"}:{" "}
+                {missingSchemeIds.join(", ")} — запрос уйдёт без этих данных.
+              </span>
+              <button type="button" className="oas-try-copy-btn" onClick={onRequestAuth}>
+                Заполнить
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {(["path", "query", "header"] as const).map((location) =>
         groups[location].length > 0 ? (

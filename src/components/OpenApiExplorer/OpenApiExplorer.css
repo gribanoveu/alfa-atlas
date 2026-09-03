@@ -773,3 +773,186 @@
 .oas-diagnostics-list code {
   color: var(--text-0);
 }
+
+/* --- Авторизация ---------------------------------------------------- */
+
+/* Липкая шапка: секреты общие на всю спеку, и состояние «заполнено/нет»
+   должно быть видно, на какой бы операции пользователь ни находился. */
+.oas-auth {
+  position: sticky;
+  top: -16px;
+  z-index: 2;
+  margin: -16px -24px 14px;
+  padding: 10px 24px;
+  background: var(--bg-editor);
+  border-bottom: 1px solid var(--border);
+}
+
+.oas-auth-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.oas-auth-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-1);
+  font-size: calc(var(--font-preview) * 0.79);
+  font-weight: 600;
+  flex: none;
+}
+
+.oas-auth-toggle:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.oas-auth-toggle.is-filled {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.oas-auth-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.72);
+}
+
+.oas-auth-reveal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.72);
+  cursor: pointer;
+}
+
+.oas-auth-clear {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.72);
+}
+
+.oas-auth-clear:hover {
+  color: var(--red-tag);
+  border-color: var(--red-tag);
+}
+
+.oas-auth-body {
+  margin-top: 12px;
+}
+
+.oas-auth-scheme {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+}
+
+.oas-auth-scheme.is-active {
+  border-color: var(--accent-dim);
+}
+
+.oas-auth-scheme-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.oas-auth-scheme-id {
+  color: var(--purple);
+  font-size: calc(var(--font-preview) * 0.85);
+  font-weight: 600;
+}
+
+.oas-auth-scheme-tag {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--accent-dim);
+  color: var(--text-0);
+  font-size: calc(var(--font-preview) * 0.65);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.oas-auth-scheme-meta,
+.oas-auth-scheme-desc {
+  margin-top: 3px;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.72);
+}
+
+.oas-auth-fields {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.oas-auth-note {
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.72);
+}
+
+.oas-nav-item-lock {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-2);
+}
+
+.oas-op-security {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.79);
+}
+
+.oas-try-auth-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.79);
+}
+
+.oas-try-auth-list code {
+  color: var(--text-0);
+}
+
+.oas-try-auth-missing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-2);
+  font-size: calc(var(--font-preview) * 0.79);
+}
+
+.oas-try-auth-missing.is-required {
+  border-color: var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 10%, transparent);
+  color: var(--yellow);
+}
+
+.oas-try-auth-missing span {
+  flex: 1;
+  min-width: 0;
+}

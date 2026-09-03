@@ -1,8 +1,14 @@
 import { useState } from "react";
+import { Lock } from "lucide-react";
 import { asObject, isRefMarker, parseParameters, type JsonValue } from "./openApiModel";
 import { JsonExample } from "./JsonExample";
 import { SchemaViewer, SchemaTypeInline } from "./SchemaViewer";
 import { TryItOut } from "./TryItOut";
+import {
+  resolveOperationSecurity,
+  type AuthValues,
+  type SecurityScheme,
+} from "./security";
 import "./OpenApiExplorer.css";
 
 type OperationViewProps = {
@@ -10,6 +16,10 @@ type OperationViewProps = {
   method: string;
   operation: JsonValue;
   document: JsonValue;
+  securitySchemes: SecurityScheme[];
+  authValues: AuthValues;
+  /** Раскрыть панель авторизации — из подсказки «токен не заполнен». */
+  onRequestAuth: () => void;
 };
 
 function contentEntries(content: unknown): [string, unknown][] {
@@ -18,8 +28,17 @@ function contentEntries(content: unknown): [string, unknown][] {
   return Object.entries(obj);
 }
 
-export function OperationView({ path, method, operation, document }: OperationViewProps) {
+export function OperationView({
+  path,
+  method,
+  operation,
+  document,
+  securitySchemes,
+  authValues,
+  onRequestAuth,
+}: OperationViewProps) {
   const [tryItOutOpen, setTryItOutOpen] = useState(false);
+  const security = resolveOperationSecurity(document, operation);
   const summary = typeof operation.summary === "string" ? operation.summary : null;
   const description =
     typeof operation.description === "string" ? operation.description : null;
@@ -45,11 +64,28 @@ export function OperationView({ path, method, operation, document }: OperationVi
         </button>
       </div>
       {summary ? <div className="oas-op-summary">{summary}</div> : null}
+      {security.declared ? (
+        <div className="oas-op-security">
+          <Lock size={12} aria-hidden />
+          <span>
+            {security.optional ? "Авторизация необязательна: " : "Требует авторизации: "}
+            {security.schemeIds.join(", ")}
+          </span>
+        </div>
+      ) : null}
       {operationId ? <div className="oas-op-id">operationId: {operationId}</div> : null}
       {description ? <p className="oas-op-description">{description}</p> : null}
 
       {tryItOutOpen ? (
-        <TryItOut path={path} method={method} operation={operation} document={document} />
+        <TryItOut
+          path={path}
+          method={method}
+          operation={operation}
+          document={document}
+          securitySchemes={securitySchemes}
+          authValues={authValues}
+          onRequestAuth={onRequestAuth}
+        />
       ) : null}
 
       {parameters.length > 0 ? (
