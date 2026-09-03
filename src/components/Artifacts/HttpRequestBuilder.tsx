@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy, Plus, Trash2, Wand2 } from "lucide-react";
+import { Check, ClipboardPaste, Copy, Plus, Trash2, Wand2 } from "lucide-react";
 import {
   artifactRender,
   type ArtifactContent,
@@ -18,6 +18,7 @@ import {
   mergeInferredParams,
   missingPathParams,
 } from "../../lib/httpRequestSpec";
+import { applyCurlImport, parseCurl } from "../../lib/curlImport";
 
 /** Narrowed to its own variant — `ArtifactView` dispatches on
  *  `content.kind`, so this component only ever sees an httpRequest. */
@@ -106,6 +107,27 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
     [onChange, spec],
   );
 
+  // Импорт из curl: чаще всего работающий запрос у автора уже есть — из
+  // DevTools, Postman или чужой инструкции, — и перенос его в форму руками
+  // это просто переписывание того же самого.
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importError, setImportError] = useState<string | null>(null);
+
+  const applyImport = () => {
+    const parsed = parseCurl(importText);
+    if (!parsed) {
+      setImportError(
+        "Не похоже на curl: нужна команда, начинающаяся с curl и содержащая адрес запроса.",
+      );
+      return;
+    }
+    onChange({ kind: "httpRequest", ...applyCurlImport(spec, parsed) });
+    setImportOpen(false);
+    setImportText("");
+    setImportError(null);
+  };
+
   const undeclaredPathParams = useMemo(() => missingPathParams(spec), [spec]);
 
   const addMissingPathParams = () => {
@@ -156,6 +178,69 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
 
       {outerTab === "builder" ? (
         <div className="http-builder-form">
+          <div className="http-builder-import-row">
+            <button
+              type="button"
+              className="artifact-btn"
+              aria-expanded={importOpen}
+              onClick={() => {
+                setImportError(null);
+                setImportOpen((open) => !open);
+              }}
+            >
+              <ClipboardPaste size={13} aria-hidden />
+              Импорт из curl
+            </button>
+          </div>
+
+          {importOpen ? (
+            <div className="http-builder-import">
+              <textarea
+                className="http-builder-import-input"
+                value={importText}
+                spellCheck={false}
+                rows={6}
+                autoFocus
+                placeholder={"curl -X POST 'https://host/api/documents' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"id\": 1}'"}
+                aria-label="Команда curl"
+                onChange={(e) => {
+                  setImportText(e.target.value);
+                  setImportError(null);
+                }}
+              />
+              {importError ? (
+                <p className="http-builder-import-error">{importError}</p>
+              ) : null}
+              <p className="http-builder-import-note">
+                Заполнятся метод, адрес, query-параметры, заголовки и тело. Ответы, коды
+                ошибок и описания полей в curl не содержатся — их дозаполняете вы.
+                Уже введённые описания и форматы сохранятся. Значения авторизации,
+                ключей и cookie заменяются плейсхолдером, чтобы токен со стенда не
+                попал в документ.
+              </p>
+              <div className="http-builder-import-actions">
+                <button
+                  type="button"
+                  className="artifact-btn"
+                  onClick={() => {
+                    setImportOpen(false);
+                    setImportError(null);
+                  }}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  className="artifact-btn primary"
+                  disabled={!importText.trim()}
+                  onClick={applyImport}
+                >
+                  Заполнить
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="http-builder-line">
             <MethodSelect value={spec.method || "GET"} onChange={(method) => patch({ method })} />
             <input

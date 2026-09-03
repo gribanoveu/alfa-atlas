@@ -642,3 +642,55 @@
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* Импорт из curl — вспомогательное действие над формой, поэтому кнопка
+   прижата вправо и не спорит со строкой метода/адреса. */
+.http-builder-import-row {
+  display: flex;
+  justify-content: flex-end;
+  flex: none;
+}
+
+.http-builder-import {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: none;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+.http-builder-import-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: var(--font-ui-sm);
+  line-height: 1.5;
+}
+
+.http-builder-import-note {
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+  line-height: 1.5;
+}
+
+.http-builder-import-error {
+  margin: 0;
+  color: var(--red-tag);
+  font-size: var(--font-ui-sm);
+}
+
+.http-builder-import-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
