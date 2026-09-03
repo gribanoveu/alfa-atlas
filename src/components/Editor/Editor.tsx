@@ -1,6 +1,7 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import type { editor as MonacoEditor } from "monaco-editor";
+import { FileJson2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGitGutter } from "../../hooks/useGitGutter";
 import { useMonacoCompletions } from "../../hooks/useMonacoCompletions";
@@ -82,6 +83,15 @@ type EditorPaneProps = {
    * `activeTab`/`activeTabId`. */
   activeKind: EditorPaneKind;
   openApiExplorer?: React.ReactNode;
+  /** Docs-relative путь входного документа OpenAPI (когда проект — specs-репозиторий
+   * и входной файл лежит под docsRoot). Для этой вкладки «Рендер»/«Сплит» показывают
+   * `openApiExplorer` вместо сырого YAML-дерева. */
+  specEntryPath?: string | null;
+  /** Активный файл лежит внутри `specs/` — в полосе вкладок показываем явную
+   * кнопку «API Explorer». */
+  inSpecsTree?: boolean;
+  /** Открыть API Explorer отдельной вкладкой. */
+  onOpenApiExplorer?: () => void;
   utilityView?: React.ReactNode;
   artifactView?: React.ReactNode;
   visualView?: React.ReactNode;
@@ -149,6 +159,9 @@ export function EditorPane({
   artifactView,
   visualView,
   openApiExplorer,
+  specEntryPath = null,
+  inSpecsTree = false,
+  onOpenApiExplorer,
   onSelectTab,
   onCloseTab,
   onCloseAllTabs,
@@ -191,6 +204,13 @@ export function EditorPane({
   const projectTextTab = !isImageTab && !isPlanTab ? activeTab : null;
   const isAsciiDocTab =
     projectTextTab !== null && isAsciiDocPath(projectTextTab.path);
+  // Входной документ спецификации: «Рендер» для него — это API Explorer, а не
+  // дерево ключей YAML, которое пользователи принимали за единственный рендер.
+  const isSpecEntryTab =
+    activeKind === "file" &&
+    projectTextTab !== null &&
+    specEntryPath !== null &&
+    projectTextTab.path === specEntryPath;
 
   const contextActions = useMemo(() => {
     if (activeKind !== "file" || !projectTextTab) return [];
@@ -565,6 +585,8 @@ export function EditorPane({
           monaco={monaco}
         />
       </div>
+    ) : isSpecEntryTab && openApiExplorer ? (
+      openApiExplorer
     ) : (
       <DocumentPreview
         content={activeTab.content}
@@ -596,6 +618,22 @@ export function EditorPane({
     </button>
   ) : null;
 
+  // Пока открыт любой файл спецификации, рендер должен быть в одном клике:
+  // из фрагмента (schemas/, operations/) до него иначе не добраться вообще, а
+  // из входного документа — только через переключатель режима.
+  const apiExplorerAction =
+    activeKind === "file" && inSpecsTree && onOpenApiExplorer ? (
+      <button
+        type="button"
+        className="tab-api-explorer-btn"
+        onClick={onOpenApiExplorer}
+        title="Открыть рендер OpenAPI-спецификации отдельной вкладкой"
+      >
+        <FileJson2 size={13} aria-hidden />
+        API Explorer
+      </button>
+    ) : null;
+
   return (
     <section className="editor-col">
       <EditorTabs
@@ -615,7 +653,7 @@ export function EditorPane({
           activeKind === "visual"
         }
         allowedViewModes={isPlanTab ? (["source", "render"] as const) : undefined}
-        actions={planActions}
+        actions={planActions ?? apiExplorerAction}
       />
       <div className={`editor-body editor-body-${isImageTab ? "render" : effectiveViewMode}`}>
         {activeKind === "openapi" ? (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type * as Monaco from "monaco-editor";
 import { toMessage } from "./lib/errors";
 import { BottomDock } from "./components/BottomDock/BottomDock";
@@ -96,6 +96,7 @@ import {
   lineEndingLabelFor,
 } from "./lib/supportedFiles";
 import {
+  isUnderDocsRoot,
   toDocsRelativePath,
   toRepoRelativePath,
 } from "./lib/paths";
@@ -183,12 +184,58 @@ function App() {
     openVisualTab,
   } = tabs;
 
+  // Раньше рендер спецификации открывался только одной кнопкой в сайдбаре, и
+  // пользователи его не находили: естественный жест — открыть входной документ
+  // и нажать «Рендер» — показывал обычное дерево ключей YAML. Считаем путь
+  // входного документа в docs-relative виде (в нём живут вкладки редактора) и
+  // отдаём для него в качестве превью сам API Explorer.
+  const specEntryDocsPath = useMemo(() => {
+    const entry = specsRepo.info?.entryFile;
+    if (!entry || !project.repoRoot || !project.docsRoot) return null;
+    if (!isUnderDocsRoot(entry, project.repoRoot, project.docsRoot)) return null;
+    return toDocsRelativePath(entry, project.repoRoot, project.docsRoot);
+  }, [specsRepo.info, project.repoRoot, project.docsRoot]);
+
+  const activeFilePath = editor.activeTab?.path ?? null;
+  const specEntryActive =
+    activeKind === "file" &&
+    specEntryDocsPath !== null &&
+    activeFilePath === specEntryDocsPath;
+
+  // Любой файл спецификации (входной документ или фрагмент из schemas/,
+  // operations/, …) даёт в полосе вкладок кнопку «API Explorer».
+  const inSpecsTree = useMemo(() => {
+    if (!specsRepo.info || !activeFilePath || !project.repoRoot || !project.docsRoot) {
+      return false;
+    }
+    const repoRelative = toRepoRelativePath(
+      activeFilePath,
+      project.repoRoot,
+      project.docsRoot,
+    );
+    return repoRelative.replace(/\\/g, "/").startsWith("specs/");
+  }, [specsRepo.info, activeFilePath, project.repoRoot, project.docsRoot]);
+
   const openApiBundle = useOpenApiBundle(
     project.repoRoot,
     specsRepo.info?.entryFile ?? null,
-    openApiTabOpen,
+    // Резолв бандла стоит дорого, поэтому для файловой вкладки платим за него
+    // только когда рендер действительно виден.
+    openApiTabOpen || (specEntryActive && viewMode.viewMode !== "source"),
   );
 
+  // Бандл собирается бэкендом из файлов на диске, а не из буфера редактора,
+  // поэтому после сохранения спецификации (шорткат или автосохранение — оба
+  // сбрасывают dirty) рендер нужно перечитать, иначе в сплите он остаётся на
+  // предыдущей версии.
+  const specTabDirty = inSpecsTree && (editor.activeTab?.dirty ?? false);
+  const specTabWasDirty = useRef(false);
+  useEffect(() => {
+    if (specTabWasDirty.current && !specTabDirty && openApiBundle.bundle) {
+      void openApiBundle.reload();
+    }
+    specTabWasDirty.current = specTabDirty;
+  }, [specTabDirty, openApiBundle.bundle, openApiBundle.reload]);
 
   useEffect(() => {
     const onOpenPlan = (event: Event) => {
@@ -823,7 +870,7 @@ function App() {
               activeTab={editor.activeTab}
               activeKind={activeKind}
               openApiExplorer={
-                openApiTabOpen ? (
+                openApiTabOpen || specEntryActive ? (
                   <OpenApiExplorer
                     bundle={openApiBundle.bundle}
                     loading={openApiBundle.loading}
@@ -831,6 +878,9 @@ function App() {
                   />
                 ) : undefined
               }
+              specEntryPath={specEntryDocsPath}
+              inSpecsTree={inSpecsTree}
+              onOpenApiExplorer={openApiExplorerTab}
               utilityView={
                 activeUtility ? <UtilityView utilityId={activeUtility} /> : undefined
               }

@@ -177,6 +177,33 @@
   filter: brightness(1.06);
 }
 
+.tab-api-explorer-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  margin: 0 2px 0 8px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-1);
+  color: var(--text-0);
+  font: inherit;
+  font-size: var(--font-ui-sm, 12px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab-api-explorer-btn svg {
+  flex: none;
+  color: #85ea2d;
+}
+
+.tab-api-explorer-btn:hover {
+  background: var(--bg-2);
+  border-color: var(--accent-dim);
+}
+
 .plan-tab-preview {
   height: 100%;
   overflow: auto;

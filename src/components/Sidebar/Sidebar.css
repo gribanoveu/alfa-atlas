@@ -118,3 +118,22 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Иконка узнаётся как «спека» (фирменный зелёный Swagger) и не сжимается
+   вместе с панелью — по умолчанию flex-строка ужимала её до нечитаемой. */
+.sidebar-pinned-icon {
+  flex: none;
+  color: #85ea2d;
+}
+
+.sidebar-pinned-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.sidebar-pinned-sub {
+  color: var(--text-2);
+  font-size: var(--font-sidebar-sm);
+}

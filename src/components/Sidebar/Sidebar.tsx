@@ -155,10 +155,21 @@ export function Sidebar({
           type="button"
           className="sidebar-pinned-item"
           onClick={onOpenApiExplorer}
-          title={`Открыть API Explorer${specsRepo.version ? ` (v${specsRepo.version})` : ""}`}
+          title={`Открыть рендер OpenAPI-спецификации ${specsRepo.entryFile}${
+            specsRepo.version ? ` (v${specsRepo.version})` : ""
+          }`}
         >
-          <FileJson2 size={14} aria-hidden />
-          <span>{specsRepo.title ?? "API Explorer"}</span>
+          <FileJson2 size={14} className="sidebar-pinned-icon" aria-hidden />
+          {/* Заголовок спецификации сам по себе выглядит как ещё один файл в
+              дереве — пользователи не понимали, что это единственная кнопка
+              «открыть рендер OpenAPI». Поэтому основная строка — назначение,
+              а title спеки уходит во вторую, приглушённую. */}
+          <span className="sidebar-pinned-text">
+            <span className="sidebar-pinned-label">Открыть API Explorer</span>
+            {specsRepo.title ? (
+              <span className="sidebar-pinned-sub">{specsRepo.title}</span>
+            ) : null}
+          </span>
         </button>
       ) : null}
       <div className="sidebar-body">
