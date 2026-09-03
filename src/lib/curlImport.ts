@@ -1,5 +1,11 @@
 import type { BodySpec, HttpRequestSpec, ParamSpec } from "./artifacts";
-import { emptyParam, inferParamsFromJson, mergeInferredParams } from "./httpRequestSpec";
+import {
+  BODY_HEADERS,
+  emptyParam,
+  ensureHeaders,
+  inferParamsFromJson,
+  mergeInferredParams,
+} from "./httpRequestSpec";
 
 /** Что удалось вычитать из команды curl. Только те поля, которые в curl
  *  действительно есть: ответы, коды ошибок, обязательность и смысл полей из
@@ -345,6 +351,11 @@ export function parseCurl(input: string): CurlImport | null {
  * пользователь уже проставил, переживают повторный импорт, а недописанные
  * пустые строки не пропадают. Тело подставляется целиком только если своего
  * ещё нет — иначе берём из импорта поля, но оставляем набранный пример.
+ *
+ * Если у запроса есть тело, к заголовкам добавляется пара Content-Type/Accept
+ * — тем же правилом, что и при добавлении тела руками. Заголовок, пришедший
+ * из самой команды, при этом побеждает: `ensureHeaders` не трогает то, что
+ * уже есть.
  */
 export function applyCurlImport(
   spec: HttpRequestSpec,
@@ -360,13 +371,15 @@ export function applyCurlImport(
     };
   })();
 
+  const headers = mergeInferredParams(spec.headers, imported.headers);
+
   return {
     ...spec,
     method: imported.method,
     baseUrl: imported.baseUrl || spec.baseUrl,
     path: imported.path || spec.path,
     queryParams: mergeInferredParams(spec.queryParams, imported.queryParams),
-    headers: mergeInferredParams(spec.headers, imported.headers),
+    headers: body !== null ? ensureHeaders(headers, BODY_HEADERS) : headers,
     body,
   };
 }

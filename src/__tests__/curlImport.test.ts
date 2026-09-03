@@ -174,7 +174,8 @@ describe("applyCurlImport", () => {
     expect(next.baseUrl).toBe("https://a.example.com");
     expect(next.path).toBe("/svc/docs");
     expect(next.queryParams.map((p) => p.name)).toEqual(["page"]);
-    expect(next.headers.map((p) => p.name)).toEqual(["X-Trace"]);
+    // Тело есть — значит к заголовкам добавляется обязательная пара.
+    expect(next.headers.map((p) => p.name)).toEqual(["X-Trace", "Content-Type", "Accept"]);
     expect(next.body?.params.map((p) => p.name)).toEqual(["id"]);
   });
 
@@ -218,5 +219,32 @@ describe("applyCurlImport", () => {
     expect(next.responses).toEqual(spec.responses);
     expect(next.errors).toEqual(spec.errors);
     expect(next.notes).toBe("Заметка");
+  });
+});
+
+describe("applyCurlImport · заголовки для тела", () => {
+  test("adds Content-Type and Accept when the command carries a body", () => {
+    const imported = parseCurl(`curl https://a.example.com/x -d '{"id":1}'`)!;
+    const next = applyCurlImport(emptySpec(), imported);
+    expect(next.headers.map((h) => [h.name, h.values])).toEqual([
+      ["Content-Type", "application/json"],
+      ["Accept", "application/json"],
+    ]);
+  });
+
+  test("a Content-Type from the command itself wins over the template row", () => {
+    const imported = parseCurl(
+      "curl https://a.example.com/x -H 'content-type: application/xml' -d '<a/>'",
+    )!;
+    const next = applyCurlImport(emptySpec(), imported);
+    expect(next.headers.map((h) => [h.name, h.values])).toEqual([
+      ["content-type", "application/xml"],
+      ["Accept", "application/json"],
+    ]);
+  });
+
+  test("a bodyless command gets no extra headers", () => {
+    const imported = parseCurl("curl https://a.example.com/x")!;
+    expect(applyCurlImport(emptySpec(), imported).headers).toEqual([]);
   });
 });

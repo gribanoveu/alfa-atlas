@@ -145,3 +145,92 @@ export function describeHttpRequest(spec: HttpRequestSpec): string {
   if (!path) return method;
   return `${method} ${path}`;
 }
+
+/**
+ * Корпоративный блок заголовков: он одинаков во всех методах, и набирать его
+ * руками в каждом артефакте — переписывание одного и того же. Значения в
+ * колонке «Варианты значений» — примеры формата, а не настоящие данные.
+ */
+export const CORPORATE_HEADERS: ParamSpec[] = [
+  {
+    name: "A-userId",
+    format: "string",
+    required: true,
+    description: "xPin клиента",
+    values: "XAAAAA",
+  },
+  {
+    name: "A-customerId",
+    format: "string",
+    required: true,
+    description: "uPin клиента",
+    values: "UAAAAA",
+  },
+  {
+    name: "A-projectId",
+    format: "string",
+    required: true,
+    description: "идентификатор проекта",
+    values: "CORP-",
+  },
+  {
+    name: "A-clientType",
+    format: "string",
+    required: true,
+    description: "тип клиента",
+    values: "FRONT",
+  },
+  {
+    name: "A-channelId",
+    format: "string",
+    required: true,
+    description: "канал",
+    values: "NIB",
+  },
+  {
+    name: "A-userIp",
+    format: "string",
+    required: false,
+    description: "ip-адрес клиента",
+    values: "192.168.0.0",
+  },
+];
+
+/** Заголовки, которые обязаны сопровождать тело запроса. */
+export const BODY_HEADERS: ParamSpec[] = [
+  {
+    name: "Content-Type",
+    format: "string",
+    required: true,
+    description: "тип контента",
+    values: "application/json",
+  },
+  {
+    name: "Accept",
+    format: "string",
+    required: true,
+    description: "формат",
+    values: "application/json",
+  },
+];
+
+/**
+ * Дописывает недостающие заголовки, не трогая уже имеющиеся: если строка с
+ * таким именем есть, побеждает она целиком — пользователь мог уточнить
+ * описание или пример, и подстановка шаблонного значения поверх этого была бы
+ * потерей работы. Сравнение имён без учёта регистра: `content-type` из curl и
+ * `Content-Type` из блока — один и тот же заголовок.
+ */
+export function ensureHeaders(existing: ParamSpec[], required: ParamSpec[]): ParamSpec[] {
+  const present = new Set(
+    existing.map((p) => p.name.trim().toLowerCase()).filter(Boolean),
+  );
+  const missing = required.filter((p) => !present.has(p.name.toLowerCase()));
+  return missing.length === 0 ? existing : [...existing, ...missing.map((p) => ({ ...p }))];
+}
+
+/** Полный набор для кнопки «Корпоративные заголовки»: блок A-* плюс пара
+ *  для тела, когда тело у запроса есть. */
+export function corporateHeadersFor(hasBody: boolean): ParamSpec[] {
+  return hasBody ? [...CORPORATE_HEADERS, ...BODY_HEADERS] : CORPORATE_HEADERS;
+}

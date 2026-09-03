@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  BODY_HEADERS,
+  CORPORATE_HEADERS,
+  corporateHeadersFor,
   describeHttpRequest,
   emptyParam,
+  ensureHeaders,
   inferParamsFromJson,
   jsonFormatOf,
   mergeInferredParams,
@@ -144,5 +148,67 @@ describe("describeHttpRequest", () => {
     expect(describeHttpRequest({ ...base, method: "", path: "/a" })).toBe("/a");
     expect(describeHttpRequest({ ...base, method: "get", path: "" })).toBe("GET");
     expect(describeHttpRequest({ ...base, method: "", path: "" })).toBe("");
+  });
+});
+
+function headerRow(name: string, overrides: Partial<ParamSpec> = {}): ParamSpec {
+  return { name, format: "string", required: true, description: "", values: "", ...overrides };
+}
+
+describe("CORPORATE_HEADERS", () => {
+  test("carries the house block in order, with A-userIp the only optional one", () => {
+    expect(CORPORATE_HEADERS.map((h) => [h.name, h.required, h.values])).toEqual([
+      ["A-userId", true, "XAAAAA"],
+      ["A-customerId", true, "UAAAAA"],
+      ["A-projectId", true, "CORP-"],
+      ["A-clientType", true, "FRONT"],
+      ["A-channelId", true, "NIB"],
+      ["A-userIp", false, "192.168.0.0"],
+    ]);
+  });
+});
+
+describe("ensureHeaders", () => {
+  test("appends only what is missing", () => {
+    expect(ensureHeaders([headerRow("A-userId")], CORPORATE_HEADERS).map((h) => h.name)).toEqual([
+      "A-userId",
+      "A-customerId",
+      "A-projectId",
+      "A-clientType",
+      "A-channelId",
+      "A-userIp",
+    ]);
+  });
+
+  test("never overwrites a row the user already filled in", () => {
+    const mine = headerRow("A-projectId", { description: "мой проект", values: "CORP-42" });
+    expect(ensureHeaders([mine], CORPORATE_HEADERS)).toContainEqual(mine);
+  });
+
+  test("matches header names case-insensitively", () => {
+    const next = ensureHeaders([headerRow("content-type", { values: "text/plain" })], BODY_HEADERS);
+    expect(next.map((h) => h.name)).toEqual(["content-type", "Accept"]);
+  });
+
+  test("returns the array untouched when nothing is missing", () => {
+    const existing = CORPORATE_HEADERS.map((h) => ({ ...h }));
+    expect(ensureHeaders(existing, CORPORATE_HEADERS)).toBe(existing);
+  });
+
+  test("inserts copies — editing a row must not mutate the catalogue", () => {
+    const inserted = ensureHeaders([], CORPORATE_HEADERS);
+    inserted[0]!.description = "изменено";
+    expect(CORPORATE_HEADERS[0]!.description).toBe("xPin клиента");
+  });
+});
+
+describe("corporateHeadersFor", () => {
+  test("adds the body pair only when the request has a body", () => {
+    expect(corporateHeadersFor(false).map((h) => h.name)).not.toContain("Content-Type");
+    expect(corporateHeadersFor(true).map((h) => h.name)).toEqual([
+      ...CORPORATE_HEADERS.map((h) => h.name),
+      "Content-Type",
+      "Accept",
+    ]);
   });
 });

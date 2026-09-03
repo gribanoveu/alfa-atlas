@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, ClipboardPaste, Copy, Plus, Trash2, Wand2 } from "lucide-react";
+import { Building2, Check, ClipboardPaste, Copy, Plus, Trash2, Wand2 } from "lucide-react";
 import {
   artifactRender,
   type ArtifactContent,
@@ -12,8 +12,11 @@ import {
 } from "../../lib/artifacts";
 import { toMessage } from "../../lib/errors";
 import {
+  BODY_HEADERS,
   HTTP_METHODS,
+  corporateHeadersFor,
   emptyParam,
+  ensureHeaders,
   inferParamsFromJson,
   mergeInferredParams,
   missingPathParams,
@@ -306,10 +309,30 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
                 params={spec.headers}
                 onChange={(headers) => patch({ headers })}
                 emptyHint="Заголовки запроса — например стандартный блок A-userId / A-customerId."
+                onInsertCorporate={() =>
+                  patch({
+                    headers: ensureHeaders(spec.headers, corporateHeadersFor(body !== null)),
+                  })
+                }
               />
             ) : null}
             {section === "body" ? (
-              <BodyEditor body={body} onChange={(next) => patch({ body: next })} />
+              <BodyEditor
+                body={body}
+                onChange={(next) =>
+                  patch({
+                    body: next,
+                    // Тело без Content-Type/Accept — незаполненный контракт,
+                    // поэтому пара добавляется вместе с ним, а не ждёт, пока
+                    // о ней вспомнят. Только при появлении тела: если строку
+                    // потом удалили осознанно, возвращать её не надо.
+                    headers:
+                      next !== null && body === null
+                        ? ensureHeaders(spec.headers, BODY_HEADERS)
+                        : spec.headers,
+                  })
+                }
+              />
             ) : null}
             {section === "responses" ? (
               <ResponsesEditor
@@ -455,6 +478,8 @@ type ParamTableProps = {
   emptyHint: string;
   /** Shown above the table when the rows can be seeded from a JSON sample. */
   onInferFromJson?: () => void;
+  /** Заголовки: подставить корпоративный блок A-* (плюс пару для тела). */
+  onInsertCorporate?: () => void;
 };
 
 /** The five columns of the house parameter table, in the same order the
@@ -501,7 +526,13 @@ function AutoGrowField({
   );
 }
 
-function ParamTable({ params, onChange, emptyHint, onInferFromJson }: ParamTableProps) {
+function ParamTable({
+  params,
+  onChange,
+  emptyHint,
+  onInferFromJson,
+  onInsertCorporate,
+}: ParamTableProps) {
   const update = (index: number, changes: Partial<ParamSpec>) =>
     onChange(params.map((p, i) => (i === index ? { ...p, ...changes } : p)));
 
@@ -512,6 +543,12 @@ function ParamTable({ params, onChange, emptyHint, onInferFromJson }: ParamTable
           <button type="button" className="artifact-btn" onClick={onInferFromJson}>
             <Wand2 size={13} aria-hidden />
             Разобрать поля из JSON
+          </button>
+        ) : null}
+        {onInsertCorporate ? (
+          <button type="button" className="artifact-btn" onClick={onInsertCorporate}>
+            <Building2 size={13} aria-hidden />
+            Корпоративные заголовки
           </button>
         ) : null}
         <button type="button" className="artifact-btn" onClick={() => onChange([...params, emptyParam()])}>
