@@ -1,10 +1,14 @@
 //! The matching engine behind `semanticSearch`: symbol lookup, embedding
-//! similarity, and a lexical fallback, merged and re-ranked.
+//! similarity, and BM25 full-text ranking, merged and re-ranked.
 //!
-//! The three run in that order deliberately — an exact symbol hit is worth
-//! more than a close embedding, and lexical only fills in when neither
-//! found anything. `truncate_snippet` lives here because every match kind
-//! renders its preview the same way.
+//! An exact symbol hit still comes first — it is the cheapest and most
+//! precise of the three, and nothing a ranker says outweighs a name the
+//! caller spelled correctly. The other two are peers: `fuse_rrf` combines
+//! their rankings rather than picking one, because "these words appear
+//! here" and "this passage means that" are different kinds of evidence and
+//! a chunk carrying both is a better answer than a chunk carrying either.
+//! `truncate_snippet` lives here because every match kind renders its
+//! preview the same way.
 
 use std::collections::HashSet;
 use std::fs;
@@ -13,14 +17,13 @@ use std::sync::TryLockError;
 
 use crate::domain::ai_access::AiAccessMode;
 use crate::domain::ai_tools::{MatchSource, ToolError, ToolMatch, ToolScope};
-use crate::domain::chunk_index::{ChunkMetadata, qualified_name_for};
+use crate::domain::chunk_index::qualified_name_for;
 use crate::domain::repo_index::{FileId, Symbol};
 use crate::domain::search_query::{
-    MatchTightness, extract_search_tokens, lexical_token_weight, path_segment_matches,
+    MatchTightness, extract_search_tokens, fts5_query, path_segment_matches,
     symbol_name_matches_token,
 };
 use crate::infra::{embedding_credentials_store, embedding_providers};
-use crate::services::chunk_builder::ChunkIndex;
 use crate::services::chunk_text::resolve_text;
 use crate::services::embedding_state::{
     attach_current, attach_embedding_index, attach_index_store, clear_embedding_outage,
@@ -243,35 +246,66 @@ pub(super) fn semantic_matches(
     Ok(out)
 }
 
-/// No-embeddings fallback: scans every chunk's resolved text for
-/// case-insensitive token matches (from `extract_search_tokens`), ranked by
-/// a weighted occurrence sum. When no tokens are extracted, falls back to
-/// the whole query as a single needle (backward-compatible for one-word
-/// queries). Scores are not comparable to the semantic tier's cosine
-/// similarity.
+/// How many BM25 candidates to ask SQLite for per result actually wanted.
+/// A hit is dropped after ranking when its chunk is outside the scope
+/// (`DocsOnly`), gone from `ChunkIndex`, or no longer resolvable to text —
+/// without slack, a `top_k` of 10 could come back with three. Over-fetching
+/// inside SQLite costs one bounded query, not a second round trip.
+const BM25_OVERFETCH: usize = 8;
+
+/// Ceiling on that over-fetch, so a `MAX_TOP_K` search can't turn into a
+/// several-thousand-row result set to throw most of away.
+const BM25_MAX_CANDIDATES: usize = 500;
+
+/// The BM25 tier: ranks the FTS5 index in `IndexStore` (see `chunks_fts`)
+/// and resolves each hit's chunk text, exactly as the semantic tier does
+/// with vector neighbors. Runs off the same persisted store, so it is ready
+/// whenever chunks have been indexed — including when no embedding provider
+/// is configured at all, which is what makes it the fallback tier.
+///
+/// Infallible by signature on purpose: this is what the cascade degrades
+/// *to*, so a store that won't attach, a project that isn't open, or a
+/// malformed `MATCH` all report no results rather than failing a search
+/// that other tiers can still answer.
 pub(super) fn lexical_matches(
-    chunk_index: &ChunkIndex,
+    deps: &EmbeddingDeps,
     scope: &ToolScope,
     query: &str,
     top_k: usize,
     hidden: &mut u32,
 ) -> Vec<ToolMatch> {
-    let tokens = extract_search_tokens(query);
-    let needles: Vec<(String, f32)> = if tokens.is_empty() {
-        let whole = query.trim().to_lowercase();
-        if whole.is_empty() {
-            return Vec::new();
-        }
-        vec![(whole, 1.0)]
-    } else {
-        tokens
-            .iter()
-            .map(|t| (t.to_lowercase(), lexical_token_weight(t)))
-            .collect()
+    let Some(fts_query) = fts5_query(query) else {
+        return Vec::new();
     };
 
-    let mut scored: Vec<(f32, ChunkMetadata, String)> = Vec::new();
-    for metadata in chunk_index.all() {
+    let store = match attach_current(&deps.chunk_index, &deps.index_store) {
+        Ok(Some(attached)) if !attached.stale => attached.store,
+        // Stale means the persisted chunking predates this binary — the
+        // FTS rows describe spans that no longer line up with the files.
+        Ok(_) => return Vec::new(),
+        Err(e) => {
+            eprintln!("[search] bm25 tier unavailable: {e}");
+            return Vec::new();
+        }
+    };
+
+    let candidates = (top_k * BM25_OVERFETCH).min(BM25_MAX_CANDIDATES);
+    let hits = match store.search_bm25(&fts_query, candidates) {
+        Ok(hits) => hits,
+        Err(e) => {
+            eprintln!("[search] bm25 query failed: {e}");
+            return Vec::new();
+        }
+    };
+
+    let mut out = Vec::with_capacity(top_k.min(hits.len()));
+    for (chunk_id, score) in hits {
+        if out.len() >= top_k {
+            break;
+        }
+        let Some(metadata) = deps.chunk_index.get(&chunk_id) else {
+            continue;
+        };
         if !scope.allows_search_result(&metadata.file_id) {
             *hidden += 1;
             continue;
@@ -279,34 +313,66 @@ pub(super) fn lexical_matches(
         let Ok(text) = resolve_text(&scope.repo_root, &metadata) else {
             continue;
         };
-        let lower = text.to_lowercase();
-        let mut score = 0.0_f32;
-        for (needle, weight) in &needles {
-            let count = lower.matches(needle.as_str()).count() as f32;
-            score += count * weight;
-        }
-        if score > 0.0 {
-            scored.push((score, metadata, text));
+        let Some(access_path) = to_access_relative(scope, &metadata.file_id.0) else {
+            continue;
+        };
+        out.push(ToolMatch {
+            path: access_path,
+            snippet: truncate_snippet(&text),
+            score,
+            start_byte: metadata.start_byte,
+            end_byte: metadata.end_byte,
+            qualified_name: metadata.qualified_name,
+            source: MatchSource::Lexical,
+        });
+    }
+    out
+}
+
+/// Reciprocal-rank fusion's smoothing constant. 60 is the value the
+/// technique was published with and the one everything since uses: large
+/// enough that the gap between rank 1 and rank 2 doesn't swamp a second
+/// list's opinion, small enough that being ranked at all still matters.
+const RRF_K: f32 = 60.0;
+
+/// Merges independently ranked lists into one, scoring each result by
+/// `Σ 1/(K + rank)` across the lists that returned it.
+///
+/// Rank, not score, is what fuses: the tiers measure incomparable things —
+/// cosine similarity lands in `0..1`, BM25 in an unbounded positive range
+/// that grows with corpus size — and no fixed scale factor makes them
+/// commensurable across queries. Ranks are ordinal in both, so a chunk that
+/// both tiers rank highly outranks one that a single tier ranks first,
+/// which is the whole point: agreement between an exact-term signal and a
+/// meaning signal is stronger evidence than either alone.
+///
+/// Deduped on `(path, start_byte)`, the same identity `symbol_matches`
+/// uses. The earliest list's `ToolMatch` is the one kept, so callers order
+/// lists by which tier's `source`/snippet should represent a chunk both
+/// found.
+pub(super) fn fuse_rrf(lists: Vec<Vec<ToolMatch>>, budget: usize) -> Vec<ToolMatch> {
+    let mut fused: Vec<ToolMatch> = Vec::new();
+    let mut position: std::collections::HashMap<(String, u32), usize> =
+        std::collections::HashMap::new();
+
+    for list in lists {
+        for (rank, mut candidate) in list.into_iter().enumerate() {
+            let contribution = 1.0 / (RRF_K + rank as f32 + 1.0);
+            let key = (candidate.path.clone(), candidate.start_byte);
+            match position.get(&key) {
+                Some(&index) => fused[index].score += contribution,
+                None => {
+                    candidate.score = contribution;
+                    position.insert(key, fused.len());
+                    fused.push(candidate);
+                }
+            }
         }
     }
-    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-    scored.truncate(top_k);
 
-    scored
-        .into_iter()
-        .filter_map(|(score, metadata, text)| {
-            let access_path = to_access_relative(scope, &metadata.file_id.0)?;
-            Some(ToolMatch {
-                path: access_path,
-                snippet: truncate_snippet(&text),
-                score,
-                start_byte: metadata.start_byte,
-                end_byte: metadata.end_byte,
-                qualified_name: metadata.qualified_name,
-                source: MatchSource::Lexical,
-            })
-        })
-        .collect()
+    fused.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    fused.truncate(budget);
+    fused
 }
 
 /// Score for an exact symbol-name hit.
@@ -811,89 +877,171 @@ mod tests {
         fs::remove_dir_all(&repo).ok();
     }
 
-    #[test]
-    fn lexical_matches_finds_a_case_insensitive_substring() {
-        use crate::domain::chunk_index::ChunkBuildOptions;
-        use crate::services::chunk_builder::ChunkBuilder;
+    /// The BM25 tier reads the persisted FTS index, so its tests need a
+    /// really-synced project rather than a hand-populated `ChunkIndex`:
+    /// runs `files` through `with_open_project` + a full `sync`, then hands
+    /// the callback deps sharing that session's slots and a scope in `mode`.
+    fn with_synced_project<T>(
+        label: &str,
+        files: &[(&str, &str)],
+        mode: AiAccessMode,
+        f: impl FnOnce(&EmbeddingDeps, &ToolScope) -> T,
+    ) -> T {
+        use crate::services::embedding_state::tests::with_open_project;
+        use crate::services::embedding_sync::{ProgressSink, sync};
 
-        let (repo, docs) = fixture_repo();
-        fs::write(repo.join("docs/needle.adoc"), "= Guide\n\nfind the NEEDLE here\n").unwrap();
+        with_open_project(label, files, |root, session| {
+            let noop: ProgressSink = Arc::new(|_| {});
+            sync(session, &noop).unwrap();
 
-        let repo_index = RepositoryIndex::new();
-        repo_index.build(&repo).unwrap();
-        let chunk_index = ChunkIndex::new();
-        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
-        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
-
-        let matches = lexical_matches(&chunk_index, &scope, "needle", 10, &mut 0);
-        assert!(!matches.is_empty());
-        assert_eq!(matches[0].source, MatchSource::Lexical);
-        assert!(matches[0].snippet.to_lowercase().contains("needle"));
-
-        fs::remove_dir_all(&repo).ok();
+            let deps = EmbeddingDeps {
+                repo_index: session.repo_index.clone(),
+                chunk_index: session.chunk_index.clone(),
+                embedding_index: session.embedding_index.clone(),
+                index_store: session.index_store.clone(),
+                embedding_provider: session.embedding_provider.clone(),
+                sync_guard: session.sync_guard.clone(),
+                workspace_index: session.workspace_index.clone(),
+                fast_apply: None,
+                active_file: None,
+            };
+            // `with_open_project` opens the repo root as both repo and docs
+            // root, so `DocsOnly` needs a narrower one to actually exclude
+            // anything — `docs/` is where the fixtures put documentation.
+            let scope = ToolScope::for_project(root, &root.join("docs"), mode);
+            f(&deps, &scope)
+        })
     }
 
     #[test]
-    fn lexical_matches_tokenizes_natural_language_query() {
-        use crate::domain::chunk_index::ChunkBuildOptions;
-        use crate::services::chunk_builder::ChunkBuilder;
+    fn lexical_matches_ranks_the_denser_match_first() {
+        with_synced_project(
+            "bm25-rank",
+            &[
+                ("dense.adoc", "= Уведомления\n\nПорядок подачи уведомления и сроки рассмотрения уведомления.\n"),
+                ("sparse.adoc", "= Общие положения\n\nЗдесь уведомления не рассматриваются.\n"),
+            ],
+            AiAccessMode::FullRepo,
+            |deps, scope| {
+                let matches = lexical_matches(deps, scope, "порядок подачи уведомления", 10, &mut 0);
 
-        let (repo, docs) = fixture_repo();
-        fs::write(
-            repo.join("docs/guide.adoc"),
-            "= Guide\n\nHere we describe notifications for patent submit.\n",
-        )
-        .unwrap();
-
-        let repo_index = RepositoryIndex::new();
-        repo_index.build(&repo).unwrap();
-        let chunk_index = ChunkIndex::new();
-        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
-        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
-
-        let matches = lexical_matches(
-            &chunk_index,
-            &scope,
-            "алгоритм формирования списка уведомлений notifications",
-            10,
-            &mut 0,
+                assert_eq!(matches[0].path, "dense.adoc", "{matches:#?}");
+                assert_eq!(matches[0].source, MatchSource::Lexical);
+                // BM25 is higher-is-better here — `apply_related_boost`
+                // multiplies, and a negative score would invert the boost.
+                assert!(matches[0].score > 0.0, "{:?}", matches[0].score);
+            },
         );
-        assert!(!matches.is_empty());
-        assert!(matches[0].snippet.to_lowercase().contains("notifications"));
+    }
 
-        fs::remove_dir_all(&repo).ok();
+    /// The reason this tier does not reuse `extract_search_tokens`: that
+    /// tokenizer keeps only ASCII identifiers, and the corpus is Russian.
+    #[test]
+    fn lexical_matches_finds_russian_text_the_symbol_tokenizer_would_drop() {
+        with_synced_project(
+            "bm25-russian",
+            &[("guide.adoc", "= Guide\n\nСроки рассмотрения уведомлений по заявке.\n")],
+            AiAccessMode::FullRepo,
+            |deps, scope| {
+                // No ASCII identifier anywhere in the query.
+                let matches = lexical_matches(deps, scope, "сроки рассмотрения", 10, &mut 0);
+
+                assert_eq!(matches.len(), 1, "{matches:#?}");
+                assert!(matches[0].snippet.contains("Сроки"));
+            },
+        );
     }
 
     #[test]
     fn lexical_matches_is_empty_for_an_empty_query() {
-        let (repo, docs) = fixture_repo();
-        let chunk_index = ChunkIndex::new();
-        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
-        assert!(lexical_matches(&chunk_index, &scope, "", 10, &mut 0).is_empty());
-        fs::remove_dir_all(&repo).ok();
+        with_synced_project(
+            "bm25-empty",
+            &[("guide.adoc", "= Guide\n\nтекст\n")],
+            AiAccessMode::FullRepo,
+            |deps, scope| {
+                assert!(lexical_matches(deps, scope, "", 10, &mut 0).is_empty());
+                assert!(lexical_matches(deps, scope, " — ?! ", 10, &mut 0).is_empty());
+            },
+        );
     }
 
     #[test]
     fn lexical_matches_excludes_non_doc_chunks_in_docs_only() {
-        use crate::domain::chunk_index::ChunkBuildOptions;
-        use crate::services::chunk_builder::ChunkBuilder;
+        with_synced_project(
+            "bm25-docs-only",
+            &[
+                ("docs/guide.adoc", "= Guide\n\nуведомления по заявке\n"),
+                ("outside.adoc", "= Outside\n\nуведомления по заявке\n"),
+            ],
+            AiAccessMode::DocsOnly,
+            |deps, scope| {
+                let mut hidden = 0;
+                let matches = lexical_matches(deps, scope, "уведомления", 10, &mut hidden);
 
+                assert_eq!(matches.len(), 1, "{matches:#?}");
+                assert_eq!(matches[0].path, "guide.adoc");
+                assert!(hidden > 0, "the out-of-scope hit must be counted, not swallowed");
+            },
+        );
+    }
+
+    #[test]
+    fn lexical_matches_returns_nothing_when_no_project_is_attached() {
         let (repo, docs) = fixture_repo();
-        fs::write(
-            repo.join("src/Needle.java"),
-            "public class Needle {\n    // find the NEEDLE here\n}\n",
-        )
-        .unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
 
-        let repo_index = RepositoryIndex::new();
-        repo_index.build(&repo).unwrap();
-        let chunk_index = ChunkIndex::new();
-        chunk_index.insert_all(ChunkBuilder::new().build_all(&repo_index, &ChunkBuildOptions::default()));
-        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
-
-        assert!(lexical_matches(&chunk_index, &scope, "needle", 10, &mut 0).is_empty());
+        // No open project, so no store to rank against — the tier the whole
+        // cascade degrades to must degrade quietly itself.
+        assert!(lexical_matches(&EmbeddingDeps::empty(), &scope, "needle", 10, &mut 0).is_empty());
 
         fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn fuse_rrf_puts_a_chunk_both_tiers_agree_on_above_either_tier_leader() {
+        let semantic = vec![sample_match("semantic-only.adoc", 0.9), sample_match("both.adoc", 0.8)];
+        let lexical = vec![sample_match("lexical-only.adoc", 12.0), sample_match("both.adoc", 9.0)];
+
+        let fused = fuse_rrf(vec![semantic, lexical], 10);
+
+        // `both` is second in each list — 2/62 — against 1/61 for either
+        // list's leader. Corroboration beats a single strong opinion.
+        assert_eq!(fused[0].path, "both.adoc", "{fused:#?}");
+        assert_eq!(fused.len(), 3, "the shared chunk appears once: {fused:#?}");
+    }
+
+    #[test]
+    fn fuse_rrf_keeps_the_first_lists_match_for_a_shared_chunk() {
+        let mut semantic = sample_match("both.adoc", 0.8);
+        semantic.source = MatchSource::Semantic;
+        semantic.snippet = "from the semantic tier".to_string();
+
+        let fused = fuse_rrf(vec![vec![semantic], vec![sample_match("both.adoc", 9.0)]], 10);
+
+        // What `meta.has_semantic` reads, and the more informative label
+        // for the model.
+        assert_eq!(fused[0].source, MatchSource::Semantic);
+        assert_eq!(fused[0].snippet, "from the semantic tier");
+    }
+
+    #[test]
+    fn fuse_rrf_ignores_incomparable_tier_score_scales() {
+        // BM25 scores are unbounded and dwarf cosine similarity. Fusing on
+        // score rather than rank would hand the lexical list every slot;
+        // fusing on rank makes the two lists equal voters.
+        let semantic = vec![sample_match("semantic-first.adoc", 0.42)];
+        let lexical = vec![sample_match("lexical-first.adoc", 250.0)];
+
+        let fused = fuse_rrf(vec![semantic, lexical], 10);
+
+        assert_eq!(fused[0].score, fused[1].score, "both are rank 1: {fused:#?}");
+    }
+
+    #[test]
+    fn fuse_rrf_truncates_to_the_budget() {
+        let list = vec![sample_match("a.adoc", 1.0), sample_match("b.adoc", 2.0)];
+        assert_eq!(fuse_rrf(vec![list], 1).len(), 1);
+        assert!(fuse_rrf(Vec::new(), 5).is_empty());
     }
 
     /// Regression guard for the readiness de-duplication.

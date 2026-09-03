@@ -590,7 +590,13 @@ pub(crate) mod tests {
         with_temp_home(|| {
             let root = fixture_dir(label);
             for (name, body) in files {
-                fs::write(root.join(name), body).unwrap();
+                let path = root.join(name);
+                // `name` may be nested (`docs/guide.adoc`) — a scoped test
+                // needs a subdirectory to scope *to*.
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::write(path, body).unwrap();
             }
             let root_str = root.to_string_lossy().into_owned();
             project_open::open_project(&root_str, &root_str).unwrap();

@@ -67,13 +67,93 @@ pub fn extract_search_tokens(query: &str) -> Vec<String> {
     scored.into_iter().map(|(_, t)| t).collect()
 }
 
-/// Weight for a token in the lexical tier: camelCase/PascalCase × 2, else × 1.
-pub fn lexical_token_weight(token: &str) -> f32 {
-    if looks_camel_or_pascal(token) {
-        2.0
-    } else {
-        1.0
+/// Terms past this are dropped. A pasted paragraph would otherwise build an
+/// FTS5 query with hundreds of `OR` branches, every one of them a term
+/// lookup, for words that barely move a BM25 score anyway — the ones that
+/// do are the rare ones, and a query usually leads with those.
+const MAX_FTS_TERMS: usize = 24;
+
+/// Below this a term is punctuation-level noise (`и`, `в`, `a`).
+const MIN_FTS_TERM_CHARS: usize = 2;
+
+/// From this length up a term is searched as a prefix. Shorter than four
+/// characters a prefix matches so much that it stops being evidence.
+const FTS_PREFIX_MIN_CHARS: usize = 4;
+
+/// Longer terms are cut to this many characters before the prefix is
+/// applied: `уведомления` is searched as `уведом*`.
+///
+/// This is the stand-in for a stemmer, and it has to cut rather than just
+/// append `*` because Russian inflects the *suffix* — `уведомления` is not
+/// a prefix of `уведомлений`, so the untruncated prefix term would miss the
+/// very case it exists for. Cutting to a fixed length works because Russian
+/// (and English, and camelCase identifiers) keep the stem at the front:
+/// `уведом*` reaches every case of `уведомление`, `notifi*` reaches
+/// `notification`/`notifications`.
+///
+/// Six is the balance point. Shorter starts merging unrelated words;
+/// longer starts missing inflections again — Russian endings run to three
+/// characters. The recall this buys is worth more than the precision it
+/// costs, because BM25's own term weighting already discounts whatever a
+/// loose prefix drags in: a prefix matching many terms matches common ones,
+/// and common terms score near zero.
+///
+/// The `prefix` index in `chunks_fts` is built for exactly the lengths this
+/// can emit (4, 5, 6) — keep the two in step.
+const FTS_STEM_PREFIX_CHARS: usize = 6;
+
+/// Builds the `MATCH` expression for the BM25 tier — a separate tokenizer
+/// from `extract_search_tokens` on purpose. That one feeds the *symbol*
+/// tier and deliberately keeps only ASCII identifiers, dropping Cyrillic
+/// entirely (see `split_raw_segments`); the indexed corpus here is Russian
+/// documentation, so reusing it would throw away the half of the query that
+/// actually matches the text.
+///
+/// Terms are joined with `OR`, not FTS5's implicit `AND`: a
+/// natural-language question shares only some of its words with any one
+/// chunk, and requiring all of them returns nothing. BM25 then does the
+/// discriminating — a chunk matching more, rarer terms outranks one
+/// matching a single common word.
+///
+/// `None` when nothing survives tokenization (empty or punctuation-only
+/// query) — there is no such thing as an empty `MATCH` expression.
+pub fn fts5_query(query: &str) -> Option<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut terms: Vec<String> = Vec::new();
+
+    for raw in query.split(|c: char| !c.is_alphanumeric()) {
+        if terms.len() >= MAX_FTS_TERMS {
+            break;
+        }
+        let lower = raw.to_lowercase();
+        let chars = lower.chars().count();
+        if chars < MIN_FTS_TERM_CHARS {
+            continue;
+        }
+        // Always quoted. Bare `AND`/`OR`/`NOT`/`NEAR` read as operators and
+        // a bare leading digit is a syntax error, so an unquoted user word
+        // can fail the whole query rather than just miss. Quoting is safe
+        // without escaping here: splitting on non-alphanumerics leaves no
+        // `"` inside a term to escape.
+        let term = if chars >= FTS_PREFIX_MIN_CHARS {
+            let stem: String = lower.chars().take(FTS_STEM_PREFIX_CHARS).collect();
+            format!("\"{stem}\"*")
+        } else {
+            format!("\"{lower}\"")
+        };
+        // Deduped on the emitted term, not the word it came from: two
+        // inflections of one word (`уведомление`, `уведомления`) collapse to
+        // the same stem, and repeating it would just make BM25 count the
+        // same evidence twice.
+        if seen.insert(term.clone()) {
+            terms.push(term);
+        }
     }
+
+    if terms.is_empty() {
+        return None;
+    }
+    Some(terms.join(" OR "))
 }
 
 /// True when any extracted token looks like camelCase/PascalCase (not just
@@ -442,9 +522,81 @@ mod tests {
     }
 
     #[test]
-    fn lexical_weight_camel_is_double() {
-        assert_eq!(lexical_token_weight("getName"), 2.0);
-        assert_eq!(lexical_token_weight("UserService"), 2.0);
-        assert_eq!(lexical_token_weight("notifications"), 1.0);
+    fn fts5_query_keeps_the_cyrillic_that_extract_search_tokens_drops() {
+        let query = "алгоритм формирования уведомлений notifications";
+
+        // The premise of this tier existing at all: the symbol tier's
+        // tokenizer emits nothing that came from the Russian words —
+        // `Notification` here is the RU→EN expansion, not the query text.
+        assert!(
+            extract_search_tokens(query)
+                .iter()
+                .all(|t| t.is_ascii()),
+            "{:?}",
+            extract_search_tokens(query)
+        );
+
+        let fts = fts5_query(query).unwrap();
+        assert!(fts.contains("\"алгори\"*"), "{fts}");
+        assert!(fts.contains("\"формир\"*"), "{fts}");
+        assert!(fts.contains("\"уведом\"*"), "{fts}");
+        assert!(fts.contains("\"notifi\"*"), "{fts}");
+    }
+
+    /// The point of cutting a term before prefixing it: Russian inflects the
+    /// end of a word, so the full word is not a prefix of its own other
+    /// forms — `"уведомления"*` would never reach `уведомлений`.
+    #[test]
+    fn fts5_query_cuts_terms_to_a_stem_that_survives_inflection() {
+        let stem = "\"уведом\"*";
+        assert!(fts5_query("уведомления").unwrap().contains(stem));
+        assert!(fts5_query("уведомлений").unwrap().contains(stem));
+        assert!(fts5_query("УВЕДОМЛЕНИЕ").unwrap().contains(stem));
+    }
+
+    #[test]
+    fn fts5_query_joins_with_or_so_a_long_question_still_matches() {
+        let fts = fts5_query("где описан порядок подачи").unwrap();
+        // Implicit AND would demand every word in one chunk, which for a
+        // natural-language question means no results at all.
+        assert!(fts.contains(" OR "), "{fts}");
+        assert!(!fts.contains(" AND "), "{fts}");
+    }
+
+    #[test]
+    fn fts5_query_prefixes_only_terms_long_enough_to_stay_selective() {
+        let fts = fts5_query("для уведомления").unwrap();
+        // Three characters: matched whole, or `для*` would hit half the corpus.
+        assert!(fts.contains("\"для\"") && !fts.contains("\"для\"*"), "{fts}");
+        assert!(fts.contains("\"уведом\"*"), "{fts}");
+    }
+
+    #[test]
+    fn fts5_query_quotes_terms_that_would_otherwise_parse_as_operators() {
+        let fts = fts5_query("stub OR NEAR 2fa").unwrap();
+        assert!(fts.contains("\"or\""), "{fts}");
+        assert!(fts.contains("\"near\"*"), "{fts}");
+        // A bare leading digit is an FTS5 syntax error, not just a miss.
+        assert!(fts.contains("\"2fa\""), "{fts}");
+    }
+
+    #[test]
+    fn fts5_query_is_none_when_nothing_survives_tokenization() {
+        assert!(fts5_query("").is_none());
+        assert!(fts5_query("  — ?! ").is_none());
+        // Single characters are punctuation-level noise.
+        assert!(fts5_query("a и").is_none());
+    }
+
+    #[test]
+    fn fts5_query_dedupes_and_caps_term_count() {
+        let fts = fts5_query("отчёт Отчёт ОТЧЁТ").unwrap();
+        assert_eq!(fts.matches("\"отчёт\"").count(), 1, "{fts}");
+
+        // Three characters each, so every one is a distinct term rather
+        // than collapsing into a shared stem.
+        let long: String = (0..80).map(|i| format!("t{i:02} ")).collect();
+        let capped = fts5_query(&long).unwrap();
+        assert_eq!(capped.matches(" OR ").count(), MAX_FTS_TERMS - 1, "{capped}");
     }
 }

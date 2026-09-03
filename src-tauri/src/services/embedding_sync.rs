@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::domain::chunk_index::ChunkBuildOptions;
+use crate::domain::chunk_index::{ChunkBuildOptions, ChunkId};
 use crate::domain::embeddings::{
     EmbeddingIndexStatus, SyncPhase, SyncProgress, SyncStats, SyncTrigger,
 };
@@ -33,6 +33,7 @@ use crate::domain::workspace_index::DocumentId;
 use crate::infra::index_store::IndexStore;
 use crate::infra::{embedding_credentials_store, embedding_providers, workspace_scanner};
 use crate::services::chunk_builder::{ChunkBuilder, ChunkIndex};
+use crate::services::chunk_text;
 use crate::services::embedding_config;
 use crate::services::embedding_index::EmbeddingBuilder;
 use crate::services::embedding_state::{
@@ -100,6 +101,49 @@ fn load_persisted_symbols(store: &IndexStore) -> Result<HashMap<FileId, Reusable
             (file_id, ReusableFileData { metadata, symbols, imports })
         })
         .collect())
+}
+
+/// Rebuilds `chunks_fts` for every already-persisted chunk, for stores that
+/// predate the BM25 tier (or whose `FTS_VERSION` moved). Without this an
+/// existing user's index would have complete `chunks`/`embeddings` and an
+/// empty full-text index, i.e. no lexical tier at all, until every file
+/// happened to change.
+///
+/// Deliberately not a `CHUNK_VERSION` bump: that path
+/// (`index_store_ensure::repair_stale`) wipes the vectors too, making a
+/// search-tier improvement cost a full re-embed. Rebuilding from the source
+/// files instead costs one read per indexed file, once.
+///
+/// Runs only from the full `sync` — the watcher's incremental path stays
+/// light, and a store it touches meanwhile just keeps its `fts_version`
+/// marker unset until the next full sync. Chunks whose text no longer
+/// resolves (the file moved or changed since the last sync) are skipped:
+/// the same sync re-chunks them further down, which writes their FTS rows
+/// through the normal path.
+fn backfill_fts(store: &IndexStore, chunk_index: &ChunkIndex, repo_root: &Path) -> Result<(), String> {
+    let mut by_file: HashMap<FileId, Vec<(ChunkId, Option<String>, String)>> = HashMap::new();
+    for metadata in chunk_index.all() {
+        let Ok(text) = chunk_text::resolve_text(repo_root, &metadata) else {
+            continue;
+        };
+        by_file.entry(metadata.file_id.clone()).or_default().push((
+            metadata.id.clone(),
+            metadata.qualified_name.clone(),
+            text.to_string(),
+        ));
+    }
+
+    let files = by_file.len();
+    for (file_id, entries) in by_file {
+        store
+            .replace_fts_for_file(&file_id, &entries)
+            .map_err(|e| e.to_string())?;
+    }
+    store.mark_fts_current().map_err(|e| e.to_string())?;
+    if files > 0 {
+        eprintln!("[embedding-sync] rebuilt the full-text index for {files} file(s)");
+    }
+    Ok(())
 }
 
 /// The file-watcher's `on_change` reaction — the incremental counterpart to
@@ -189,11 +233,12 @@ fn run_incremental_sync(
                     let chunks = ChunkBuilder::new()
                         .build_file(repo_index, &file_id, &ChunkBuildOptions::default())
                         .map_err(|e| e.to_string())?;
-                    let metadatas: Vec<_> = chunks.iter().map(|c| c.metadata.clone()).collect();
-                    chunk_index.replace_for_file(&file_id, chunks);
+                    // Store first: it needs the chunk text (for the FTS
+                    // index), and `replace_for_file` consumes the `Vec`.
                     store
-                        .replace_chunks_for_file(&file_id, &metadatas)
+                        .replace_chunks_for_file(&file_id, &chunks)
                         .map_err(|e| e.to_string())?;
+                    chunk_index.replace_for_file(&file_id, chunks);
                     store
                         .replace_symbols_for_file(&file_id, &indexed.symbols)
                         .map_err(|e| e.to_string())?;
@@ -300,11 +345,10 @@ fn sync_backlog_batch(
             .map_err(|e| e.to_string())?;
         match chunk_builder.build_file(repo_index, file_id, &options) {
             Ok(chunks) => {
-                let metadatas: Vec<_> = chunks.iter().map(|c| c.metadata.clone()).collect();
-                chunk_index.replace_for_file(file_id, chunks);
                 store
-                    .replace_chunks_for_file(file_id, &metadatas)
+                    .replace_chunks_for_file(file_id, &chunks)
                     .map_err(|e| e.to_string())?;
+                chunk_index.replace_for_file(file_id, chunks);
                 store
                     .replace_symbols_for_file(file_id, &indexed.symbols)
                     .map_err(|e| e.to_string())?;
@@ -704,6 +748,14 @@ pub fn sync(session: &EmbeddingSession, progress: &ProgressSink) -> Result<SyncS
         return Ok(SyncStats::default());
     }
 
+    // Before the diff: an index carried over from a build without the BM25
+    // tier has chunks but no full-text rows. A no-op on a fresh project
+    // (nothing persisted to rebuild from) and on every sync after the
+    // first that marks the version current.
+    if store.fts_needs_backfill().map_err(|e| e.to_string())? {
+        backfill_fts(&store, &chunk_index, &index_root)?;
+    }
+
     // A fresh project (nothing chunked yet, in this store or ever) is
     // the only case that additionally prioritizes open editor files —
     // documentation itself is always prioritized below, on every sync.
@@ -794,11 +846,10 @@ pub fn sync(session: &EmbeddingSession, progress: &ProgressSink) -> Result<SyncS
         let chunks = chunk_builder
             .build_file(&repo_index, file_id, &options)
             .map_err(|e| e.to_string())?;
-        let metadatas: Vec<_> = chunks.iter().map(|c| c.metadata.clone()).collect();
-        chunk_index.replace_for_file(file_id, chunks);
         store
-            .replace_chunks_for_file(file_id, &metadatas)
+            .replace_chunks_for_file(file_id, &chunks)
             .map_err(|e| e.to_string())?;
+        chunk_index.replace_for_file(file_id, chunks);
         store
             .replace_symbols_for_file(file_id, &indexed.symbols)
             .map_err(|e| e.to_string())?;
@@ -1424,6 +1475,35 @@ mod tests {
                     second.skipped_unchanged > 0,
                     "the second pass should recognize the first pass's work as unchanged"
                 );
+            },
+        );
+    }
+
+    #[test]
+    fn a_sync_leaves_the_full_text_index_searchable_and_marked_current() {
+        with_open_project(
+            "fts-after-sync",
+            &[("guide.adoc", "= Guide\n\nСроки рассмотрения уведомлений.\n")],
+            |root, session| {
+                sync(session, &noop_progress()).unwrap();
+
+                let store = attach_current(&session.chunk_index, &session.index_store)
+                    .unwrap()
+                    .unwrap()
+                    .store;
+
+                assert!(
+                    !store.fts_needs_backfill().unwrap(),
+                    "a completed sync should leave nothing to backfill"
+                );
+                assert_eq!(store.search_bm25("\"уведом\"*", 10).unwrap().len(), 1);
+
+                // The migration path for a store written before this tier
+                // existed. Running it over an already-indexed project is the
+                // sharpest check available: it must rebuild the rows, not
+                // add a second copy of each.
+                backfill_fts(&store, &session.chunk_index, root).unwrap();
+                assert_eq!(store.search_bm25("\"уведом\"*", 10).unwrap().len(), 1);
             },
         );
     }

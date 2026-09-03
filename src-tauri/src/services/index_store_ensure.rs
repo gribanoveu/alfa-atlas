@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn repair_stale_wipes_existing_rows_and_writes_fresh_meta() {
-        use crate::domain::chunk_index::{chunk_hash, ChunkId, ChunkKind, ChunkMetadata};
+        use crate::domain::chunk_index::{chunk_hash, Chunk, ChunkId, ChunkKind, ChunkMetadata};
         use crate::domain::repo_index::{FileId, FileMetadata, Language};
 
         let root = fixture_root();
@@ -170,17 +170,20 @@ mod tests {
         store
             .replace_chunks_for_file(
                 &FileId("a.json".to_string()),
-                &[ChunkMetadata {
-                    id: ChunkId("a.json#0-3".to_string()),
-                    file_id: FileId("a.json".to_string()),
-                    language: Language::Json,
-                    kind: ChunkKind::File,
-                    start_byte: 0,
-                    end_byte: 3,
-                    file_hash,
-                    hash: chunk_hash(file_hash, 0, 3),
-                    qualified_name: None,
-                    ordinal: 0,
+                &[Chunk {
+                    metadata: ChunkMetadata {
+                        id: ChunkId("a.json#0-3".to_string()),
+                        file_id: FileId("a.json".to_string()),
+                        language: Language::Json,
+                        kind: ChunkKind::File,
+                        start_byte: 0,
+                        end_byte: 3,
+                        file_hash,
+                        hash: chunk_hash(file_hash, 0, 3),
+                        qualified_name: None,
+                        ordinal: 0,
+                    },
+                    text: "{}\n".to_string(),
                 }],
             )
             .unwrap();

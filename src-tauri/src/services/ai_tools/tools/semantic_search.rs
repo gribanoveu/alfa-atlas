@@ -12,14 +12,19 @@ use crate::services::embedding_state::embedding_outage_active;
 
 use super::super::EmbeddingDeps;
 use super::super::search::{
-    DEFAULT_TOP_K, MAX_TOP_K, apply_related_boost, is_semantic_ready, lexical_matches,
+    DEFAULT_TOP_K, MAX_TOP_K, apply_related_boost, fuse_rrf, is_semantic_ready, lexical_matches,
     related_files, semantic_matches, symbol_matches,
 };
 
-/// Cascade entry point: an exact symbol-name hit (cheapest, always tried)
-/// is prepended to whichever of the semantic/lexical tiers fills the
-/// remaining `top_k` budget, chosen by `is_semantic_ready`. Returns matches
-/// plus `meta` (extracted tokens, weak-search hint) for the model/UI.
+/// Entry point: an exact symbol-name hit (cheapest, always tried) is
+/// prepended to the recall tiers, which fill the remaining `top_k` budget.
+///
+/// The recall half used to be a cascade — semantic *or* lexical, whichever
+/// `is_semantic_ready` picked. It is now a fusion: BM25 runs on every
+/// search and, when the semantic tier is available too, `fuse_rrf` merges
+/// the two rankings. The cascade remains only as the degradation path, for
+/// when the semantic tier genuinely cannot answer. Returns matches plus
+/// `meta` (extracted tokens, weak-search hint) for the model/UI.
 pub(super) fn semantic_search(
     scope: &ToolScope,
     args: SemanticSearchArgs,
@@ -58,12 +63,23 @@ pub(super) fn semantic_search(
             (remaining * 3).min(MAX_TOP_K * 3)
         };
 
+        // Always run: one indexed SQLite query, and its exact-term evidence
+        // is worth fusing in even when the semantic tier is healthy — an
+        // identifier or a Russian term the embedding model blurred is
+        // precisely what BM25 is good at.
+        let lexical = lexical_matches(deps, scope, &args.query, fetch_k, &mut hidden);
+        tiers_used.push("lexical".to_string());
+
         let tier = choose_tier(is_semantic_ready(deps), embedding_outage_active());
         let tier_results = match tier {
             Tier::Semantic => match semantic_matches(scope, deps, &args.query, fetch_k, &mut hidden) {
                 Ok(hits) => {
                     tiers_used.push("semantic".to_string());
-                    hits
+                    // Semantic first: `fuse_rrf` keeps the earliest list's
+                    // `ToolMatch` for a chunk both tiers found, and
+                    // `MatchSource::Semantic` is the more informative label
+                    // for the model (and what `meta.has_semantic` reads).
+                    fuse_rrf(vec![hits, lexical], fetch_k)
                 }
                 // The index was ready and the semantic tier still failed —
                 // in practice the query-embedding call couldn't reach the
@@ -75,19 +91,14 @@ pub(super) fn semantic_search(
                 // and say so in `meta` so the answer isn't overtrusted.
                 Err(e) => {
                     degraded = Some(degraded_note(&DegradedReason::SemanticFailed(e.to_string())));
-                    tiers_used.push("lexical".to_string());
-                    lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k, &mut hidden)
+                    lexical
                 }
             },
             Tier::LexicalDuringOutage => {
                 degraded = Some(degraded_note(&DegradedReason::ProviderCoolingDown));
-                tiers_used.push("lexical".to_string());
-                lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k, &mut hidden)
+                lexical
             }
-            Tier::Lexical => {
-                tiers_used.push("lexical".to_string());
-                lexical_matches(&deps.chunk_index, scope, &args.query, fetch_k, &mut hidden)
-            }
+            Tier::Lexical => lexical,
         };
 
         results.extend(apply_related_boost(tier_results, &related, remaining));
@@ -182,7 +193,7 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "semanticSearch".to_string(),
         description:
-            "Default search tool — use this first whenever you need to find something in the project and the exact file or line is not already known. Searches via symbol lookup (exact + stem), semantic similarity, and lexical fallback. One strong first query beats several vague repeats — guess camelCase names justified by words in the question (уведомления→Notification/getNotifications, не выдумывать Patent если пользователь не сказал «патент») plus Russian business context; do not send only a lone plain word. Refine with real operation/class names only after a hit reveals them. A second call is only for a new identifier learned from readFile — prefer at most two searches per request. After results, readFile at most 2–3 entry files (adoc + owning *Service); do not listFiles the parent or open mappers/siblings until needed. If meta.hint is present, follow it on the next search. Verify with readFile before precise claims; use grep only for exhaustive exact line matches."
+            "Default search tool — use this first whenever you need to find something in the project and the exact file or line is not already known. Searches via symbol lookup (exact + stem) plus a fusion of semantic similarity and BM25 full-text ranking, so exact wording (Russian included) and meaning both count. One strong first query beats several vague repeats — guess camelCase names justified by words in the question (уведомления→Notification/getNotifications, не выдумывать Patent если пользователь не сказал «патент») plus Russian business context; do not send only a lone plain word. Refine with real operation/class names only after a hit reveals them. A second call is only for a new identifier learned from readFile — prefer at most two searches per request. After results, readFile at most 2–3 entry files (adoc + owning *Service); do not listFiles the parent or open mappers/siblings until needed. If meta.hint is present, follow it on the next search. Verify with readFile before precise claims; use grep only for exhaustive exact line matches."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -205,6 +216,65 @@ pub(super) fn definition() -> LlmToolDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The behaviour change this module exists to make: the recall tiers
+    /// used to be mutually exclusive, so a healthy semantic index meant BM25
+    /// never ran and an exact term in the query contributed nothing.
+    #[test]
+    fn both_recall_tiers_run_and_fuse_once_the_index_is_ready() {
+        use std::sync::Arc;
+
+        use crate::domain::ai_access::AiAccessMode;
+        use crate::domain::ai_tools::{ToolCall, ToolResult};
+        use crate::services::ai_tools::{EmbeddingDeps, execute_tool};
+        use crate::services::embedding_state::tests::with_open_project;
+        use crate::services::embedding_sync::{ProgressSink, sync};
+
+        with_open_project(
+            "fusion",
+            &[("guide.adoc", "= Guide\n\nСроки рассмотрения уведомлений по заявке.\n")],
+            |root, session| {
+                let noop: ProgressSink = Arc::new(|_| {});
+                sync(session, &noop).unwrap();
+
+                let deps = EmbeddingDeps {
+                    repo_index: session.repo_index.clone(),
+                    chunk_index: session.chunk_index.clone(),
+                    embedding_index: session.embedding_index.clone(),
+                    index_store: session.index_store.clone(),
+                    embedding_provider: session.embedding_provider.clone(),
+                    sync_guard: session.sync_guard.clone(),
+                    workspace_index: session.workspace_index.clone(),
+                    fast_apply: None,
+                    active_file: None,
+                };
+                let scope = ToolScope::for_project(root, root, AiAccessMode::FullRepo);
+
+                let result = execute_tool(
+                    &scope,
+                    ToolCall::SemanticSearch(SemanticSearchArgs {
+                        query: "сроки рассмотрения уведомлений".to_string(),
+                        top_k: None,
+                    }),
+                    &deps,
+                    &[],
+                )
+                .unwrap();
+
+                let ToolResult::SemanticSearchResults(payload) = result else {
+                    panic!("expected SemanticSearchResults, got {result:?}");
+                };
+                assert!(
+                    payload.meta.tiers_used.contains(&"semantic".to_string())
+                        && payload.meta.tiers_used.contains(&"lexical".to_string()),
+                    "{:?}",
+                    payload.meta.tiers_used
+                );
+                assert!(payload.meta.degraded.is_none(), "{:?}", payload.meta.degraded);
+                assert!(!payload.matches.is_empty());
+            },
+        );
+    }
 
     #[test]
     fn tier_choice_separates_a_missing_index_from_an_unreachable_provider() {

@@ -1,10 +1,17 @@
 //! SQLite-backed durable mirror of `ChunkIndex`/`EmbeddingIndex` metadata —
 //! everything needed to reload both without a full repo rescan, and to
-//! diff incrementally against what's on disk now. Deliberately stores
-//! neither chunk text (it lives in the source files, read on demand via
-//! `services::chunk_text::resolve_text`) nor embedding vectors (they live
-//! in `vectors.usearch`, see `infra::vector_store`) — this is only ids,
-//! byte offsets, and hashes.
+//! diff incrementally against what's on disk now. Deliberately stores no
+//! embedding vectors (they live in `vectors.usearch`, see
+//! `infra::vector_store`) — the relational tables here are only ids, byte
+//! offsets, and hashes.
+//!
+//! The one exception is `chunks_fts`, the FTS5 index behind the BM25 search
+//! tier: a full-text index *is* a copy of the text, there is no way to rank
+//! by term statistics without one, and the alternative the lexical tier
+//! used before it — reading and lowercasing every chunk in the repository
+//! on every query — cost far more than the disk this does. The relational
+//! tables still hold no text, and `chunk_text::resolve_text` remains the
+//! only way a *result* gets its snippet.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,11 +21,21 @@ use std::time::UNIX_EPOCH;
 use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
-use crate::domain::chunk_index::{ChunkId, ChunkKind, ChunkMetadata};
+use crate::domain::chunk_index::{Chunk, ChunkId, ChunkKind, ChunkMetadata};
 use crate::domain::repo_index::{FileId, FileMetadata, ImportRef, Language, Symbol, SymbolKind};
 
 const DB_FILE_NAME: &str = "chunks.db";
 pub const VECTORS_FILE_NAME: &str = "vectors.usearch";
+
+/// Bump whenever the FTS schema or tokenizer changes in a way that makes
+/// already-indexed rows wrong. Deliberately *not* folded into
+/// `CHUNK_VERSION`/`INDEX_VERSION`: those invalidate the whole store,
+/// vectors included, and re-embedding a repository costs hours — a
+/// full-text index can be rebuilt from the source files in seconds, so it
+/// carries its own version and its own repair (see
+/// `embedding_sync::backfill_fts`).
+const FTS_VERSION: &str = "1";
+const META_FTS_VERSION: &str = "fts_version";
 
 const SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -47,9 +64,32 @@ CREATE TABLE IF NOT EXISTS chunks (
   file_hash      BLOB NOT NULL,
   chunk_hash     BLOB NOT NULL,
   qualified_name TEXT,
-  ordinal        INTEGER NOT NULL
+  ordinal        INTEGER NOT NULL,
+  -- This chunk's row in `chunks_fts`. A virtual table takes no foreign key
+  -- and so is not reached by the `ON DELETE CASCADE` above; keeping the
+  -- rowid here is what lets a delete find its FTS row through
+  -- `idx_chunks_file_id` instead of scanning the whole full-text index.
+  -- Nullable: an index written before the FTS tier existed has chunk rows
+  -- with no counterpart until `replace_fts_for_file` backfills them.
+  fts_rowid      INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file_id ON chunks(file_id);
+
+-- The BM25 tier's index. `unicode61` case-folds Cyrillic but does not stem
+-- it, which is why `domain::search_query::fts5_query` cuts longer terms to
+-- a stem and searches them as prefixes. `prefix = '4 5 6'` covers exactly
+-- the lengths that produces (see `FTS_STEM_PREFIX_CHARS`), so those lookups
+-- hit an index instead of walking the term list — keep the two in step.
+-- `qualified_name` is indexed alongside the text (and weighted above it at
+-- query time) so an identifier query lands on the method that carries the
+-- name, not just on prose mentioning it.
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  chunk_id UNINDEXED,
+  qualified_name,
+  text,
+  tokenize = 'unicode61 remove_diacritics 2',
+  prefix = '4 5 6'
+);
 
 -- `chunk_hash` here mirrors `EmbeddingRecord.chunk_hash`, written only once
 -- a vector actually lands in `vectors.usearch` — deliberately a separate
@@ -119,6 +159,7 @@ impl IndexStore {
         std::fs::create_dir_all(index_dir).map_err(IndexStoreError::Io)?;
         let conn = Connection::open(index_dir.join(DB_FILE_NAME))?;
         conn.execute_batch(SCHEMA_SQL)?;
+        migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
             dir: index_dir.to_path_buf(),
@@ -152,14 +193,14 @@ impl IndexStore {
         Ok(())
     }
 
-    /// Deletes every row (`meta`/`files`/`chunks`/`embeddings`/`symbols`/
-    /// `imports`) — used when the version/`index_root` compatibility guard
-    /// decides a persisted store is unusable and must be rebuilt from
-    /// scratch.
+    /// Deletes every row (`meta`/`files`/`chunks`/`chunks_fts`/`embeddings`/
+    /// `symbols`/`imports`) — used when the version/`index_root`
+    /// compatibility guard decides a persisted store is unusable and must be
+    /// rebuilt from scratch.
     pub fn wipe(&self) -> Result<(), IndexStoreError> {
         let conn = self.lock()?;
         conn.execute_batch(
-            "DELETE FROM embeddings; DELETE FROM chunks; DELETE FROM symbols; DELETE FROM imports; DELETE FROM files; DELETE FROM meta;",
+            "DELETE FROM embeddings; DELETE FROM chunks; DELETE FROM chunks_fts; DELETE FROM symbols; DELETE FROM imports; DELETE FROM files; DELETE FROM meta;",
         )?;
         Ok(())
     }
@@ -195,10 +236,14 @@ impl IndexStore {
     }
 
     /// Cascades to `chunks`/`embeddings` via the `ON DELETE CASCADE` FKs.
+    /// `chunks_fts` is a virtual table and takes no foreign key, so its rows
+    /// are dropped explicitly first — while `chunks` still holds the
+    /// `fts_rowid`s that locate them.
     pub fn delete_files(&self, file_ids: &[FileId]) -> Result<(), IndexStoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
         for file_id in file_ids {
+            purge_fts_rows(&tx, file_id)?;
             tx.execute("DELETE FROM files WHERE file_id = ?1", params![file_id.0])?;
         }
         tx.commit()?;
@@ -208,35 +253,119 @@ impl IndexStore {
     /// Drops every existing chunk row for `file_id`, then inserts `chunks`
     /// — mirrors `ChunkIndex::replace_for_file`, which calls this in
     /// lockstep. Cascades to that file's `embeddings` rows too.
+    ///
+    /// Takes whole `Chunk`s rather than the `ChunkMetadata` it used to,
+    /// because `chunks_fts` needs the text and this is the only place it is
+    /// still in hand — the caller is about to hand the same `Vec` to
+    /// `ChunkIndex::replace_for_file`, which drops it. One write path for
+    /// both tables is the point: an FTS index that can silently disagree
+    /// with `chunks` about which chunks exist is worse than none.
     pub fn replace_chunks_for_file(
         &self,
         file_id: &FileId,
-        chunks: &[ChunkMetadata],
+        chunks: &[Chunk],
     ) -> Result<(), IndexStoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction()?;
+        purge_fts_rows(&tx, file_id)?;
         tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id.0])?;
         for chunk in chunks {
+            let meta = &chunk.metadata;
+            let fts_rowid = insert_fts_row(&tx, &meta.id, meta.qualified_name.as_deref(), &chunk.text)?;
             tx.execute(
                 "INSERT INTO chunks (chunk_id, file_id, language, kind, start_byte, end_byte,
-                    file_hash, chunk_hash, qualified_name, ordinal)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    file_hash, chunk_hash, qualified_name, ordinal, fts_rowid)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
-                    chunk.id.0,
-                    chunk.file_id.0,
-                    language_to_str(chunk.language),
-                    chunk_kind_to_str(chunk.kind),
-                    chunk.start_byte,
-                    chunk.end_byte,
-                    chunk.file_hash.as_bytes().to_vec(),
-                    chunk.hash.as_bytes().to_vec(),
-                    chunk.qualified_name,
-                    chunk.ordinal,
+                    meta.id.0,
+                    meta.file_id.0,
+                    language_to_str(meta.language),
+                    chunk_kind_to_str(meta.kind),
+                    meta.start_byte,
+                    meta.end_byte,
+                    meta.file_hash.as_bytes().to_vec(),
+                    meta.hash.as_bytes().to_vec(),
+                    meta.qualified_name,
+                    meta.ordinal,
+                    fts_rowid,
                 ],
             )?;
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Re-indexes `file_id`'s existing chunks for full-text search without
+    /// touching `chunks` itself. The backfill path (see
+    /// `embedding_sync::backfill_fts`): an index written before this tier
+    /// existed already has correct chunk rows and, more to the point,
+    /// `embeddings` rows that took hours to compute — going through
+    /// `replace_chunks_for_file` would cascade those away for nothing.
+    ///
+    /// `entries` is `(chunk_id, qualified_name, text)`, in any order; ids
+    /// that no longer have a `chunks` row are indexed but left unlinked,
+    /// and the next `replace_chunks_for_file` for the file clears them.
+    pub fn replace_fts_for_file(
+        &self,
+        file_id: &FileId,
+        entries: &[(ChunkId, Option<String>, String)],
+    ) -> Result<(), IndexStoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        purge_fts_rows(&tx, file_id)?;
+        for (chunk_id, qualified_name, text) in entries {
+            let fts_rowid = insert_fts_row(&tx, chunk_id, qualified_name.as_deref(), text)?;
+            tx.execute(
+                "UPDATE chunks SET fts_rowid = ?1 WHERE chunk_id = ?2",
+                params![fts_rowid, chunk_id.0],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Whether `chunks_fts` predates the running binary's `FTS_VERSION` —
+    /// true for any index written before this tier existed, and after any
+    /// tokenizer change. The caller rebuilds and then calls
+    /// `mark_fts_current`.
+    pub fn fts_needs_backfill(&self) -> Result<bool, IndexStoreError> {
+        Ok(self.read_meta(META_FTS_VERSION)?.as_deref() != Some(FTS_VERSION))
+    }
+
+    pub fn mark_fts_current(&self) -> Result<(), IndexStoreError> {
+        self.write_meta(META_FTS_VERSION, FTS_VERSION)
+    }
+
+    /// The BM25 tier: ranks `chunks_fts` against an FTS5 `MATCH` expression
+    /// from `domain::search_query::fts5_query`, best first.
+    ///
+    /// `bm25()` scores lower-is-better (it returns a negated value), which
+    /// is why the ordering is ascending and the score is flipped on the way
+    /// out — every other tier here reports higher-is-better, and
+    /// `apply_related_boost` multiplies, so a negative score would invert
+    /// the boost into a penalty.
+    pub fn search_bm25(
+        &self,
+        fts_query: &str,
+        limit: usize,
+    ) -> Result<Vec<(ChunkId, f32)>, IndexStoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            // Column weights, positionally: `chunk_id` is UNINDEXED and can
+            // never match (0.0), `qualified_name` counts for four times a
+            // body-text hit, `text` is the baseline.
+            "SELECT chunk_id, bm25(chunks_fts, 0.0, 4.0, 1.0) AS rank
+             FROM chunks_fts
+             WHERE chunks_fts MATCH ?1
+             ORDER BY rank
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![fts_query, limit as i64], |row| {
+            let chunk_id: String = row.get(0)?;
+            let rank: f64 = row.get(1)?;
+            Ok((ChunkId(chunk_id), -rank as f32))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(IndexStoreError::from)
     }
 
     /// Every persisted chunk's metadata — what `ChunkIndex::ensure_loaded`
@@ -467,6 +596,53 @@ impl IndexStore {
     }
 }
 
+/// Schema changes that `CREATE TABLE IF NOT EXISTS` cannot apply to a
+/// database that already exists. Kept additive on purpose: the alternative
+/// — bumping `CHUNK_VERSION` so `index_store_ensure` wipes and rebuilds —
+/// would also throw away every embedding, i.e. make an existing user pay a
+/// full re-embed for a search-tier improvement.
+fn migrate(conn: &Connection) -> Result<(), IndexStoreError> {
+    let has_fts_rowid = conn
+        .prepare("SELECT 1 FROM pragma_table_info('chunks') WHERE name = 'fts_rowid'")?
+        .exists([])?;
+    if !has_fts_rowid {
+        conn.execute_batch("ALTER TABLE chunks ADD COLUMN fts_rowid INTEGER")?;
+    }
+    Ok(())
+}
+
+/// Drops `file_id`'s rows from `chunks_fts`, located through `chunks` (and
+/// so through `idx_chunks_file_id`) rather than by scanning the full-text
+/// index for a column it does not index.
+fn purge_fts_rows(tx: &rusqlite::Transaction<'_>, file_id: &FileId) -> Result<(), IndexStoreError> {
+    let rowids: Vec<i64> = {
+        let mut stmt = tx.prepare(
+            "SELECT fts_rowid FROM chunks WHERE file_id = ?1 AND fts_rowid IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![file_id.0], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    for rowid in rowids {
+        tx.execute("DELETE FROM chunks_fts WHERE rowid = ?1", params![rowid])?;
+    }
+    Ok(())
+}
+
+/// Inserts one chunk into the full-text index, returning the rowid the
+/// caller stores in `chunks.fts_rowid` to find this row again.
+fn insert_fts_row(
+    tx: &rusqlite::Transaction<'_>,
+    chunk_id: &ChunkId,
+    qualified_name: Option<&str>,
+    text: &str,
+) -> Result<i64, IndexStoreError> {
+    tx.execute(
+        "INSERT INTO chunks_fts (chunk_id, qualified_name, text) VALUES (?1, ?2, ?3)",
+        params![chunk_id.0, qualified_name.unwrap_or(""), text],
+    )?;
+    Ok(tx.last_insert_rowid())
+}
+
 fn hash_from_bytes(bytes: &[u8]) -> blake3::Hash {
     let arr: [u8; 32] = bytes.try_into().expect("hash column is always 32 bytes");
     blake3::Hash::from(arr)
@@ -563,19 +739,32 @@ mod tests {
         }
     }
 
-    fn sample_chunk(file_id: &str, start: u32, end: u32) -> ChunkMetadata {
+    fn sample_chunk(file_id: &str, start: u32, end: u32) -> Chunk {
+        sample_chunk_with_text(file_id, start, end, "{}", None)
+    }
+
+    fn sample_chunk_with_text(
+        file_id: &str,
+        start: u32,
+        end: u32,
+        text: &str,
+        qualified_name: Option<&str>,
+    ) -> Chunk {
         let file_hash = blake3::hash(file_id.as_bytes());
-        ChunkMetadata {
-            id: ChunkId(format!("{file_id}#{start}-{end}")),
-            file_id: FileId(file_id.to_string()),
-            language: Language::Json,
-            kind: ChunkKind::File,
-            start_byte: start,
-            end_byte: end,
-            file_hash,
-            hash: compute_chunk_hash(file_hash, start, end),
-            qualified_name: None,
-            ordinal: 0,
+        Chunk {
+            metadata: ChunkMetadata {
+                id: ChunkId(format!("{file_id}#{start}-{end}")),
+                file_id: FileId(file_id.to_string()),
+                language: Language::Json,
+                kind: ChunkKind::File,
+                start_byte: start,
+                end_byte: end,
+                file_hash,
+                hash: compute_chunk_hash(file_hash, start, end),
+                qualified_name: qualified_name.map(str::to_string),
+                ordinal: 0,
+            },
+            text: text.to_string(),
         }
     }
 
@@ -602,15 +791,15 @@ mod tests {
         let file_id = FileId("a.json".to_string());
         let chunks = vec![sample_chunk("a.json", 0, 10)];
         store
-            .upsert_files(&[sample_file("a.json", chunks[0].file_hash)])
+            .upsert_files(&[sample_file("a.json", chunks[0].metadata.file_hash)])
             .unwrap();
         store.replace_chunks_for_file(&file_id, &chunks).unwrap();
 
         let loaded = store.load_all_chunks().unwrap();
         assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].id, chunks[0].id);
-        assert_eq!(loaded[0].file_hash, chunks[0].file_hash);
-        assert_eq!(loaded[0].hash, chunks[0].hash);
+        assert_eq!(loaded[0].id, chunks[0].metadata.id);
+        assert_eq!(loaded[0].file_hash, chunks[0].metadata.file_hash);
+        assert_eq!(loaded[0].hash, chunks[0].metadata.hash);
 
         // Replacing again with an empty set drops the file's chunks.
         store.replace_chunks_for_file(&file_id, &[]).unwrap();
@@ -627,10 +816,12 @@ mod tests {
         let file_id = FileId("a.json".to_string());
         let chunks = vec![sample_chunk("a.json", 0, 10)];
         store
-            .upsert_files(&[sample_file("a.json", chunks[0].file_hash)])
+            .upsert_files(&[sample_file("a.json", chunks[0].metadata.file_hash)])
             .unwrap();
         store.replace_chunks_for_file(&file_id, &chunks).unwrap();
-        store.upsert_embedding(&chunks[0].id, chunks[0].hash).unwrap();
+        store
+            .upsert_embedding(&chunks[0].metadata.id, chunks[0].metadata.hash)
+            .unwrap();
         assert_eq!(store.load_all_embedding_hashes().unwrap().len(), 1);
 
         store.replace_chunks_for_file(&file_id, &[]).unwrap();
@@ -647,16 +838,210 @@ mod tests {
         let file_id = FileId("a.json".to_string());
         let chunks = vec![sample_chunk("a.json", 0, 10)];
         store
-            .upsert_files(&[sample_file("a.json", chunks[0].file_hash)])
+            .upsert_files(&[sample_file("a.json", chunks[0].metadata.file_hash)])
             .unwrap();
         store.replace_chunks_for_file(&file_id, &chunks).unwrap();
-        store.upsert_embedding(&chunks[0].id, chunks[0].hash).unwrap();
+        store
+            .upsert_embedding(&chunks[0].metadata.id, chunks[0].metadata.hash)
+            .unwrap();
 
         store.wipe().unwrap();
 
         assert_eq!(store.read_meta("k").unwrap(), None);
         assert!(store.load_all_chunks().unwrap().is_empty());
         assert!(store.load_all_embedding_hashes().unwrap().is_empty());
+        // `chunks_fts` is a virtual table: no foreign key reaches it, so a
+        // wipe that forgot it would leave the search tier answering from
+        // chunks that no longer exist.
+        assert!(store.search_bm25("\"уведом\"*", 10).unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Indexes `chunks` under `file_id` after registering the file row the
+    /// `chunks.file_id` foreign key requires.
+    fn index_chunks(store: &IndexStore, file_id: &str, chunks: &[Chunk]) {
+        store
+            .upsert_files(&[sample_file(file_id, chunks[0].metadata.file_hash)])
+            .unwrap();
+        store
+            .replace_chunks_for_file(&FileId(file_id.to_string()), chunks)
+            .unwrap();
+    }
+
+    #[test]
+    fn bm25_ranks_a_denser_match_above_a_passing_mention() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        index_chunks(
+            &store,
+            "about.json",
+            &[sample_chunk_with_text(
+                "about.json",
+                0,
+                10,
+                "Порядок подачи уведомления и сроки рассмотрения уведомления.",
+                None,
+            )],
+        );
+        index_chunks(
+            &store,
+            "aside.json",
+            &[sample_chunk_with_text(
+                "aside.json",
+                0,
+                10,
+                "Общие положения. Здесь уведомления не рассматриваются, см. другой раздел про сроки.",
+                None,
+            )],
+        );
+
+        let hits = store.search_bm25("\"уведом\"* OR \"подачи\"*", 10).unwrap();
+
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].0.0, "about.json#0-10");
+        assert!(
+            hits[0].1 > hits[1].1,
+            "score must be higher-is-better after the bm25() flip: {hits:?}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bm25_matches_a_russian_query_across_case_and_inflection() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        index_chunks(
+            &store,
+            "a.json",
+            &[sample_chunk_with_text(
+                "a.json",
+                0,
+                10,
+                "УВЕДОМЛЕНИЙ по заявке",
+                None,
+            )],
+        );
+
+        // Query said `уведомления`, the text says `УВЕДОМЛЕНИЙ`: `unicode61`
+        // folds the case, and the stem prefix `fts5_query` cut it down to
+        // bridges the inflection the full word would have missed.
+        let hits = store.search_bm25("\"уведом\"*", 10).unwrap();
+
+        assert_eq!(hits.len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn qualified_name_is_searchable_alongside_the_text() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        index_chunks(
+            &store,
+            "a.json",
+            &[sample_chunk_with_text(
+                "a.json",
+                0,
+                10,
+                "нет ни одного совпадения в тексте",
+                Some("UserService.getNotifications"),
+            )],
+        );
+
+        let hits = store.search_bm25("\"getnotifications\"*", 10).unwrap();
+
+        assert_eq!(hits.len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn re_chunking_a_file_drops_its_stale_fts_rows() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        index_chunks(
+            &store,
+            "a.json",
+            &[sample_chunk_with_text("a.json", 0, 10, "первоначальный текст", None)],
+        );
+        assert_eq!(store.search_bm25("\"первон\"*", 10).unwrap().len(), 1);
+
+        index_chunks(
+            &store,
+            "a.json",
+            &[sample_chunk_with_text("a.json", 0, 10, "переписанный текст", None)],
+        );
+
+        assert!(store.search_bm25("\"первон\"*", 10).unwrap().is_empty());
+        assert_eq!(store.search_bm25("\"перепи\"*", 10).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deleting_a_file_purges_its_fts_rows() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        index_chunks(
+            &store,
+            "a.json",
+            &[sample_chunk_with_text("a.json", 0, 10, "исчезающий текст", None)],
+        );
+        store.delete_files(&[FileId("a.json".to_string())]).unwrap();
+
+        assert!(store.search_bm25("\"исчеза\"*", 10).unwrap().is_empty());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn backfilling_fts_leaves_the_embeddings_it_would_be_ruinous_to_recompute() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        let file_id = FileId("a.json".to_string());
+        let chunk = sample_chunk_with_text("a.json", 0, 10, "текст чанка", None);
+        index_chunks(&store, "a.json", std::slice::from_ref(&chunk));
+        store
+            .upsert_embedding(&chunk.metadata.id, chunk.metadata.hash)
+            .unwrap();
+
+        store
+            .replace_fts_for_file(
+                &file_id,
+                &[(chunk.metadata.id.clone(), None, "текст чанка".to_string())],
+            )
+            .unwrap();
+
+        // The whole reason this is a separate write path from
+        // `replace_chunks_for_file`: that one cascades embeddings away.
+        assert_eq!(store.load_all_embedding_hashes().unwrap().len(), 1);
+        assert_eq!(store.load_all_chunks().unwrap().len(), 1);
+        // Exactly one row, not the original plus a duplicate.
+        assert_eq!(store.search_bm25("\"чанка\"*", 10).unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fts_version_gates_the_backfill_until_it_is_marked_current() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+
+        assert!(store.fts_needs_backfill().unwrap());
+        store.mark_fts_current().unwrap();
+        assert!(!store.fts_needs_backfill().unwrap());
+
+        // A wipe clears `meta` too, so a rebuilt store asks again.
+        store.wipe().unwrap();
+        assert!(store.fts_needs_backfill().unwrap());
 
         std::fs::remove_dir_all(&dir).ok();
     }
