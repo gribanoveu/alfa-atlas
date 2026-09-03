@@ -177,6 +177,14 @@ export type LlmChatStreamDelta = TurnScoped & {
   delta: string;
 };
 
+// Mirrors `domain::llm::ChatRetrying` — a transient network-retry status for
+// the current turn, emitted before the ten-second backoff.
+export type LlmChatRetrying = TurnScoped & {
+  attempt: number;
+  maxAttempts: number;
+  delaySeconds: number;
+};
+
 // Mirrors `commands::llm::ChatStreamReasoningPayload` — same shape/lifecycle
 // as `LlmChatStreamDelta`, but for a reasoning-capable model's "thinking"
 // text, fired ahead of any `LlmChatStreamDelta` for that round. Never fires
@@ -511,6 +519,15 @@ export function listenLlmChatDelta(
   onDelta: (payload: LlmChatStreamDelta) => void,
 ): Promise<UnlistenFn> {
   return listen<LlmChatStreamDelta>("llm:chat-stream-delta", (event) => onDelta(event.payload));
+}
+
+/** Fires before a safe retry after the provider reports `Peer disconnected`.
+ * The retry is performed inside the backend's current model round, before
+ * any tool execution, so the same turn and history are preserved. */
+export function listenLlmRetrying(
+  onRetrying: (payload: LlmChatRetrying) => void,
+): Promise<UnlistenFn> {
+  return listen<LlmChatRetrying>("llm:chat-retrying", (event) => onRetrying(event.payload));
 }
 
 /** Fires once per non-empty `reasoning_content` chunk while a

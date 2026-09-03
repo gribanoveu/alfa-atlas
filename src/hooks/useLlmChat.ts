@@ -87,6 +87,7 @@ import {
   listenLlmChatDelta,
   listenLlmChatReasoningDelta,
   listenLlmContextUsage,
+  listenLlmRetrying,
   listenLlmRoundStarted,
   listenLlmRoundText,
   listenLlmSteeringApplied,
@@ -173,6 +174,11 @@ export function useLlmChat(
 ) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [sending, setSending] = useState(false);
+  const [retryState, setRetryState] = useState<{
+    attempt: number;
+    maxAttempts: number;
+    delaySeconds: number;
+  } | null>(null);
   const [pendingSteers, setPendingSteers] = useState<string[]>([]);
 
   /** The provider's own token count for the most recent finished LLM round
@@ -541,6 +547,7 @@ export function useLlmChat(
     void cancelLlmChat();
     activeApprovalRef.current?.denyAll();
     setPendingSteers([]);
+    setRetryState(null);
   }, []);
 
   const steerChat = useCallback(async (text: string) => {
@@ -568,9 +575,30 @@ export function useLlmChat(
     let cancelled = false;
     void listenLlmChatDelta(({ turnId, delta }) => {
       if (turnId !== activeTurnIdRef.current) return;
+      setRetryState(null);
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) => appendDeltaToBlocks(blocks, delta), "text"),
       );
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // A provider retry happens inside the backend's current model round, before
+  // any tool execution. Keep this transient state separate from the persisted
+  // assistant message so the retry notice disappears automatically when the
+  // next attempt starts producing data.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listenLlmRetrying(({ turnId, attempt, maxAttempts, delaySeconds }) => {
+      if (turnId !== activeTurnIdRef.current) return;
+      setRetryState({ attempt, maxAttempts, delaySeconds });
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -635,6 +663,7 @@ export function useLlmChat(
     let cancelled = false;
     void listenLlmRoundText(({ turnId, text }) => {
       if (turnId !== activeTurnIdRef.current) return;
+      setRetryState(null);
       setMessages((prev) => updateLastAssistantBlocks(prev, (blocks) => correctRoundText(blocks, text)));
     }).then((fn) => {
       if (cancelled) fn();
@@ -655,6 +684,7 @@ export function useLlmChat(
     let cancelled = false;
     void listenLlmChatReasoningDelta(({ turnId, delta }) => {
       if (turnId !== activeTurnIdRef.current) return;
+      setRetryState(null);
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) => appendReasoningDeltaToBlocks(blocks, delta), "reasoning"),
       );
@@ -677,6 +707,7 @@ export function useLlmChat(
     let cancelled = false;
     void listenLlmToolCallDelta(({ turnId, id, name, arguments: argumentsJson }) => {
       if (turnId !== activeTurnIdRef.current) return;
+      setRetryState(null);
       if (name) toolNamesRef.current.set(id, name);
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) => applyToolCallDelta(blocks, { id, name, argumentsJson })),
@@ -700,6 +731,7 @@ export function useLlmChat(
     let cancelled = false;
     void listenLlmToolCall(({ turnId, id, name, arguments: argumentsJson }) => {
       if (turnId !== activeTurnIdRef.current) return;
+      setRetryState(null);
       const autoApproved = autoApprovedIdsRef.current.has(id);
       toolNamesRef.current.set(id, name);
       setMessages((prev) =>
@@ -957,8 +989,9 @@ export function useLlmChat(
   /** Applies a `"done"`/`"cancelled"` outcome's authoritative final text to
    * the in-flight assistant message — shared by `runTurn` and the
    * cold-hydrate effect below, same as `runPendingLoop`. */
-  const settleOutcome = useCallback(
+    const settleOutcome = useCallback(
     (outcome: ChatStreamOutcome, assistantId: string, turnStartedAt: number) => {
+      setRetryState(null);
       // `runPendingLoop` never returns while `status === "pendingApproval"`
       // (that's its own while-loop's exit condition) — this guard is just
       // to satisfy the type checker across the function-call boundary, not
@@ -1003,6 +1036,7 @@ export function useLlmChat(
   /** Marks the in-flight assistant message as failed — shared by `runTurn`
    * and the cold-hydrate effect below, same as `runPendingLoop`. */
   const settleError = useCallback((e: unknown, assistantId: string, turnStartedAt: number) => {
+    setRetryState(null);
     const message = toMessage(e);
     // Best-effort: drives the "Сжать историю и повторить" retry action
     // (`retryWithCompaction`) rather than just showing raw error text — see
@@ -1071,6 +1105,7 @@ export function useLlmChat(
       const turnId = crypto.randomUUID();
       activeTurnIdRef.current = turnId;
       setSending(true);
+      setRetryState(null);
       setLiveUsage(null);
       const turnStartedAt = Date.now();
       turnModeRef.current = accessMode;
@@ -1407,6 +1442,7 @@ export function useLlmChat(
     const turnId = crypto.randomUUID();
     activeTurnIdRef.current = turnId;
     setSending(true);
+    setRetryState(null);
     setLiveUsage(null);
     // Only covers time since this app restart, not the turn's true original
     // start (lost across the restart) — see `durationMs`'s doc comment on
@@ -1515,6 +1551,7 @@ export function useLlmChat(
   return {
     messages,
     sending,
+    retryState,
     pendingSteers,
     sendMessage,
     steerChat,

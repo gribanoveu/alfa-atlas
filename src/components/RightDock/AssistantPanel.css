@@ -1334,6 +1334,38 @@
 
 
 /* =========================================================
+   Provider retry status — transient notice while a dropped connection
+   is being retried by the backend
+   ========================================================= */
+
+.assistant-chat-retry-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-0));
+  color: var(--text-2);
+  font-size: var(--font-ui-sm);
+  line-height: 1.4;
+}
+
+.assistant-chat-retry-icon {
+  flex: none;
+  animation: assistant-chat-retry-spin 0.9s linear infinite;
+  color: var(--accent);
+}
+
+@keyframes assistant-chat-retry-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
+/* =========================================================
    Failed message — a card under the turn's own text/blocks (which stay
    their normal color, see AssistantConversation's `failed` handling)
    rather than recoloring the whole message red.

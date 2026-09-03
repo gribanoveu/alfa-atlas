@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type WheelEvent } from "react";
-import { AlertCircle, ArrowDown, ChevronUp, Clock3, FileText, FolderGit2, Send, Sparkles, Square, X } from "lucide-react";
+import { AlertCircle, ArrowDown, ChevronUp, Clock3, FileText, FolderGit2, RefreshCw, Send, Sparkles, Square, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useLlmChat } from "../../hooks/useLlmChat";
 import { formatElapsedDuration } from "../../hooks/useElapsedSeconds";
@@ -493,6 +493,7 @@ export function AssistantConversation({
   const {
     messages,
     sending,
+    retryState,
     pendingSteers,
     sendMessage,
     steerChat,
@@ -1213,6 +1214,14 @@ export function AssistantConversation({
                       )}
                       {m.streaming && !lastBlockShowsLiveProgress(m.blocks) ? (
                         <AssistantThinkingIndicator />
+                      ) : null}
+                      {m.streaming && retryState ? (
+                        <div className="assistant-chat-retry-status" role="status" aria-live="polite">
+                          <RefreshCw className="assistant-chat-retry-icon" size={13} strokeWidth={1.75} aria-hidden />
+                          <span>
+                            Связь прервана. Повторная попытка {retryState.attempt}/{retryState.maxAttempts} через {retryState.delaySeconds} с.
+                          </span>
+                        </div>
                       ) : null}
                       {stopped ? <div className="assistant-chat-cancelled-note">Остановлено пользователем</div> : null}
                       {failed ? (

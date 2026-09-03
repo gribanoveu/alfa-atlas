@@ -14,18 +14,20 @@
 //! Provider resolution and the resident provider cache live next door in
 //! `services::llm_session`.
 
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::domain::ai_access::{call_requires_confirmation, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
 use crate::domain::conversation_mode::{mode_tools, ConversationMode};
 use crate::domain::llm::{
     sanitize_tool_call_arguments, ChatDone, ChatEvent, ChatEventSink, ChatRequest,
-    ChatRoundText,
+    ChatRetrying, ChatRoundText,
     ChatStreamDelta,
     ChatStreamResult,
     ChatStreamOutcome, ChatStreamReasoning, LlmMessage, LlmProvider, LlmRole, LlmSettings,
@@ -49,6 +51,18 @@ use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot, SteeringQueu
 /// weight must never make the loop unstoppable), but `MAX_TOOL_BUDGET` is
 /// the more sensitive limit in practice — see its doc comment.
 const MAX_TOOL_ITERATIONS: usize = 60;
+
+/// A dropped provider connection is safe to retry only when the provider has
+/// not emitted any response data yet. That guarantees no tool call or partial
+/// answer has reached the loop, so retrying the same model request cannot
+/// duplicate side effects or append duplicate text. The five retries are in
+/// addition to the initial request.
+const MAX_PEER_DISCONNECTED_RETRIES: u32 = 5;
+const PEER_DISCONNECTED_RETRY_DELAY_SECONDS: u64 = 10;
+
+fn is_peer_disconnected_error(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("peer disconnected")
+}
 
 /// Converts the frontend's docs-root-relative `EditorTab.path` (sent
 /// verbatim, same convention `embedding_set_priority_files` already
@@ -583,17 +597,21 @@ fn run_tool_loop(
                     model: ctx.model.to_string(),
                 };
                 llm_debug_log::log_request(ctx.settings.debug_logging, ctx.provider_id, round, &request);
+                let attempt_emitted_data = Cell::new(false);
                 let on_delta = |delta: &str| {
+                    attempt_emitted_data.set(true);
                     (ctx.events)(ChatEvent::Delta(ChatStreamDelta {
                         delta: delta.to_string(),
                     }));
                 };
                 let on_reasoning = |delta: &str| {
+                    attempt_emitted_data.set(true);
                     (ctx.events)(ChatEvent::Reasoning(ChatStreamReasoning {
                         delta: delta.to_string(),
                     }));
                 };
                 let on_tool_call_delta = |id: &str, name: &str, arguments: &str| {
+                    attempt_emitted_data.set(true);
                     (ctx.events)(ChatEvent::ToolCallDelta(ToolCallEvent {
                         id: id.to_string(),
                         name: name.to_string(),
@@ -601,11 +619,43 @@ fn run_tool_loop(
                     }));
                 };
                 let cancelled = || ctx.cancel_flag.load(Ordering::SeqCst);
-                let raw_result = ctx
-                    .provider
-                    .chat_stream(request, &on_delta, &on_reasoning, &on_tool_call_delta, &cancelled);
-                llm_debug_log::log_response(ctx.settings.debug_logging, ctx.provider_id, round, &raw_result);
-                let result = raw_result.map_err(|e| e.to_string())?;
+                let mut retry_attempt = 0;
+                let result = loop {
+                    let raw_result = ctx
+                        .provider
+                        .chat_stream(request.clone(), &on_delta, &on_reasoning, &on_tool_call_delta, &cancelled);
+                    llm_debug_log::log_response(ctx.settings.debug_logging, ctx.provider_id, round, &raw_result);
+                    match raw_result {
+                        Ok(result) => break result,
+                        Err(error)
+                            if retry_attempt < MAX_PEER_DISCONNECTED_RETRIES
+                                && !attempt_emitted_data.get()
+                                && is_peer_disconnected_error(&error.to_string()) =>
+                        {
+                            retry_attempt += 1;
+                            (ctx.events)(ChatEvent::Retrying(ChatRetrying {
+                                attempt: retry_attempt,
+                                max_attempts: MAX_PEER_DISCONNECTED_RETRIES,
+                                delay_seconds: PEER_DISCONNECTED_RETRY_DELAY_SECONDS,
+                            }));
+                            for _ in 0..PEER_DISCONNECTED_RETRY_DELAY_SECONDS {
+                                if cancelled() {
+                                    return Ok(ChatStreamOutcome::Cancelled(ChatDone {
+                                        result: ChatStreamResult {
+                                            text: String::new(),
+                                            reasoning: String::new(),
+                                            usage: None,
+                                            tool_calls: vec![],
+                                        },
+                                        todos,
+                                    }));
+                                }
+                                std::thread::sleep(Duration::from_secs(1));
+                            }
+                        }
+                        Err(error) => return Err(error.to_string()),
+                    }
+                };
                 if let Some(usage) = result.usage {
                     llm_rate_limit::record(ctx.provider_id, usage.prompt_tokens, usage.completion_tokens);
                     (ctx.events)(ChatEvent::RateLimitChanged);
@@ -1342,6 +1392,13 @@ mod tests {
     #[test]
     fn round_cost_of_no_calls_is_zero() {
         assert_eq!(round_cost(&[]), 0);
+    }
+
+    #[test]
+    fn peer_disconnect_is_the_only_error_selected_for_network_retry() {
+        assert!(is_peer_disconnected_error("http error: Peer disconnected"));
+        assert!(is_peer_disconnected_error("HTTP ERROR: peer disconnected"));
+        assert!(!is_peer_disconnected_error("http error: timeout"));
     }
 
     #[test]

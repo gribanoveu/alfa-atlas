@@ -17,6 +17,9 @@ use crate::domain::llm::{ChatEvent, ChatEventSink};
 /// `chat_event_sink`.
 pub const CHAT_STREAM_DELTA_EVENT: &str = "llm:chat-stream-delta";
 
+/// Fires before a safe retry of a provider request after `Peer disconnected`.
+pub const CHAT_RETRYING_EVENT: &str = "llm:chat-retrying";
+
 /// Same shape/lifecycle as `CHAT_STREAM_DELTA_EVENT`, but for a
 /// reasoning-capable model's "thinking" text (`reasoning_content` on the
 /// wire, see `infra::llm_providers::openai_compatible::StreamDelta`) —
@@ -125,6 +128,7 @@ pub fn chat_event_sink(app: &AppHandle, turn_id: String) -> ChatEventSink {
     Arc::new(move |event: ChatEvent| {
         let _ = match event {
             ChatEvent::Delta(p) => app.emit(CHAT_STREAM_DELTA_EVENT, with_turn(&turn_id, p)),
+            ChatEvent::Retrying(p) => app.emit(CHAT_RETRYING_EVENT, with_turn(&turn_id, p)),
             ChatEvent::Reasoning(p) => app.emit(CHAT_STREAM_REASONING_EVENT, with_turn(&turn_id, p)),
             ChatEvent::RoundStarted => {
                 app.emit(ROUND_STARTED_EVENT, TurnOnly { turn_id: turn_id.clone() })

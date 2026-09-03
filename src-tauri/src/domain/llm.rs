@@ -633,6 +633,17 @@ pub struct ChatStreamDelta {
     pub delta: String,
 }
 
+/// A transient notice that the current provider request is being retried
+/// after a dropped connection. It is emitted before the delay, so the UI can
+/// explain why the assistant is temporarily waiting instead of looking stuck.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRetrying {
+    pub attempt: u32,
+    pub max_attempts: u32,
+    pub delay_seconds: u64,
+}
+
 /// Payload of `ChatEvent::RoundText` — one round's finished prose, in full.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -739,6 +750,7 @@ pub struct ToolResultEvent {
 #[derive(Debug, Clone)]
 pub enum ChatEvent {
     Delta(ChatStreamDelta),
+    Retrying(ChatRetrying),
     Reasoning(ChatStreamReasoning),
     /// A fresh model round is about to start inside this turn.
     ///
