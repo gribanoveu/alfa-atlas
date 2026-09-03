@@ -59,29 +59,24 @@ const ACCESS_MODE_OPTIONS: { value: AiAccessMode; label: string; Icon: LucideIco
  * empty state shows under «Привет! Я Атлас», which changes with the mode —
  * its opening also says what kind of input the mode expects (a task, a
  * question), so the two halves of the placeholder don't repeat each other. */
-const CHAT_MODE_OPTIONS: {
-  value: ConversationMode;
-  label: string;
-  title: string;
-  greeting: string;
-}[] = [
+const CHAT_MODE_OPTIONS = [
   {
     value: "agent",
     label: "Агент",
-    title: "смогу исследовать репозиторий и вносить изменения в документацию",
-    greeting: "Расскажите, что нужно сделать — изучу проект и внесу правки в документацию, фокусируюсь больше на действии, чем на мыслительном процессе.",
+    title: "изучу и сделаю — исследование плюс правки",
+    greeting: "Расскажите, что нужно сделать — изучу проект и внесу правки в документацию.",
   },
   {
     value: "plan",
     label: "План",
-    title: "смогу составлять план будущих работ без правок в документацию",
-    greeting: "Опишите задачу — изучу проект и составлю план работ, не меняя файлы. Больше думаю перед ответом и исследую проект подробнее.",
+    title: "внимательно изучу и предложу план — без правок",
+    greeting: "Опишите задачу — внимательно изучу все варианты и нюансы, прежде чем предложить план. Файлы не меняю.",
   },
   {
     value: "question",
     label: "Вопрос",
-    title: "смогу отвечать на точечные вопросы не внося изменений в документацию",
-    greeting: "Спросите о проекте — разберусь и отвечу, не меняя файлы.",
+    title: "быстро отвечу на точечный вопрос — без анализа",
+    greeting: "Спросите о проекте — быстро разберусь и отвечу, не меняя файлы.",
   },
 ];
 
