@@ -73,7 +73,7 @@ pub fn extractor_prompt(turn: &TurnTranscript) -> String {
          - Usually return an empty facts array. That is the correct default.\n\
          - At most 2 facts. Never more.\n\
          - Extract only durable facts that will still matter in a later session: an explicit user preference, a team decision the user confirmed, or a lasting repository convention.\n\
-         - Do NOT store Atlas/assistant capabilities (built-in skills such as method-spec or openapi-specs-layout, getAsciidocTemplates, integrity checks, harness tools).\n\
+         - Do NOT store Atlas/assistant capabilities (built-in skills such as method-spec, openapi-specs-layout, jira-task-description, or jira-task-decomposition, getAsciidocTemplates, integrity checks, harness tools).\n\
          - Do NOT store this turn's findings: broken/malformed tables, empty sections, typos, missing files, audit scores (56/97, 12 of 13 pass), checklists of issues.\n\
          - Do NOT store implementation details the assistant discovered by reading code and that can be re-read (@ValidMonths, a specific Gateway method).\n\
          - Architecture belongs in memory only if the USER confirmed it, not merely because the assistant found it in source.\n\

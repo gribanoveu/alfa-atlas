@@ -378,6 +378,21 @@ mod tests {
                     "jira-task-description not found by {query:?}"
                 );
             }
+            for query in [
+                "декомпозируй задачу",
+                "разбей задачу",
+                "нарежь задачи",
+                "декомпозиция фичи",
+                "декомпозировать задачу",
+                "минимальный срез",
+                "вертикальный срез",
+                "vertical slicing",
+            ] {
+                assert!(
+                    search_hits(query).contains(&"jira-task-decomposition".to_string()),
+                    "jira-task-decomposition not found by {query:?}"
+                );
+            }
         });
     }
 
@@ -388,6 +403,7 @@ mod tests {
             assert!(catalog.iter().any(|s| s.name == "method-spec"));
             assert!(catalog.iter().any(|s| s.name == "openapi-specs-layout"));
             assert!(catalog.iter().any(|s| s.name == "jira-task-description"));
+            assert!(catalog.iter().any(|s| s.name == "jira-task-decomposition"));
         });
     }
 
