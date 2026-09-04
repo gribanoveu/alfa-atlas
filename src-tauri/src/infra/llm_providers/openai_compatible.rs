@@ -18,6 +18,8 @@ use crate::domain::llm::{
     LlmRole, LlmToolCall, REQUEST_HEADER_VALUE_UUID,
 };
 use crate::infra::http_agent;
+use secrecy::{ExposeSecret, SecretString};
+use zeroize::Zeroizing;
 
 /// Thin wrapper around `http_agent::build_agent` that maps TLS failures
 /// into `LlmError::Tls` — kept as a local helper so call sites and tests
@@ -480,7 +482,7 @@ impl ToolCallAccumulator {
 pub struct OpenAiCompatibleProvider {
     agent: ureq::Agent,
     base_url: String,
-    api_key: String,
+    api_key: SecretString,
     request_headers: HashMap<String, String>,
     /// `None` means send no `temperature` — see `ChatCompletionRequest`.
     temperature: Option<f32>,
@@ -491,10 +493,19 @@ pub struct OpenAiCompatibleProvider {
 }
 
 impl OpenAiCompatibleProvider {
+    /// The `Authorization` value, in a buffer that wipes itself on drop.
+    ///
+    /// `ureq` wants the header as `&str`, so the key unavoidably exists in
+    /// a formatted copy for the duration of the call; `Zeroizing` is what
+    /// keeps that copy from being freed and left behind in the heap.
+    fn authorization_header(&self) -> Zeroizing<String> {
+        Zeroizing::new(format!("Bearer {}", self.api_key.expose_secret()))
+    }
+
     pub fn new(
         agent: ureq::Agent,
         base_url: String,
-        api_key: String,
+        api_key: SecretString,
         request_headers: HashMap<String, String>,
         temperature: Option<f32>,
         max_tokens: Option<u32>,
@@ -608,7 +619,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let mut request = self
             .agent
             .post(self.chat_url())
-            .header("Authorization", &format!("Bearer {}", self.api_key));
+            .header("Authorization", self.authorization_header().as_str());
         for (name, value) in &self.request_headers {
             request = request.header(name.as_str(), resolve_header_value(value));
         }
@@ -684,7 +695,7 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let mut request = self
             .agent
             .get(self.models_url())
-            .header("Authorization", &format!("Bearer {}", self.api_key));
+            .header("Authorization", self.authorization_header().as_str());
         for (name, value) in &self.request_headers {
             request = request.header(name.as_str(), resolve_header_value(value));
         }
@@ -722,7 +733,7 @@ mod tests {
         OpenAiCompatibleProvider::new(
             build_agent(None).unwrap(),
             base_url.to_string(),
-            "key".to_string(),
+            SecretString::from("key"),
             HashMap::new(),
             temperature,
             None,
@@ -740,7 +751,7 @@ mod tests {
         OpenAiCompatibleProvider::new(
             build_agent(None).unwrap(),
             "https://api.example.com/v1".to_string(),
-            "key".to_string(),
+            SecretString::from("key"),
             HashMap::new(),
             None,
             max_tokens,

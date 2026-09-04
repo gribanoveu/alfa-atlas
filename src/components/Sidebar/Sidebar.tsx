@@ -3,10 +3,10 @@ import { HideIcon } from "../icons/HideIcon";
 import type { TreeNode } from "../../lib/project";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import { FileTree, type FileTreeDeleteTarget } from "./FileTree";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { useCallback } from "react";
 import { ChevronsDownUp, ChevronsUpDown, FileJson2, RefreshCw } from "lucide-react";
 import "./Sidebar.css";
+import { revealPath } from "../../lib/reveal";
 
 type SidebarProps = {
   open: boolean;
@@ -83,7 +83,7 @@ export function Sidebar({
         relativePath === "." || relativePath === ""
           ? root
           : root + "/" + relativePath;
-      openPath(absolutePath).catch(() => {});
+      revealPath(absolutePath).catch(() => {});
     },
     [docsRoot],
   );

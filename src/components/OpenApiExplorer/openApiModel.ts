@@ -208,9 +208,30 @@ export function namedExamples(media: JsonValue): NamedExample[] {
 
 export type ExternalDocs = { url: string; description: string | null };
 
+/** Whether `raw` is a web link we are willing to hand to the OS.
+ *
+ * `externalDocs.url` is written by whoever authored the spec — which may be
+ * a file someone sent the user — and ends up in the system "open" handler.
+ * OpenAPI requires a URL there, so anything that is not `http`/`https` is
+ * malformed input, and treating it as such here keeps a hostile spec from
+ * turning that button into "open an arbitrary local path or scheme". The
+ * opener plugin's own scope enforces the same restriction; this layer
+ * exists so the button is never rendered in the first place, rather than
+ * rendered and silently rejected on click.
+ */
+function isWebUrl(raw: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  return parsed.protocol === "http:" || parsed.protocol === "https:";
+}
+
 export function externalDocsOf(node: JsonValue): ExternalDocs | null {
   const docs = asObject(node.externalDocs);
-  if (!docs || typeof docs.url !== "string" || docs.url === "") return null;
+  if (!docs || typeof docs.url !== "string" || !isWebUrl(docs.url)) return null;
   return {
     url: docs.url,
     description: typeof docs.description === "string" ? docs.description : null,

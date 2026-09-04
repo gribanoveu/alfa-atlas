@@ -7,6 +7,7 @@
 //! an SSH key is and when to make one.
 
 use aes_gcm::aead::OsRng;
+use secrecy::SecretString;
 use ssh_key::private::{Ed25519Keypair, KeypairData};
 use ssh_key::{LineEnding, PrivateKey};
 use std::fs;
@@ -153,7 +154,7 @@ pub fn import_key_file(source_path: &Path) -> Result<AppKeyStatus, String> {
 }
 
 /// Decrypts and returns the app-managed private key as an OpenSSH string.
-pub fn get_decrypted_private_key() -> Option<String> {
+pub fn get_decrypted_private_key() -> Option<SecretString> {
     let config = match load_key_config() {
         Ok(c) => c,
         Err(e) => {
@@ -172,8 +173,8 @@ pub fn get_decrypted_private_key() -> Option<String> {
         }
     };
     let plain = secret_store::read_secret_file(&enc_path, PURPOSE)?;
-    match String::from_utf8(plain) {
-        Ok(s) => Some(s),
+    match std::str::from_utf8(&plain) {
+        Ok(s) => Some(SecretString::from(s)),
         Err(e) => {
             eprintln!("[alfa-atlas] get_decrypted_private_key: decrypted data is not valid UTF-8: {e}");
             None
@@ -190,6 +191,7 @@ pub fn generate_and_store_key_app() -> Result<AppKeyStatus, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
 
     #[test]
     fn generate_keypair_produces_valid_openssh() {
@@ -213,7 +215,7 @@ mod tests {
             assert!(status.public_key.starts_with("ssh-ed25519 "));
 
             let private = get_decrypted_private_key().expect("key should be readable");
-            PrivateKey::from_openssh(&private).unwrap();
+            PrivateKey::from_openssh(private.expose_secret()).unwrap();
 
             // A second call must not replace a healthy key.
             let again = ensure_app_key_exists().unwrap();

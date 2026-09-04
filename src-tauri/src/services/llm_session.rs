@@ -18,6 +18,8 @@ use crate::domain::llm::{
 };
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
 use crate::services::{llm_config, llm_rate_limit};
+use secrecy::SecretString;
+use crate::infra::secret_store;
 
 /// Caches the constructed `LlmProvider` across calls, same reasoning as
 /// `services::embedding_state::EmbeddingProviderSlot`: keyed by
@@ -25,7 +27,8 @@ use crate::services::{llm_config, llm_rate_limit};
 /// rotation or a settings-layer override change (a different `base_url`/
 /// `trusted_cert_pem`) invalidates the cache instead of silently reusing a
 /// stale `ureq::Agent`.
-pub type LlmProviderSlot = Mutex<Option<(ResolvedLlmProvider, Option<String>, Arc<dyn LlmProvider>)>>;
+pub type LlmProviderSlot =
+    Mutex<Option<(ResolvedLlmProvider, Option<[u8; 32]>, Arc<dyn LlmProvider>)>>;
 
 /// One flag for "the user asked the in-flight turn to stop" — this app has
 /// exactly one chat panel / one in-flight conversation at a time (same
@@ -66,14 +69,17 @@ pub fn remove_steering_note(queue: &SteeringQueue, id: &str) -> Result<bool, Str
 pub fn ensure_provider(
     slot: &LlmProviderSlot,
     resolved: &ResolvedLlmProvider,
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
 ) -> Result<Arc<dyn LlmProvider>, String> {
     let mut guard = slot.lock().map_err(|_| "llm provider lock poisoned".to_string())?;
-    let stale = !matches!(guard.as_ref(), Some((r, k, _)) if r == resolved && *k == api_key);
+    // Compared by digest so the slot does not hold a second live copy of
+    // the API key — see `secret_store::fingerprint`.
+    let fingerprint = secret_store::fingerprint(api_key.as_ref());
+    let stale = !matches!(guard.as_ref(), Some((r, k, _)) if r == resolved && *k == fingerprint);
     if stale {
         let provider =
-            llm_providers::provider_for(resolved, api_key.clone()).map_err(|e| e.to_string())?;
-        *guard = Some((resolved.clone(), api_key, Arc::from(provider)));
+            llm_providers::provider_for(resolved, api_key).map_err(|e| e.to_string())?;
+        *guard = Some((resolved.clone(), fingerprint, Arc::from(provider)));
     }
     Ok(guard.as_ref().expect("just set above if missing").2.clone())
 }

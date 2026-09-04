@@ -1,6 +1,7 @@
 pub mod openai_compatible;
 
 use crate::domain::llm::{LlmError, LlmProvider, ResolvedLlmProvider};
+use secrecy::SecretString;
 
 /// Resolves a merged `ResolvedLlmProvider` (see `services::llm_config::
 /// resolve_provider`) plus an API key already read from
@@ -12,7 +13,7 @@ use crate::domain::llm::{LlmError, LlmProvider, ResolvedLlmProvider};
 /// doc for why there's no kind enum to branch on yet.
 pub fn provider_for(
     resolved: &ResolvedLlmProvider,
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
 ) -> Result<Box<dyn LlmProvider>, LlmError> {
     let api_key = api_key.ok_or_else(|| {
         LlmError::Message(format!("no API key configured for provider \"{}\"", resolved.id))
@@ -64,7 +65,7 @@ mod tests {
 
     #[test]
     fn provider_for_with_a_malformed_trust_cert_errors_clearly() {
-        let Err(err) = provider_for(&resolved(Some("not a pem")), Some("key".to_string())) else {
+        let Err(err) = provider_for(&resolved(Some("not a pem")), Some(SecretString::from("key"))) else {
             panic!("expected an error");
         };
         assert!(matches!(err, LlmError::Tls(_)));
@@ -72,6 +73,6 @@ mod tests {
 
     #[test]
     fn provider_for_succeeds_with_no_trust_cert_override() {
-        assert!(provider_for(&resolved(None), Some("key".to_string())).is_ok());
+        assert!(provider_for(&resolved(None), Some(SecretString::from("key"))).is_ok());
     }
 }

@@ -6,6 +6,7 @@ use crate::domain::git::{
     GitStashRestoreOutcome, GitStatusSnapshot, GitSyncStatus, PullMode,
 };
 use crate::infra::{git_credentials_store, git_repo, key_management};
+use secrecy::ExposeSecret;
 
 pub fn status(repo_root: &str) -> Result<GitStatusSnapshot, GitError> {
     git_repo::status(Path::new(repo_root))
@@ -47,7 +48,7 @@ pub fn incoming_commits(repo_root: &str, limit: usize) -> Result<Vec<GitCommitSu
     git_repo::incoming_commits(
         Path::new(repo_root),
         &credentials,
-        app_private_key.as_deref(),
+        app_private_key.as_ref().map(|k| k.expose_secret()),
         limit,
     )
 }
@@ -84,7 +85,7 @@ pub fn pull(
         Path::new(repo_root),
         mode,
         &credentials,
-        app_private_key.as_deref(),
+        app_private_key.as_ref().map(|k| k.expose_secret()),
         on_progress,
     )
 }
@@ -109,14 +110,14 @@ pub fn sync_status(repo_root: &str) -> Result<GitSyncStatus, GitError> {
     let credentials = git_credentials_store::load()
         .map_err(|e| GitError::Message(e.to_string()))?;
     let app_private_key = key_management::get_decrypted_private_key();
-    git_repo::sync_status(Path::new(repo_root), &credentials, app_private_key.as_deref())
+    git_repo::sync_status(Path::new(repo_root), &credentials, app_private_key.as_ref().map(|k| k.expose_secret()))
 }
 
 pub fn reset_to_remote(repo_root: &str) -> Result<(), GitError> {
     let credentials = git_credentials_store::load()
         .map_err(|e| GitError::Message(e.to_string()))?;
     let app_private_key = key_management::get_decrypted_private_key();
-    git_repo::reset_to_remote(Path::new(repo_root), &credentials, app_private_key.as_deref())
+    git_repo::reset_to_remote(Path::new(repo_root), &credentials, app_private_key.as_ref().map(|k| k.expose_secret()))
 }
 
 pub fn push(
@@ -129,7 +130,7 @@ pub fn push(
     git_repo::push(
         Path::new(repo_root),
         &credentials,
-        app_private_key.as_deref(),
+        app_private_key.as_ref().map(|k| k.expose_secret()),
         on_progress,
     )
 }
@@ -210,7 +211,7 @@ pub fn fetch_branches(
     git_repo::fetch_branches(
         Path::new(repo_root),
         &credentials,
-        app_private_key.as_deref(),
+        app_private_key.as_ref().map(|k| k.expose_secret()),
         on_progress,
     )
 }

@@ -15,6 +15,8 @@
 use gouqi::{Credentials, Error as GouqiError, Jira};
 use reqwest::blocking::Client;
 
+use secrecy::{ExposeSecret, SecretString};
+
 use crate::domain::jira::{
     JiraError, JiraIssueType, JiraProject, JiraSettings, JiraUser, JiraWebLink, NewIssue,
 };
@@ -43,7 +45,11 @@ fn http_client(trusted_cert_pem: Option<&str>) -> Result<Client, JiraError> {
 
 /// Builds a client for `settings` (already merged with the build preset by
 /// `services::jira_config::resolve`), authenticating with `token`.
-pub fn connect(settings: &JiraSettings, token: String) -> Result<Jira, JiraError> {
+///
+/// The token is exposed only at the `gouqi::Credentials` boundary — that
+/// crate takes a plain `String` and keeps it for the client's lifetime, so
+/// this is as far as the `SecretString` wrapper can travel.
+pub fn connect(settings: &JiraSettings, token: SecretString) -> Result<Jira, JiraError> {
     let base_url = settings.base_url.trim();
     if base_url.is_empty() {
         return Err(JiraError::NotConfigured);
@@ -54,8 +60,12 @@ pub fn connect(settings: &JiraSettings, token: String) -> Result<Jira, JiraError
         .map(str::trim)
         .filter(|pem| !pem.is_empty());
 
-    Jira::from_client(base_url.to_string(), Credentials::Bearer(token), http_client(cert)?)
-        .map_err(|e| JiraError::InvalidBaseUrl(e.to_string()))
+    Jira::from_client(
+        base_url.to_string(),
+        Credentials::Bearer(token.expose_secret().to_string()),
+        http_client(cert)?,
+    )
+    .map_err(|e| JiraError::InvalidBaseUrl(e.to_string()))
 }
 
 /// `GET /rest/api/latest/myself` — the account behind the token.
@@ -240,7 +250,7 @@ mod tests {
     fn an_empty_base_url_is_reported_as_unconfigured() {
         let mut settings = settings();
         settings.base_url = "   ".to_string();
-        let err = connect(&settings, "t".to_string()).unwrap_err();
+        let err = connect(&settings, SecretString::from("t")).unwrap_err();
         assert!(matches!(err, JiraError::NotConfigured));
     }
 
@@ -248,7 +258,7 @@ mod tests {
     fn a_malformed_trusted_certificate_is_a_tls_error() {
         let mut settings = settings();
         settings.trusted_cert_pem = Some("not a pem".to_string());
-        let err = connect(&settings, "t".to_string()).unwrap_err();
+        let err = connect(&settings, SecretString::from("t")).unwrap_err();
         assert!(matches!(err, JiraError::Tls(_)), "unexpected error: {err}");
     }
 
@@ -256,12 +266,12 @@ mod tests {
     fn a_blank_certificate_field_is_not_treated_as_an_override() {
         let mut settings = settings();
         settings.trusted_cert_pem = Some("   \n".to_string());
-        assert!(connect(&settings, "t".to_string()).is_ok());
+        assert!(connect(&settings, SecretString::from("t")).is_ok());
     }
 
     #[test]
     fn connects_with_a_valid_base_url() {
-        assert!(connect(&settings(), "t".to_string()).is_ok());
+        assert!(connect(&settings(), SecretString::from("t")).is_ok());
     }
 
     /// Диагностика живого инстанса — не часть обычного прогона, запускается
@@ -300,7 +310,7 @@ mod tests {
                 trusted_cert_pem: pem.map(str::to_string),
                 ..Default::default()
             };
-            let outcome = connect(&settings, token.clone()).and_then(|jira| current_user(&jira));
+            let outcome = connect(&settings, SecretString::from(token.as_str())).and_then(|jira| current_user(&jira));
             match outcome {
                 Ok(user) => println!(
                     "  -> OK: {} <{}>, учётная запись {}, активна: {}",

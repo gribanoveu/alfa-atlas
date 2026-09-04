@@ -1,6 +1,6 @@
-import { openPath } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toMessage } from "../lib/errors";
+import { revealPath } from "../lib/reveal";
 import {
   DEFAULT_GENERAL_PREFS,
   getGeneralPrefs,
@@ -109,7 +109,7 @@ export function useGeneralPrefsEditor(
   const openUserSettingsDir = useCallback(async () => {
     if (!paths?.userSettingsDir) return;
     try {
-      await openPath(paths.userSettingsDir);
+      await revealPath(paths.userSettingsDir);
     } catch (e) {
       if (mounted.current) setError(toMessage(e));
     }

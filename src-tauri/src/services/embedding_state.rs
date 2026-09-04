@@ -29,6 +29,7 @@ use crate::services::index_watcher::IndexWatcher;
 use crate::services::project_open;
 use crate::services::repo_index::RepositoryIndex;
 use crate::services::workspace_index::WorkspaceIndex;
+use secrecy::SecretString;
 
 pub(crate) const META_EMBEDDING_DIMENSIONS: &str = "embedding_dimensions";
 
@@ -56,27 +57,30 @@ pub type IndexStoreSlot = Mutex<Option<(PathBuf, Arc<IndexStore>, bool)>>;
 /// provider, `provider_for` constructs `LocalEmbeddingProvider::try_new()`,
 /// a full ONNX model load (~570MB); doing that on every sync (and, once
 /// wired up, every incremental file-watcher tick) would be unacceptable.
-/// Keyed by `(config, api_key)` rather than `config` alone — a `Remote`
-/// provider closes over the API key at construction time, so a key
+/// Keyed by `(config, api-key fingerprint)` rather than `config` alone — a
+/// `Remote` provider closes over the API key at construction time, so a key
 /// rotation with an otherwise-unchanged config must still invalidate the
-/// cache. Global (not per-project): the provider choice itself is global
-/// (`AppSettings.embedding`), not per-repo.
+/// cache. A digest rather than the key itself, so this long-lived slot does
+/// not keep a second plaintext copy of the credential alive for the process
+/// — see `secret_store::fingerprint`. Global (not per-project): the
+/// provider choice itself is global (`AppSettings.embedding`), not per-repo.
 pub type EmbeddingProviderSlot =
-    Mutex<Option<(ResolvedEmbeddingConfig, Option<String>, Arc<dyn EmbeddingProvider>)>>;
+    Mutex<Option<(ResolvedEmbeddingConfig, Option<[u8; 32]>, Arc<dyn EmbeddingProvider>)>>;
 
 pub(crate) fn ensure_provider(
     slot: &EmbeddingProviderSlot,
     config: &ResolvedEmbeddingConfig,
-    api_key: Option<String>,
+    api_key: Option<SecretString>,
 ) -> Result<Arc<dyn EmbeddingProvider>, String> {
     let mut guard = slot
         .lock()
         .map_err(|_| "embedding provider lock poisoned".to_string())?;
-    let stale = !matches!(guard.as_ref(), Some((c, k, _)) if c == config && *k == api_key);
+    let fingerprint = crate::infra::secret_store::fingerprint(api_key.as_ref());
+    let stale = !matches!(guard.as_ref(), Some((c, k, _)) if c == config && *k == fingerprint);
     if stale {
-        let provider = embedding_providers::provider_for(config, api_key.clone())
-            .map_err(|e| e.to_string())?;
-        *guard = Some((config.clone(), api_key, Arc::from(provider)));
+        let provider =
+            embedding_providers::provider_for(config, api_key).map_err(|e| e.to_string())?;
+        *guard = Some((config.clone(), fingerprint, Arc::from(provider)));
     }
     Ok(guard.as_ref().expect("just set above if missing").2.clone())
 }
@@ -564,10 +568,11 @@ pub(crate) mod tests {
     /// happens to be `Local` or an incomplete `Remote` config).
     pub(crate) fn mock_provider_slot() -> EmbeddingProviderSlot {
         let config = embedding_config::resolve_embedding_config().unwrap_or_default();
-        let api_key = embedding_credentials_store::get_api_key();
+        let fingerprint =
+            crate::infra::secret_store::fingerprint(embedding_credentials_store::get_api_key().as_ref());
         let dimensions = embedding_providers::expected_dimensions(&config);
         let provider: Arc<dyn EmbeddingProvider> = Arc::new(MockProvider { dimensions });
-        EmbeddingProviderSlot::new(Some((config, api_key, provider)))
+        EmbeddingProviderSlot::new(Some((config, fingerprint, provider)))
     }
 
     /// A temp repo containing `files`, opened as *the* current project, plus
@@ -644,8 +649,8 @@ pub(crate) mod tests {
         let slot = EmbeddingProviderSlot::new(None);
         let config = remote_config("m1");
 
-        let first = ensure_provider(&slot, &config, Some("key1".to_string())).unwrap();
-        let second = ensure_provider(&slot, &config, Some("key1".to_string())).unwrap();
+        let first = ensure_provider(&slot, &config, Some(SecretString::from("key1"))).unwrap();
+        let second = ensure_provider(&slot, &config, Some(SecretString::from("key1"))).unwrap();
 
         assert!(Arc::ptr_eq(&first, &second));
     }
@@ -654,8 +659,8 @@ pub(crate) mod tests {
     fn ensure_provider_rebuilds_on_config_change() {
         let slot = EmbeddingProviderSlot::new(None);
 
-        let first = ensure_provider(&slot, &remote_config("m1"), Some("key1".to_string())).unwrap();
-        let second = ensure_provider(&slot, &remote_config("m2"), Some("key1".to_string())).unwrap();
+        let first = ensure_provider(&slot, &remote_config("m1"), Some(SecretString::from("key1"))).unwrap();
+        let second = ensure_provider(&slot, &remote_config("m2"), Some(SecretString::from("key1"))).unwrap();
 
         assert!(!Arc::ptr_eq(&first, &second));
     }
@@ -665,8 +670,8 @@ pub(crate) mod tests {
         let slot = EmbeddingProviderSlot::new(None);
         let config = remote_config("m1");
 
-        let first = ensure_provider(&slot, &config, Some("key1".to_string())).unwrap();
-        let second = ensure_provider(&slot, &config, Some("key2".to_string())).unwrap();
+        let first = ensure_provider(&slot, &config, Some(SecretString::from("key1"))).unwrap();
+        let second = ensure_provider(&slot, &config, Some(SecretString::from("key2"))).unwrap();
 
         assert!(!Arc::ptr_eq(&first, &second));
     }

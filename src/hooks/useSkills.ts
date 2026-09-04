@@ -1,7 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toMessage } from "../lib/errors";
+import { revealPath } from "../lib/reveal";
 import {
   skillsImport,
   skillsList,
@@ -99,7 +99,7 @@ export function useSkills(): UseSkills {
    * so it neither sets `busy` nor reloads. */
   const openFolder = useCallback(async () => {
     try {
-      await openPath(await skillsUserDir());
+      await revealPath(await skillsUserDir());
     } catch (e) {
       if (mounted.current) setError(toMessage(e));
     }

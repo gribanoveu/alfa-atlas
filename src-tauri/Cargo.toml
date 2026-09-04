@@ -40,6 +40,11 @@ tauri-plugin-mcp-bridge = "0.12.0"
 # честно ушёл в файловый fallback (он определяет mock в рантайме).
 keyring = "3"
 aes-gcm = "0.10"
+# Секреты в памяти: `Zeroizing`/`SecretString` затирают буфер при Drop, а
+# `SecretString` вдобавок не выводится через `Debug`/`Serialize` — чтобы ключ
+# нельзя было случайно уронить в лог, сообщение об ошибке или крэш-дамп.
+zeroize = "1"
+secrecy = "0.10"
 rand = "0.8"
 ssh-key = { version = "0.6", features = ["ed25519"] }
 spellbook = "0.4.2"

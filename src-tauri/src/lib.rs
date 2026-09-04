@@ -354,6 +354,7 @@ pub fn run() {
             commands::prefs::get_general_prefs,
             commands::prefs::set_general_prefs,
             commands::prefs::get_settings_paths,
+            commands::reveal::reveal_path,
             commands::metrics::metrics_status,
             commands::metrics::metrics_set_enabled,
             commands::metrics::metrics_track,

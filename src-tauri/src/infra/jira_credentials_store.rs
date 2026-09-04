@@ -15,6 +15,8 @@
 use std::fs;
 use std::path::PathBuf;
 
+use secrecy::SecretString;
+
 use crate::infra::secret_store::{self, SecretPurpose};
 use crate::infra::settings_store;
 
@@ -33,9 +35,13 @@ pub fn save_token(token: &str) -> Result<(), String> {
 /// Missing file / stale master key / corrupt data all degrade to `None`
 /// rather than an error — the caller's next step is the same either way
 /// (`JiraError::MissingToken`, "add a token in Settings").
-pub fn get_token() -> Option<String> {
+///
+/// Returns a `SecretString` so the token cannot reach a log, an error
+/// message or a crash dump by way of `Debug`/`Serialize`, and is wiped when
+/// the caller drops it.
+pub fn get_token() -> Option<SecretString> {
     let plain = secret_store::read_secret_file(&credentials_path().ok()?, PURPOSE)?;
-    String::from_utf8(plain).ok()
+    std::str::from_utf8(&plain).ok().map(SecretString::from)
 }
 
 pub fn has_token() -> bool {

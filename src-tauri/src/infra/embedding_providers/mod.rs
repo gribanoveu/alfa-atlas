@@ -1,6 +1,8 @@
 pub mod local;
 pub mod remote;
 
+use secrecy::SecretString;
+
 use crate::domain::embeddings::{
     EmbeddingError, EmbeddingProvider, EmbeddingProviderKind, ResolvedEmbeddingConfig,
     DEFAULT_REMOTE_DIMENSIONS,
@@ -13,7 +15,7 @@ use crate::domain::embeddings::{
 /// `LocalEmbeddingProvider`/`RemoteEmbeddingProvider` directly.
 pub fn provider_for(
     config: &ResolvedEmbeddingConfig,
-    remote_api_key: Option<String>,
+    remote_api_key: Option<SecretString>,
 ) -> Result<Box<dyn EmbeddingProvider>, EmbeddingError> {
     match config.kind {
         EmbeddingProviderKind::Local => Ok(Box::new(local::LocalEmbeddingProvider::try_new()?)),
@@ -95,7 +97,7 @@ mod tests {
             api_key_bundled: false,
             api_key_user_set: false,
         };
-        let Err(err) = provider_for(&config, Some("key".to_string())) else {
+        let Err(err) = provider_for(&config, Some(SecretString::from("key"))) else {
             panic!("expected an error");
         };
         assert!(matches!(err, EmbeddingError::Message(_)));

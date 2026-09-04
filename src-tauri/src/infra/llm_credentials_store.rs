@@ -16,7 +16,11 @@
 //! covered in `key_management.rs`'s test module).
 
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
+
+use secrecy::SecretString;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::infra::secret_store::{self, SecretPurpose};
 use crate::infra::settings_store;
@@ -29,22 +33,56 @@ fn credentials_path() -> Result<PathBuf, String> {
     Ok(dir.join(CREDENTIALS_FILE))
 }
 
+/// The whole decrypted provider→key map, with every key wiped when the map
+/// is dropped.
+///
+/// `serde_json` has to deserialize into plain `String`s, so the API keys do
+/// land in ordinary heap allocations on the way in; what this wrapper
+/// guarantees is that they do not simply get freed and left behind. Nothing
+/// hands this type out — callers get a single `SecretString` — so the
+/// window is one function call wide.
+#[derive(Default)]
+struct Credentials(HashMap<String, String>);
+
+impl Deref for Credentials {
+    type Target = HashMap<String, String>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Credentials {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for Credentials {
+    fn drop(&mut self) {
+        for key in self.0.values_mut() {
+            key.zeroize();
+        }
+    }
+}
+
 /// Missing file / stale key / corrupt data all degrade to an empty map —
 /// mirrors `get_api_key`'s `Option`-returning, never-panics contract on the
 /// embedding-credentials sibling.
-fn load_all() -> HashMap<String, String> {
+fn load_all() -> Credentials {
     let Ok(path) = credentials_path() else {
-        return HashMap::new();
+        return Credentials::default();
     };
     let Some(plain) = secret_store::read_secret_file(&path, PURPOSE) else {
-        return HashMap::new();
+        return Credentials::default();
     };
-    serde_json::from_slice(&plain).unwrap_or_default()
+    Credentials(serde_json::from_slice(&plain).unwrap_or_default())
 }
 
-fn save_all(map: &HashMap<String, String>) -> Result<(), String> {
-    let plain =
-        serde_json::to_vec(map).map_err(|e| format!("failed to serialize LLM credentials: {e}"))?;
+fn save_all(map: &Credentials) -> Result<(), String> {
+    let plain = Zeroizing::new(
+        serde_json::to_vec(&map.0)
+            .map_err(|e| format!("failed to serialize LLM credentials: {e}"))?,
+    );
     secret_store::write_secret_file(&credentials_path()?, PURPOSE, &plain)
 }
 
@@ -63,8 +101,9 @@ pub fn save_api_key(provider_id: &str, api_key: &str) -> Result<(), String> {
 /// Decrypts and returns `provider_id`'s stored API key, if any — for
 /// internal use when actually constructing an `LlmProvider`, never
 /// returned from an IPC command.
-pub fn get_api_key(provider_id: &str) -> Option<String> {
-    load_all().remove(provider_id)
+pub fn get_api_key(provider_id: &str) -> Option<SecretString> {
+    let map = load_all();
+    map.get(provider_id).map(|key| SecretString::from(key.as_str()))
 }
 
 pub fn has_api_key(provider_id: &str) -> bool {
@@ -73,7 +112,10 @@ pub fn has_api_key(provider_id: &str) -> bool {
 
 pub fn delete_api_key(provider_id: &str) -> Result<(), String> {
     let mut map = load_all();
-    if map.remove(provider_id).is_some() {
+    // `remove` moves the key out of the map, past `Credentials`' own
+    // wipe-on-drop — so wipe this one by hand.
+    if let Some(mut removed) = map.remove(provider_id) {
+        removed.zeroize();
         save_all(&map)?;
     }
     Ok(())

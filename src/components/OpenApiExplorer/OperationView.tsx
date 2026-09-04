@@ -1,5 +1,5 @@
 import { ExternalLink, FileCode2, Lock } from "lucide-react";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { OpenApiExplorerState } from "../../hooks/useOpenApiExplorerState";
 import { operationKey } from "../../hooks/useOpenApiExplorerState";
 import {
@@ -119,7 +119,7 @@ export function OperationView({
         <button
           type="button"
           className="oas-op-external"
-          onClick={() => void openPath(externalDocs.url).catch(() => {})}
+          onClick={() => void openUrl(externalDocs.url).catch(() => {})}
           title={externalDocs.url}
         >
           <ExternalLink size={12} aria-hidden />

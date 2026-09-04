@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider, REQUEST_HEADER_VALUE_UUID};
 use crate::infra::http_agent;
+use secrecy::{ExposeSecret, SecretString};
 
 #[derive(Debug, Serialize)]
 struct EmbeddingsRequest<'a> {
@@ -41,7 +42,7 @@ pub struct RemoteEmbeddingProvider {
     agent: ureq::Agent,
     base_url: String,
     model: String,
-    api_key: String,
+    api_key: SecretString,
     dimensions: usize,
     request_headers: HashMap<String, String>,
 }
@@ -50,7 +51,7 @@ impl RemoteEmbeddingProvider {
     pub fn new(
         base_url: String,
         model: String,
-        api_key: String,
+        api_key: SecretString,
         dimensions: usize,
         trusted_cert_pem: Option<&str>,
         request_headers: HashMap<String, String>,
@@ -92,7 +93,10 @@ impl EmbeddingProvider for RemoteEmbeddingProvider {
         let mut request = self
             .agent
             .post(self.embeddings_url())
-            .header("Authorization", &format!("Bearer {}", self.api_key))
+            .header(
+                "Authorization",
+                &format!("Bearer {}", self.api_key.expose_secret()),
+            )
             .header("accept", "application/json");
 
         for (name, value) in &self.request_headers {
@@ -139,7 +143,7 @@ mod tests {
         RemoteEmbeddingProvider::new(
             base_url.to_string(),
             "text-embedding-3-small".to_string(),
-            "key".to_string(),
+            SecretString::from("key"),
             1536,
             None,
             HashMap::new(),
@@ -182,7 +186,7 @@ mod tests {
         let result = RemoteEmbeddingProvider::new(
             "https://api.example.com/v1".to_string(),
             "m".to_string(),
-            "key".to_string(),
+            SecretString::from("key"),
             1536,
             Some("not a pem"),
             HashMap::new(),

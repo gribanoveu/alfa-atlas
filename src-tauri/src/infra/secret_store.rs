@@ -32,9 +32,23 @@ use aes_gcm::{
     AeadCore, Aes256Gcm, KeyInit, Nonce,
 };
 use rand::RngCore;
+use secrecy::{ExposeSecret, SecretString};
+use zeroize::Zeroizing;
 
 use crate::infra::master_key::{self, KEY_LEN};
 use crate::infra::settings_store;
+
+/// A stable, non-reversible fingerprint of a secret, for use as a cache key.
+///
+/// The provider caches need to answer "is this the same key as last time?"
+/// on every request. Keeping the key itself to compare against means a
+/// second plaintext copy of a credential living for the whole process; and
+/// `SecretString` deliberately implements no `PartialEq`, precisely to
+/// discourage that. A digest answers the same question exactly while
+/// retaining nothing usable.
+pub(crate) fn fingerprint(secret: Option<&SecretString>) -> Option<[u8; 32]> {
+    secret.map(|s| *blake3::hash(s.expose_secret().as_bytes()).as_bytes())
+}
 
 const MAGIC: &[u8; 4] = b"ATLS";
 const VERSION: u8 = 1;
@@ -109,7 +123,7 @@ pub(crate) fn open(
     purpose: SecretPurpose,
     blob: &[u8],
     key: &[u8; KEY_LEN],
-) -> Result<Vec<u8>, String> {
+) -> Result<Zeroizing<Vec<u8>>, String> {
     if blob.starts_with(MAGIC) {
         if let Ok(plain) = open_v1(purpose, blob, key) {
             return Ok(plain);
@@ -122,7 +136,7 @@ fn open_v1(
     purpose: SecretPurpose,
     blob: &[u8],
     key: &[u8; KEY_LEN],
-) -> Result<Vec<u8>, String> {
+) -> Result<Zeroizing<Vec<u8>>, String> {
     if blob.len() < 6 {
         return Err("sealed blob is truncated".to_string());
     }
@@ -149,11 +163,12 @@ fn open_v1(
                 aad: header,
             },
         )
+        .map(Zeroizing::new)
         .map_err(|e| format!("decryption failed: {e}"))
 }
 
 /// Pre-v1 layout: `nonce || ciphertext`, no AAD, no purpose binding.
-fn open_legacy(blob: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>, String> {
+fn open_legacy(blob: &[u8], key: &[u8; KEY_LEN]) -> Result<Zeroizing<Vec<u8>>, String> {
     if blob.len() < NONCE_LEN {
         return Err("encrypted data too short".to_string());
     }
@@ -161,6 +176,7 @@ fn open_legacy(blob: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| format!("invalid key length: {e}"))?;
     cipher
         .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
+        .map(Zeroizing::new)
         .map_err(|e| format!("decryption failed: {e}"))
 }
 
@@ -228,7 +244,7 @@ pub(crate) fn write_secret_file(
 /// A legacy blob is re-sealed in v1 as a side effect; that rewrite is
 /// best-effort and a failure never denies the caller the secret it asked
 /// for.
-pub(crate) fn read_secret_file(path: &Path, purpose: SecretPurpose) -> Option<Vec<u8>> {
+pub(crate) fn read_secret_file(path: &Path, purpose: SecretPurpose) -> Option<Zeroizing<Vec<u8>>> {
     let blob = fs::read(path).ok()?;
     let key = master_key::get_or_create().ok()?;
     let plain = open(purpose, &blob, &key).ok()?;
@@ -249,12 +265,51 @@ mod tests {
 
     const KEY: [u8; KEY_LEN] = [42u8; KEY_LEN];
 
+    /// The reason secrets are wrapped at all: a `SecretString` that ends up
+    /// inside a formatted log line, a panic message or a `Debug`-derived
+    /// error must not carry the credential with it.
+    #[test]
+    fn a_wrapped_secret_does_not_print_itself() {
+        let secret = SecretString::from("sk-live-abcdef123456");
+        assert!(!format!("{secret:?}").contains("sk-live"));
+
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct ProviderConfig {
+            base_url: String,
+            api_key: SecretString,
+        }
+        let config = ProviderConfig {
+            base_url: "https://api.example.com".to_string(),
+            api_key: SecretString::from("sk-live-abcdef123456"),
+        };
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("sk-live"), "leaked through Debug: {rendered}");
+        assert!(rendered.contains("api.example.com"), "should still be useful");
+    }
+
+    #[test]
+    fn fingerprint_identifies_without_revealing() {
+        let key = SecretString::from("sk-live-abcdef123456");
+        let same = SecretString::from("sk-live-abcdef123456");
+        let other = SecretString::from("sk-live-something-else");
+
+        assert_eq!(fingerprint(Some(&key)), fingerprint(Some(&same)));
+        assert_ne!(fingerprint(Some(&key)), fingerprint(Some(&other)));
+        assert_eq!(fingerprint(None), None);
+        assert_ne!(fingerprint(Some(&key)), None);
+
+        // Nothing of the key survives in what the cache retains.
+        let digest = fingerprint(Some(&key)).unwrap();
+        assert!(!digest.windows(3).any(|w| w == b"sk-"));
+    }
+
     #[test]
     fn seal_open_round_trip() {
         let blob = seal(SecretPurpose::JiraToken, b"a-jira-token", &KEY).unwrap();
         assert!(blob.starts_with(MAGIC));
         let plain = open(SecretPurpose::JiraToken, &blob, &KEY).unwrap();
-        assert_eq!(plain, b"a-jira-token");
+        assert_eq!(plain.as_slice(), b"a-jira-token");
     }
 
     #[test]
@@ -306,7 +361,7 @@ mod tests {
         // Any purpose opens a legacy blob — it carries none, and refusing
         // would lock users out of tokens stored by an older build.
         let plain = open(SecretPurpose::JiraToken, &legacy, &KEY).unwrap();
-        assert_eq!(plain, b"old-token");
+        assert_eq!(plain.as_slice(), b"old-token");
     }
 
     #[test]
@@ -321,7 +376,7 @@ mod tests {
         legacy.extend_from_slice(&cipher.encrypt(nonce, b"old-token".as_ref()).unwrap());
 
         assert_eq!(
-            open(SecretPurpose::JiraToken, &legacy, &KEY).unwrap(),
+            open(SecretPurpose::JiraToken, &legacy, &KEY).unwrap().as_slice(),
             b"old-token"
         );
     }
@@ -364,18 +419,18 @@ mod tests {
     fn reading_a_legacy_file_upgrades_it_in_place() {
         settings_store::test_support::with_temp_home(|| {
             master_key::forget_for_tests();
-            let key = master_key::get_or_create().unwrap();
+            let key = *master_key::get_or_create().unwrap();
             let dir = settings_store::ensure_settings_dir().unwrap();
             let path = dir.join("legacy.enc");
             fs::write(&path, seal_legacy(b"old-token", &key)).unwrap();
 
             let plain = read_secret_file(&path, SecretPurpose::JiraToken).unwrap();
-            assert_eq!(plain, b"old-token");
+            assert_eq!(plain.as_slice(), b"old-token");
 
             let on_disk = fs::read(&path).unwrap();
             assert!(on_disk.starts_with(MAGIC), "should have been re-sealed");
             assert_eq!(
-                read_secret_file(&path, SecretPurpose::JiraToken).unwrap(),
+                read_secret_file(&path, SecretPurpose::JiraToken).unwrap().as_slice(),
                 b"old-token"
             );
 
@@ -387,10 +442,7 @@ mod tests {
     fn missing_file_reads_as_none() {
         settings_store::test_support::with_temp_home(|| {
             let dir = settings_store::ensure_settings_dir().unwrap();
-            assert_eq!(
-                read_secret_file(&dir.join("nope.enc"), SecretPurpose::JiraToken),
-                None
-            );
+            assert!(read_secret_file(&dir.join("nope.enc"), SecretPurpose::JiraToken).is_none());
         });
     }
 }

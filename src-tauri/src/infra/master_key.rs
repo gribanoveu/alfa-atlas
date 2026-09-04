@@ -32,6 +32,7 @@ use std::path::PathBuf;
 
 use aes_gcm::aead::OsRng;
 use rand::RngCore;
+use zeroize::Zeroizing;
 
 use crate::infra::settings_store;
 
@@ -52,6 +53,9 @@ const KEYRING_PROBE_USER: &str = "backend-probe";
 const LEGACY_KEY_FILE: &str = ".enc_key";
 
 pub const KEY_LEN: usize = 32;
+
+/// The master key, wiped from memory when the last holder drops it.
+pub(crate) type MasterKey = Zeroizing<[u8; KEY_LEN]>;
 
 fn legacy_key_path() -> Result<PathBuf, String> {
     let dir = settings_store::settings_dir().map_err(|e| e.to_string())?;
@@ -111,12 +115,12 @@ fn probe_keychain() -> bool {
     usable
 }
 
-fn keychain_get() -> Option<[u8; KEY_LEN]> {
+fn keychain_get() -> Option<MasterKey> {
     if !keychain_is_usable() {
         return None;
     }
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).ok()?;
-    let secret = match entry.get_secret() {
+    let secret = match entry.get_secret().map(Zeroizing::new) {
         Ok(s) => s,
         Err(keyring::Error::NoEntry) => return None,
         Err(e) => {
@@ -125,7 +129,7 @@ fn keychain_get() -> Option<[u8; KEY_LEN]> {
         }
     };
     match <[u8; KEY_LEN]>::try_from(secret.as_slice()) {
-        Ok(key) => Some(key),
+        Ok(key) => Some(Zeroizing::new(key)),
         Err(_) => {
             eprintln!(
                 "[alfa-atlas] keychain holds a {}-byte key, expected {KEY_LEN} — ignoring it",
@@ -149,14 +153,14 @@ fn keychain_put(key: &[u8; KEY_LEN]) -> bool {
         eprintln!("[alfa-atlas] keychain write failed: {e}");
         return false;
     }
-    keychain_get().is_some_and(|stored| &stored == key)
+    keychain_get().is_some_and(|stored| stored.as_slice() == key.as_slice())
 }
 
-fn legacy_file_read() -> Option<[u8; KEY_LEN]> {
+fn legacy_file_read() -> Option<MasterKey> {
     let path = legacy_key_path().ok()?;
-    let bytes = fs::read(&path).ok()?;
+    let bytes = Zeroizing::new(fs::read(&path).ok()?);
     match <[u8; KEY_LEN]>::try_from(bytes.as_slice()) {
-        Ok(key) => Some(key),
+        Ok(key) => Some(Zeroizing::new(key)),
         Err(_) => {
             eprintln!(
                 "[alfa-atlas] {} holds {} bytes, expected {KEY_LEN} — ignoring it",
@@ -209,7 +213,7 @@ fn shred_legacy_file() {
 /// keychain and shredding it when that succeeds), then a freshly generated
 /// key. The key bytes are preserved verbatim across migration — every blob
 /// sealed by an older build stays decryptable.
-pub(crate) fn get_or_create() -> Result<[u8; KEY_LEN], String> {
+pub(crate) fn get_or_create() -> Result<MasterKey, String> {
     if let Some(key) = keychain_get() {
         // Authoritative store answered; retire any file left by an older
         // build (or by a run where the keychain was temporarily missing).
@@ -225,8 +229,8 @@ pub(crate) fn get_or_create() -> Result<[u8; KEY_LEN], String> {
         return Ok(key);
     }
 
-    let mut key = [0u8; KEY_LEN];
-    OsRng.fill_bytes(&mut key);
+    let mut key = Zeroizing::new([0u8; KEY_LEN]);
+    OsRng.fill_bytes(key.as_mut_slice());
 
     if keychain_put(&key) {
         eprintln!("[alfa-atlas] created a new master key in the OS keychain");
@@ -274,7 +278,7 @@ mod tests {
             let path = legacy_key_path().unwrap();
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, b"too short").unwrap();
-            assert_eq!(legacy_file_read(), None);
+            assert!(legacy_file_read().is_none());
         });
     }
 
@@ -283,7 +287,7 @@ mod tests {
         settings_store::test_support::with_temp_home(|| {
             let key = [3u8; KEY_LEN];
             legacy_file_write(&key).unwrap();
-            assert_eq!(legacy_file_read(), Some(key));
+            assert_eq!(legacy_file_read().as_deref(), Some(&key));
 
             #[cfg(unix)]
             {
@@ -297,7 +301,7 @@ mod tests {
 
             shred_legacy_file();
             assert!(!legacy_key_path().unwrap().exists());
-            assert_eq!(legacy_file_read(), None);
+            assert!(legacy_file_read().is_none());
         });
     }
 
@@ -313,7 +317,7 @@ mod tests {
             let existing = [0xABu8; KEY_LEN];
             legacy_file_write(&existing).unwrap();
 
-            assert_eq!(get_or_create().unwrap(), existing);
+            assert_eq!(*get_or_create().unwrap(), existing);
 
             if keychain_is_usable() {
                 assert!(
@@ -321,7 +325,7 @@ mod tests {
                     "file fallback should be shredded once the keychain holds the key"
                 );
                 // Still the same key on the next start, now from the keychain.
-                assert_eq!(get_or_create().unwrap(), existing);
+                assert_eq!(*get_or_create().unwrap(), existing);
             } else {
                 assert!(legacy_key_path().unwrap().exists());
             }
@@ -347,13 +351,13 @@ mod tests {
             let existing = [0xCDu8; KEY_LEN];
             legacy_file_write(&existing).unwrap();
 
-            assert_eq!(get_or_create().unwrap(), existing, "key bytes must survive");
+            assert_eq!(*get_or_create().unwrap(), existing, "key bytes must survive");
             assert!(
                 !legacy_key_path().unwrap().exists(),
                 "plaintext key file must be shredded after migration"
             );
-            assert_eq!(keychain_get(), Some(existing), "keychain must hold the key");
-            assert_eq!(get_or_create().unwrap(), existing, "and serve it next start");
+            assert_eq!(keychain_get().as_deref(), Some(&existing), "keychain must hold the key");
+            assert_eq!(*get_or_create().unwrap(), existing, "and serve it next start");
 
             forget_for_tests();
         });
@@ -363,9 +367,9 @@ mod tests {
     fn a_fresh_install_gets_a_stable_key() {
         settings_store::test_support::with_temp_home(|| {
             forget_for_tests();
-            let first = get_or_create().unwrap();
+            let first = *get_or_create().unwrap();
             assert_ne!(first, [0u8; KEY_LEN]);
-            assert_eq!(get_or_create().unwrap(), first);
+            assert_eq!(*get_or_create().unwrap(), first);
             forget_for_tests();
         });
     }

@@ -17,6 +17,8 @@
 use std::fs;
 use std::path::PathBuf;
 
+use secrecy::SecretString;
+
 use crate::infra::bundled_secrets;
 use crate::infra::secret_store::{self, SecretPurpose};
 use crate::infra::settings_store;
@@ -29,9 +31,9 @@ fn credentials_path() -> Result<PathBuf, String> {
     Ok(dir.join(CREDENTIALS_FILE))
 }
 
-fn load_user_key() -> Option<String> {
+fn load_user_key() -> Option<SecretString> {
     let plain = secret_store::read_secret_file(&credentials_path().ok()?, PURPOSE)?;
-    String::from_utf8(plain).ok()
+    std::str::from_utf8(&plain).ok().map(SecretString::from)
 }
 
 /// Whether *this user* stored a key, as opposed to `has_api_key`, which is
@@ -46,8 +48,14 @@ pub fn save_api_key(api_key: &str) -> Result<(), String> {
 }
 
 /// User override first, then compile-time bundled key from `build.rs`.
-pub fn get_api_key() -> Option<String> {
-    load_user_key().or_else(|| bundled_secrets::EMBEDDING_API_KEY.map(str::to_owned))
+///
+/// The bundled key is a `&'static str` baked into the binary, so wrapping
+/// it changes nothing about *its* exposure — it is extractable from the
+/// executable either way (see `docs/build-secrets.md`). The wrapper is
+/// still applied so callers have one type to handle and cannot print
+/// whichever of the two they got.
+pub fn get_api_key() -> Option<SecretString> {
+    load_user_key().or_else(|| bundled_secrets::EMBEDDING_API_KEY.map(SecretString::from))
 }
 
 pub fn has_api_key() -> bool {

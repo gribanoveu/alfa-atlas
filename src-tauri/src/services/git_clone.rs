@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::domain::git::{GitError, GitProgressEvent};
 use crate::domain::paths;
 use crate::infra::{git_credentials_store, git_repo, key_management};
+use secrecy::ExposeSecret;
 
 /// Clone `url` into `destination`.
 ///
@@ -59,7 +60,7 @@ pub fn clone_repository<'a>(
         &canonical_dest,
         &repo_config,
         &credentials,
-        app_private_key.as_deref(),
+        app_private_key.as_ref().map(|k| k.expose_secret()),
         on_progress,
         is_cancelled,
     );

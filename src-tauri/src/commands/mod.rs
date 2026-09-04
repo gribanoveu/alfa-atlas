@@ -19,6 +19,7 @@ pub mod plans;
 pub mod prefs;
 pub mod project;
 pub mod repo_index;
+pub mod reveal;
 pub mod search;
 pub mod skills;
 pub mod spellcheck;
