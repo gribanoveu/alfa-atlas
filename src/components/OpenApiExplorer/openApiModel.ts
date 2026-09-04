@@ -143,6 +143,7 @@ export type ParamEntry = {
   required: boolean;
   description: string | null;
   schema: unknown;
+  example?: unknown;
 };
 
 /** Parses `operation.parameters` into a flat list, skipping unresolved refs
@@ -159,6 +160,7 @@ export function parseParameters(operation: JsonValue): ParamEntry[] {
       required: Boolean(p.required),
       description: typeof p.description === "string" ? p.description : null,
       schema: p.schema,
+      example: p.example,
     }));
 }
 

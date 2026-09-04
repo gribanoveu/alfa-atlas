@@ -106,7 +106,21 @@ export function skeletonForSchema(schema: unknown): unknown {
 
 /** Simple scalar string form for a parameter's default value (path/query/header
  * inputs are plain text fields, not JSON editors). */
-export function scalarSkeleton(schema: unknown): string {
+export function scalarSkeleton(schema: unknown, fallbackExample?: unknown): string {
+  if (fallbackExample !== undefined && fallbackExample !== null) {
+    if (typeof fallbackExample === "string") return fallbackExample;
+    if (typeof fallbackExample === "number" || typeof fallbackExample === "boolean") {
+      return String(fallbackExample);
+    }
+    if (
+      Array.isArray(fallbackExample) &&
+      fallbackExample.length > 0 &&
+      typeof fallbackExample[0] === "string"
+    ) {
+      return fallbackExample[0];
+    }
+    return JSON.stringify(fallbackExample);
+  }
   const value = skeletonForSchema(schema);
   if (value === null || value === undefined) return "";
   if (typeof value === "string") return value;

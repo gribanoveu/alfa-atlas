@@ -55,6 +55,7 @@ pub struct OpenApiBundleResult {
     pub document: serde_json::Value,
     pub diagnostics: Vec<RefDiagnostic>,
     pub sources: Vec<SourceRef>,
+    pub common_params_enabled: bool,
 }
 
 #[derive(Debug, Error)]

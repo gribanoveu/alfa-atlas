@@ -66,7 +66,7 @@ export function TryItOut({
   const initialForm = useMemo<TryItOutForm>(() => {
     const paramValues: TryItOutForm["paramValues"] = {};
     for (const p of parameters) {
-      paramValues[paramKey(p.in, p.name)] = scalarSkeleton(p.schema);
+      paramValues[paramKey(p.in, p.name)] = scalarSkeleton(p.schema, p.example);
     }
     return {
       paramValues,

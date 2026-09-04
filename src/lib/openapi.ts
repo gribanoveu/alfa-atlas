@@ -29,6 +29,7 @@ export type OpenApiBundleResult = {
   document: Record<string, unknown>;
   diagnostics: RefDiagnostic[];
   sources: SourceRef[];
+  commonParamsEnabled?: boolean;
 };
 
 export function detectSpecsRepo(repoRoot: string): Promise<SpecsRepoInfo | null> {

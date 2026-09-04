@@ -148,7 +148,17 @@ export function OpenApiExplorer({
     <div className="oas-explorer">
       <div className="oas-nav">
         <div className="oas-nav-header">
-          <div className="oas-nav-title">{title}</div>
+          <div className="oas-nav-title">
+            {title}
+            {bundle?.commonParamsEnabled ? (
+              <span
+                className="oas-common-params-badge"
+                title="commonParams = true в settings.gradle (добавлены корпоративные заголовки A-*)"
+              >
+                commonParams
+              </span>
+            ) : null}
+          </div>
           {version ? <div className="oas-nav-version">v{version}</div> : null}
         </div>
         <input
