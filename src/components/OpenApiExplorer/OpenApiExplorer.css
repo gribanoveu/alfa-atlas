@@ -595,6 +595,9 @@
   z-index: 20;
   max-height: 220px;
   overflow-y: auto;
+  /* See `.clone-select-menu`: left implicit, `overflow-x` computes to
+     `auto` and a too-wide option turns into a horizontal scrollbar. */
+  overflow-x: hidden;
   padding: 4px 0;
   background: var(--bg-1);
   border: 1px solid var(--border);
@@ -605,6 +608,8 @@
 .oas-select-option {
   display: block;
   width: 100%;
+  /* A `<button>` does not clip its own content — see `.clone-select-option`. */
+  min-width: 0;
   padding: 6px 10px;
   text-align: left;
   color: var(--text-0);

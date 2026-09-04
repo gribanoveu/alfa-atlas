@@ -1,93 +1,12 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   DATE_RANGE_OPTIONS,
   useToolCallLog,
   type DateRangeOption,
 } from "../../hooks/useToolCallLog";
+import { LogSelect, type LogSelectOption } from "./LogSelect";
 import "../Welcome/CloneRepoModal.css";
 import "./ToolCallLogModal.css";
-
-type LogSelectOption = { value: string; label: string };
-
-// Same `.clone-select*` trigger/menu markup every other dropdown in the app
-// hand-rolls per usage (`SettingsDialog`'s language picker,
-// `AssistantConversation`'s model picker, …) — factored into one local
-// component here only because this file needs three instances of it side by
-// side, not as a new sitewide abstraction.
-function LogSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: LogSelectOption[];
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  const current = options.find((o) => o.value === value) ?? options[0];
-
-  return (
-    <div className="clone-select tool-log-select" ref={ref}>
-      <button
-        type="button"
-        className={`clone-select-trigger${open ? " is-open" : ""}`}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={label}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span className="clone-select-value">
-          <span className="clone-select-path">{current?.label}</span>
-        </span>
-        <span className="clone-select-chevron" aria-hidden>
-          ▾
-        </span>
-      </button>
-      {open ? (
-        <div className="clone-select-menu" role="listbox">
-          {options.map((option) => {
-            const active = option.value === value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="option"
-                aria-selected={active}
-                className={`clone-select-option${active ? " is-active" : ""}`}
-                onClick={() => {
-                  onChange(option.value);
-                  setOpen(false);
-                }}
-              >
-                <span className="clone-select-path">{option.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
 type ToolCallLogModalProps = {
   projectRoot: string | null;

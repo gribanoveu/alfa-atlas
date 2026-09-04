@@ -8,6 +8,13 @@
 //! deliberately outside the repo: an artifact is working material for
 //! writing documentation, not documentation itself.
 //!
+//! Storage is repository-keyed; *access* is not. A new artifact is filed
+//! under the project that is open, but listing and reading span every
+//! project — one Jira ticket routinely draws on several services, and an
+//! HTTP request assembled from a spec is finished in the microservice's own
+//! repo. Each `ArtifactSummary` therefore carries the project it belongs
+//! to, since a mixed list is unreadable without it.
+//!
 //! The kind/content split is the extension point. `ArtifactKind` names the
 //! shape, `ArtifactContent` carries it, and everything else in the record is
 //! kind-agnostic — a second kind adds one variant to each and one renderer,
@@ -299,6 +306,27 @@ pub struct ArtifactSummary {
     pub subtitle: String,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
+    /// Where the artifact was created. An artifact stays bound to one
+    /// repository, but every listing spans all of them — one Jira ticket
+    /// routinely draws on several services, and an HTTP request assembled
+    /// from a spec is finished in the microservice's own repo — so a row
+    /// that did not say where it came from would be unplaceable.
+    #[serde(default)]
+    pub repo_root: Option<String>,
+    /// `repo_root`'s last path segment, which is what the project switcher
+    /// shows. Empty for a record saved before repo roots were recorded.
+    #[serde(default)]
+    pub repo_name: String,
+}
+
+/// The repo's own name, not its identity hash — just the last segment of
+/// its root, matching what the project switcher in the top bar shows (e.g.
+/// `/Users/x/WORK_REPOS/.../corp-wlbuh-ausn-api` → `corp-wlbuh-ausn-api`).
+pub fn repo_display_name(repo_root: &str) -> &str {
+    std::path::Path::new(repo_root)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(repo_root)
 }
 
 impl ArtifactRecord {
@@ -311,6 +339,13 @@ impl ArtifactRecord {
             subtitle: self.subtitle(),
             created_at_ms: self.created_at_ms,
             updated_at_ms: self.updated_at_ms,
+            repo_root: self.repo_root.clone(),
+            repo_name: self
+                .repo_root
+                .as_deref()
+                .map(repo_display_name)
+                .unwrap_or_default()
+                .to_string(),
         }
     }
 
@@ -332,10 +367,20 @@ impl ArtifactRecord {
             // outcome has not been written yet.
             ArtifactContent::JiraTicket(spec) => {
                 let outcome = spec.outcome.trim();
-                if outcome.is_empty() {
+                let body = if outcome.is_empty() {
                     first_line(spec.why.trim())
                 } else {
                     first_line(outcome)
+                };
+                // Once published, the key is the thing this ticket is known
+                // by everywhere else — in the branch name, in the commit, in
+                // whatever someone is asking about — so it leads, and the
+                // outcome follows as the reminder of what it was.
+                let key = spec.issue_key.trim();
+                match (key.is_empty(), body.is_empty()) {
+                    (true, _) => body,
+                    (false, true) => key.to_string(),
+                    (false, false) => format!("{key} · {body}"),
                 }
             }
         }
@@ -486,6 +531,40 @@ mod tests {
         // is — better than a blank row in the artifacts list.
         let early = record(JiraTicketSpec { why: "Проблема".into(), ..Default::default() });
         assert_eq!(early.to_summary().subtitle, "Проблема");
+    }
+
+    #[test]
+    fn a_published_ticket_leads_with_its_issue_key() {
+        let record = |spec: JiraTicketSpec| ArtifactRecord {
+            id: "t".into(),
+            kind: ArtifactKind::JiraTicket,
+            title: "Тикет".into(),
+            purpose: None,
+            status: ArtifactStatus::Ready,
+            content: ArtifactContent::JiraTicket(spec),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            chat_id: None,
+            repo_root: None,
+        };
+
+        let published = record(JiraTicketSpec {
+            issue_key: "WOWTAX-8094".into(),
+            outcome: "Пользователь может X".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            published.to_summary().subtitle,
+            "WOWTAX-8094 · Пользователь может X"
+        );
+
+        // A ticket published straight from a title, with no sections filled
+        // in, is just its key — not a key followed by a dangling separator.
+        let bare = record(JiraTicketSpec {
+            issue_key: "WOWTAX-8094".into(),
+            ..Default::default()
+        });
+        assert_eq!(bare.to_summary().subtitle, "WOWTAX-8094");
     }
 
     #[test]

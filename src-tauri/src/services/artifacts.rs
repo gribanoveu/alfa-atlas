@@ -9,7 +9,8 @@
 use uuid::Uuid;
 
 use crate::domain::artifact::{
-    ArtifactContent, ArtifactError, ArtifactKind, ArtifactRecord, ArtifactStatus, ArtifactSummary,
+    repo_display_name as repo_folder_name, ArtifactContent, ArtifactError, ArtifactKind,
+    ArtifactRecord, ArtifactStatus, ArtifactSummary,
 };
 use crate::domain::artifact_render::{self, RenderedArtifact};
 use crate::infra::artifact_store;
@@ -17,6 +18,20 @@ use crate::services::repository_scope;
 
 fn open_repo_id() -> Result<(String, String), ArtifactError> {
     repository_scope::open_repository().map_err(|e| ArtifactError::Project(e.to_string()))
+}
+
+/// The repository an existing artifact lives in — which is not necessarily
+/// the one that is open.
+///
+/// Creating binds an artifact to the current project, but everything
+/// afterwards is deliberately project-blind: a ticket written while one
+/// service was open is routinely reopened, edited and published from
+/// another, and an HTTP request assembled from a spec is finished in the
+/// microservice's own repo. Scoping reads to the open project would have
+/// made those artifacts unreachable without switching back.
+fn owning_repo_id(artifact_id: &str) -> Result<String, ArtifactError> {
+    artifact_store::find_repository(artifact_id)?
+        .ok_or_else(|| ArtifactError::NotFound(artifact_id.to_string()))
 }
 
 fn seed_repo_path_default(content: &mut ArtifactContent, repo_root: &str) {
@@ -33,16 +48,6 @@ fn seed_repo_path_default(content: &mut ArtifactContent, repo_root: &str) {
     }
 }
 
-/// The repo's own name, not its identity hash — just the last path segment
-/// of its root, matching what the project switcher in the top bar already
-/// shows the user (e.g. `/Users/x/WORK_REPOS/.../corp-wlbuh-ausn-api` →
-/// `corp-wlbuh-ausn-api`).
-fn repo_folder_name(repo_root: &str) -> &str {
-    std::path::Path::new(repo_root)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(repo_root)
-}
 
 /// A fresh `Draft`. `prefill` is whatever the requesting model already knew
 /// (method, path, the standard header block) — it only seeds the form, and
@@ -145,7 +150,7 @@ pub fn update_agent(
     title: Option<String>,
     content: ArtifactContent,
 ) -> Result<ArtifactRecord, ArtifactError> {
-    let (repo_id, _) = open_repo_id()?;
+    let repo_id = owning_repo_id(artifact_id)?;
     let stored = artifact_store::get(&repo_id, artifact_id)?;
     ensure_agent_authored(stored.kind)?;
     if content.kind() != stored.kind {
@@ -194,7 +199,7 @@ pub fn save(incoming: ArtifactRecord) -> Result<ArtifactRecord, ArtifactError> {
             "artifact kind does not match its content".into(),
         ));
     }
-    let (repo_id, repo_root) = open_repo_id()?;
+    let repo_id = owning_repo_id(&incoming.id)?;
     let stored = artifact_store::get(&repo_id, &incoming.id)?;
 
     let title = incoming.title.trim();
@@ -212,24 +217,27 @@ pub fn save(incoming: ArtifactRecord) -> Result<ArtifactRecord, ArtifactError> {
         created_at_ms: stored.created_at_ms,
         updated_at_ms: 0,
         chat_id: stored.chat_id,
-        repo_root: stored.repo_root.or(Some(repo_root)),
+        // Never re-derived from the open project: saving a ticket while a
+        // different service is open must not re-home it.
+        repo_root: stored.repo_root,
     });
     artifact_store::save(&repo_id, &record)?;
     Ok(record)
 }
 
 pub fn get(artifact_id: &str) -> Result<ArtifactRecord, ArtifactError> {
-    let (repo_id, _) = open_repo_id()?;
+    let repo_id = owning_repo_id(artifact_id)?;
     artifact_store::get(&repo_id, artifact_id)
 }
 
+/// Every artifact of every repository. Filtering by project is the reader's
+/// (and the model's) job — see `owning_repo_id`.
 pub fn list() -> Result<Vec<ArtifactSummary>, ArtifactError> {
-    let (repo_id, _) = open_repo_id()?;
-    artifact_store::list(&repo_id)
+    artifact_store::list_all()
 }
 
 pub fn delete(artifact_id: &str) -> Result<(), ArtifactError> {
-    let (repo_id, _) = open_repo_id()?;
+    let repo_id = owning_repo_id(artifact_id)?;
     artifact_store::delete(&repo_id, artifact_id)
 }
 
@@ -246,6 +254,83 @@ pub fn artifacts_root_path() -> Result<std::path::PathBuf, ArtifactError> {
 mod tests {
     use super::*;
     use crate::domain::artifact::HttpRequestSpec;
+    use crate::infra::settings_store::test_support::with_temp_home;
+
+    fn stored_in(repo_id: &str, artifact_id: &str) -> ArtifactRecord {
+        let record = artifact_store::stamp_new(ArtifactRecord {
+            id: artifact_id.to_string(),
+            kind: ArtifactKind::HttpRequest,
+            title: "Создание документа".into(),
+            purpose: None,
+            status: ArtifactStatus::Draft,
+            content: ArtifactContent::HttpRequest(HttpRequestSpec::default()),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            chat_id: None,
+            repo_root: Some("/repos/corp-wlbuh-enp-api".into()),
+        });
+        artifact_store::save(repo_id, &record).expect("save");
+        record
+    }
+
+    #[test]
+    fn an_artifact_is_reachable_without_its_project_being_open() {
+        // No project is open here at all, which is the strongest form of
+        // "not the current repository": before this, every read went
+        // through `open_repository()` and would have failed outright.
+        with_temp_home(|| {
+            stored_in("some-other-repo", "written-elsewhere");
+            let loaded = get("written-elsewhere").expect("get");
+            assert_eq!(loaded.id, "written-elsewhere");
+        });
+    }
+
+    #[test]
+    fn a_missing_artifact_is_not_found_rather_than_a_project_error() {
+        with_temp_home(|| {
+            assert!(matches!(get("nothing-here"), Err(ArtifactError::NotFound(id)) if id == "nothing-here"));
+        });
+    }
+
+    #[test]
+    fn saving_keeps_an_artifact_in_the_repository_that_owns_it() {
+        with_temp_home(|| {
+            let stored = stored_in("owning-repo", "stays-put");
+            let saved = save(ArtifactRecord {
+                title: "Переименовано".into(),
+                ..stored
+            })
+            .expect("save");
+            assert_eq!(saved.title, "Переименовано");
+            // Still one artifact, still in the same directory — a save made
+            // from a different project must not copy it into that one.
+            assert_eq!(
+                artifact_store::find_repository("stays-put").expect("find"),
+                Some("owning-repo".to_string())
+            );
+            assert_eq!(saved.repo_root.as_deref(), Some("/repos/corp-wlbuh-enp-api"));
+        });
+    }
+
+    #[test]
+    fn deleting_reaches_an_artifact_of_another_project() {
+        with_temp_home(|| {
+            stored_in("some-other-repo", "doomed");
+            delete("doomed").expect("delete");
+            assert!(matches!(get("doomed"), Err(ArtifactError::NotFound(_))));
+        });
+    }
+
+    #[test]
+    fn list_returns_artifacts_from_every_project() {
+        with_temp_home(|| {
+            stored_in("repo-a", "one");
+            stored_in("repo-b", "two");
+            let ids: Vec<_> = list().expect("list").into_iter().map(|s| s.id).collect();
+            assert_eq!(ids.len(), 2);
+            assert!(ids.contains(&"one".to_string()) && ids.contains(&"two".to_string()));
+        });
+    }
 
     #[test]
     fn repo_folder_name_takes_the_last_path_segment() {

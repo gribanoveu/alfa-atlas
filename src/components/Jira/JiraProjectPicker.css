@@ -133,6 +133,7 @@
   list-style: none;
   max-height: 240px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .jira-project-option {
@@ -141,6 +142,7 @@
   gap: 8px;
   width: 100%;
   min-width: 0;
+  overflow: hidden;
   padding: 5px 8px;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -231,6 +233,9 @@
   z-index: 20;
   max-height: 260px;
   overflow-y: auto;
+  /* See `.clone-select-menu`: left implicit, `overflow-x` computes to
+     `auto` and a too-wide option turns into a horizontal scrollbar. */
+  overflow-x: hidden;
   padding: 4px;
   background: var(--bg-1);
   border: 1px solid var(--border);
@@ -241,6 +246,11 @@
 .jira-select-option {
   display: block;
   width: 100%;
+  /* A `<button>` does not clip its own content — see `.clone-select-option`. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 5px 10px;
   border: none;
   border-radius: 5px;

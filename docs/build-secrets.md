@@ -49,7 +49,15 @@ Every `*.enc` file under `~/.atlas` is sealed with one AES-256 master key held i
 
 Two things to know when changing this:
 
-- **The `keyring` dependency needs its per-target `features`.** Platform backends are opt-in in keyring 3.x, and without them the crate silently compiles to an in-memory mock whose writes vanish at process exit — every secret would quietly fall back to the plaintext key file. `master_key` detects this at runtime, and `native_keychain_backend_is_compiled_in` fails the build if the features go missing.
+- **The `keyring` dependency needs its per-target `features`.** Platform backends are opt-in in keyring 3.x, and without them the crate silently compiles to an in-memory mock whose writes vanish at process exit — every secret would quietly fall back to the plaintext key file. `master_key` detects this at runtime and logs it loudly, and `master_key_store.json` flips to `"file"` when it happens.
+
+  The test that proves the features are still wired up is **not** part of a normal `cargo test` run, because it is the only one that uses the real keychain — and every run builds a new binary, whose access to an item created by the previous one costs a macOS password dialog. Run it after touching the `keyring` dependency:
+
+  ```bash
+  cargo test -- --ignored native_keychain_backend_is_compiled_in
+  ```
+
+  Every other test runs against `master_key::backend`'s in-process double, so the suite never touches (or leaves anything in) a developer's keychain.
 - **The keychain does not defend against malware running as the user.** On all three platforms an unlocked keychain is readable by that user's processes; what it buys is that the key no longer travels with a copy of `~/.atlas` (backups, cloud-synced home directories, support bundles). Defending against same-user code needs a master password, which does not exist yet.
 
 Blobs carry a `"ATLS" | version | purpose` header that is also the AES-GCM AAD, so a blob can only be opened as the kind of secret it was written as. Pre-header blobs are still readable and are rewritten in the current format on first read.

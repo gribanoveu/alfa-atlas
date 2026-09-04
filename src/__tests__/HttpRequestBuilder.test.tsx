@@ -21,7 +21,10 @@ const renderCalls: ArtifactContent[] = [];
 // every later test file that imports them.
 mock.module("../lib/artifacts", () => ({
   ...actualArtifacts,
-  ARTIFACT_KIND_LABELS: { httpRequest: "HTTP-запрос" },
+  // No `ARTIFACT_KIND_LABELS` override: this test never read it, and a
+  // narrowed copy travelled — `mock.module` is global — into every later
+  // file, where a kind missing from the map is a silently wrong label or,
+  // in `artifactFilters`, a silently wrong sort order.
   artifactRender: async (content: ArtifactContent) => {
     renderCalls.push(content);
     return {

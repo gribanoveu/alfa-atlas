@@ -87,10 +87,11 @@ pub(crate) mod test_support {
     /// Runs `f` holding `HOME_ENV_LOCK` but leaving `$HOME` alone, for
     /// tests that need the *real* home directory.
     ///
-    /// On macOS the keychain resolves the login keychain through `$HOME`,
-    /// so a `with_temp_home` running concurrently makes any keychain call
-    /// fail with "A default keychain could not be found" — taking the same
-    /// lock is what keeps those tests from colliding.
+    /// The one such test is `master_key`'s `#[ignore]`d keychain-backend
+    /// probe: on macOS the login keychain is resolved through `$HOME`, so a
+    /// `with_temp_home` running concurrently would make it fail with "A
+    /// default keychain could not be found". Taking the same lock is what
+    /// keeps the two from colliding.
     pub(crate) fn with_real_home<T>(f: impl FnOnce() -> T) -> T {
         let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         f()
@@ -106,7 +107,6 @@ pub(crate) mod test_support {
         let home = std::env::temp_dir().join(format!("alfa-atlas-test-home-{nanos}-{n}"));
         std::fs::create_dir_all(&home).unwrap();
         let previous = std::env::var_os("HOME");
-        link_keychains_into(&home, previous.as_deref());
         std::env::set_var("HOME", &home);
         // The master key is cached per process; a key resolved under some
         // other test's `~/.atlas` must not answer for this one.
@@ -120,31 +120,4 @@ pub(crate) mod test_support {
         result
     }
 
-    /// Points the temp home's `Library/Keychains` at the real one.
-    ///
-    /// macOS resolves the login keychain through `$HOME`, and
-    /// Security.framework caches the result *per process*: the first
-    /// keychain call made under a temp home without this link resolves to
-    /// "no default keychain" and every later call in that process keeps
-    /// failing, however the home is arranged by then. That made keychain
-    /// coverage depend on test order — a test passing alone and failing in
-    /// the suite. Linking unconditionally keeps every temp home
-    /// keychain-capable, so the answer no longer depends on who ran first.
-    ///
-    /// Only a symlink is created, and `remove_dir_all` does not traverse
-    /// symlinks, so teardown can never reach the real keychains.
-    #[cfg(target_os = "macos")]
-    fn link_keychains_into(home: &std::path::Path, real_home: Option<&std::ffi::OsStr>) {
-        let Some(real_home) = real_home else { return };
-        let target = std::path::Path::new(real_home).join("Library/Keychains");
-        if !target.is_dir() {
-            return;
-        }
-        if std::fs::create_dir_all(home.join("Library")).is_ok() {
-            let _ = std::os::unix::fs::symlink(target, home.join("Library/Keychains"));
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn link_keychains_into(_home: &std::path::Path, _real_home: Option<&std::ffi::OsStr>) {}
 }

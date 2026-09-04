@@ -1,84 +1,97 @@
+/* The tool-call log's dialog shell (`../ToolLog/ToolCallLogModal.css`) with
+   the columns this table needs. Only the differences live here. */
+
 .artifacts-dialog {
-  width: min(760px, 100%);
-  height: min(600px, 100%);
+  width: min(1100px, 100%);
+  height: min(640px, 100%);
 }
 
-.artifacts-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  /* Never horizontally: every row truncates, so a horizontal scrollbar can
-     only mean something has overflowed and pushed the row actions out of
-     view. */
-  overflow-x: hidden;
-  background: var(--bg-1);
+/* Wider than the 170px the filter bar gives a select by default: these
+   values are service repositories («corp-wowtax-patent-notification-api»),
+   not the short tool names the log's own filters hold, and at 170px every
+   entry ellipsized to the same prefix. */
+.artifacts-project-select {
+  width: 280px;
 }
 
-.artifacts-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* `fixed` so the columns are sized by these rules rather than by whichever
+   title happens to be longest — with `auto`, one artifact named with a
+   sentence widens its column until the ones after it have nothing left. */
+.artifacts-table {
+  table-layout: fixed;
 }
 
-.artifacts-list-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
+.artifacts-table th:nth-child(1),
+.artifacts-table td:nth-child(1) {
+  width: 19%;
 }
 
-/* `width: 0` and `overflow: hidden`, not just `min-width: 0`. This is a
-   `<button>`, and a button's content box does not shrink below its
-   content the way a `div`'s does — with only `min-width: 0` the title and
-   subtitle keep their full width and, since the button itself does not
-   clip, paint straight over the status and the delete icon to their right.
-   `width: 0` makes the flex basis the whole width calculation, and
-   `overflow: hidden` guarantees nothing escapes the button whatever the
-   engine decides about its intrinsic size. */
-.artifacts-list-main {
-  flex: 1 1 0;
-  width: 0;
-  min-width: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
+.artifacts-table th:nth-child(2),
+.artifacts-table td:nth-child(2) {
+  width: 22%;
 }
 
-.artifacts-list-title {
-  font-size: var(--font-ui);
-  font-weight: 500;
-  color: var(--text-0);
+.artifacts-table th:nth-child(3),
+.artifacts-table td:nth-child(3) {
+  width: 10%;
+}
+
+.artifacts-table th:nth-child(4),
+.artifacts-table td:nth-child(4) {
+  width: 16%;
+}
+
+.artifacts-table th:nth-child(5),
+.artifacts-table td:nth-child(5) {
+  width: 8%;
+}
+
+.artifacts-table th:nth-child(6),
+.artifacts-table td:nth-child(6) {
+  width: 12%;
+}
+
+/* Wide enough for the delete confirmation («Удалить?» plus two buttons),
+   not just for the trash icon — otherwise arming it would push the
+   confirmation over the date column beside it. */
+.artifacts-table th:nth-child(7),
+.artifacts-table td:nth-child(7) {
+  width: 13%;
+}
+
+/* Every text cell truncates rather than wrapping: rows stay one line high,
+   so the eye can run down a column. The full value is in the `title`. */
+.artifacts-cell-title,
+.artifacts-cell-subtitle,
+.artifacts-cell-project {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.artifacts-list-main:hover .artifacts-list-title {
+.artifacts-cell-title {
+  color: var(--text-0);
+}
+
+.tool-log-row:hover .artifacts-cell-title {
   color: var(--accent);
 }
 
-.artifacts-list-meta {
-  font-size: var(--font-ui-sm);
+.artifacts-cell-subtitle,
+.artifacts-cell-project {
   color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.artifacts-cell-actions {
+  text-align: right;
+  /* The row is the open-artifact target; this cell is not, so it must not
+     show the row's pointer over its own empty space. */
+  cursor: default;
 }
 
 /* Plain text + dot, deliberately no pill/background — this sits right next
    to an actual button (delete) in the row, and giving it button-like chrome
    made the two read as competing controls. */
 .artifacts-status {
-  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -117,6 +130,7 @@
   background: transparent;
   color: var(--text-2);
   cursor: pointer;
+  vertical-align: middle;
 }
 
 .artifacts-icon-btn:hover {
@@ -134,10 +148,9 @@
 }
 
 .artifacts-confirm {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex: none;
 }
 
 .artifacts-confirm-text {

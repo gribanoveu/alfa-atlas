@@ -115,6 +115,12 @@ export type ArtifactSummary = {
   subtitle: string;
   createdAtMs: number;
   updatedAtMs: number;
+  /** Full path of the project the artifact was written in. Absent on
+   *  records saved before roots were recorded. */
+  repoRoot: string | null;
+  /** `repoRoot`'s last segment — what the project switcher shows. Empty
+   *  string when the root is unknown. */
+  repoName: string;
 };
 
 /** Mirrors `domain::artifact_render::RenderedHttpRequest`. */

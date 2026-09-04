@@ -20,17 +20,20 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// `~/.atlas/artifacts/{repository_id}/`
-pub fn artifact_dir(repository_id: &str) -> Result<PathBuf, ArtifactError> {
-    Ok(settings_store::settings_dir()?
-        .join(ARTIFACTS_DIR_NAME)
-        .join(repository_id))
+/// `~/.atlas/artifacts/`
+fn artifacts_root() -> Result<PathBuf, ArtifactError> {
+    Ok(settings_store::settings_dir()?.join(ARTIFACTS_DIR_NAME))
 }
 
-fn artifact_path(repository_id: &str, artifact_id: &str) -> Result<PathBuf, ArtifactError> {
-    // Ids are generated server-side, but the id also arrives from the
-    // frontend on save/read — guard against traversal regardless of who
-    // supplied it, same as `plan_store`.
+/// `~/.atlas/artifacts/{repository_id}/`
+pub fn artifact_dir(repository_id: &str) -> Result<PathBuf, ArtifactError> {
+    Ok(artifacts_root()?.join(repository_id))
+}
+
+/// Ids are generated server-side, but an id also arrives from the frontend
+/// and from the model on save/read — guard against traversal regardless of
+/// who supplied it, same as `plan_store`.
+fn check_id(artifact_id: &str) -> Result<(), ArtifactError> {
     if artifact_id.is_empty()
         || artifact_id.contains('/')
         || artifact_id.contains('\\')
@@ -40,6 +43,11 @@ fn artifact_path(repository_id: &str, artifact_id: &str) -> Result<PathBuf, Arti
             "invalid artifact id: {artifact_id}"
         )));
     }
+    Ok(())
+}
+
+fn artifact_path(repository_id: &str, artifact_id: &str) -> Result<PathBuf, ArtifactError> {
+    check_id(artifact_id)?;
     Ok(artifact_dir(repository_id)?.join(format!("{artifact_id}.json")))
 }
 
@@ -73,14 +81,65 @@ pub fn delete(repository_id: &str, artifact_id: &str) -> Result<(), ArtifactErro
     Ok(())
 }
 
-/// All artifacts for a repository, newest `updated_at_ms` first.
-pub fn list(repository_id: &str) -> Result<Vec<ArtifactSummary>, ArtifactError> {
-    let dir = artifact_dir(repository_id)?;
-    if !dir.is_dir() {
+/// Every artifact from every repository, newest `updated_at_ms` first.
+///
+/// Storage stays repository-keyed — an artifact belongs to the project it
+/// was written in — but reading is not: one ticket often draws on several
+/// services, so the list, and the model, see all of them and filter by
+/// project themselves.
+pub fn list_all() -> Result<Vec<ArtifactSummary>, ArtifactError> {
+    let root = artifacts_root()?;
+    if !root.is_dir() {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for entry in fs::read_dir(&dir)? {
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        if !entry.path().is_dir() {
+            continue;
+        }
+        // A directory that cannot be read (permissions, a half-removed
+        // repo folder) must not take the whole listing down with it.
+        let Ok(summaries) = read_dir_summaries(&entry.path()) else {
+            continue;
+        };
+        out.extend(summaries);
+    }
+    out.sort_by_key(|a| std::cmp::Reverse(a.updated_at_ms));
+    Ok(out)
+}
+
+/// Which repository directory holds `artifact_id`, if any. `None` means no
+/// repository has it — the caller turns that into `NotFound`.
+///
+/// A scan rather than an index: a record does not carry its own repository
+/// id (only its root path, which may be absent on older records), and the
+/// number of directories here is the number of repositories the user has
+/// ever opened.
+pub fn find_repository(artifact_id: &str) -> Result<Option<String>, ArtifactError> {
+    check_id(artifact_id)?;
+    let root = artifacts_root()?;
+    if !root.is_dir() {
+        return Ok(None);
+    }
+    let file_name = format!("{artifact_id}.json");
+    for entry in fs::read_dir(&root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() || !path.join(&file_name).is_file() {
+            continue;
+        }
+        let Some(repo_id) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        return Ok(Some(repo_id.to_string()));
+    }
+    Ok(None)
+}
+
+fn read_dir_summaries(dir: &Path) -> Result<Vec<ArtifactSummary>, ArtifactError> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
@@ -99,7 +158,6 @@ pub fn list(repository_id: &str) -> Result<Vec<ArtifactSummary>, ArtifactError> 
             Err(_) => continue,
         }
     }
-    out.sort_by_key(|a| std::cmp::Reverse(a.updated_at_ms));
     Ok(out)
 }
 
@@ -181,10 +239,10 @@ mod tests {
     }
 
     #[test]
-    fn list_is_newest_first_and_empty_for_an_unknown_repo() {
+    fn list_all_is_newest_first_and_empty_before_anything_is_saved() {
         with_temp_home(|| {
             let repo = unique_repo_id();
-            assert!(list(&repo).expect("list").is_empty());
+            assert!(list_all().expect("list").is_empty());
 
             let mut older = sample_record("older");
             older.updated_at_ms = 100;
@@ -193,12 +251,65 @@ mod tests {
             save(&repo, &older).expect("save older");
             save(&repo, &newer).expect("save newer");
 
-            let listed = list(&repo).expect("list");
+            let listed = list_all().expect("list");
             assert_eq!(
                 listed.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
                 vec!["newer", "older"]
             );
             assert_eq!(listed[0].subtitle, "POST /api/documents");
+        });
+    }
+
+    #[test]
+    fn list_all_spans_repositories_and_orders_across_them() {
+        with_temp_home(|| {
+            let (first, second) = (unique_repo_id(), unique_repo_id());
+
+            let mut a = sample_record("from-first");
+            a.updated_at_ms = 100;
+            a.repo_root = Some("/repos/corp-wlbuh-enp-api".into());
+            let mut b = sample_record("from-second");
+            b.updated_at_ms = 300;
+            b.repo_root = Some("/repos/corp-wlbuh-ausn-api".into());
+            save(&first, &a).expect("save first");
+            save(&second, &b).expect("save second");
+
+            let listed = list_all().expect("list");
+            // Ordering is by time across the whole set, not per directory —
+            // the list is one list, not a concatenation of repositories.
+            assert_eq!(
+                listed.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+                vec!["from-second", "from-first"]
+            );
+            // Each row carries the project it came from, which is the only
+            // thing that makes a mixed list readable.
+            assert_eq!(listed[0].repo_name, "corp-wlbuh-ausn-api");
+            assert_eq!(listed[1].repo_name, "corp-wlbuh-enp-api");
+        });
+    }
+
+    #[test]
+    fn find_repository_locates_an_artifact_in_whichever_repo_holds_it() {
+        with_temp_home(|| {
+            let (first, second) = (unique_repo_id(), unique_repo_id());
+            save(&first, &sample_record("here")).expect("save");
+            save(&second, &sample_record("elsewhere")).expect("save");
+
+            assert_eq!(find_repository("here").expect("find"), Some(first));
+            assert_eq!(find_repository("elsewhere").expect("find"), Some(second));
+            assert_eq!(find_repository("never-saved").expect("find"), None);
+        });
+    }
+
+    #[test]
+    fn find_repository_rejects_a_traversal_id_before_reading_anything() {
+        with_temp_home(|| {
+            for bad in ["", "../escape", "a/b", "a\\b", ".."] {
+                assert!(
+                    matches!(find_repository(bad), Err(ArtifactError::Invalid(_))),
+                    "id {bad:?} should be rejected"
+                );
+            }
         });
     }
 
@@ -239,7 +350,7 @@ mod tests {
             fs::write(dir.join(".half.tmp"), "{}").expect("write temp");
             fs::write(dir.join("notes.txt"), "hello").expect("write txt");
 
-            let listed = list(&repo).expect("list");
+            let listed = list_all().expect("list");
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].id, "good");
         });

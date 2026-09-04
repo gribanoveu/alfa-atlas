@@ -232,6 +232,13 @@
   z-index: 20;
   max-height: 220px;
   overflow-y: auto;
+  /* Explicitly hidden, not left to compute. `overflow-y: auto` with the
+     default `overflow-x: visible` computes the other axis to `auto` too, so
+     an option one pixel too wide gives the menu a horizontal scrollbar — and
+     since the app draws non-overlay 4px scrollbars, a scrolled menu shows
+     its options with their *beginnings* cut off. Every option ellipsizes,
+     so there is never anything worth scrolling to sideways. */
+  overflow-x: hidden;
   padding: 4px 0;
   background: var(--bg-1);
   border: 1px solid var(--border);
@@ -239,11 +246,18 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+/* `min-width: 0` and `overflow: hidden` on top of `width: 100%`: this is a
+   `<button>`, whose used width does not go below its content in every
+   engine, so a long path kept the option wider than the menu — which is
+   what put the scrollbar there. The button has to clip, not just be told a
+   width. Same trap as `.artifacts-list-main` had. */
 .clone-select-option {
   display: flex;
   flex-direction: column;
   gap: 2px;
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
   padding: 7px 12px;
   text-align: left;
   color: var(--text-0);

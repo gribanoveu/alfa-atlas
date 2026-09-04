@@ -23,9 +23,15 @@
 //! `Ok(())` and evaporate at process exit. A missing Secret Service on
 //! Linux fails less quietly but just as fatally. So the keychain is never
 //! trusted on the strength of a successful write: `probe_keychain` writes a
-//! marker through one `Entry` and reads it back through a *fresh* one,
-//! which the mock cannot satisfy (it allocates independent state per
-//! `Entry`), and only then is the store considered real.
+//! marker and reads it back through a separate `Entry`, which the mock
+//! cannot satisfy (it allocates independent state per `Entry`), and only
+//! then is the store considered real.
+//!
+//! ## Tests
+//!
+//! Everything here runs against `backend`, which is the real keyring in a
+//! normal build and an in-process double under `cfg(test)` — see that
+//! module for why the suite must not touch a real keychain.
 
 use std::fs;
 use std::path::PathBuf;
@@ -41,11 +47,11 @@ use crate::infra::settings_store;
 
 #[cfg(not(test))]
 const KEYRING_SERVICE: &str = "com.eugene.alfa-atlas";
-/// Tests get their own service name. `with_temp_home` can redirect the
-/// *file* fallback but not the keychain, and a test run that generated a
-/// key under the production name would overwrite the user's real one —
-/// after which the app would decrypt its own blobs with the wrong key and
-/// every stored token would be lost.
+/// Tests never reach a real keychain — `backend` swaps in an in-process
+/// double — so this only namespaces that double's entries. It is kept
+/// distinct from the production name as a second line of defence: were a
+/// test ever to bypass the seam, it still could not overwrite the user's
+/// own master key and leave every stored token undecryptable.
 #[cfg(test)]
 const KEYRING_SERVICE: &str = "com.eugene.alfa-atlas.tests";
 
@@ -136,10 +142,9 @@ fn keychain_is_usable() -> bool {
     usable
 }
 
-/// Uncached under test. `$HOME` is stable in a running app but not in the
-/// test suite, and on macOS the login keychain is resolved through it — a
-/// cached `false` from the first test that ran under `with_temp_home`
-/// would otherwise decide the answer for every later test in the process.
+/// Uncached under test, so one test's simulated outage
+/// (`with_unreachable_keychain`) cannot decide the answer for every later
+/// test in the process.
 #[cfg(test)]
 fn keychain_is_usable() -> bool {
     if force_unreachable() {
@@ -196,6 +201,76 @@ pub(crate) fn forget_resolution_for_tests() {
     state.failed_at = None;
 }
 
+/// The three keychain operations this module needs.
+///
+/// Under `cfg(test)` these run against an in-process double instead of the
+/// real login keychain, for one concrete reason: `cargo test` builds a new
+/// binary, and macOS binds a keychain item's ACL to the program that
+/// created it — so reading or deleting an item left behind by the previous
+/// run raises a password dialog, on every single run. The double also makes
+/// the suite hermetic: it can neither disturb nor be disturbed by anything
+/// in the developer's real keychain.
+///
+/// What the double cannot check is whether `keyring` was built with a real
+/// platform backend at all — that is what the `#[ignore]`d
+/// `native_keychain_backend_is_compiled_in` is for.
+#[cfg(not(test))]
+mod backend {
+    use super::KEYRING_SERVICE;
+
+    /// `Ok(None)` is "no such item", distinct from `Err` ("could not ask").
+    pub(super) fn get(user: &str) -> Result<Option<Vec<u8>>, String> {
+        let entry = keyring::Entry::new(KEYRING_SERVICE, user).map_err(|e| e.to_string())?;
+        match entry.get_secret() {
+            Ok(secret) => Ok(Some(secret)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    pub(super) fn set(user: &str, secret: &[u8]) -> Result<(), String> {
+        keyring::Entry::new(KEYRING_SERVICE, user)
+            .and_then(|entry| entry.set_secret(secret))
+            .map_err(|e| e.to_string())
+    }
+
+    pub(super) fn delete(user: &str) {
+        if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, user) {
+            let _ = entry.delete_credential();
+        }
+    }
+}
+
+#[cfg(test)]
+mod backend {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    static ITEMS: Mutex<Option<HashMap<String, Vec<u8>>>> = Mutex::new(None);
+
+    fn slot(user: &str) -> String {
+        format!("{}/{}", super::KEYRING_SERVICE, user)
+    }
+
+    fn with<T>(f: impl FnOnce(&mut HashMap<String, Vec<u8>>) -> T) -> T {
+        let mut guard = ITEMS.lock().unwrap_or_else(|e| e.into_inner());
+        f(guard.get_or_insert_with(HashMap::new))
+    }
+
+    pub(super) fn get(user: &str) -> Result<Option<Vec<u8>>, String> {
+        Ok(with(|items| items.get(&slot(user)).cloned()))
+    }
+
+    pub(super) fn set(user: &str, secret: &[u8]) -> Result<(), String> {
+        with(|items| items.insert(slot(user), secret.to_vec()));
+        Ok(())
+    }
+
+    pub(super) fn delete(user: &str) {
+        with(|items| items.remove(&slot(user)));
+    }
+}
+
 fn probe_keychain() -> bool {
     let marker: [u8; 8] = {
         let mut b = [0u8; 8];
@@ -203,25 +278,16 @@ fn probe_keychain() -> bool {
         b
     };
 
-    let writer = match keyring::Entry::new(KEYRING_SERVICE, KEYRING_PROBE_USER) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("[alfa-atlas] keychain unavailable (Entry::new: {e}) — using file fallback");
-            return false;
-        }
-    };
-    if let Err(e) = writer.set_secret(&marker) {
+    if let Err(e) = backend::set(KEYRING_PROBE_USER, &marker) {
         eprintln!("[alfa-atlas] keychain unavailable (write: {e}) — using file fallback");
         return false;
     }
 
-    // Deliberately a *new* Entry: the mock store keeps its value inside the
-    // Entry that wrote it, so only a real backend can answer this.
-    let usable = match keyring::Entry::new(KEYRING_SERVICE, KEYRING_PROBE_USER) {
-        Ok(reader) => matches!(reader.get_secret(), Ok(v) if v == marker),
-        Err(_) => false,
-    };
-    let _ = writer.delete_credential();
+    // A separate read, not a handle kept from the write: keyring's mock
+    // store keeps the value inside the `Entry` that wrote it, so only a
+    // real backend can answer this.
+    let usable = matches!(backend::get(KEYRING_PROBE_USER), Ok(Some(v)) if v == marker);
+    backend::delete(KEYRING_PROBE_USER);
 
     if !usable {
         eprintln!(
@@ -243,10 +309,9 @@ fn keychain_get() -> Option<MasterKey> {
     if recorded_store() != Some(KeyStore::Keychain) && !keychain_is_usable() {
         return None;
     }
-    let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).ok()?;
-    let secret = match entry.get_secret().map(Zeroizing::new) {
-        Ok(s) => s,
-        Err(keyring::Error::NoEntry) => return None,
+    let secret = match backend::get(KEYRING_USER) {
+        Ok(Some(secret)) => Zeroizing::new(secret),
+        Ok(None) => return None,
         Err(e) => {
             eprintln!("[alfa-atlas] keychain read failed: {e}");
             return None;
@@ -270,10 +335,7 @@ fn keychain_put(key: &[u8; KEY_LEN]) -> bool {
     if force_unreachable() || !keychain_is_usable() {
         return false;
     }
-    let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) else {
-        return false;
-    };
-    if let Err(e) = entry.set_secret(key) {
+    if let Err(e) = backend::set(KEYRING_USER, key) {
         eprintln!("[alfa-atlas] keychain write failed: {e}");
         return false;
     }
@@ -509,9 +571,7 @@ fn resolve() -> Result<MasterKey, String> {
 /// nothing behind in the developer's keychain.
 #[cfg(test)]
 pub(crate) fn forget_for_tests() {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-        let _ = entry.delete_credential();
-    }
+    backend::delete(KEYRING_USER);
     forget_resolution_for_tests();
 }
 
@@ -523,14 +583,42 @@ mod tests {
     /// on the three shipping platforms `Cargo.toml` enables a native
     /// backend, so a `false` here means those features were dropped and
     /// every secret would silently fall back to the plaintext key file.
+    /// Not part of a normal `cargo test` run — it is the one test that must
+    /// use the *real* keychain, and doing so costs a macOS password dialog
+    /// every time, because each run builds a new binary and the item's ACL
+    /// names the previous one. Run it deliberately, after touching the
+    /// `keyring` dependency:
+    ///
+    /// ```text
+    /// cargo test -- --ignored native_keychain_backend_is_compiled_in
+    /// ```
+    ///
+    /// What it catches: `keyring` 3.x makes its platform backends opt-in,
+    /// and without the per-target `features` in `Cargo.toml` the crate
+    /// compiles to an in-memory mock — every secret would then quietly fall
+    /// back to the plaintext key file.
     #[test]
+    #[ignore = "touches the real OS keychain; prompts for a password"]
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn native_keychain_backend_is_compiled_in() {
-        // Needs the real `$HOME`: see `with_real_home`.
+        // Bypasses `backend`, which is the in-process double under test.
+        const PROBE: &str = "com.eugene.alfa-atlas.feature-probe";
+        let marker = [0x5Au8; 32];
+
+        // Needs the real `$HOME`: on macOS the login keychain is resolved
+        // through it (see `with_real_home`).
         settings_store::test_support::with_real_home(|| {
+            let writer = keyring::Entry::new(PROBE, "k").expect("Entry::new");
+            writer.set_secret(&marker).expect("keychain write");
+
+            let reader = keyring::Entry::new(PROBE, "k").expect("Entry::new");
+            let read_back = reader.get_secret();
+            let _ = reader.delete_credential();
+
             assert!(
-                keychain_is_usable(),
-                "keyring has no working native backend — check the per-target \
+                matches!(read_back, Ok(ref v) if v == &marker),
+                "keyring has no working native backend (a fresh Entry could not \
+                 read back what another just wrote) — check the per-target \
                  `features` on the `keyring` dependency in Cargo.toml"
             );
         });
@@ -602,11 +690,10 @@ mod tests {
     /// moves into the keychain, the plaintext file is gone, and the next
     /// start reads the *same* key back out of the keychain.
     ///
-    /// `~/.atlas` is isolated in the temp home while the keychain stays
-    /// reachable through the symlink `with_temp_home` sets up, and the
-    /// test-only `KEYRING_SERVICE` keeps the user's own key untouched.
+    /// `~/.atlas` is isolated in the temp home and the keychain is
+    /// `backend`'s in-process double, so this exercises the real migration
+    /// logic without touching anything the developer owns.
     #[test]
-    #[cfg(target_os = "macos")]
     fn migration_moves_the_key_into_the_keychain_and_shreds_the_file() {
         settings_store::test_support::with_temp_home(|| {
             forget_for_tests();
