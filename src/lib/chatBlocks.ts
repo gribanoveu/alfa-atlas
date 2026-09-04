@@ -523,40 +523,39 @@ export function settleToolCallBlock(
   });
 }
 
-/** `streamLlmChat()`'s resolved `text` is the authoritative full text of
- * the *final* round only (a safety net against a dropped delta) — by
- * construction the trailing block, if it's text, was built entirely from
- * that same final round's deltas (any earlier round's text was closed off
- * by an intervening `toolCall` block), so correcting only that one block is
- * exactly right: earlier text/tool-call blocks are untouched. If the
- * trailing block isn't text (the final round had a tool call as its very
- * last block, or there are no blocks yet) and `text` is non-empty, a new
- * trailing text block is appended instead of overwriting anything; an empty
- * `text` in that situation is a no-op. */
-export function correctTrailingText(blocks: MessageBlock[], text: string): MessageBlock[] {
-  const index = findOpenBlockIndex(blocks, "text");
-  if (index !== -1) {
-    return blocks.map((b, i) => (i === index && b.type === "text" ? { ...b, content: text } : b));
-  }
-  return text !== "" ? [...blocks, { type: "text", id: crypto.randomUUID(), content: text }] : blocks;
-}
-
-/** Overwrites one finished round's text block with the authoritative text
- * the backend accumulated for it (`llm:round-text`).
+/** Reconciles one finished round's prose with the authoritative text the
+ * backend accumulated for it (`llm:round-text`), and closes it off.
  *
- * `correctTrailingText` cannot do this job: it goes through
- * `findOpenBlockIndex`, which gives up the moment it meets a `toolCall`
- * scanning back — so the prose of a round that *ended* in a tool call, which
- * is most of them, was never reconciled with anything and a single dropped
- * delta truncated it permanently. This walks past the round's own tool calls
- * to reach the text block in front of them.
+ * `findOpenBlockIndex` cannot find the block to correct: it gives up the
+ * moment it meets a `toolCall` scanning back — so the prose of a round that
+ * *ended* in a tool call, which is most of them, was never reconciled with
+ * anything and a single dropped delta truncated it permanently. This walks
+ * past the round's own tool calls to reach the text it wrote in front of
+ * them.
  *
- * It stops only at a `steer`, and at a `text` block already marked `closed`:
- * both mean the scan has left this round and reached an earlier one, whose
- * text belongs to a report that already happened. `closed` is only ever set
- * during a live turn by `closeOpenBlocks`, on the *next* round's
- * `llm:round-started` — which is why this event, fired as its own round
- * ends, always arrives while its block is still open.
+ * A round can own *several* text blocks, and collapsing them is the point.
+ * `appendDeltaToBlocks` starts a fresh block for any delta that lands after
+ * a tool call, and providers routinely emit a trailing `"\n"` once the tool
+ * call's arguments have started streaming — so the round's own prose ends up
+ * split across a block before the call and a one-character orphan after it.
+ * Writing the round's full text into whichever of them the scan happened to
+ * reach first left the other standing: every paragraph appeared twice in the
+ * transcript, once before the tool-call chip and once after it. All of the
+ * round's text blocks therefore fold into its first one, and the rest are
+ * dropped.
+ *
+ * The scan stops at a `steer`, and at a `text` block already marked
+ * `closed`: both mean it has left this round and reached an earlier one,
+ * whose text belongs to a report that already happened. Reaching either
+ * before finding any of this round's own text means the round has nothing
+ * here to correct, and the input is returned untouched rather than guessing
+ * where its prose would have gone.
+ *
+ * The surviving block is marked `closed`: this event fires once the round
+ * has stopped streaming, so nothing more can belong to it. Without that the
+ * block stays reopenable — and, sitting behind a tool call where
+ * `closeOpenBlocks` can never reach it, a later round whose deltas were all
+ * dropped would overwrite this round's answer with its own.
  *
  * An empty `text` is a no-op rather than a blanking: a round with no prose
  * has no text block to correct, so an empty string here can only mean the
@@ -567,9 +566,15 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
   // Where a brand-new block goes if the round has none: in front of the
   // tool calls it opened, never after them.
   let insertAt = blocks.length;
+  // Every text block this round wrote, oldest first.
+  const roundText: number[] = [];
+  let leftTheRound = false;
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i]!;
-    if (block.type === "steer") return blocks;
+    if (block.type === "steer") {
+      leftTheRound = true;
+      break;
+    }
     if (block.type === "toolCall") {
       insertAt = i;
       continue;
@@ -581,20 +586,35 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
     // its tool calls. `findOpenBlockIndex` skips them for the same reason.
     if (block.type === "reasoning") continue;
     if (block.type === "text") {
-      if (block.closed) return blocks;
-      return blocks.map((b, j) => (j === i && b.type === "text" ? { ...b, content: text } : b));
+      if (block.closed) {
+        leftTheRound = true;
+        break;
+      }
+      roundText.unshift(i);
     }
   }
+  if (roundText.length > 0) {
+    const keep = roundText[0]!;
+    const fold = new Set(roundText.slice(1));
+    return blocks.flatMap((b, i): MessageBlock[] =>
+      i === keep && b.type === "text"
+        ? [{ ...b, content: text, closed: true }]
+        : fold.has(i)
+          ? []
+          : [b],
+    );
+  }
+  if (leftTheRound) return blocks;
   // Every delta for this round was dropped — the text still belongs in the
   // transcript, in the place the round would have put it.
-  const fresh: MessageBlock = { type: "text", id: crypto.randomUUID(), content: text };
+  const fresh: MessageBlock = { type: "text", id: crypto.randomUUID(), content: text, closed: true };
   return [...blocks.slice(0, insertAt), fresh, ...blocks.slice(insertAt)];
 }
 
-/** Same safety-net role as `correctTrailingText`, for `reasoning` instead
- * of `text`. Only ever corrects an already-open trailing `reasoning` block
+/** Same safety-net role as `correctRoundText`, for `reasoning` instead of
+ * `text`. Only ever corrects an already-open trailing `reasoning` block
  * (the round ended before any `content` arrived) — unlike
- * `correctTrailingText`, it never appends a brand-new block when the
+ * `correctRoundText`, it never appends a brand-new block when the
  * trailing one isn't a reasoning block: reasoning always precedes the
  * answer it led to, so a reasoning block can't correctly be tacked onto the
  * *end* of blocks that already moved on to text/tool-calls; if every

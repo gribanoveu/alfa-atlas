@@ -538,7 +538,7 @@ struct LoopCtx<'a> {
 /// that point (a round's own streamed prose, if any, is always closed off
 /// by whatever tool-call block followed it — see `chatBlocks.ts`'s
 /// `appendDeltaToBlocks` doc comment), so an empty string correctly leaves
-/// it untouched via `correctTrailingText` on the frontend rather than
+/// it untouched via `correctRoundText` on the frontend rather than
 /// clobbering it.
 fn run_tool_loop(
     ctx: &LoopCtx,

@@ -46,7 +46,6 @@ import {
   estimateMessageContextTokens,
   correctTrailingReasoning,
   correctRoundText,
-  correctTrailingText,
   markRunningToolCallsAsInterrupted,
   settleToolCallBlock,
   updateLastAssistantBlocks,
@@ -1055,7 +1054,7 @@ export function useLlmChat(
             ? {
                 ...m,
                 blocks: (() => {
-                  const corrected = correctTrailingText(correctTrailingReasoning(m.blocks, reasoning ?? ""), text);
+                  const corrected = correctRoundText(correctTrailingReasoning(m.blocks, reasoning ?? ""), text);
                   return stoppedByUser
                     ? markRunningToolCallsAsInterrupted(corrected, "Остановлено пользователем")
                     : corrected;
@@ -1414,9 +1413,11 @@ export function useLlmChat(
         // the card entirely for tool names already trusted, whether from
         // this chat or persisted from an earlier one on this project)
         // before resuming, potentially several times if later rounds pause
-        // again. Authoritative full text of the *final* round corrects only
-        // the trailing text block — see `correctTrailingText`'s doc comment
-        // for why that's always the right (and only) block it can apply to.
+        // again. The outcome's authoritative full text belongs to the
+        // *final* round, and goes through the same `correctRoundText` every
+        // other round already reported through — which, having closed that
+        // round's block off when `llm:round-text` fired for it, is a no-op
+        // here unless that event never arrived.
         const outcome = await runPendingLoop(
           await streamLlmChat(
             providerId,

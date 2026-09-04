@@ -833,18 +833,17 @@ pub enum ChatEvent {
     ///
     /// `Delta` is the only thing that builds a round's prose on the
     /// frontend, and a dropped delta there is permanent: the blocks are what
-    /// gets persisted, and the only reconciliation that existed
-    /// (`correctTrailingText`) runs once per *turn*, against the final
-    /// round. A round closed by a tool call was therefore never checked
-    /// against anything — every one of them in the transcript that prompted
-    /// this ended mid-word, while the same round's full text sat in
-    /// `history` and went to the model. The user read a truncated version of
-    /// what the model actually said.
+    /// gets persisted, and the only reconciliation that existed before this
+    /// event ran once per *turn*, against the final round. A round closed by
+    /// a tool call was therefore never checked against anything — every one
+    /// of them in the transcript that prompted this ended mid-word, while
+    /// the same round's full text sat in `history` and went to the model.
+    /// The user read a truncated version of what the model actually said.
     ///
-    /// Fires for every round, the last one included (where it agrees with
-    /// what `correctTrailingText` will do anyway — one rule is cheaper than
-    /// a special case), and before the pending-approval check, so a round
-    /// that pauses for a confirmation has already reported its prose.
+    /// Fires for every round, the last one included (where the turn's own
+    /// final text agrees with it anyway — one rule is cheaper than a special
+    /// case), and before the pending-approval check, so a round that pauses
+    /// for a confirmation has already reported its prose.
     RoundText(ChatRoundText),
     SteeringApplied(SteeringAppliedEvent),
     /// Fired while a tool call's `arguments` are still arriving on the

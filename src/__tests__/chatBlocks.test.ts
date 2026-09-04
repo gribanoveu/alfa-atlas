@@ -10,7 +10,6 @@ import {
   closeOpenBlocks,
   correctRoundText,
   correctTrailingReasoning,
-  correctTrailingText,
   flattenBlocksToText,
   groupBlocksForRender,
   lastBlockShowsLiveProgress,
@@ -153,13 +152,6 @@ describe("interleaved reasoning and text deltas", () => {
     expect(mergeInterleavedStreamBlocks(blocks)).toBe(blocks);
   });
 
-  test("correctTrailingText fixes up the round's open text block, not just a trailing one", () => {
-    const blocks = appendReasoningDeltaToBlocks(appendDeltaToBlocks([], "partia"), "still thinking");
-    const corrected = correctTrailingText(blocks, "partial answer, made whole");
-    expect(corrected).toHaveLength(2);
-    expect(corrected[0]).toMatchObject({ type: "text", content: "partial answer, made whole" });
-  });
-
   test("correctTrailingReasoning fixes up the round's open reasoning block", () => {
     const blocks = appendDeltaToBlocks(appendReasoningDeltaToBlocks([], "partia"), "the answer");
     const corrected = correctTrailingReasoning(blocks, "partial thought, made whole");
@@ -243,6 +235,51 @@ describe("correctRoundText", () => {
     });
   });
 
+  test("folds a delta that landed after the tool call back into the round's prose", () => {
+    // The defect, straight off a real transcript: the model emits a trailing
+    // "\n" once the tool call's arguments have started streaming, which opens
+    // a second text block for the same round. Writing the round's full text
+    // into that orphan left the block in front of the call standing, so every
+    // paragraph appeared twice — once before the tool-call chip, once after.
+    let blocks = appendDeltaToBlocks([], "Смотрю файл конфигурации.");
+    blocks = appendToolCallBlock(blocks, call);
+    blocks = appendDeltaToBlocks(blocks, "\n");
+    const corrected = correctRoundText(blocks, "Смотрю файл конфигурации.\n");
+    expect(corrected.map((b) => b.type)).toEqual(["text", "toolCall"]);
+    expect(corrected[0]).toMatchObject({
+      type: "text",
+      content: "Смотрю файл конфигурации.\n",
+      closed: true,
+    });
+  });
+
+  test("folds a round whose prose is split across several of its tool calls", () => {
+    let blocks = appendDeltaToBlocks([], "Читаю ");
+    blocks = appendToolCallBlock(blocks, call);
+    blocks = appendDeltaToBlocks(blocks, "оба ");
+    blocks = appendToolCallBlock(blocks, { ...call, id: "call_2" });
+    blocks = appendDeltaToBlocks(blocks, "файла.");
+    const corrected = correctRoundText(blocks, "Читаю оба файла.");
+    expect(corrected.filter((b) => b.type === "text")).toHaveLength(1);
+    expect(corrected.map((b) => b.type)).toEqual(["text", "toolCall", "toolCall"]);
+    expect(corrected[0]).toMatchObject({ content: "Читаю оба файла." });
+  });
+
+  test("leaves the previous round's prose alone while folding this one's", () => {
+    let blocks = correctRoundText(
+      appendToolCallBlock(appendDeltaToBlocks([], "Первый раунд."), call),
+      "Первый раунд.",
+    );
+    blocks = appendDeltaToBlocks(blocks, "Второй ");
+    blocks = appendToolCallBlock(blocks, { ...call, id: "call_2" });
+    blocks = appendDeltaToBlocks(blocks, "\n");
+    const corrected = correctRoundText(blocks, "Второй раунд.\n");
+    expect(corrected.filter((b) => b.type === "text").map((b) => b.type === "text" && b.content)).toEqual([
+      "Первый раунд.",
+      "Второй раунд.\n",
+    ]);
+  });
+
   test("puts recovered prose after the reasoning it followed", () => {
     const blocks = appendToolCallBlock(appendReasoningDeltaToBlocks([], "думаю"), call);
     const corrected = correctRoundText(blocks, "Ответ.");
@@ -281,14 +318,19 @@ describe("round boundaries", () => {
     expect(closeOpenBlocks([])).toEqual([]);
   });
 
-  test("correctTrailingText cannot reopen a closed block", () => {
-    // The final round's authoritative text belongs to the final round; with
-    // a closed earlier block it appends instead of overwriting the wrong one.
-    const closed = closeOpenBlocks(appendDeltaToBlocks([], "первый раунд"));
-    const corrected = correctTrailingText(closed, "второй раунд");
-    expect(corrected).toHaveLength(2);
-    expect(corrected[0]).toMatchObject({ content: "первый раунд", closed: true });
-    expect(corrected[1]).toMatchObject({ type: "text", content: "второй раунд" });
+  test("a corrected round's block is closed, so a later round cannot claim it", () => {
+    // `closeOpenBlocks` can never reach a text block sitting behind a tool
+    // call, so `llm:round-text` closing it is the only boundary that round
+    // ever gets — without it a later round that called a tool and lost every
+    // delta would overwrite this round's answer with its own text.
+    const call = { id: "call_1", name: "readFile", argumentsJson: "{}" };
+    const round1 = correctRoundText(
+      appendToolCallBlock(appendDeltaToBlocks([], "перв"), call),
+      "первый раунд",
+    );
+    expect(round1[0]).toMatchObject({ type: "text", content: "первый раунд", closed: true });
+    const round2 = appendToolCallBlock(round1, { ...call, id: "call_2" });
+    expect(correctRoundText(round2, "второй раунд")).toBe(round2);
   });
 
   test("a stored transcript is not re-glued across a round boundary on load", () => {
@@ -510,40 +552,6 @@ describe("settleToolCallBlock", () => {
       error: null,
     });
     expect(blocks[0]).toEqual(running);
-  });
-});
-
-describe("correctTrailingText", () => {
-  test("replaces a trailing text block's content", () => {
-    const blocks: MessageBlock[] = [{ type: "text", id: "t1", content: "partial" }];
-    const corrected = correctTrailingText(blocks, "full authoritative text");
-    expect(corrected).toHaveLength(1);
-    expect(corrected[0]).toMatchObject({ id: "t1", content: "full authoritative text" });
-  });
-
-  test("appends a new text block when trailing is a tool call and text is non-empty", () => {
-    const toolCall: ToolCallBlock = {
-      type: "toolCall",
-      id: "call_1",
-      name: "readFile",
-      argumentsJson: "{}",
-      status: "done",
-    };
-    const corrected = correctTrailingText([toolCall], "final answer");
-    expect(corrected).toHaveLength(2);
-    expect(corrected[1]).toMatchObject({ type: "text", content: "final answer" });
-  });
-
-  test("is a no-op when trailing is a tool call and text is empty", () => {
-    const toolCall: ToolCallBlock = {
-      type: "toolCall",
-      id: "call_1",
-      name: "readFile",
-      argumentsJson: "{}",
-      status: "done",
-    };
-    const corrected = correctTrailingText([toolCall], "");
-    expect(corrected).toEqual([toolCall]);
   });
 });
 
