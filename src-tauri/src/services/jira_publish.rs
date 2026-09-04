@@ -11,7 +11,7 @@
 //! retry, whereas losing the key would orphan a real issue in a shared
 //! tracker and invite a duplicate on the next click.
 
-use crate::domain::artifact::{ArtifactContent, JiraTicketSpec};
+use crate::domain::artifact::ArtifactContent;
 use crate::domain::artifact_render;
 use crate::domain::jira::{JiraCreatedIssue, JiraError, JiraLinkOutcome, JiraWebLink, NewIssue};
 use crate::infra::{jira_client, llm_provider_manifest};
@@ -92,7 +92,8 @@ pub fn publish(artifact_id: &str) -> Result<PublishOutcome, JiraError> {
 
     // Before the links: an issue whose key was never recorded is an issue
     // the user cannot find and will publish again.
-    remember_issue_key(artifact_id, spec, &key)?;
+    artifacts::record_issue_key(artifact_id, &key)
+        .map_err(|e| JiraError::Artifact(e.to_string()))?;
 
     let links: Vec<JiraWebLink> = record_links(&record.content);
     let outcomes = if links.is_empty() {
@@ -127,20 +128,6 @@ fn browse_url(base_url: &str, key: &str) -> String {
     format!("{}/browse/{key}", base_url.trim_end_matches('/'))
 }
 
-fn remember_issue_key(
-    artifact_id: &str,
-    spec: JiraTicketSpec,
-    key: &str,
-) -> Result<(), JiraError> {
-    let content = ArtifactContent::JiraTicket(JiraTicketSpec {
-        issue_key: key.to_string(),
-        ..spec
-    });
-    artifacts::update_agent(artifact_id, None, content)
-        .map(|_| ())
-        .map_err(|e| JiraError::Artifact(e.to_string()))
-}
-
 /// The ticket's own links, as Web Links. Title falls back to the link type
 /// (`GIT`, `FIGMA`), matching what hand-written tickets carry.
 fn record_links(content: &ArtifactContent) -> Vec<JiraWebLink> {
@@ -167,7 +154,7 @@ fn record_links(content: &ArtifactContent) -> Vec<JiraWebLink> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::artifact::TicketLink;
+    use crate::domain::artifact::{JiraTicketSpec, TicketLink};
 
     #[test]
     fn browse_url_joins_with_exactly_one_slash() {

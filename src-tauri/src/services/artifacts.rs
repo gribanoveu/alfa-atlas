@@ -170,12 +170,38 @@ pub fn update_agent(
         title,
         purpose: stored.purpose,
         status: stored.status,
-        content,
+        // Wholesale, except identity: a model rewriting a published ticket
+        // sends the content back without its issue key, and losing the key
+        // would make the next publish create a duplicate issue.
+        content: content.with_identity_of(&stored.content),
         created_at_ms: stored.created_at_ms,
         updated_at_ms: 0,
         chat_id: stored.chat_id,
         repo_root: stored.repo_root,
     });
+    artifact_store::save(&repo_id, &record)?;
+    Ok(record)
+}
+
+/// Records the Jira key a publish produced.
+///
+/// The only writer of that field. Every other path — `save`,
+/// `update_agent` — carries the stored key forward untouched (see
+/// `ArtifactContent::with_identity_of`), so an artifact can only ever point
+/// at an issue this app actually created.
+pub fn record_issue_key(
+    artifact_id: &str,
+    issue_key: &str,
+) -> Result<ArtifactRecord, ArtifactError> {
+    let repo_id = owning_repo_id(artifact_id)?;
+    let mut record = artifact_store::get(&repo_id, artifact_id)?;
+    let ArtifactContent::JiraTicket(spec) = &mut record.content else {
+        return Err(ArtifactError::Invalid(format!(
+            "artifact {artifact_id} is not a Jira ticket and has no issue key"
+        )));
+    };
+    spec.issue_key = issue_key.trim().to_string();
+    let record = artifact_store::stamp_updated(record);
     artifact_store::save(&repo_id, &record)?;
     Ok(record)
 }
@@ -213,7 +239,10 @@ pub fn save(incoming: ArtifactRecord) -> Result<ArtifactRecord, ArtifactError> {
         },
         purpose: stored.purpose,
         status: incoming.status,
-        content: incoming.content,
+        // Same rule as `update_agent`: the builder round-trips the whole
+        // record, so a UI that ever stopped carrying the key would silently
+        // unpublish the ticket.
+        content: incoming.content.with_identity_of(&stored.content),
         created_at_ms: stored.created_at_ms,
         updated_at_ms: 0,
         chat_id: stored.chat_id,
@@ -318,6 +347,108 @@ mod tests {
             stored_in("some-other-repo", "doomed");
             delete("doomed").expect("delete");
             assert!(matches!(get("doomed"), Err(ArtifactError::NotFound(_))));
+        });
+    }
+
+    fn ticket_in(repo_id: &str, artifact_id: &str, why: &str) -> ArtifactRecord {
+        let record = artifact_store::stamp_new(ArtifactRecord {
+            id: artifact_id.to_string(),
+            kind: ArtifactKind::JiraTicket,
+            title: "Тикет".into(),
+            purpose: None,
+            status: ArtifactStatus::Ready,
+            content: ArtifactContent::JiraTicket(crate::domain::artifact::JiraTicketSpec {
+                why: why.to_string(),
+                ..Default::default()
+            }),
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            chat_id: None,
+            repo_root: Some("/repos/corp-wlbuh-enp-api".into()),
+        });
+        artifact_store::save(repo_id, &record).expect("save");
+        record
+    }
+
+    fn issue_key_of(record: &ArtifactRecord) -> &str {
+        match &record.content {
+            ArtifactContent::JiraTicket(spec) => &spec.issue_key,
+            _ => panic!("not a ticket"),
+        }
+    }
+
+    /// Editing a published ticket must not un-publish it: the key is what
+    /// stops the next click from creating a second issue in Jira.
+    #[test]
+    fn an_assistant_rewrite_keeps_a_published_ticket_published() {
+        with_temp_home(|| {
+            ticket_in("repo", "published", "Старая формулировка");
+            record_issue_key("published", "WOWTAX-8094").expect("record key");
+
+            // The model sends the whole ticket back, without the key — it is
+            // not in the tool's schema for it to know about.
+            let updated = update_agent(
+                "published",
+                None,
+                ArtifactContent::JiraTicket(crate::domain::artifact::JiraTicketSpec {
+                    why: "Новая формулировка".into(),
+                    ..Default::default()
+                }),
+            )
+            .expect("update");
+
+            assert_eq!(issue_key_of(&updated), "WOWTAX-8094");
+            assert_eq!(issue_key_of(&get("published").expect("get")), "WOWTAX-8094");
+        });
+    }
+
+    #[test]
+    fn saving_from_the_builder_keeps_the_issue_key_too() {
+        with_temp_home(|| {
+            let stored = ticket_in("repo", "published", "Проблема");
+            record_issue_key("published", "WOWTAX-8094").expect("record key");
+
+            // A record that lost the key on its way through the UI.
+            let saved = save(ArtifactRecord {
+                content: ArtifactContent::JiraTicket(
+                    crate::domain::artifact::JiraTicketSpec {
+                        why: "Проблема".into(),
+                        ..Default::default()
+                    },
+                ),
+                ..stored
+            })
+            .expect("save");
+            assert_eq!(issue_key_of(&saved), "WOWTAX-8094");
+        });
+    }
+
+    #[test]
+    fn an_issue_key_cannot_be_claimed_by_writing_content() {
+        with_temp_home(|| {
+            ticket_in("repo", "draft", "Проблема");
+            let updated = update_agent(
+                "draft",
+                None,
+                ArtifactContent::JiraTicket(crate::domain::artifact::JiraTicketSpec {
+                    issue_key: "WOWTAX-1".into(),
+                    why: "Проблема".into(),
+                    ..Default::default()
+                }),
+            )
+            .expect("update");
+            assert!(issue_key_of(&updated).is_empty());
+        });
+    }
+
+    #[test]
+    fn record_issue_key_refuses_anything_but_a_ticket() {
+        with_temp_home(|| {
+            stored_in("repo", "an-http-request");
+            assert!(matches!(
+                record_issue_key("an-http-request", "WOWTAX-1"),
+                Err(ArtifactError::Invalid(_))
+            ));
         });
     }
 

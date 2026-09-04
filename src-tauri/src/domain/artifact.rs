@@ -222,11 +222,13 @@ pub struct TicketLink {
 pub struct JiraTicketSpec {
     /// The issue this draft became, once published — e.g. `WOWTAX-123`.
     ///
-    /// Written by `services::jira_publish`, never by hand and never by the
-    /// model: it is the *result* of publishing, and it is what stops a
-    /// second publish from creating a duplicate issue. Identity, not
-    /// content, so it is outside the section order below and is never
-    /// rendered into the description.
+    /// Written only by `services::artifacts::record_issue_key`, which
+    /// publishing calls — never by hand and never by the model: it is the
+    /// *result* of publishing, and it is what stops a second publish from
+    /// creating a duplicate issue. Identity, not content, so it survives a
+    /// wholesale content rewrite (`ArtifactContent::with_identity_of`), it
+    /// is outside the section order below, and it is never rendered into
+    /// the description.
     pub issue_key: String,
     /// «Почему задача существует» — the problem, without the solution.
     pub why: String,
@@ -266,6 +268,31 @@ impl ArtifactContent {
             ArtifactKind::HttpRequest => ArtifactContent::HttpRequest(HttpRequestSpec::default()),
             ArtifactKind::JiraTicket => ArtifactContent::JiraTicket(JiraTicketSpec::default()),
         }
+    }
+
+    /// This content as a replacement for `stored`, keeping the identity
+    /// `stored` carries.
+    ///
+    /// A rewrite replaces content wholesale — that is what makes «убери
+    /// этот риск» expressible at all — but a Jira key is not content. It is
+    /// the result of publishing, it is deliberately absent from the
+    /// `artifact` tool's schema, and so a model sending a whole ticket back
+    /// always sends it empty. Without this, editing a published ticket
+    /// would clear its key, put the publish button back, and let the next
+    /// click create a duplicate issue in a tracker that has no undo.
+    ///
+    /// Unconditional in both directions: a key the caller supplies is
+    /// dropped just as an empty one is. Publishing writes the field through
+    /// `services::artifacts::record_issue_key`, which is the only writer,
+    /// so a model inventing a plausible `WOWTAX-…` cannot make an artifact
+    /// point at an issue that does not exist.
+    pub fn with_identity_of(mut self, stored: &ArtifactContent) -> Self {
+        if let (ArtifactContent::JiraTicket(next), ArtifactContent::JiraTicket(previous)) =
+            (&mut self, stored)
+        {
+            next.issue_key = previous.issue_key.clone();
+        }
+        self
     }
 }
 
@@ -531,6 +558,42 @@ mod tests {
         // is — better than a blank row in the artifacts list.
         let early = record(JiraTicketSpec { why: "Проблема".into(), ..Default::default() });
         assert_eq!(early.to_summary().subtitle, "Проблема");
+    }
+
+    /// The rule that keeps an edit from turning into a duplicate issue.
+    #[test]
+    fn a_content_rewrite_carries_the_issue_key_across() {
+        let published = ArtifactContent::JiraTicket(JiraTicketSpec {
+            issue_key: "WOWTAX-8094".into(),
+            why: "Старая формулировка".into(),
+            ..Default::default()
+        });
+        // What a model actually sends back: the whole ticket, and no key —
+        // the field is not in the tool's schema for it to know about.
+        let rewritten = ArtifactContent::JiraTicket(JiraTicketSpec {
+            why: "Новая формулировка".into(),
+            ..Default::default()
+        });
+
+        let merged = rewritten.with_identity_of(&published);
+        let ArtifactContent::JiraTicket(spec) = merged else { panic!("kind changed") };
+        assert_eq!(spec.issue_key, "WOWTAX-8094");
+        assert_eq!(spec.why, "Новая формулировка");
+    }
+
+    /// The other direction: a key the caller supplied is not a way to claim
+    /// an issue. Only publishing writes that field.
+    #[test]
+    fn a_content_rewrite_cannot_invent_an_issue_key() {
+        let unpublished = ArtifactContent::JiraTicket(JiraTicketSpec::default());
+        let claiming = ArtifactContent::JiraTicket(JiraTicketSpec {
+            issue_key: "WOWTAX-1".into(),
+            ..Default::default()
+        });
+
+        let merged = claiming.with_identity_of(&unpublished);
+        let ArtifactContent::JiraTicket(spec) = merged else { panic!("kind changed") };
+        assert!(spec.issue_key.is_empty());
     }
 
     #[test]
