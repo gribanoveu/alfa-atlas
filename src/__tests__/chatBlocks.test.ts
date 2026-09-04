@@ -23,6 +23,7 @@ import {
   type MessageBlock,
   type ToolCallBlock,
 } from "../lib/chatBlocks";
+import { APPROVAL_TIMED_OUT_ERROR, TOOL_DENIED_BY_USER, type ToolResult } from "../lib/aiTools";
 
 describe("appendDeltaToBlocks", () => {
   test("opens a new text block when there are no blocks yet", () => {
@@ -753,12 +754,35 @@ describe("toolLedger", () => {
     name: string,
     args: Record<string, unknown>,
     status: ToolCallBlock["status"] = "done",
+    extra: Partial<ToolCallBlock> = {},
   ): ToolCallBlock => ({
     type: "toolCall",
-    id: `call_${name}_${JSON.stringify(args)}`,
+    id: `call_${name}_${JSON.stringify(args)}_${status}_${JSON.stringify(extra)}`,
     name,
     argumentsJson: JSON.stringify(args),
     status,
+    ...extra,
+  });
+
+  const grepHits = (n: number): ToolResult => ({
+    tool: "grepResults",
+    result: {
+      matches: Array.from({ length: n }, (_, i) => ({ path: `f${i}.adoc`, line: i, text: "hit" })),
+      truncated: false,
+    },
+  });
+
+  const semanticHits = (n: number): ToolResult => ({
+    tool: "semanticSearchResults",
+    result: Array.from({ length: n }, (_, i) => ({
+      path: `f${i}.adoc`,
+      snippet: "hit",
+      score: 1,
+      startByte: 0,
+      endByte: 1,
+      qualifiedName: null,
+      source: "lexical" as const,
+    })),
   });
 
   test("records read, changed and deleted paths, changes first", () => {
@@ -768,19 +792,79 @@ describe("toolLedger", () => {
       call("deleteFile", { path: "docs/old.adoc" }),
     ]);
     expect(ledger).toBe(
-      "[Файлы, затронутые в этом ходе — изменены: docs/fetch.adoc; удалены: docs/old.adoc; прочитаны: src/api/AusnController.java]",
+      "[В этом ходе — изменены: docs/fetch.adoc; удалены: docs/old.adoc; прочитаны: src/api/AusnController.java]",
     );
   });
 
-  test("is empty for a turn that touched no files", () => {
+  test("is empty for a turn that did nothing worth remembering", () => {
     expect(toolLedger([{ type: "text", id: "t1", content: "just prose" }])).toBe("");
-    expect(toolLedger([call("semanticSearch", { query: "x" }), call("todo", { op: "write" })])).toBe("");
+    expect(toolLedger([call("todo", { op: "write" })])).toBe("");
+    // A search with no recognizable query is not a search anyone can reuse.
+    expect(toolLedger([call("semanticSearch", { query: "  " })])).toBe("");
   });
 
-  test("ignores calls that did not settle successfully", () => {
-    expect(toolLedger([call("readFile", { path: "a.adoc" }, "error")])).toBe("");
+  test("ignores calls still in flight, which have no outcome to record yet", () => {
     expect(toolLedger([call("readFile", { path: "a.adoc" }, "running")])).toBe("");
     expect(toolLedger([call("writeFile", { path: "a.adoc" }, "pendingApproval")])).toBe("");
+  });
+
+  test("records searches with their hit counts", () => {
+    // The count is the point: a query that found nothing must read as
+    // answered, or the next turn runs it again verbatim.
+    const ledger = toolLedger([
+      call("grep", { pattern: "AusnTransaction" }, "done", { result: grepHits(12) }),
+      call("semanticSearch", { query: "подпись патента" }, "done", { result: semanticHits(0) }),
+    ]);
+    expect(ledger).toBe(
+      "[В этом ходе — искали: «AusnTransaction» (grep, найдено 12), «подпись патента» (semanticSearch, ничего не найдено)]",
+    );
+  });
+
+  test("a search is remembered even when its result is gone", () => {
+    expect(toolLedger([call("grep", { pattern: "AusnTransaction" })])).toBe(
+      "[В этом ходе — искали: «AusnTransaction» (grep)]",
+    );
+  });
+
+  test("a grep's path does not turn it into a file the turn read", () => {
+    // It searched inside the file, it did not see its contents.
+    const ledger = toolLedger([call("grep", { pattern: "patent", path: "docs/api" }, "done", { result: grepHits(1) })]);
+    expect(ledger).not.toContain("прочитаны");
+    expect(ledger).toContain("искали: «patent» (grep, найдено 1)");
+  });
+
+  test("records a refusal apart from a failure, and never as the wrong one", () => {
+    const ledger = toolLedger([
+      call("writeFile", { path: "docs/x.adoc" }, "error", { errorMessage: TOOL_DENIED_BY_USER }),
+      call("askUser", { title: "Уточнить?" }, "error", { errorMessage: TOOL_DENIED_BY_USER }),
+      call("requestArtifact", { id: "a" }, "error", { errorMessage: TOOL_DENIED_BY_USER }),
+      call("editFile", { path: "docs/y.adoc" }, "error", { errorMessage: APPROVAL_TIMED_OUT_ERROR }),
+      call("check", { kind: "standards" }, "error", { errorMessage: "parser crashed" }),
+    ]);
+    expect(ledger).toBe(
+      "[В этом ходе — не выполнено: writeFile docs/x.adoc (отклонено пользователем), " +
+        "askUser (пропущено пользователем), requestArtifact (отложено пользователем), " +
+        "editFile docs/y.adoc (истекло время на подтверждение), check (ошибка: parser crashed)]",
+    );
+  });
+
+  test("a refused write is not also counted as a file the turn changed", () => {
+    const ledger = toolLedger([
+      call("writeFile", { path: "docs/x.adoc" }, "error", { errorMessage: TOOL_DENIED_BY_USER }),
+    ]);
+    expect(ledger).not.toContain("изменены");
+  });
+
+  test("long queries and long errors are cut down to a recognizable stub", () => {
+    const ledger = toolLedger([
+      call("semanticSearch", { query: "как\n  устроена   ".concat("подпись ".repeat(20)) }, "done", {
+        result: semanticHits(1),
+      }),
+      call("check", { kind: "standards" }, "error", { errorMessage: "x".repeat(200) }),
+    ]);
+    expect(ledger).toContain("«как устроена подпись");
+    expect(ledger).toContain("…»");
+    expect(ledger).toContain(`ошибка: ${"x".repeat(80)}…`);
   });
 
   test("dedupes repeated paths and survives unparseable arguments", () => {
@@ -789,13 +873,24 @@ describe("toolLedger", () => {
       call("readFile", { path: "a.adoc" }),
       { type: "toolCall", id: "c3", name: "readFile", argumentsJson: "{not json", status: "done" },
     ]);
-    expect(ledger).toBe("[Файлы, затронутые в этом ходе — прочитаны: a.adoc]");
+    expect(ledger).toBe("[В этом ходе — прочитаны: a.adoc]");
   });
 
   test("renders a move as its before → after pair", () => {
     expect(toolLedger([call("move", { path: "old.adoc", newPath: "new.adoc" })])).toBe(
-      "[Файлы, затронутые в этом ходе — изменены: old.adoc → new.adoc]",
+      "[В этом ходе — изменены: old.adoc → new.adoc]",
     );
+  });
+
+  test("searches and failures have their own caps, so paths cannot starve them", () => {
+    const reads = Array.from({ length: 45 }, (_, i) => call("readFile", { path: `f${i}.java` }));
+    const searches = Array.from({ length: 11 }, (_, i) =>
+      call("grep", { pattern: `p${i}` }, "done", { result: grepHits(1) }),
+    );
+    const ledger = toolLedger([...reads, ...searches]);
+    expect(ledger).toContain("«p10»");
+    expect(ledger).not.toContain("«p2»");
+    expect(ledger).toContain("и ещё 3");
   });
 
   test("caps a long research turn and reports how many paths were dropped", () => {
@@ -819,7 +914,7 @@ describe("toolLedger", () => {
       ],
     };
     expect(chatMessageToPlainText(message)).toBe(
-      "Смотри AusnTransactionService.java:41.\n\n[Файлы, затронутые в этом ходе — прочитаны: src/thrift/services/AusnTransactionService.java]",
+      "Смотри AusnTransactionService.java:41.\n\n[В этом ходе — прочитаны: src/thrift/services/AusnTransactionService.java]",
     );
   });
 });

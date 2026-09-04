@@ -6,7 +6,7 @@ import type {
   SemanticSearchMeta,
   Task,
 } from "./aiTools";
-import { normalizeSemanticSearchResult } from "./aiTools";
+import { APPROVAL_TIMED_OUT_ERROR, normalizeSemanticSearchResult, TOOL_DENIED_BY_USER } from "./aiTools";
 import type { ChatMessage, ToolCallBlock } from "./chatBlocks";
 import type { SpecsRepoInfo } from "./openapi";
 import type { ArtifactSummary } from "./artifacts";
@@ -316,7 +316,10 @@ All tool path arguments and path fields in tool results use the **same access-mo
 
 - Pass paths between tools unchanged — a \`listFiles\`/\`readFile\`/\`grep\`/\`semanticSearch\`/\`check\` path is already valid for \`writeFile\`/\`editFile\`/\`move\`/\`check\` in the same mode.
 - Write/mutate/\`check\` still only succeed for paths under the documentation tree. A path outside it (e.g. source code in Full-repo) fails immediately with an error — do not retry the same path, and do not ask the user to approve an impossible write.
-- Earlier assistant turns end with a \`[Файлы, затронутые в этом ходе — …]\` line. It is a record of what those turns actually read or changed, not prose you wrote: those paths are exact and can go straight into \`readFile\`/\`grep\`. Never reconstruct a path from a filename mentioned in prose when that line already has the full one, and never quote this line back to the user.
+- Earlier assistant turns end with a \`[В этом ходе — …]\` line. It is a record of what those turns actually did, not prose you wrote, and it is never quoted back to the user. Read it as three separate facts:
+  - \`изменены\`/\`удалены\`/\`прочитаны\` — exact paths, they go straight into \`readFile\`/\`grep\`. Never reconstruct a path from a filename mentioned in prose when that line already has the full one.
+  - \`искали\` — queries already run, with how many hits each returned. Do not repeat a query listed there; if it says \`ничего не найдено\`, that answer still stands — search differently or say so, rather than running it again.
+  - \`не выполнено\` — calls that did not happen, with the reason. \`отклонено пользователем\` means the user refused: do not silently retry it, ask. \`ошибка\` means it failed for a technical reason: fix the cause before repeating it.
 
 ${pathExampleBlock(docsRootRelativeToRepo)}
 
@@ -1040,7 +1043,7 @@ export function describeToolResult(
     // worth its own Russian phrasing rather than falling through to the
     // generic "Ошибка: {raw backend text}" line below. `askUser` skip uses
     // the same backend marker but reads as "Пропущено", not "Отклонено".
-    if (block.errorMessage === "denied by user") {
+    if (block.errorMessage === TOOL_DENIED_BY_USER) {
       if (block.name === "askUser") return "Пропущено пользователем";
       // «Заполню позже» is a deferral, not a refusal — saying "Отклонено"
       // would misreport what the user did.
@@ -1388,11 +1391,6 @@ export function isAutoApprovable(toolName: string): boolean {
  * artifact being filled in another tab) plus the consent tools, where an
  * auto-deny is indistinguishable to the model from a real refusal. */
 export const NO_TIMEOUT_TOOLS = new Set([...PAUSE_ONLY_TOOLS, ...CONSENT_TOOLS]);
-
-/** `errorMessage` `useLlmChat` substitutes for the backend's generic
- * `"denied by user"` when it was the countdown, not the user, that refused
- * the call — see `describeToolResult`, which renders it as its own line. */
-export const APPROVAL_TIMED_OUT_ERROR = "approval timed out";
 
 /** Static Russian labels for the tools a pending-approval card's "не
  * спрашивать больше"/"Разрешать всегда" controls can apply to

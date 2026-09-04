@@ -1,4 +1,9 @@
-import { normalizeSemanticSearchResult, type ToolResult } from "./aiTools";
+import {
+  APPROVAL_TIMED_OUT_ERROR,
+  normalizeSemanticSearchResult,
+  TOOL_DENIED_BY_USER,
+  type ToolResult,
+} from "./aiTools";
 import { STEERING_PREFIX, type ChatUsage } from "./llm";
 import { estimateTokenCount, estimateTokensFromChars } from "./tokens";
 
@@ -768,49 +773,152 @@ const WRITE_TOOLS = new Set(["writeFile", "editFile", "createDirectory"]);
 
 const DELETE_TOOLS = new Set(["deleteFile", "deleteDirectory"]);
 
-/** Reads `path`/`newPath` off a tool call's raw arguments JSON. Purely
- * cosmetic-grade parsing, like `describeToolActivity`'s: a call whose
- * arguments don't parse contributes nothing rather than throwing. */
-export function toolCallPaths(block: ToolCallBlock): { path?: string; newPath?: string } {
+/** Tools whose call *is* a question about the repository rather than a
+ * visit to a known file — the argument worth remembering is the query, not
+ * a path (`semanticSearch` has no path at all). `listFiles` is absent: a
+ * directory listing is reproduced from its path, which the model can see it
+ * already has. */
+const SEARCH_TOOLS = new Set(["grep", "semanticSearch"]);
+
+/** Upper bounds for the two sections that are not paths. Searches are the
+ * cheaper line and the more useful one, so they get the larger budget;
+ * failures are rare in a healthy turn, and a turn with more than a handful
+ * has a story its prose already tells. */
+const TOOL_LEDGER_MAX_SEARCHES = 8;
+const TOOL_LEDGER_MAX_FAILURES = 6;
+
+/** A `semanticSearch` query can be a whole sentence and a `grep` pattern a
+ * long regex; the ledger only has to make the search recognizable as one
+ * already tried. */
+const TOOL_LEDGER_MAX_QUERY_CHARS = 60;
+
+/** Enough of a backend error to tell one cause from another without
+ * replaying a stack trace's worth of text. */
+const TOOL_LEDGER_MAX_ERROR_CHARS = 80;
+
+function truncateForLedger(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
+}
+
+/** Cosmetic-grade parsing of a tool call's raw arguments JSON, shared by
+ * everything below: a call whose arguments don't parse contributes nothing
+ * rather than throwing (the same tolerance `describeToolActivity` has). */
+function toolCallArgs(block: ToolCallBlock): Record<string, unknown> {
   try {
     const parsed: unknown = JSON.parse(block.argumentsJson);
-    if (!parsed || typeof parsed !== "object") return {};
-    const args = parsed as Record<string, unknown>;
-    return {
-      path: typeof args.path === "string" ? args.path : undefined,
-      newPath: typeof args.newPath === "string" ? args.newPath : undefined,
-    };
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
   } catch {
     return {};
   }
 }
 
-/** A one-line record of which files this turn touched, for replay into
- * later turns.
+/** Reads `path`/`newPath` off a tool call's raw arguments JSON. */
+export function toolCallPaths(block: ToolCallBlock): { path?: string; newPath?: string } {
+  const args = toolCallArgs(block);
+  return {
+    path: typeof args.path === "string" ? args.path : undefined,
+    newPath: typeof args.newPath === "string" ? args.newPath : undefined,
+  };
+}
+
+/** How many hits a settled search returned, or `null` when the result isn't
+ * a search payload at all. The count is the half of a search worth
+ * replaying: "already looked, found nothing" is what stops the model from
+ * running the identical query again next turn, and no number can say that. */
+function searchHitCount(result: ToolResult | undefined): number | null {
+  if (!result) return null;
+  if (result.tool === "grepResults") return result.result.matches.length;
+  if (result.tool === "semanticSearchResults") {
+    return normalizeSemanticSearchResult(result.result).matches.length;
+  }
+  return null;
+}
+
+/** One settled search as the ledger records it — `«запрос» (grep, найдено
+ * 12)`. `null` for a call whose query argument is missing or unparseable:
+ * a search nobody can identify is not worth a line. */
+function describeSearch(block: ToolCallBlock): string | null {
+  const args = toolCallArgs(block);
+  const raw = block.name === "grep" ? args.pattern : args.query;
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  const hits = searchHitCount(block.result);
+  const found = hits === null ? "" : hits === 0 ? ", ничего не найдено" : `, найдено ${hits}`;
+  return `«${truncateForLedger(raw, TOOL_LEDGER_MAX_QUERY_CHARS)}» (${block.name}${found})`;
+}
+
+/** One call that did not happen, and why. The refusal markers are spelled
+ * out rather than folded into "ошибка": a turn that reads its own history
+ * as a failed write retries it, while one that reads a refusal asks first —
+ * and `askUser`/`requestArtifact` are neither, so calling their outcome a
+ * refusal would put words in the user's mouth. */
+function describeFailure(block: ToolCallBlock): string {
+  const { path } = toolCallPaths(block);
+  const target = path ? ` ${path}` : "";
+  return `${block.name}${target} (${failureReason(block)})`;
+}
+
+function failureReason(block: ToolCallBlock): string {
+  if (block.errorMessage === APPROVAL_TIMED_OUT_ERROR) return "истекло время на подтверждение";
+  if (block.errorMessage === TOOL_DENIED_BY_USER) {
+    if (block.name === "askUser") return "пропущено пользователем";
+    if (block.name === "requestArtifact") return "отложено пользователем";
+    return "отклонено пользователем";
+  }
+  return `ошибка: ${truncateForLedger(block.errorMessage ?? "неизвестная ошибка", TOOL_LEDGER_MAX_ERROR_CHARS)}`;
+}
+
+/** A one-line record of what this turn actually did, for replay into later
+ * turns.
  *
  * The problem it solves: tool calls and their results live only inside the
  * turn that made them (`services::llm_chat::run_tool_loop` keeps them in
  * its own `history`); cross-turn replay is `flattenBlocksToText`, which
  * keeps prose only. So a follow-up turn sees the assistant's *answer* but
- * has no record of the files behind it — and prose routinely shortens a
+ * has no record of the work behind it — and prose routinely shortens a
  * path to a basename. Observed consequence: a turn that had read
  * `.../thrift/services/AusnTransactionService.java` answered citing
  * `AusnTransactionService.java:41`; the next turn needed that file again,
  * reconstructed the directory from a neighbouring path in its own text,
  * and called `grep` on a path that does not exist.
  *
- * Paths, not results: a re-read is one cheap call, while an invented path
- * costs a failed call plus whatever the model does to recover. So this
- * replays only the identity of what was touched — never snippets, never
- * search hits (those are reproducible), never failed calls. Returns `""`
- * when the turn touched nothing. */
+ * Identity, not content: a re-read is one cheap call, while an invented
+ * path costs a failed call plus whatever the model does to recover. So this
+ * replays what was touched, asked and refused — never snippets, never
+ * search hits themselves.
+ *
+ * Three kinds of fact, each earning its tokens differently:
+ *
+ * - **paths** the turn read or changed, the original reason this exists;
+ * - **searches** it ran, with their hit counts. A search leaves no path
+ *   behind (`semanticSearch` takes no path at all), so without this a turn
+ *   remembers nothing about having looked — and re-runs the identical query
+ *   next turn. The count is what makes the line worth its tokens: "already
+ *   looked, found nothing" is a fact no path list can express;
+ * - **calls that did not happen**, with the reason. The ledger used to keep
+ *   settled calls only, so a write the user refused left the same trace as
+ *   one that was never attempted: the next turn simply tried it again.
+ *
+ * Returns `""` for a turn that did none of the three. */
 export function toolLedger(blocks: MessageBlock[]): string {
   const read: string[] = [];
   const written: string[] = [];
   const deleted: string[] = [];
+  const searched: string[] = [];
+  const failed: string[] = [];
 
   for (const block of blocks) {
-    if (block.type !== "toolCall" || block.status !== "done") continue;
+    if (block.type !== "toolCall") continue;
+    if (block.status === "error") {
+      failed.push(describeFailure(block));
+      continue;
+    }
+    if (block.status !== "done") continue;
+    if (SEARCH_TOOLS.has(block.name)) {
+      const search = describeSearch(block);
+      if (search) searched.push(search);
+      continue;
+    }
     const { path, newPath } = toolCallPaths(block);
     if (block.name === "move") {
       if (path && newPath) written.push(`${path} → ${newPath}`);
@@ -825,16 +933,14 @@ export function toolLedger(blocks: MessageBlock[]): string {
   // Writes and deletes lead: they changed the project, so a later turn
   // reasoning about its current state needs them even more than reads —
   // and being first, they are never the entries the cap drops.
-  const groups: (readonly [string, string[]])[] = [
+  const pathSections: string[] = [];
+  let budget = TOOL_LEDGER_MAX_PATHS;
+  let omitted = 0;
+  for (const [label, paths] of [
     ["изменены", written],
     ["удалены", deleted],
     ["прочитаны", read],
-  ];
-
-  const sections: string[] = [];
-  let budget = TOOL_LEDGER_MAX_PATHS;
-  let omitted = 0;
-  for (const [label, paths] of groups) {
+  ] as const) {
     const unique = [...new Set(paths)];
     if (unique.length === 0) continue;
     // Keep the most recent entries of whatever no longer fits — a
@@ -843,12 +949,33 @@ export function toolLedger(blocks: MessageBlock[]): string {
     const kept = unique.slice(Math.max(0, unique.length - budget));
     omitted += unique.length - kept.length;
     budget -= kept.length;
-    if (kept.length > 0) sections.push(`${label}: ${kept.join(", ")}`);
+    if (kept.length > 0) pathSections.push(`${label}: ${kept.join(", ")}`);
+  }
+  // The count of dropped paths belongs after the last path section, not
+  // trailing the whole line — by then the reader is two sections past them.
+  const paths =
+    pathSections.length === 0
+      ? []
+      : [`${pathSections.join("; ")}${omitted > 0 ? `; и ещё ${omitted} файл(ов)` : ""}`];
+
+  // Their own caps rather than a share of the path budget: a research turn
+  // that reads forty files still ran only a handful of searches, and the
+  // two must not be able to starve each other.
+  const rest: string[] = [];
+  for (const [label, entries, cap] of [
+    ["искали", searched, TOOL_LEDGER_MAX_SEARCHES],
+    ["не выполнено", failed, TOOL_LEDGER_MAX_FAILURES],
+  ] as const) {
+    const unique = [...new Set(entries)];
+    if (unique.length === 0) continue;
+    const kept = unique.slice(Math.max(0, unique.length - cap));
+    const dropped = unique.length - kept.length;
+    rest.push(`${label}: ${kept.join(", ")}${dropped > 0 ? ` и ещё ${dropped}` : ""}`);
   }
 
+  const sections = [...paths, ...rest];
   if (sections.length === 0) return "";
-  const tail = omitted > 0 ? `; и ещё ${omitted} файл(ов)` : "";
-  return `[Файлы, затронутые в этом ходе — ${sections.join("; ")}${tail}]`;
+  return `[В этом ходе — ${sections.join("; ")}]`;
 }
 
 /** Whether this conversation's *most recent* search ran without the

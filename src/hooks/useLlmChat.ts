@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getAutoApprovedTools,
   getMemoryWake,
+  APPROVAL_TIMED_OUT_ERROR,
   onAutoApprovedToolsChange,
   setToolAutoApproved,
   type AiAccessMode,
@@ -25,7 +26,6 @@ import {
   sliceMessagesForPlanExecution,
   CONTEXT_COMPACTION_KEEP_LAST_MESSAGES,
   CONTEXT_COMPACTION_RETRY_KEEP_LAST_MESSAGES,
-  APPROVAL_TIMED_OUT_ERROR,
   isAutoApprovable,
   NO_TIMEOUT_TOOLS,
   PAUSE_ONLY_TOOLS,

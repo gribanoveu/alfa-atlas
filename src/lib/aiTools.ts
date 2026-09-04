@@ -76,6 +76,22 @@ export type SemanticSearchMeta = {
   hiddenByAccessBoundary?: number;
 };
 
+/** The backend's `error` for a call the user refused on its approval card
+ * (`services::llm_chat`'s tool loop turns a `!approved` decision into
+ * exactly this string) — a marker, not a message, so every consumer that
+ * has to tell a refusal apart from a real tool failure compares against it
+ * rather than pattern-matching prose. Lives here, with the rest of the tool
+ * protocol, because both the transcript's own projections
+ * (`chatBlocks.ts`'s `toolLedger`) and the UI's (`describeToolResult`) need
+ * it and neither should reach into the other. */
+export const TOOL_DENIED_BY_USER = "denied by user";
+
+/** `errorMessage` `useLlmChat` substitutes for `TOOL_DENIED_BY_USER` when it
+ * was the countdown, not the user, that refused the call — the backend
+ * cannot tell the two apart (both arrive as `approved: false`), and
+ * reporting an unread card as a refusal is simply false. */
+export const APPROVAL_TIMED_OUT_ERROR = "approval timed out";
+
 /** Mirrors `domain::ai_tools::SemanticSearchPayload`. */
 export type SemanticSearchPayload = {
   matches: ToolMatch[];
