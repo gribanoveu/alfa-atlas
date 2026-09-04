@@ -149,6 +149,7 @@ type RightDockProps = {
    * checking it is exactly what someone does before opening anything. */
   jira?: {
     onOpenSettings: () => void;
+    onAskAssistant?: () => void;
   } | null;
   assistant?: {
     onOpenSettings: () => void;
@@ -322,7 +323,10 @@ export function RightDock({
                 onDelete={branches.onDelete}
               />
             ) : activeTool === "jira" && jira ? (
-              <JiraPanel onOpenSettings={jira.onOpenSettings} />
+              <JiraPanel
+                onOpenSettings={jira.onOpenSettings}
+                onAskAssistant={jira.onAskAssistant}
+              />
             ) : activeTool === "suggestions" ? (
               <NotificationsPanel gitActionLog={gitActionLog ?? undefined} />
             ) : (

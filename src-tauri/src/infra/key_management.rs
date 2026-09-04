@@ -14,6 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::domain::git::{AppKeyStatus, KeyConfig};
+use crate::infra::master_key;
 use crate::infra::secret_store::{self, SecretPurpose};
 use crate::infra::settings_store;
 
@@ -91,6 +92,13 @@ pub fn ensure_app_key_exists() -> Result<AppKeyStatus, String> {
         // Config exists but encrypted file is missing — regenerate.
         return generate_and_store_key(false);
     }
+
+    // "Cannot decrypt" and "cannot reach the master key" look identical
+    // through `read_secret_file`, and only the first justifies throwing the
+    // keypair away. A keychain that is merely locked or not yet up clears
+    // on its own, so report that rather than regenerating a key the user
+    // would have to re-register with their git host.
+    master_key::get_or_create()?;
 
     if secret_store::read_secret_file(&enc_path, PURPOSE).is_none() {
         eprintln!("[alfa-atlas] app SSH key could not be decrypted — regenerating");
@@ -208,7 +216,7 @@ mod tests {
     #[test]
     fn generated_key_round_trips_through_storage() {
         settings_store::test_support::with_temp_home(|| {
-            crate::infra::master_key::forget_for_tests();
+            master_key::forget_for_tests();
 
             let status = generate_and_store_key(false).unwrap();
             assert!(status.exists);
@@ -221,7 +229,37 @@ mod tests {
             let again = ensure_app_key_exists().unwrap();
             assert_eq!(again.public_key, status.public_key);
 
-            crate::infra::master_key::forget_for_tests();
+            master_key::forget_for_tests();
+        });
+    }
+
+    /// An unreachable master key must not be mistaken for a corrupt one:
+    /// regenerating here would hand the user a new public key to register
+    /// with their git host, over a locked keychain that clears by itself.
+    #[test]
+    fn an_unreachable_master_key_does_not_regenerate_the_ssh_key() {
+        settings_store::test_support::with_temp_home(|| {
+            master_key::forget_for_tests();
+
+            let original = generate_and_store_key(false).unwrap();
+            let enc_path = encrypted_key_path(ENCRYPTED_KEY_FILE).unwrap();
+            let sealed_before = fs::read(&enc_path).unwrap();
+
+            let outcome = master_key::with_unreachable_keychain(ensure_app_key_exists);
+
+            assert!(outcome.is_err(), "should report, not regenerate");
+            assert_eq!(
+                fs::read(&enc_path).unwrap(),
+                sealed_before,
+                "the sealed key must be left untouched"
+            );
+            assert_eq!(
+                load_key_config().unwrap().public_key,
+                original.public_key,
+                "the public key must not have changed"
+            );
+
+            master_key::forget_for_tests();
         });
     }
 
@@ -229,7 +267,7 @@ mod tests {
     #[test]
     fn unreadable_key_is_regenerated() {
         settings_store::test_support::with_temp_home(|| {
-            crate::infra::master_key::forget_for_tests();
+            master_key::forget_for_tests();
 
             let first = generate_and_store_key(false).unwrap();
             let enc_path = encrypted_key_path(ENCRYPTED_KEY_FILE).unwrap();
@@ -240,7 +278,7 @@ mod tests {
             assert_ne!(second.public_key, first.public_key);
             assert!(get_decrypted_private_key().is_some());
 
-            crate::infra::master_key::forget_for_tests();
+            master_key::forget_for_tests();
         });
     }
 

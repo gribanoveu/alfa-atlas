@@ -108,6 +108,9 @@ pub(crate) mod test_support {
         let previous = std::env::var_os("HOME");
         link_keychains_into(&home, previous.as_deref());
         std::env::set_var("HOME", &home);
+        // The master key is cached per process; a key resolved under some
+        // other test's `~/.atlas` must not answer for this one.
+        crate::infra::master_key::forget_resolution_for_tests();
         let result = f();
         match previous {
             Some(p) => std::env::set_var("HOME", p),

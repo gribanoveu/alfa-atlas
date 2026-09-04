@@ -1141,6 +1141,15 @@ function App() {
             }
             jira={{
               onOpenSettings: () => setJiraSettingsSignal((n) => n + 1),
+              // Only with a repo open: the composer this fills belongs to a
+              // chat that is stored per repository, so without one the
+              // button would switch to a panel that cannot answer.
+              onAskAssistant: hasProject
+                ? () =>
+                    assistant.insertAssistantDraft(
+                      "Составь задачу для Jira. Вот что нужно сделать: ",
+                    )
+                : undefined,
             }}
             assistant={{
               onOpenSettings: () => setLlmSettingsSignal((n) => n + 1),

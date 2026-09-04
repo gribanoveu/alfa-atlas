@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, RefreshCw, Settings2, Ticket } from "lucide-react";
+import { AlertTriangle, CheckCircle2, RefreshCw, Settings2, Sparkles, Ticket } from "lucide-react";
 import { useJiraConnection } from "../../hooks/useJiraConnection";
 import { useJiraProject } from "../../hooks/useJiraProject";
 import { JiraIssueTypePicker } from "../Jira/JiraIssueTypePicker";
@@ -12,13 +12,17 @@ const MISSING_TEXT: Record<"instance" | "token", string> = {
 
 export type JiraPanelProps = {
   onOpenSettings: () => void;
+  /** Opens the assistant with the composer prefilled. Optional so the panel
+   *  still renders where no assistant is available (no repo open) — the tip
+   *  then has nothing to offer and is left out. */
+  onAskAssistant?: () => void;
 };
 
 /** Reports whether the stored Jira token actually works, by showing the
  * account it belongs to. There is no separate "test" action: the identity
  * *is* the proof — it only appears when settings, token, TLS and the HTTP
  * round trip all worked. */
-export function JiraPanel({ onOpenSettings }: JiraPanelProps) {
+export function JiraPanel({ onOpenSettings, onAskAssistant }: JiraPanelProps) {
   const { state, refresh } = useJiraConnection();
   const project = useJiraProject();
 
@@ -144,6 +148,24 @@ export function JiraPanel({ onOpenSettings }: JiraPanelProps) {
                   <p className="jira-panel-error">{project.error}</p>
                 ) : null}
               </section>
+            ) : null}
+
+            {/* The panel shows where a ticket would go but nothing about how
+                one gets written, and the assistant — which has the ticket
+                skill — is one icon away in the same stripe. Says it once,
+                quietly, and offers the click rather than leaving the reader
+                to guess the wording. */}
+            {onAskAssistant ? (
+              <div className="jira-panel-tip">
+                <p className="jira-panel-tip-text">
+                  <Sparkles className="jira-panel-tip-icon" size={13} aria-hidden />
+                  Описание задачи может составить ассистент: расскажите ему о проблеме,
+                  он оформит скоуп, критерии приёмки и DoD.
+                </p>
+                <button type="button" className="jira-panel-btn" onClick={onAskAssistant}>
+                  Составить задачу
+                </button>
+              </div>
             ) : null}
           </div>
         ) : null}

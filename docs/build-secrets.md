@@ -45,6 +45,8 @@ LLM provider keys are **not** injected at build time. Users set them in Settings
 
 Every `*.enc` file under `~/.atlas` is sealed with one AES-256 master key held in the **OS keychain** (macOS Keychain, Windows Credential Manager, Linux Secret Service) — see `infra::master_key`. `~/.atlas/.enc_key` is a fallback for machines with no reachable keychain; when a keychain becomes available the key is moved into it and the file is shredded, keeping the same key bytes so existing blobs stay readable.
 
+`~/.atlas/master_key_store.json` records *which* of the two currently holds the key (no key material). Without it, an unreachable keychain — locked, prompt dismissed, Secret Service not up yet — is indistinguishable from a first run, and minting a key at that moment would permanently orphan every sealed blob. With it, the app reports the keychain as unavailable and leaves the credentials alone until it is back.
+
 Two things to know when changing this:
 
 - **The `keyring` dependency needs its per-target `features`.** Platform backends are opt-in in keyring 3.x, and without them the crate silently compiles to an in-memory mock whose writes vanish at process exit — every secret would quietly fall back to the plaintext key file. `master_key` detects this at runtime, and `native_keychain_backend_is_compiled_in` fails the build if the features go missing.
