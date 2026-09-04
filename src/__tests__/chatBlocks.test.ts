@@ -153,6 +153,26 @@ describe("interleaved reasoning and text deltas", () => {
     expect(mergeInterleavedStreamBlocks(blocks)).toBe(blocks);
   });
 
+  test("mergeInterleavedStreamBlocks removes persisted adjacent closed duplicates", () => {
+    const duplicated: MessageBlock[] = [
+      { type: "text", id: "t1", content: "Готово.", closed: true },
+      { type: "text", id: "t2", content: "Готово.", closed: true },
+    ];
+    expect(mergeInterleavedStreamBlocks(duplicated)).toEqual([
+      { type: "text", id: "t1", content: "Готово.", closed: true },
+    ]);
+  });
+
+  test("mergeInterleavedStreamBlocks preserves equal closed text across a real boundary", () => {
+    const boundary: MessageBlock = { type: "steer", id: "s1", text: "повтори" };
+    const repeated: MessageBlock[] = [
+      { type: "text", id: "t1", content: "Готово.", closed: true },
+      boundary,
+      { type: "text", id: "t2", content: "Готово.", closed: true },
+    ];
+    expect(mergeInterleavedStreamBlocks(repeated)).toBe(repeated);
+  });
+
   test("correctTrailingReasoning fixes up the round's open reasoning block", () => {
     const blocks = appendDeltaToBlocks(appendReasoningDeltaToBlocks([], "partia"), "the answer");
     const corrected = correctTrailingReasoning(blocks, "partial thought, made whole");
@@ -183,6 +203,24 @@ describe("correctRoundText", () => {
   test("corrects a round that has not called anything yet", () => {
     const corrected = correctRoundText(appendDeltaToBlocks([], "Гото"), "Готово.");
     expect(corrected[0]).toMatchObject({ type: "text", content: "Готово." });
+  });
+
+  test("applying the same authoritative text twice is idempotent", () => {
+    const once = correctRoundText(
+      appendDeltaToBlocks(appendToolCallBlock([], call), "Смотрю фай"),
+      "Смотрю файл конфигурации.",
+    );
+    expect(correctRoundText(once, "Смотрю файл конфигурации.")).toBe(once);
+    expect(once.filter((b) => b.type === "text")).toHaveLength(1);
+  });
+
+  test("recovers wholly lost prose that repeats an earlier round across a tool boundary", () => {
+    const firstRound = correctRoundText(appendDeltaToBlocks([], "Готово."), "Готово.");
+    const secondRound = correctRoundText(appendToolCallBlock(firstRound, call), "Готово.");
+    expect(secondRound.filter((b) => b.type === "text").map((b) => b.type === "text" && b.content)).toEqual([
+      "Готово.",
+      "Готово.",
+    ]);
   });
 
   test("recovers a lost round in front of its calls without touching the closed one", () => {

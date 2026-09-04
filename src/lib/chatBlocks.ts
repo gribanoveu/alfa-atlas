@@ -337,6 +337,23 @@ export function mergeInterleavedStreamBlocks(blocks: MessageBlock[]): MessageBlo
       result.push(block);
       continue;
     }
+    // `correctRoundText` briefly lost its idempotency: the final round is
+    // reconciled once by `llm:round-text` and once more by the resolved IPC
+    // outcome, and the second pass appended an identical closed block. Keep
+    // this load-time repair deliberately narrow — exact, adjacent, closed
+    // text blocks only — so persisted transcripts created during that
+    // regression heal without collapsing real round boundaries.
+    const previous = result[result.length - 1];
+    if (
+      block.type === "text" &&
+      block.closed &&
+      previous?.type === "text" &&
+      previous.closed &&
+      previous.content === block.content
+    ) {
+      merged = true;
+      continue;
+    }
     // A closed block ended a round of its own: folding the next round's
     // answer into it would recreate, on load, exactly the concatenation
     // `closeOpenBlocks` exists to prevent.
@@ -561,7 +578,11 @@ export function settleToolCallBlock(
  *   it is inserted, in front of the tool calls the round opened. Refusing to
  *   would throw away exactly the prose this event exists to rescue, both
  *   from the transcript and from what `flattenBlocksToText` replays to the
- *   model on the next turn.
+ *   model on the next turn. The exception is an exact content match: the
+ *   final round is deliberately reconciled both by `llm:round-text` and by
+ *   the resolved IPC outcome, so seeing its already-closed authoritative
+ *   text with no intervening tool call makes the second pass a no-op rather
+ *   than a duplicate.
  * - a `steer` means a later round has already begun (steering is applied at
  *   a round's start, ahead of `RoundStarted`), so this report is stale and
  *   the input is returned untouched.
@@ -584,6 +605,8 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
   // Every text block this round wrote, oldest first.
   const roundText: number[] = [];
   let stale = false;
+  let alreadyReconciled = false;
+  let crossedToolCall = false;
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i]!;
     if (block.type === "steer") {
@@ -591,6 +614,7 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
       break;
     }
     if (block.type === "toolCall") {
+      crossedToolCall = true;
       insertAt = i;
       continue;
     }
@@ -601,7 +625,15 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
     // its tool calls. `findOpenBlockIndex` skips them for the same reason.
     if (block.type === "reasoning") continue;
     if (block.type === "text") {
-      if (block.closed) break;
+      if (block.closed) {
+        // The turn-level outcome only repeats the final round, which cannot
+        // itself contain a tool call. If calls sit between here and the
+        // boundary, this is an earlier round that merely happened to say the
+        // same thing and the current round's wholly lost prose must still be
+        // recovered.
+        alreadyReconciled = !crossedToolCall && block.content === text;
+        break;
+      }
       roundText.unshift(i);
     }
   }
@@ -616,7 +648,7 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
           : [b],
     );
   }
-  if (stale) return blocks;
+  if (stale || alreadyReconciled) return blocks;
   // Every delta for this round was dropped — the text still belongs in the
   // transcript, in the place the round would have put it.
   const fresh: MessageBlock = { type: "text", id: crypto.randomUUID(), content: text, closed: true };
