@@ -184,11 +184,16 @@ describe("correctRoundText", () => {
     expect(corrected[0]).toMatchObject({ type: "text", content: "Готово." });
   });
 
-  test("leaves an earlier round's closed block alone", () => {
-    // `closeOpenBlocks` runs on the *next* round's start, so a closed block
-    // is by definition not the round reporting now.
+  test("recovers a lost round in front of its calls without touching the closed one", () => {
+    // A closed block is by definition not the round reporting now, so this
+    // round wrote nothing that survived: its deltas were all dropped, and
+    // `text` is the only copy left. Rescuing it is the whole point of the
+    // event — but it goes in beside the earlier round's prose, never over it.
     const blocks = appendToolCallBlock(closeOpenBlocks(appendDeltaToBlocks([], "Первый раунд.")), call);
-    expect(correctRoundText(blocks, "текст другого раунда")).toBe(blocks);
+    const corrected = correctRoundText(blocks, "Второй раунд.");
+    expect(corrected.map((b) => b.type)).toEqual(["text", "text", "toolCall"]);
+    expect(corrected[0]).toMatchObject({ content: "Первый раунд.", closed: true });
+    expect(corrected[1]).toMatchObject({ content: "Второй раунд.", closed: true });
   });
 
   test("stops at a steer instead of reaching across it", () => {
@@ -280,6 +285,47 @@ describe("correctRoundText", () => {
     ]);
   });
 
+  test("no interleaving of a round's deltas and calls loses or duplicates its prose", () => {
+    // What the model is owed on the next turn is exactly what it said, once.
+    // The provider accumulates every `content` delta of a round into one
+    // string regardless of where the round's tool calls fell among them (see
+    // `chat_stream`'s `full`), and that string is what `llm:round-text`
+    // reports — so for every possible interleaving, the round's blocks must
+    // flatten back to it verbatim.
+    const chunks = ["Смотрю ", "файл ", "конфигурации."];
+    const full = chunks.join("");
+    // Every placement of up to two tool calls among the chunks.
+    for (let mask = 0; mask < 1 << (chunks.length + 1); mask++) {
+      let blocks: MessageBlock[] = [];
+      let calls = 0;
+      for (let slot = 0; slot <= chunks.length; slot++) {
+        if (mask & (1 << slot)) {
+          blocks = appendToolCallBlock(blocks, { ...call, id: `call_${++calls}` });
+        }
+        if (slot < chunks.length) blocks = appendDeltaToBlocks(blocks, chunks[slot]!);
+      }
+      const corrected = correctRoundText(blocks, full);
+      expect(flattenBlocksToText(corrected)).toBe(full);
+      expect(corrected.filter((b) => b.type === "toolCall")).toHaveLength(calls);
+    }
+  });
+
+  test("a folded round leaves the previous round's replay text untouched", () => {
+    // The cross-turn wire projection is `flattenBlocksToText` — a fold that
+    // reached into an earlier round would silently rewrite history the model
+    // already acted on.
+    let blocks = correctRoundText(
+      appendToolCallBlock(appendDeltaToBlocks([], "Первый раунд."), call),
+      "Первый раунд.",
+    );
+    blocks = appendDeltaToBlocks(blocks, "Второй ");
+    blocks = appendToolCallBlock(blocks, { ...call, id: "call_2" });
+    blocks = appendDeltaToBlocks(blocks, "раунд.");
+    expect(flattenBlocksToText(correctRoundText(blocks, "Второй раунд."))).toBe(
+      "Первый раунд.\n\nВторой раунд.",
+    );
+  });
+
   test("puts recovered prose after the reasoning it followed", () => {
     const blocks = appendToolCallBlock(appendReasoningDeltaToBlocks([], "думаю"), call);
     const corrected = correctRoundText(blocks, "Ответ.");
@@ -329,8 +375,11 @@ describe("round boundaries", () => {
       "первый раунд",
     );
     expect(round1[0]).toMatchObject({ type: "text", content: "первый раунд", closed: true });
-    const round2 = appendToolCallBlock(round1, { ...call, id: "call_2" });
-    expect(correctRoundText(round2, "второй раунд")).toBe(round2);
+    const round2 = correctRoundText(appendToolCallBlock(round1, { ...call, id: "call_2" }), "второй раунд");
+    expect(round2.filter((b) => b.type === "text").map((b) => b.type === "text" && b.content)).toEqual([
+      "первый раунд",
+      "второй раунд",
+    ]);
   });
 
   test("a stored transcript is not re-glued across a round boundary on load", () => {

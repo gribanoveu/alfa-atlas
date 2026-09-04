@@ -546,10 +546,20 @@ export function settleToolCallBlock(
  *
  * The scan stops at a `steer`, and at a `text` block already marked
  * `closed`: both mean it has left this round and reached an earlier one,
- * whose text belongs to a report that already happened. Reaching either
- * before finding any of this round's own text means the round has nothing
- * here to correct, and the input is returned untouched rather than guessing
- * where its prose would have gone.
+ * whose text belongs to a report that already happened. Neither is ever
+ * overwritten. What happens when the scan hits one before finding any of
+ * this round's own text differs, though, because the two say different
+ * things:
+ *
+ * - a `closed` text block means the round genuinely wrote nothing here, so
+ *   every one of its deltas was dropped and `text` is the only copy left —
+ *   it is inserted, in front of the tool calls the round opened. Refusing to
+ *   would throw away exactly the prose this event exists to rescue, both
+ *   from the transcript and from what `flattenBlocksToText` replays to the
+ *   model on the next turn.
+ * - a `steer` means a later round has already begun (steering is applied at
+ *   a round's start, ahead of `RoundStarted`), so this report is stale and
+ *   the input is returned untouched.
  *
  * The surviving block is marked `closed`: this event fires once the round
  * has stopped streaming, so nothing more can belong to it. Without that the
@@ -568,11 +578,11 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
   let insertAt = blocks.length;
   // Every text block this round wrote, oldest first.
   const roundText: number[] = [];
-  let leftTheRound = false;
+  let stale = false;
   for (let i = blocks.length - 1; i >= 0; i--) {
     const block = blocks[i]!;
     if (block.type === "steer") {
-      leftTheRound = true;
+      stale = true;
       break;
     }
     if (block.type === "toolCall") {
@@ -586,10 +596,7 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
     // its tool calls. `findOpenBlockIndex` skips them for the same reason.
     if (block.type === "reasoning") continue;
     if (block.type === "text") {
-      if (block.closed) {
-        leftTheRound = true;
-        break;
-      }
+      if (block.closed) break;
       roundText.unshift(i);
     }
   }
@@ -604,7 +611,7 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
           : [b],
     );
   }
-  if (leftTheRound) return blocks;
+  if (stale) return blocks;
   // Every delta for this round was dropped — the text still belongs in the
   // transcript, in the place the round would have put it.
   const fresh: MessageBlock = { type: "text", id: crypto.randomUUID(), content: text, closed: true };
