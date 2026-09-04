@@ -41,6 +41,17 @@ EMBEDDING_API_KEY='your-api-key-here' bun run tauri build
 
 LLM provider keys are **not** injected at build time. Users set them in Settings; they are stored encrypted in `~/.atlas/llm_credentials.enc`.
 
+## Where the master key lives
+
+Every `*.enc` file under `~/.atlas` is sealed with one AES-256 master key held in the **OS keychain** (macOS Keychain, Windows Credential Manager, Linux Secret Service) — see `infra::master_key`. `~/.atlas/.enc_key` is a fallback for machines with no reachable keychain; when a keychain becomes available the key is moved into it and the file is shredded, keeping the same key bytes so existing blobs stay readable.
+
+Two things to know when changing this:
+
+- **The `keyring` dependency needs its per-target `features`.** Platform backends are opt-in in keyring 3.x, and without them the crate silently compiles to an in-memory mock whose writes vanish at process exit — every secret would quietly fall back to the plaintext key file. `master_key` detects this at runtime, and `native_keychain_backend_is_compiled_in` fails the build if the features go missing.
+- **The keychain does not defend against malware running as the user.** On all three platforms an unlocked keychain is readable by that user's processes; what it buys is that the key no longer travels with a copy of `~/.atlas` (backups, cloud-synced home directories, support bundles). Defending against same-user code needs a master password, which does not exist yet.
+
+Blobs carry a `"ATLS" | version | purpose` header that is also the AES-GCM AAD, so a blob can only be opened as the kind of secret it was written as. Pre-header blobs are still readable and are rewritten in the current format on first read.
+
 ## TLS certificates in manifest
 
 CA root certificates in `system_providers.yaml` are **not** secrets — public trust anchors. Use YAML multiline `trustedCertPem: |` blocks for readable PEM.

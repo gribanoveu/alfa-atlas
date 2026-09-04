@@ -16,13 +16,13 @@
 //! covered in `key_management.rs`'s test module).
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 
-use crate::infra::key_management::{decrypt_private_key, encrypt_private_key, get_or_create_encryption_key};
+use crate::infra::secret_store::{self, SecretPurpose};
 use crate::infra::settings_store;
 
 const CREDENTIALS_FILE: &str = "llm_credentials.enc";
+const PURPOSE: SecretPurpose = SecretPurpose::LlmCredentials;
 
 fn credentials_path() -> Result<PathBuf, String> {
     let dir = settings_store::settings_dir().map_err(|e| e.to_string())?;
@@ -36,50 +36,24 @@ fn load_all() -> HashMap<String, String> {
     let Ok(path) = credentials_path() else {
         return HashMap::new();
     };
-    if !path.exists() {
-        return HashMap::new();
-    }
-    let Ok(encrypted) = fs::read(&path) else {
-        return HashMap::new();
-    };
-    let Ok(key) = get_or_create_encryption_key() else {
-        return HashMap::new();
-    };
-    let Ok(plain) = decrypt_private_key(&encrypted, &key) else {
+    let Some(plain) = secret_store::read_secret_file(&path, PURPOSE) else {
         return HashMap::new();
     };
     serde_json::from_slice(&plain).unwrap_or_default()
 }
 
 fn save_all(map: &HashMap<String, String>) -> Result<(), String> {
-    let key = get_or_create_encryption_key()?;
     let plain =
         serde_json::to_vec(map).map_err(|e| format!("failed to serialize LLM credentials: {e}"))?;
-    let encrypted = encrypt_private_key(&plain, &key)?;
-
-    let path = credentials_path()?;
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("failed to create settings dir: {e}"))?;
-    }
-    fs::write(&path, &encrypted).map_err(|e| format!("failed to write LLM credentials: {e}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(&path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600);
-            let _ = fs::set_permissions(&path, perms);
-        }
-    }
-
-    Ok(())
+    secret_store::write_secret_file(&credentials_path()?, PURPOSE, &plain)
 }
 
-/// Read-decrypt-modify-encrypt-write of the whole blob — a last-write-wins
-/// race under concurrent calls, the same non-atomic characteristic every
-/// other file under `infra::settings_store` (and its embedding-credentials
-/// sibling) already has; not a new risk class here.
+/// Read-decrypt-modify-encrypt-write of the whole blob — still a
+/// last-write-wins race under concurrent calls (one caller's entry can be
+/// dropped by another's write), the same characteristic every other file
+/// under `infra::settings_store` has. What `secret_store` does guarantee is
+/// that no reader ever sees a half-written file, so a lost update is the
+/// worst case rather than a corrupt store.
 pub fn save_api_key(provider_id: &str, api_key: &str) -> Result<(), String> {
     let mut map = load_all();
     map.insert(provider_id.to_string(), api_key.to_string());

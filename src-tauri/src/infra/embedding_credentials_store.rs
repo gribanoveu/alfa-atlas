@@ -1,9 +1,9 @@
-//! Encrypted storage for the remote embedding provider's API key. Mirrors
-//! `infra::key_management`'s SSH-private-key storage exactly — same
-//! AES-256-GCM key (`key_management::get_or_create_encryption_key`), same
-//! "write-only from the frontend's perspective" contract: nothing in
-//! `commands::embeddings` ever returns the decrypted key back over IPC,
-//! only a boolean "is one set" status (`has_api_key`).
+//! Encrypted storage for the remote embedding provider's API key. Sealed
+//! by `infra::secret_store` under the app master key, like every other
+//! secret in `~/.atlas`, and keeps the "write-only from the frontend's
+//! perspective" contract: nothing in `commands::embeddings` ever returns
+//! the decrypted key back over IPC, only a boolean "is one set" status
+//! (`has_api_key`).
 //!
 //! When no user key is stored, `get_api_key` falls back to a compile-time
 //! key baked in by `build.rs` (`infra::bundled_secrets`) — see
@@ -18,10 +18,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::infra::bundled_secrets;
-use crate::infra::key_management::{decrypt_private_key, encrypt_private_key, get_or_create_encryption_key};
+use crate::infra::secret_store::{self, SecretPurpose};
 use crate::infra::settings_store;
 
 const CREDENTIALS_FILE: &str = "embedding_credentials.enc";
+const PURPOSE: SecretPurpose = SecretPurpose::EmbeddingApiKey;
 
 fn credentials_path() -> Result<PathBuf, String> {
     let dir = settings_store::settings_dir().map_err(|e| e.to_string())?;
@@ -29,13 +30,7 @@ fn credentials_path() -> Result<PathBuf, String> {
 }
 
 fn load_user_key() -> Option<String> {
-    let path = credentials_path().ok()?;
-    if !path.exists() {
-        return None;
-    }
-    let encrypted = fs::read(&path).ok()?;
-    let key = get_or_create_encryption_key().ok()?;
-    let plain = decrypt_private_key(&encrypted, &key).ok()?;
+    let plain = secret_store::read_secret_file(&credentials_path().ok()?, PURPOSE)?;
     String::from_utf8(plain).ok()
 }
 
@@ -47,27 +42,7 @@ pub fn has_user_key() -> bool {
 }
 
 pub fn save_api_key(api_key: &str) -> Result<(), String> {
-    let key = get_or_create_encryption_key()?;
-    let encrypted = encrypt_private_key(api_key.as_bytes(), &key)?;
-
-    let path = credentials_path()?;
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("failed to create settings dir: {e}"))?;
-    }
-    fs::write(&path, &encrypted)
-        .map_err(|e| format!("failed to write embedding credentials: {e}"))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(&path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600);
-            let _ = fs::set_permissions(&path, perms);
-        }
-    }
-
-    Ok(())
+    secret_store::write_secret_file(&credentials_path()?, PURPOSE, api_key.as_bytes())
 }
 
 /// User override first, then compile-time bundled key from `build.rs`.

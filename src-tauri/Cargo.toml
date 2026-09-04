@@ -33,6 +33,11 @@ serde_yaml = { package = "yaml_serde", version = "0.10" }
 regex = "1"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 tauri-plugin-mcp-bridge = "0.12.0"
+# Платформенные бэкенды в keyring 3.x — opt-in: без фич крейт собирается с
+# mock-хранилищем в памяти, которое молча теряет секрет при выходе из
+# процесса. Фичи включены per-target ниже; базовое объявление оставлено,
+# чтобы на неподдержанной платформе сборка не падала, а `infra::master_key`
+# честно ушёл в файловый fallback (он определяет mock в рантайме).
 keyring = "3"
 aes-gcm = "0.10"
 rand = "0.8"
@@ -76,6 +81,18 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2.4.3"
 
+# Реальные бэкенды связки ключей (см. комментарий у `keyring` выше).
+# Фичи в Cargo унифицируются, поэтому здесь достаточно дообъявить фичу для
+# уже объявленной зависимости.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+# `sync-secret-service` — блокирующий клиент Secret Service поверх dbus (в
+# приложении нет свободного async-контекста для async-варианта);
+# `crypto-rust` шифрует сам dbus-транспорт без завязки на системный OpenSSL.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
 # На Windows libssh2-sys по умолчанию собирается с бэкендом WinCNG (см. его
 # build.rs: без фичи `openssl-on-win32` определяется LIBSSH2_WINCNG). WinCNG не
 # умеет ed25519, не читает ключи в формате OpenSSH и не поддерживает
@@ -85,3 +102,4 @@ tauri-plugin-single-instance = "2.4.3"
 # OpenSSL — тот же бэкенд, что и на остальных платформах.
 [target.'cfg(windows)'.dependencies]
 libssh2-sys = { version = "0.3.2", features = ["openssl-on-win32", "vendored-openssl"] }
+keyring = { version = "3", features = ["windows-native"] }

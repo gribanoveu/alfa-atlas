@@ -15,6 +15,37 @@ pub fn settings_path() -> Result<PathBuf, SettingsError> {
     Ok(settings_dir()?.join(SETTINGS_FILE_NAME))
 }
 
+/// Creates `~/.atlas` if missing and narrows it to `0o700` on unix.
+///
+/// The directory holds sealed credential blobs (`*.enc`), the SSH private
+/// key and the chat/tool-call databases, so "other" and "group" have no
+/// business reading it. `create_dir_all` applies the process umask, which
+/// on a default macOS/Linux account yields `0o755` — hence the explicit
+/// tightening, applied on every call so an already-existing directory
+/// created by an older build gets fixed too.
+///
+/// Permission errors are swallowed: the directory may legitimately be
+/// owned by a different uid in exotic setups, and failing to *narrow*
+/// permissions is never a reason to refuse to start.
+pub fn ensure_settings_dir() -> Result<PathBuf, SettingsError> {
+    let dir = settings_dir()?;
+    fs::create_dir_all(&dir).map_err(SettingsError::CreateDir)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(&dir) {
+            let mut perms = meta.permissions();
+            if perms.mode() & 0o077 != 0 {
+                perms.set_mode(0o700);
+                let _ = fs::set_permissions(&dir, perms);
+            }
+        }
+    }
+
+    Ok(dir)
+}
+
 /// Loads settings from `~/.atlas/settings.json`.
 /// Missing file yields `AppSettings::default()`.
 pub fn load() -> Result<AppSettings, SettingsError> {
@@ -29,8 +60,7 @@ pub fn load() -> Result<AppSettings, SettingsError> {
 }
 
 pub fn save(settings: &AppSettings) -> Result<(), SettingsError> {
-    let dir = settings_dir()?;
-    fs::create_dir_all(&dir).map_err(SettingsError::CreateDir)?;
+    let dir = ensure_settings_dir()?;
 
     let path = dir.join(SETTINGS_FILE_NAME);
     let contents = serde_json::to_string_pretty(settings).map_err(SettingsError::Serialize)?;
@@ -54,6 +84,18 @@ pub(crate) mod test_support {
     static HOME_ENV_LOCK: Mutex<()> = Mutex::new(());
     static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    /// Runs `f` holding `HOME_ENV_LOCK` but leaving `$HOME` alone, for
+    /// tests that need the *real* home directory.
+    ///
+    /// On macOS the keychain resolves the login keychain through `$HOME`,
+    /// so a `with_temp_home` running concurrently makes any keychain call
+    /// fail with "A default keychain could not be found" — taking the same
+    /// lock is what keeps those tests from colliding.
+    pub(crate) fn with_real_home<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = HOME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        f()
+    }
+
     /// Redirects `settings_dir()`'s effect for the duration of `f` by
     /// pointing `$HOME` at a fresh temp dir, holding `HOME_ENV_LOCK` for
     /// the whole swap-run-restore round trip.
@@ -64,6 +106,7 @@ pub(crate) mod test_support {
         let home = std::env::temp_dir().join(format!("alfa-atlas-test-home-{nanos}-{n}"));
         std::fs::create_dir_all(&home).unwrap();
         let previous = std::env::var_os("HOME");
+        link_keychains_into(&home, previous.as_deref());
         std::env::set_var("HOME", &home);
         let result = f();
         match previous {
@@ -73,4 +116,32 @@ pub(crate) mod test_support {
         std::fs::remove_dir_all(&home).ok();
         result
     }
+
+    /// Points the temp home's `Library/Keychains` at the real one.
+    ///
+    /// macOS resolves the login keychain through `$HOME`, and
+    /// Security.framework caches the result *per process*: the first
+    /// keychain call made under a temp home without this link resolves to
+    /// "no default keychain" and every later call in that process keeps
+    /// failing, however the home is arranged by then. That made keychain
+    /// coverage depend on test order — a test passing alone and failing in
+    /// the suite. Linking unconditionally keeps every temp home
+    /// keychain-capable, so the answer no longer depends on who ran first.
+    ///
+    /// Only a symlink is created, and `remove_dir_all` does not traverse
+    /// symlinks, so teardown can never reach the real keychains.
+    #[cfg(target_os = "macos")]
+    fn link_keychains_into(home: &std::path::Path, real_home: Option<&std::ffi::OsStr>) {
+        let Some(real_home) = real_home else { return };
+        let target = std::path::Path::new(real_home).join("Library/Keychains");
+        if !target.is_dir() {
+            return;
+        }
+        if std::fs::create_dir_all(home.join("Library")).is_ok() {
+            let _ = std::os::unix::fs::symlink(target, home.join("Library/Keychains"));
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn link_keychains_into(_home: &std::path::Path, _real_home: Option<&std::ffi::OsStr>) {}
 }
