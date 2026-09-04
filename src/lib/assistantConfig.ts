@@ -102,7 +102,7 @@ When answering genuinely needs source code, call \`requestFullRepoAccess\` with 
  * called. */
 const SKILLS_ROUTER_HINT = `## Skills
 
-Writing a tracker ticket or decomposing a feature is skill work: «составь тикет», «оформи задачу», «накидай таск», «декомпозируй», «разбей задачу/фичу», «нарежь задачи», or a request for Acceptance Criteria / DoD / User Story / vertical slicing — including when the user only describes a problem and never names Jira, but is clearly preparing a ticket or breaking down a feature. Search the \`skill\` tool before drafting the text, not after. The same applies before writing or filling REST/Thrift method documentation and before laying out OpenAPI specs.`;
+Writing a tracker ticket or decomposing a feature is skill work: «составь тикет», «оформи задачу», «накидай таск», «декомпозируй», «разбей задачу/фичу», «нарежь задачи», or a request for Acceptance Criteria / DoD / User Story / vertical slicing — including when the user only describes a problem and never names Jira, but is clearly preparing a ticket or breaking down a feature. So is designing something: «спроектируй сервис», «задизайни модуль», «накидай архитектуру», a техпроект / design doc / ADR, or a request to describe an API, an event model or contracts. Search the \`skill\` tool before drafting the text, not after. The same applies before writing or filling REST/Thrift method documentation and before laying out OpenAPI specs.`;
 
 /** Applies in every mode: a `visualize` call is display-only, so nothing
  *  about it depends on write access or on whether a plan is in flight. It

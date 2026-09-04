@@ -393,6 +393,24 @@ mod tests {
                     "jira-task-decomposition not found by {query:?}"
                 );
             }
+            for query in [
+                "спроектируй сервис",
+                "спроектировать микросервис",
+                "задизайни модуль",
+                "сделай техпроект",
+                "нужна архитектура сервиса",
+                "напиши спеку",
+                "спецификация на интеграцию",
+                "design doc",
+                "ADR",
+                "опиши контракты сервиса",
+                "spec-driven development",
+            ] {
+                assert!(
+                    search_hits(query).contains(&"service-design-spec-driven".to_string()),
+                    "service-design-spec-driven not found by {query:?}"
+                );
+            }
         });
     }
 
@@ -404,6 +422,9 @@ mod tests {
             assert!(catalog.iter().any(|s| s.name == "openapi-specs-layout"));
             assert!(catalog.iter().any(|s| s.name == "jira-task-description"));
             assert!(catalog.iter().any(|s| s.name == "jira-task-decomposition"));
+            assert!(catalog
+                .iter()
+                .any(|s| s.name == "service-design-spec-driven"));
         });
     }
 

@@ -63,11 +63,18 @@ const JIRA_TASK_DECOMPOSITION: BundledSkill = BundledSkill {
     files: &[],
 };
 
+const SERVICE_DESIGN_SPEC_DRIVEN: BundledSkill = BundledSkill {
+    name: "service-design-spec-driven",
+    skill_md: include_str!("../../assets/skills/service-design-spec-driven/SKILL.md"),
+    files: &[],
+};
+
 pub const BUNDLED_SKILLS: &[BundledSkill] = &[
     OPENAPI_SPECS_LAYOUT,
     METHOD_SPEC,
     JIRA_TASK_DESCRIPTION,
     JIRA_TASK_DECOMPOSITION,
+    SERVICE_DESIGN_SPEC_DRIVEN,
 ];
 
 pub fn bundled_skill(name: &str) -> Option<&'static BundledSkill> {
