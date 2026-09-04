@@ -621,7 +621,10 @@ fn run_tool_loop(
                     // failed diagram render) is not something they said.
                     if note.source == SteeringSource::User {
                         (ctx.events)(
-                            ChatEvent::SteeringApplied(SteeringAppliedEvent { text: note.text }),
+                            ChatEvent::SteeringApplied(SteeringAppliedEvent {
+                                id: note.id,
+                                text: note.text,
+                            }),
                         );
                     }
                 }
@@ -2268,7 +2271,7 @@ mod tests {
         }));
         assert!(seen.lock().unwrap().iter().any(|event| matches!(
             event,
-            ChatEvent::SteeringApplied(SteeringAppliedEvent { text })
+            ChatEvent::SteeringApplied(SteeringAppliedEvent { text, .. })
                 if text == "Проверь ru locale"
         )));
 

@@ -16,6 +16,7 @@ import {
   buildSuggestionContext,
   needsAccessUpgrade,
   needsSuggestionForm,
+  suggestionBlockedReason,
   prefillValues,
   renderSuggestionText,
   suggestionsForMode,
@@ -78,7 +79,7 @@ const CHAT_MODE_OPTIONS = [
     title: "быстро отвечу на точечный вопрос — без анализа",
     greeting: "Спросите о проекте — быстро разберусь и отвечу, не меняя файлы.",
   },
-];
+] as const;
 
 /** Ids of already-settled `requestModeSwitch` tool calls in a transcript —
  * used to seed `handledModeSwitchIdsRef` so restoring / remounting a chat
@@ -445,6 +446,38 @@ type AssistantConversationProps = {
  * body (owns one conversation). Always rendered with an LLM provider ready
  * — the parent gates that, so unlike the old single-file component this
  * one doesn't need its own `llmReady` checks. */
+/** Фишка в ряду продолжений. Во время работы ассистента гасится только та,
+ *  что переключает режим или расширяет доступ, — остальные остаются
+ *  кликабельными: они лишь заполняют поле ввода. */
+function FollowUpChip({
+  suggestion,
+  sending,
+  conversationMode,
+  accessMode,
+  onClick,
+}: {
+  suggestion: AssistantSuggestion;
+  sending: boolean;
+  conversationMode: ConversationMode;
+  accessMode: AiAccessMode;
+  onClick: () => void;
+}) {
+  const blocked = suggestionBlockedReason(suggestion, {
+    sending,
+    conversationMode,
+    accessMode,
+  });
+  return (
+    <AssistantSuggestionChip
+      suggestion={suggestion}
+      className="assistant-followup-chip"
+      disabled={blocked !== null}
+      {...(blocked ? { disabledReason: blocked } : {})}
+      onClick={onClick}
+    />
+  );
+}
+
 export function AssistantConversation({
   chatId,
   initialMessages,
@@ -490,6 +523,7 @@ export function AssistantConversation({
     sending,
     retryState,
     pendingSteers,
+    unsteerChat,
     sendMessage,
     steerChat,
     retryWithCompaction,
@@ -1395,11 +1429,12 @@ export function AssistantConversation({
           <Sparkles className="assistant-followup-bar-icon" size={12} strokeWidth={1.75} aria-hidden />
           <div className="assistant-followup-bar-chips">
             {followUpSuggestions.map((s) => (
-              <AssistantSuggestionChip
+              <FollowUpChip
                 key={s.id}
                 suggestion={s}
-                className="assistant-followup-chip"
-                disabled={sending}
+                sending={sending}
+                conversationMode={conversationMode}
+                accessMode={accessMode}
                 onClick={() => handleSuggestionClick(s)}
               />
             ))}
@@ -1418,11 +1453,23 @@ export function AssistantConversation({
         <div className="assistant-chat-input-wrap">
           {pendingSteers.length > 0 ? (
             <div className="assistant-steer-pending-list" role="status" aria-label="Уточнения в очереди">
-              {pendingSteers.map((text, index) => (
-                <div className="assistant-steer-pending" key={`${index}-${text}`}>
+              {pendingSteers.map((steer) => (
+                <div className="assistant-steer-pending" key={steer.id}>
                   <Clock3 size={12} strokeWidth={1.75} aria-hidden />
-                  <span className="assistant-steer-pending-text">{text}</span>
+                  <span className="assistant-steer-pending-text">{steer.text}</span>
                   <span className="assistant-steer-pending-label">В очереди</span>
+                  {/* Пока уточнение не ушло в раунд, его можно забрать назад:
+                      передумали или опечатались — иначе оставался только
+                      способ оборвать весь ход целиком. */}
+                  <button
+                    type="button"
+                    className="assistant-steer-pending-cancel"
+                    title="Отменить уточнение"
+                    aria-label={`Отменить уточнение: ${steer.text}`}
+                    onClick={() => void unsteerChat(steer.id)}
+                  >
+                    <X size={12} aria-hidden />
+                  </button>
                 </div>
               ))}
             </div>

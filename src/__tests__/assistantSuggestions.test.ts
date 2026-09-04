@@ -7,6 +7,7 @@ import {
   prefillValues,
   renderSuggestionText,
   suggestionAccess,
+  suggestionBlockedReason,
   suggestionFormComplete,
   suggestionsForMode,
   visibleSuggestions,
@@ -335,5 +336,64 @@ describe("access and form gating", () => {
     expect(suggestionFormComplete(explain, { feature: "   " })).toBe(false);
     expect(suggestionFormComplete(explain, { feature: "подпись" })).toBe(true);
     expect(suggestionFormComplete(findGaps, {})).toBe(true);
+  });
+});
+
+describe("suggestionBlockedReason", () => {
+  const suggestion: AssistantSuggestion = {
+    id: "t",
+    label: "Тест",
+    text: "текст",
+    mode: "agent",
+    writes: false,
+  };
+
+  test("nothing is blocked while no turn is running", () => {
+    expect(
+      suggestionBlockedReason(suggestion, {
+        sending: false,
+        conversationMode: "plan",
+        accessMode: "docsOnly",
+      }),
+    ).toBeNull();
+  });
+
+  /** Ровно тот случай, с которого начался баг: ход не закончен (пауза на
+   *  `requestArtifact`), но само предложение ничего не переключает — гасить
+   *  его незачем, оно только заполняет поле ввода. */
+  test("a same-mode suggestion stays clickable while the turn is still open", () => {
+    expect(
+      suggestionBlockedReason(suggestion, {
+        sending: true,
+        conversationMode: "agent",
+        accessMode: "docsOnly",
+      }),
+    ).toBeNull();
+  });
+
+  test("switching the chat mode mid-turn is blocked, with a reason", () => {
+    const reason = suggestionBlockedReason(suggestion, {
+      sending: true,
+      conversationMode: "plan",
+      accessMode: "docsOnly",
+    });
+    expect(reason).toContain("режим чата");
+  });
+
+  test("widening repo access mid-turn is blocked, with a reason", () => {
+    const reason = suggestionBlockedReason(
+      { ...suggestion, access: "fullRepo" },
+      { sending: true, conversationMode: "agent", accessMode: "docsOnly" },
+    );
+    expect(reason).toContain("доступ");
+  });
+
+  test("an already-granted access level is not a reason to block", () => {
+    expect(
+      suggestionBlockedReason(
+        { ...suggestion, access: "fullRepo" },
+        { sending: true, conversationMode: "agent", accessMode: "fullRepo" },
+      ),
+    ).toBeNull();
   });
 });

@@ -126,13 +126,31 @@ pub fn llm_cancel_chat(
 }
 
 /// Queues a user clarification for the next fresh model round without
-/// interrupting the stream or tool call currently in flight.
+/// interrupting the stream or tool call currently in flight. Returns the
+/// note's id so the caller can take it back with `llm_unsteer_chat` while it
+/// is still waiting.
 #[tauri::command]
 pub fn llm_steer_chat(
     text: String,
     steering: State<'_, Arc<SteeringQueue>>,
-) -> Result<(), String> {
-    queue_note(SteeringNote::user(text.trim()), &steering)
+) -> Result<String, String> {
+    let note = SteeringNote::user(text.trim());
+    let id = note.id.clone();
+    queue_note(note, &steering)?;
+    Ok(id)
+}
+
+/// Убирает ещё не применённое уточнение из очереди.
+///
+/// `false` — заметки в очереди уже нет: её забрал очередной раунд, пока
+/// пользователь тянулся к крестику. Отменить уже отданное модели нельзя, и
+/// вызывающий по этому ответу отличает «убрали» от «не успели».
+#[tauri::command]
+pub fn llm_unsteer_chat(
+    id: String,
+    steering: State<'_, Arc<SteeringQueue>>,
+) -> Result<bool, String> {
+    llm_session::remove_steering_note(&steering, &id)
 }
 
 /// Queues an *app-authored* note for the next fresh model round — today,

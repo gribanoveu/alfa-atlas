@@ -87,7 +87,10 @@
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-2);
+  /* The same fill as `.jira-select-trigger` and `.jira-picker-input`: the
+     project and the issue type sit one above the other, and two different
+     fills read as two unrelated widgets rather than one form. */
+  background: var(--bg-0);
 }
 
 .jira-project-key {

@@ -18,11 +18,16 @@ export function JiraProjectPicker({
   projectKey,
   projectName,
   disabled,
+  label = "Проект для новых задач",
   onPick,
 }: {
   projectKey: string;
   projectName: string;
   disabled: boolean;
+  /** Overridden where the surrounding block already says what the project
+   *  is for — the dock's «Новые задачи» card, where the full label would
+   *  repeat its heading. */
+  label?: string;
   onPick: (project: JiraProject) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -78,7 +83,7 @@ export function JiraProjectPicker({
 
   return (
     <div className="jira-picker">
-      <span className="jira-picker-label">Проект для новых задач</span>
+      <span className="jira-picker-label">{label}</span>
 
       <div className="jira-project-row">
         <span className="jira-project-current">
@@ -138,14 +143,17 @@ export function JiraProjectPicker({
               </li>
             ))}
           </ul>
+
+          {/* Says what the list *is*, so it only exists while the list does.
+              Kept outside, it was the longest line in the panel and
+              described something that was not on screen. */}
+          <p className="jira-picker-hint">
+            {trimmed
+              ? "Поиск идёт по всем проектам инстанса."
+              : "Проекты, в которых вы работали недавно. Начните печатать, чтобы искать по всем."}
+          </p>
         </div>
       ) : null}
-
-      <p className="jira-picker-hint">
-        {trimmed
-          ? "Поиск идёт по всем проектам инстанса."
-          : "Показаны проекты, в которых вы работали недавно. Нажмите изменить, чтобы выбрать другой проект."}
-      </p>
     </div>
   );
 }

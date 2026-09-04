@@ -111,6 +111,32 @@ export function needsAccessUpgrade(
   return suggestionAccess(suggestion) === "fullRepo" && current !== "fullRepo";
 }
 
+/**
+ * Почему предложение нельзя применить прямо сейчас — или `null`, если можно.
+ *
+ * Пока ход идёт, клик по подсказке безопасен сам по себе: она только
+ * заполняет поле ввода, а отправляет пользователь вручную (см.
+ * `applySuggestion`). Небезопасны два её побочных эффекта — смена режима
+ * чата и расширение доступа: они меняют правила уже запущенному ходу.
+ * Поэтому во время работы гасим только такие подсказки, а не весь ряд.
+ *
+ * Важно и то, что причина возвращается текстом: погашенная фишка без
+ * объяснения неотличима от сломанной кнопки — с этого и начался баг.
+ */
+export function suggestionBlockedReason(
+  suggestion: AssistantSuggestion,
+  ctx: { sending: boolean; conversationMode: ConversationMode; accessMode: AiAccessMode },
+): string | null {
+  if (!ctx.sending) return null;
+  if (suggestion.mode && suggestion.mode !== ctx.conversationMode) {
+    return "Ассистент ещё работает, а это предложение переключает режим чата — дождитесь конца ответа.";
+  }
+  if (needsAccessUpgrade(suggestion, ctx.accessMode)) {
+    return "Ассистент ещё работает, а это предложение расширяет доступ до всего репозитория — дождитесь конца ответа.";
+  }
+  return null;
+}
+
 /** True when clicking the chip should open the input form rather than fill the
  * composer straight away — either there's something to type, or there's a
  * privilege escalation to confirm. */

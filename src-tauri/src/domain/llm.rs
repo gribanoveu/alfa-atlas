@@ -730,17 +730,29 @@ pub enum SteeringSource {
 /// One entry in `services::llm_session::SteeringQueue`.
 #[derive(Debug, Clone)]
 pub struct SteeringNote {
+    /// Собственный идентификатор заметки. Нужен, чтобы отменить именно её:
+    /// по тексту два одинаковых уточнения не различить, а очередь у них
+    /// общая с приложенческими заметками.
+    pub id: String,
     pub text: String,
     pub source: SteeringSource,
 }
 
 impl SteeringNote {
     pub fn user(text: impl Into<String>) -> Self {
-        Self { text: text.into(), source: SteeringSource::User }
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            text: text.into(),
+            source: SteeringSource::User,
+        }
     }
 
     pub fn system(text: impl Into<String>) -> Self {
-        Self { text: text.into(), source: SteeringSource::System }
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            text: text.into(),
+            source: SteeringSource::System,
+        }
     }
 
     /// The exact string that goes into the model's history.
@@ -755,6 +767,9 @@ impl SteeringNote {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SteeringAppliedEvent {
+    /// Идентификатор заметки — фронт снимает её из «в очереди» именно по
+    /// нему, а не по совпадению текста.
+    pub id: String,
     pub text: String,
 }
 

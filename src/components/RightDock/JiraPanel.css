@@ -141,7 +141,9 @@
 .jira-panel-user {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  /* Wider than the gaps inside either block, so the account and the
+     settings below it read as two things rather than one list. */
+  gap: 14px;
 }
 
 /* Имя слева, статус справа — одной строкой, чтобы блок читался целиком.
@@ -158,6 +160,7 @@
   flex: 1;
   display: flex;
   flex-direction: column;
+  gap: 1px;
   min-width: 0;
 }
 
@@ -204,11 +207,36 @@
 }
 
 /* Separated from the account block above it: the identity is what the panel
-   reports, the project is something the reader changes. */
-.jira-panel-project {
+   reports, the project and the issue type are settings the reader changes.
+   A bordered group rather than a rule — the panel is a narrow column of
+   small grey text, and a heading alone does not hold two fields together. */
+.jira-panel-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
+}
+
+/* The same caption as the settings sheet's group titles
+   (`.llm-detail-group-title`, `.settings-nav-group-label`): smaller and
+   quieter than a field label, so it reads as a heading and not as one more
+   line of content. */
+.jira-panel-group-title {
+  margin: 0;
+  font-size: var(--font-ui-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.jira-panel-error {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+  color: var(--red-tag);
+  overflow-wrap: anywhere;
 }

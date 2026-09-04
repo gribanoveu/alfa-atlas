@@ -117,13 +117,20 @@ export function JiraPanel({ onOpenSettings }: JiraPanelProps) {
             {/* The active project is switched here as well as in Settings:
                 it changes with the task at hand, not with the setup, and
                 sending someone into a settings dialog to do it would be the
-                wrong weight for something this routine. */}
+                wrong weight for something this routine.
+
+                A bordered group rather than a divider: the identity above is
+                something the panel reports, these two are settings the reader
+                changes, and a heading over a box says that at a glance where
+                a stack of same-sized grey lines did not. */}
             {project.ready ? (
-              <div className="jira-panel-project">
+              <section className="jira-panel-group">
+                <h3 className="jira-panel-group-title">Новые задачи</h3>
                 <JiraProjectPicker
                   projectKey={project.projectKey}
                   projectName={project.projectName}
                   disabled={project.busy}
+                  label="Проект"
                   onPick={(picked) => void project.pickProject(picked)}
                 />
                 <JiraIssueTypePicker
@@ -134,9 +141,9 @@ export function JiraPanel({ onOpenSettings }: JiraPanelProps) {
                   onPick={(picked) => void project.pickIssueType(picked)}
                 />
                 {project.error ? (
-                  <p className="jira-panel-notice-text">{project.error}</p>
+                  <p className="jira-panel-error">{project.error}</p>
                 ) : null}
-              </div>
+              </section>
             ) : null}
           </div>
         ) : null}

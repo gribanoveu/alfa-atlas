@@ -210,6 +210,8 @@ export const STEERING_PREFIX =
   "[Уточнение от пользователя, не новое задание — учти в текущей работе]: ";
 
 export type LlmSteeringAppliedEvent = TurnScoped & {
+  /** Идентификатор заметки — по нему её снимают из «в очереди». */
+  id: string;
   text: string;
 };
 
@@ -521,9 +523,17 @@ export function cancelLlmChat(): Promise<void> {
 }
 
 /** Adds guidance to the next fresh model round without interrupting the
- * stream or tool call currently in flight. */
-export function steerLlmChat(text: string): Promise<void> {
-  return invoke("llm_steer_chat", { text });
+ * stream or tool call currently in flight. Resolves with the queued note's
+ * id — pass it to `unsteerLlmChat` to take the clarification back while it
+ * is still waiting. */
+export function steerLlmChat(text: string): Promise<string> {
+  return invoke<string>("llm_steer_chat", { text });
+}
+
+/** Убирает ещё не применённое уточнение из очереди. `false` — заметку уже
+ * забрал очередной раунд: отменить отданное модели нельзя. */
+export function unsteerLlmChat(id: string): Promise<boolean> {
+  return invoke<boolean>("llm_unsteer_chat", { id });
 }
 
 /** Same queue as `steerLlmChat`, but for a note the *app* wrote rather than

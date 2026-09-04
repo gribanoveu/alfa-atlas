@@ -49,6 +49,20 @@ pub type ChatCancelFlag = AtomicBool;
 /// leaking into the next one.
 pub type SteeringQueue = Mutex<Vec<SteeringNote>>;
 
+/// Убирает из очереди заметку с идентификатором `id`.
+///
+/// `false` — заметки там уже нет: её забрал очередной раунд, пока
+/// пользователь тянулся к отмене. Отменить то, что уже ушло модели, нельзя,
+/// и вызывающий по этому ответу отличает «убрали» от «не успели».
+pub fn remove_steering_note(queue: &SteeringQueue, id: &str) -> Result<bool, String> {
+    let mut notes = queue
+        .lock()
+        .map_err(|_| "steering queue lock poisoned".to_string())?;
+    let before = notes.len();
+    notes.retain(|note| note.id != id);
+    Ok(notes.len() != before)
+}
+
 pub fn ensure_provider(
     slot: &LlmProviderSlot,
     resolved: &ResolvedLlmProvider,
@@ -147,4 +161,48 @@ pub fn chat_once(
         }
     }
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removes_only_the_named_note() {
+        let first = SteeringNote::user("сначала");
+        let second = SteeringNote::user("потом");
+        let ids = (first.id.clone(), second.id.clone());
+        let queue: SteeringQueue = Mutex::new(vec![first, second]);
+
+        assert!(remove_steering_note(&queue, &ids.0).unwrap());
+        let left = queue.lock().unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, ids.1);
+        assert_eq!(left[0].text, "потом");
+    }
+
+    #[test]
+    fn reports_false_when_the_note_is_already_gone() {
+        let note = SteeringNote::user("уже применено");
+        let id = note.id.clone();
+        let queue: SteeringQueue = Mutex::new(vec![note]);
+
+        assert!(remove_steering_note(&queue, &id).unwrap());
+        // Второй раз отменять нечего — раунд уже забрал заметку.
+        assert!(!remove_steering_note(&queue, &id).unwrap());
+    }
+
+    /// Два одинаковых уточнения различаются только идентификатором: отмена
+    /// одного не должна уносить второе.
+    #[test]
+    fn identical_texts_are_still_separate_notes() {
+        let first = SteeringNote::user("проверь локаль");
+        let second = SteeringNote::user("проверь локаль");
+        let first_id = first.id.clone();
+        assert_ne!(first.id, second.id);
+        let queue: SteeringQueue = Mutex::new(vec![first, second]);
+
+        remove_steering_note(&queue, &first_id).unwrap();
+        assert_eq!(queue.lock().unwrap().len(), 1);
+    }
 }

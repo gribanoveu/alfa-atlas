@@ -3715,3 +3715,10 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   gap: 6px;
   padding-top: 2px;
 }
+
+/* Обёртка над погашенной фишкой продолжения: `title` у выключенной кнопки
+   не срабатывает, поэтому причина висит здесь. */
+.assistant-suggestion-chip-wrap {
+  display: inline-flex;
+  min-width: 0;
+}

@@ -98,6 +98,7 @@ import {
   streamLlmChat,
   streamLlmChatResume,
   steerLlmChat,
+  unsteerLlmChat,
   type ChatStreamOutcome,
   type ChatUsage,
   type LlmMessage,
@@ -116,6 +117,9 @@ import { planGet, type PlanRecord } from "../lib/plans";
 import { estimateTokenCount } from "../lib/tokens";
 
 export type { ChatMessage, MessageBlock, ReasoningBlock, SteerBlock, TextBlock, ToolCallBlock, ToolCallStatus } from "../lib/chatBlocks";
+
+/** Уточнение, стоящее в очереди на следующий раунд модели. */
+export type PendingSteer = { id: string; text: string };
 
 /** Owns one conversation's state for the assistant chat panel. The
  * tool-calling loop itself (ReadFile/ListFiles/SemanticSearch) runs
@@ -183,7 +187,10 @@ export function useLlmChat(
     maxAttempts: number;
     delaySeconds: number;
   } | null>(null);
-  const [pendingSteers, setPendingSteers] = useState<string[]>([]);
+  // Уточнения, отправленные в очередь, но ещё не отданные модели. Хранятся
+  // с идентификатором, а не одним текстом: два одинаковых уточнения иначе
+  // неразличимы, и отмена одного снимала бы чужое.
+  const [pendingSteers, setPendingSteers] = useState<PendingSteer[]>([]);
 
   /** The provider's own token count for the most recent finished LLM round
    * of the turn currently in flight — see `contextTokens`. Cleared at the
@@ -557,15 +564,36 @@ export function useLlmChat(
   const steerChat = useCallback(async (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    setPendingSteers((prev) => [...prev, trimmed]);
+    // Показываем «в очереди» до ответа бэкенда — сеть здесь локальная, а
+    // задержка между нажатием и подтверждением выглядела бы как потеря
+    // ввода. Свой идентификатор до ответа неизвестен, поэтому строка
+    // временная и заменяется настоящей, как только он придёт.
+    const localId = crypto.randomUUID();
+    setPendingSteers((prev) => [...prev, { id: localId, text: trimmed }]);
     try {
-      await steerLlmChat(trimmed);
+      const id = await steerLlmChat(trimmed);
+      setPendingSteers((prev) =>
+        prev.map((steer) => (steer.id === localId ? { ...steer, id } : steer)),
+      );
     } catch (error) {
-      setPendingSteers((prev) => {
-        const index = prev.indexOf(trimmed);
-        return index === -1 ? prev : [...prev.slice(0, index), ...prev.slice(index + 1)];
-      });
+      setPendingSteers((prev) => prev.filter((steer) => steer.id !== localId));
       throw error;
+    }
+  }, []);
+
+  /** Забирает уточнение назад, пока очередной раунд его не забрал. Если не
+   *  успели — оставляем строку на месте: её снимет событие о применении, и
+   *  пользователь увидит, что уточнение всё-таки ушло. */
+  const unsteerChat = useCallback(async (id: string) => {
+    let removed = false;
+    try {
+      removed = await unsteerLlmChat(id);
+    } catch {
+      // Очередь недоступна — строку не трогаем, состояние честнее пустого.
+      return;
+    }
+    if (removed) {
+      setPendingSteers((prev) => prev.filter((steer) => steer.id !== id));
     }
   }, []);
 
@@ -616,15 +644,12 @@ export function useLlmChat(
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenLlmSteeringApplied(({ turnId, text }) => {
+    void listenLlmSteeringApplied(({ turnId, id, text }) => {
       if (turnId !== activeTurnIdRef.current) return;
       setMessages((prev) =>
         updateLastAssistantBlocks(prev, (blocks) => appendSteerBlock(blocks, text)),
       );
-      setPendingSteers((prev) => {
-        const index = prev.indexOf(text);
-        return index === -1 ? prev : [...prev.slice(0, index), ...prev.slice(index + 1)];
-      });
+      setPendingSteers((prev) => prev.filter((steer) => steer.id !== id));
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -1579,6 +1604,7 @@ export function useLlmChat(
     pendingSteers,
     sendMessage,
     steerChat,
+    unsteerChat,
     retryWithCompaction,
     contextTokens: displayedContextTokens,
     lastRequestTokens,

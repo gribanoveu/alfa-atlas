@@ -39,6 +39,9 @@ let streamCalls: unknown[][] = [];
 let resumeCalls: unknown[][] = [];
 let cancelCalls = 0;
 let steerCalls: string[] = [];
+let unsteerCalls: string[] = [];
+/** Что бэкенд отвечает на отмену: `false` — заметку уже забрал раунд. */
+let unsteerRemoves = true;
 let autoApprovedTools: string[] = [];
 let setAutoApprovedCalls: Array<[string, boolean]> = [];
 let onceResponse = "сводка";
@@ -77,6 +80,11 @@ mock.module("../lib/llm", () => ({
   },
   steerLlmChat: async (text: string) => {
     steerCalls.push(text);
+    return `note-${steerCalls.length}`;
+  },
+  unsteerLlmChat: async (id: string) => {
+    unsteerCalls.push(id);
+    return unsteerRemoves;
   },
   llmChatOnce: () => {
     if (onceThrows) return Promise.reject(onceThrows);
@@ -255,6 +263,8 @@ beforeEach(() => {
   resumeCalls = [];
   cancelCalls = 0;
   steerCalls = [];
+  unsteerCalls = [];
+  unsteerRemoves = true;
   autoApprovedTools = [];
   setAutoApprovedCalls = [];
   onceResponse = "сводка";
@@ -402,6 +412,66 @@ describe("useLlmChat — live events", () => {
     });
   });
 
+  test("a queued clarification can be taken back before the model sees it", async () => {
+    deferStream = true;
+    const { result } = render();
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("вопрос");
+      await Promise.resolve();
+      await result.current.steerChat("первое");
+      await result.current.steerChat("второе");
+    });
+    expect(result.current.pendingSteers.map((s) => s.text)).toEqual(["первое", "второе"]);
+
+    await act(async () => {
+      await result.current.unsteerChat("note-1");
+    });
+
+    expect(unsteerCalls).toEqual(["note-1"]);
+    // Снимается ровно отменённое, соседнее уточнение остаётся в очереди.
+    expect(result.current.pendingSteers).toEqual([{ id: "note-2", text: "второе" }]);
+
+    await act(async () => {
+      pendingStream[0]?.(done(""));
+      await sent;
+    });
+  });
+
+  test("a clarification the round already took stays visible until it is applied", async () => {
+    deferStream = true;
+    const { result } = render();
+
+    let sent!: Promise<void>;
+    await act(async () => {
+      sent = result.current.sendMessage("вопрос");
+      await Promise.resolve();
+      await result.current.steerChat("не успели отменить");
+    });
+
+    // Бэкенд отвечает, что заметки в очереди уже нет — значит она ушла
+    // модели, и убирать строку нельзя: пользователь должен увидеть, что
+    // уточнение всё-таки применилось.
+    unsteerRemoves = false;
+    await act(async () => {
+      await result.current.unsteerChat("note-1");
+    });
+    expect(result.current.pendingSteers).toEqual([
+      { id: "note-1", text: "не успели отменить" },
+    ]);
+
+    await act(async () => {
+      emit(steeringListeners, { id: "note-1", text: "не успели отменить" });
+    });
+    expect(result.current.pendingSteers).toEqual([]);
+
+    await act(async () => {
+      pendingStream[0]?.(done(""));
+      await sent;
+    });
+  });
+
   test("applied steering becomes a permanent block and leaves the pending queue", async () => {
     deferStream = true;
     const { result } = render();
@@ -413,10 +483,12 @@ describe("useLlmChat — live events", () => {
       await result.current.steerChat("Проверь ru locale");
     });
     expect(steerCalls).toEqual(["Проверь ru locale"]);
-    expect(result.current.pendingSteers).toEqual(["Проверь ru locale"]);
+    expect(result.current.pendingSteers).toEqual([
+      { id: "note-1", text: "Проверь ru locale" },
+    ]);
 
     await act(async () => {
-      emit(steeringListeners, { text: "Проверь ru locale" });
+      emit(steeringListeners, { id: "note-1", text: "Проверь ru locale" });
     });
 
     expect(result.current.pendingSteers).toEqual([]);

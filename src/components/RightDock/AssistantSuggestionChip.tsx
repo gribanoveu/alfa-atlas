@@ -10,23 +10,29 @@ export function AssistantSuggestionChip({
   suggestion,
   className,
   disabled,
+  disabledReason,
   onClick,
   onHoverChange,
 }: {
   suggestion: AssistantSuggestion;
   className: string;
   disabled?: boolean;
+  /** Почему фишка погашена. Заменяет обычную подсказку: у выключенной кнопки
+   *  причина важнее описания, иначе она читается как сломанная. */
+  disabledReason?: string;
   onClick: () => void;
   onHoverChange?: (suggestion: AssistantSuggestion | null) => void;
 }) {
   // When the panel renders the hint in a dedicated row below (`onHoverChange`),
   // skip the native `title` tooltip — it duplicates the text and covers it.
-  const title = onHoverChange
-    ? undefined
-    : [suggestion.hint, suggestion.writes ? "правит файлы" : "только чтение"]
-        .filter(Boolean)
-        .join(" · ");
-  return (
+  const title = disabledReason
+    ? disabledReason
+    : onHoverChange
+      ? undefined
+      : [suggestion.hint, suggestion.writes ? "правит файлы" : "только чтение"]
+          .filter(Boolean)
+          .join(" · ");
+  const chip = (
     <button
       type="button"
       className={className}
@@ -48,5 +54,16 @@ export function AssistantSuggestionChip({
         )}
       </span>
     </button>
+  );
+
+  // У выключенной кнопки браузер не показывает `title` — она не получает
+  // событий мыши вовсе. Поэтому причина висит на обёртке, иначе объяснение
+  // не увидит именно тот, кому оно адресовано.
+  return disabled && disabledReason ? (
+    <span className="assistant-suggestion-chip-wrap" title={disabledReason}>
+      {chip}
+    </span>
+  ) : (
+    chip
   );
 }

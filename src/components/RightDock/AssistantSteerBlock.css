@@ -51,3 +51,28 @@
   color: var(--text-2);
   font-size: 11px;
 }
+
+/* Крестик отмены — рядом с меткой «В очереди», по правому краю строки.
+   `margin-left` у метки уже отжимает пару вправо, поэтому здесь только
+   собственные отступы кнопки. */
+.assistant-steer-pending-cancel {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.assistant-steer-pending-cancel:hover {
+  background: var(--bg-1);
+  color: var(--red-tag);
+}
+
+.assistant-steer-pending-cancel:hover svg {
+  color: inherit;
+}
