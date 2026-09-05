@@ -62,6 +62,7 @@ pub(crate) enum SecretPurpose {
     JiraToken,
     EmbeddingApiKey,
     SshPrivateKey,
+    CalendarPassword,
 }
 
 impl SecretPurpose {
@@ -72,6 +73,7 @@ impl SecretPurpose {
             Self::JiraToken => b"jira-token",
             Self::EmbeddingApiKey => b"embedding-api-key",
             Self::SshPrivateKey => b"ssh-private-key",
+            Self::CalendarPassword => b"calendar-password",
         }
     }
 }

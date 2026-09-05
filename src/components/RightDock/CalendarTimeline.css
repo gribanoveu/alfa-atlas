@@ -1,0 +1,611 @@
+.cal-tl {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* --- Day navigation --- */
+.cal-tl-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cal-tl-arrow {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.cal-tl-arrow:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+
+.cal-tl-date {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 2px 4px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+.cal-tl-date:hover {
+  background: var(--bg-1);
+}
+
+.cal-tl-rel {
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-2);
+  text-transform: capitalize;
+}
+
+.cal-tl-date.is-today .cal-tl-rel {
+  color: var(--accent);
+}
+
+.cal-tl-datefull {
+  font-size: var(--font-ui);
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* --- All-day strip --- */
+.cal-tl-allday {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cal-tl-allday-item {
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid var(--accent-dim);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-1));
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-tl-allday-item.is-cancelled {
+  text-decoration: line-through;
+  opacity: 0.55;
+}
+
+/* --- Timed grid --- */
+.cal-tl-grid {
+  position: relative;
+  width: 100%;
+}
+
+.cal-tl-hour {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+}
+
+.cal-tl-hour-label {
+  position: absolute;
+  left: 0;
+  top: -6px;
+  width: 36px;
+  text-align: right;
+  padding-right: 6px;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-tl-hour-line {
+  position: absolute;
+  left: 42px;
+  right: 0;
+  top: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.cal-tl-track {
+  position: absolute;
+  left: 42px;
+  right: 0;
+  top: 0;
+  bottom: 0;
+}
+
+.cal-tl-event {
+  position: absolute;
+  box-sizing: border-box;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 2px 6px 2px 7px;
+  border: 1px solid var(--accent-dim);
+  border-left: 3px solid var(--accent);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-1));
+  color: var(--text-0);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cal-tl-event:hover {
+  filter: brightness(1.08);
+}
+
+/* Short blocks (≤ ~40px) read on one line: time then title, ellipsised. */
+.cal-tl-event.is-compact {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.cal-tl-event.is-compact .cal-tl-event-time {
+  flex: none;
+}
+
+.cal-tl-event.is-compact .cal-tl-event-title {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Keep the title clear of the join icon in the top-right corner: reserve the
+   space on the title's own line (stacked), or at the row end (compact). */
+.cal-tl-event.is-join:not(.is-compact) .cal-tl-event-title {
+  padding-right: 20px;
+}
+
+.cal-tl-event.is-join.is-compact {
+  padding-right: 22px;
+}
+
+.cal-tl-event.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.cal-tl-event.resp-accepted {
+  border-left-color: var(--green);
+}
+.cal-tl-event.resp-tentative {
+  border-left-color: var(--accent);
+}
+.cal-tl-event.resp-declined {
+  border-left-color: var(--red-tag);
+}
+/* Not-accepted invitations read as tentative: faded like cancelled ones, the
+   only difference being a plainer (non-accent) background. */
+.cal-tl-event.resp-notResponded {
+  border-left-style: dashed;
+  border-left-color: var(--text-2);
+  background: var(--bg-1);
+  opacity: 0.75;
+}
+
+.cal-tl-event.is-cancelled {
+  opacity: 0.55;
+}
+.cal-tl-event.is-cancelled .cal-tl-event-title {
+  text-decoration: line-through;
+}
+
+.cal-tl-event-time {
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-tl-event-title {
+  font-size: var(--font-ui-sm);
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-tl-event-join {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--bg-0) 55%, transparent);
+  cursor: pointer;
+}
+
+.cal-tl-event-join:hover {
+  background: var(--bg-0);
+}
+
+/* --- Now line --- (inside .cal-tl-track, which is already offset by the
+   hour gutter, so left is 0 here — not the gutter width again). */
+.cal-tl-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 2px solid var(--red-tag);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.cal-tl-now-dot {
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--red-tag);
+}
+
+/* --- Selected event: bottom sheet --- */
+/* Overlays the calendar from the bottom instead of pushing the grid down.
+   Anchored to `.cal-panel` (position: relative), scrolls on its own, dismissed
+   with the ✕. */
+.cal-sel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  max-height: 70%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-top: 1px solid var(--accent-dim);
+  background: var(--bg-1);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  animation: cal-sheet-in 0.18s ease-out;
+}
+
+.cal-sel.is-closing {
+  animation: cal-sheet-out 0.17s ease-in forwards;
+}
+
+@keyframes cal-sheet-in {
+  from {
+    transform: translateY(100%);
+    opacity: 0.5;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes cal-sheet-out {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(100%);
+    opacity: 0.3;
+  }
+}
+
+.cal-sel-handle {
+  align-self: center;
+  width: 34px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  margin-bottom: 2px;
+}
+
+.cal-sel-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cal-sel-org {
+  font-size: var(--font-ui-sm);
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+/* A titled block separated by a hairline — the shape RSVP and other grouped
+   actions slot into. */
+.cal-sel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.cal-sel-section-label {
+  font-size: var(--font-ui-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+
+/* Stacked so each split button (action + ▾) has room in the narrow panel. */
+.cal-sel-rsvp-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cal-rsvp-split {
+  position: relative;
+  display: flex;
+}
+
+.cal-rsvp {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-size: var(--font-ui-sm);
+  cursor: pointer;
+}
+
+.cal-rsvp:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.cal-rsvp-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  text-align: left;
+}
+
+.cal-rsvp-caret {
+  flex: none;
+  width: 30px;
+  padding: 6px 0;
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cal-rsvp-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+.cal-rsvp-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: var(--text-1);
+  font-size: var(--font-ui-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cal-rsvp-menu-item:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.cal-rsvp:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Current response stays highlighted even while the buttons are disabled. */
+.cal-rsvp.is-active {
+  opacity: 1;
+  font-weight: 600;
+}
+
+.cal-rsvp.is-active.accept {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.cal-rsvp.is-active.tentative {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.cal-rsvp.is-active.decline {
+  border-color: var(--red-tag);
+  color: var(--red-tag);
+}
+
+.cal-sel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cal-sel-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-size: var(--font-ui-sm);
+  cursor: pointer;
+}
+
+.cal-sel-copy:hover {
+  color: var(--text-0);
+  border-color: var(--accent-dim);
+  background: var(--bg-2);
+}
+
+/* On-demand details trigger — nothing is fetched until this is clicked. */
+.cal-sel-load {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-size: var(--font-ui-sm);
+  cursor: pointer;
+}
+
+.cal-sel-load:hover:not(:disabled) {
+  color: var(--text-0);
+  border-color: var(--accent-dim);
+  background: var(--bg-2);
+}
+
+.cal-sel-load:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.cal-sel-attendees {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cal-sel-attendees-count {
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
+.cal-sel .cal-attendee {
+  align-items: flex-start;
+}
+
+.cal-attendee-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.cal-attendee-email {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Attendee dot sits on the name line even when an email wraps below. */
+.cal-sel .cal-attendee-dot {
+  margin-top: 5px;
+}
+
+.cal-sel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cal-sel-title {
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-0);
+  overflow-wrap: anywhere;
+}
+
+.cal-sel-title.is-cancelled {
+  text-decoration: line-through;
+  color: var(--text-2);
+}
+
+.cal-sel-close {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.cal-sel-close:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.cal-sel-time {
+  font-size: var(--font-ui);
+  color: var(--text-1);
+}
+
+.cal-sel-loc {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.cal-sel-join {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: var(--font-ui-sm);
+  cursor: pointer;
+}
+
+.cal-sel-join:hover {
+  filter: brightness(1.08);
+}

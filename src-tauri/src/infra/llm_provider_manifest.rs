@@ -27,6 +27,7 @@ use std::sync::LazyLock;
 
 use crate::domain::embeddings::EmbeddingPreset;
 use crate::domain::git_browse::GitPreset;
+use crate::domain::calendar::CalendarPreset;
 use crate::domain::jira::JiraPreset;
 use crate::domain::llm::LlmProviderPreset;
 use crate::domain::metrics::MetricsPreset;
@@ -66,6 +67,10 @@ struct SystemProvidersManifest {
     /// recognisable on their own (`github.com`) — never guessed.
     #[serde(default)]
     git: GitPreset,
+    /// Build-time defaults for the OWA/Exchange calendar — instance URL and
+    /// the corporate CA it sits behind. Omitting it is valid.
+    #[serde(default)]
+    calendar: CalendarPreset,
 }
 
 static PARSED: LazyLock<SystemProvidersManifest> = LazyLock::new(|| {
@@ -93,6 +98,12 @@ pub fn metrics_preset() -> Option<&'static MetricsPreset> {
 /// `jira` section — a valid state, not an error.
 pub fn jira_preset() -> &'static JiraPreset {
     &PARSED.jira
+}
+
+/// Build-supplied OWA calendar defaults. All-`None` when the manifest ships
+/// no `calendar` section — a valid state, not an error.
+pub fn calendar_preset() -> &'static CalendarPreset {
+    &PARSED.calendar
 }
 
 /// Build-supplied git-forge declaration. `forge: None` when the manifest

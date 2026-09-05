@@ -6,6 +6,7 @@ import {
   Lightbulb,
   Sparkles,
   Ticket,
+  CalendarDays,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
@@ -29,6 +30,7 @@ import { BranchesPanel } from "./BranchesPanel";
 import { GitPanel } from "./GitPanel";
 import { AsciiDocPanel } from "./AsciiDocPanel";
 import { JiraPanel } from "./JiraPanel";
+import { CalendarPanel } from "./CalendarPanel";
 import { UtilitiesPanel } from "./UtilitiesPanel";
 import { NotificationsPanel } from "./NotificationsPanel";
 import "./RightDock.css";
@@ -72,6 +74,11 @@ const TOOL_DEFS: Record<
     empty: "Интеграция с Jira недоступна",
     Icon: Ticket,
   },
+  calendar: {
+    label: "Календарь",
+    empty: "Календарь не настроен",
+    Icon: CalendarDays,
+  },
 };
 
 /** Stripe order: notifications + assistant grouped on top, then git tools,
@@ -81,6 +88,7 @@ const TOOL_STRIPE_GROUPS: RightTool[][] = [
   ["branches", "git"],
   ["asciidoc", "utilities"],
   ["jira"],
+  ["calendar"],
 ];
 
 export type GitPanelViewProps = {
@@ -151,6 +159,9 @@ type RightDockProps = {
     onOpenSettings: () => void;
     onAskAssistant?: () => void;
   } | null;
+  calendar?: {
+    onOpenSettings: () => void;
+  } | null;
   assistant?: {
     onOpenSettings: () => void;
     specsRepoInfo: SpecsRepoInfo | null;
@@ -220,6 +231,7 @@ export function RightDock({
   asciidoc,
   utilities,
   jira,
+  calendar,
   assistant,
   gitActionLog,
   chatInsertRequest,
@@ -327,6 +339,8 @@ export function RightDock({
                 onOpenSettings={jira.onOpenSettings}
                 onAskAssistant={jira.onAskAssistant}
               />
+            ) : activeTool === "calendar" && calendar ? (
+              <CalendarPanel onOpenSettings={calendar.onOpenSettings} />
             ) : activeTool === "suggestions" ? (
               <NotificationsPanel gitActionLog={gitActionLog ?? undefined} />
             ) : (

@@ -16,6 +16,7 @@ import {
   Sparkles,
   SpellCheck,
   Ticket,
+  CalendarDays,
   X,
 } from "lucide-react";
 import type { GeneralPrefs } from "../../lib/prefs";
@@ -30,6 +31,7 @@ import { EditorTab } from "./EditorTab";
 import { EmbeddingsTab } from "./EmbeddingsTab";
 import { GeneralTab } from "./GeneralTab";
 import { JiraTab } from "./JiraTab";
+import { CalendarTab } from "./CalendarTab";
 import { LlmTab } from "./LlmTab";
 import { LoggingTab } from "./LoggingTab";
 import { NotificationsTab } from "./NotificationsTab";
@@ -52,6 +54,7 @@ export type SectionId =
   | "permissions"
   | "notifications"
   | "jira"
+  | "calendar"
   | "credentials"
   | "embeddings"
   | "logging";
@@ -202,6 +205,15 @@ const GROUPS: SectionGroup[] = [
           "Адрес экземпляра Jira и токен, которым приложение к нему подключается",
         icon: Ticket,
         keywords: "jira задачи тикеты токен pat personal access token сертификат инстанс",
+      },
+      {
+        id: "calendar",
+        label: "Календарь",
+        title: "Календарь",
+        description:
+          "Адрес OWA/Exchange и доменный логин для показа встреч в правой панели",
+        icon: CalendarDays,
+        keywords: "календарь owa exchange встречи ntlm домен пароль часовой пояс",
       },
     ],
   },
@@ -439,6 +451,7 @@ export function SettingsDialog({
                   {section === "permissions" ? <PermissionsTab /> : null}
                   {section === "notifications" ? <NotificationsTab /> : null}
                   {section === "jira" ? <JiraTab /> : null}
+                  {section === "calendar" ? <CalendarTab /> : null}
                   {section === "credentials" ? <CredentialsTab /> : null}
                   {section === "embeddings" ? <EmbeddingsTab repoRoot={projectRoot} /> : null}
                   {section === "logging" ? <LoggingTab /> : null}

@@ -609,6 +609,7 @@ function App() {
   const [llmSettingsSignal, setLlmSettingsSignal] = useState(0);
   const [credentialsSettingsSignal, setCredentialsSettingsSignal] = useState(0);
   const [jiraSettingsSignal, setJiraSettingsSignal] = useState(0);
+  const [calendarSettingsSignal, setCalendarSettingsSignal] = useState(0);
 
 
 
@@ -844,6 +845,7 @@ function App() {
         openLlmSettingsSignal={llmSettingsSignal}
         openCredentialsSettingsSignal={credentialsSettingsSignal}
         openJiraSettingsSignal={jiraSettingsSignal}
+        openCalendarSettingsSignal={calendarSettingsSignal}
       />
       <div className="workspace">
         <div className={mainClassName}>
@@ -1150,6 +1152,9 @@ function App() {
                       "Составь задачу для Jira. Вот что нужно сделать: ",
                     )
                 : undefined,
+            }}
+            calendar={{
+              onOpenSettings: () => setCalendarSettingsSignal((n) => n + 1),
             }}
             assistant={{
               onOpenSettings: () => setLlmSettingsSignal((n) => n + 1),

@@ -1,3 +1,5 @@
+pub mod calendar_sync;
+pub mod calendar_config;
 pub mod agent_memory;
 pub mod agent_skills;
 pub mod ai_tools;

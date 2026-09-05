@@ -1,0 +1,330 @@
+.cal-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+  /* Anchors the event bottom sheet (`.cal-sel`) to the panel. */
+  position: relative;
+}
+
+.cal-panel-toolbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 28px;
+  padding: 0 6px 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+}
+
+.cal-panel-toolbar-title {
+  min-width: 0;
+  font-size: var(--font-ui);
+  font-weight: 600;
+  color: var(--text-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-panel-toolbar-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.cal-panel-icon-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  color: var(--text-1);
+  flex: none;
+}
+
+.cal-panel-icon-btn:hover:not(:disabled) {
+  color: var(--text-0);
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+
+.cal-panel-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.cal-panel-icon-btn .spin {
+  animation: cal-panel-spin 0.9s linear infinite;
+}
+
+@keyframes cal-panel-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cal-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.cal-panel-status {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+/* --- Notice cards (not configured / error) — mirror the Jira panel --- */
+.cal-panel-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-1);
+}
+
+.cal-panel-notice.is-error {
+  border-color: color-mix(in srgb, var(--red-tag) 45%, var(--border));
+}
+
+.cal-panel-notice-icon {
+  flex: none;
+  color: var(--text-2);
+}
+
+.cal-panel-notice.is-error .cal-panel-notice-icon {
+  color: var(--red-tag);
+}
+
+.cal-panel-notice-title {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.cal-panel-notice-text {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+  color: var(--text-1);
+  overflow-wrap: anywhere;
+}
+
+.cal-panel-btn {
+  margin-top: 2px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-size: var(--font-ui-sm);
+}
+
+.cal-panel-btn:hover {
+  border-color: var(--accent-dim);
+  background: var(--bg-2);
+}
+
+/* --- Login form (disconnected state) — on a card, like the Jira panel's
+   blocks. Inputs stay `--bg-0`, a shade darker than the card, for contrast. */
+.cal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-1);
+}
+
+.cal-form-intro {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+  color: var(--text-1);
+}
+
+.cal-form-warn {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--text-0);
+}
+
+.cal-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.cal-form-label {
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+/* Same input as the rest of the app (`.clone-modal-input`). */
+.cal-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg-0);
+  color: var(--text-0);
+  font-size: var(--font-ui);
+}
+
+.cal-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.cal-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+  color: var(--text-1);
+  cursor: pointer;
+}
+
+.cal-check input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.cal-check:has(input:disabled) {
+  cursor: default;
+  color: var(--text-2);
+}
+
+.cal-form-hint {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.cal-form-error {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+  color: var(--red-tag);
+  overflow-wrap: anywhere;
+}
+
+/* Primary action — accent, like the settings dialog's primary buttons. */
+.cal-submit {
+  margin-top: 2px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  font-size: var(--font-ui-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.cal-submit:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.cal-submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cal-event-detail-status {
+  margin: 0;
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+}
+
+.cal-attendees {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cal-attendee {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cal-attendee-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-2);
+}
+
+.cal-attendee-dot.resp-accepted {
+  background: var(--green);
+}
+
+.cal-attendee-dot.resp-tentative {
+  background: var(--accent);
+}
+
+.cal-attendee-dot.resp-declined {
+  background: var(--red-tag);
+}
+
+.cal-attendee-dot.resp-organizer {
+  background: var(--text-0);
+}
+
+.cal-attendee-name {
+  font-size: var(--font-ui);
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cal-attendee-opt {
+  color: var(--text-2);
+}
+
+.cal-event-body {
+  margin: 0;
+  font-size: var(--font-ui);
+  line-height: 1.45;
+  color: var(--text-1);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Long descriptions don't push the panel — cap and scroll. */
+  max-height: 160px;
+  overflow-y: auto;
+}

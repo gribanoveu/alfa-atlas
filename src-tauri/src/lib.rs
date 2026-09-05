@@ -7,7 +7,7 @@ use domain::settings::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, WindowState}
 use services::window_settings;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
+use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
 
 use crate::services::embedding_state::{
     BackgroundBacklogSlot, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard,
@@ -15,6 +15,7 @@ use crate::services::embedding_state::{
 };
 use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot, SteeringQueue};
 use crate::infra::parsers::registry::ParserRegistry;
+use crate::services::calendar_sync::CalendarState;
 use crate::services::chunk_builder::ChunkIndex;
 use crate::services::embedding_model::DownloadState;
 use crate::services::repo_index::RepositoryIndex;
@@ -123,6 +124,7 @@ fn persist_window_state(window: &Window) {
 /// The upper bound on what a crash can lose, traded against how often a
 /// small file is rewritten while someone is working.
 const SESSION_CHECKPOINT_INTERVAL_SECS: u64 = 60;
+const CALENDAR_SYNC_INTERVAL_SECS: u64 = 300;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -184,6 +186,7 @@ pub fn run() {
             app.manage(Arc::new(SteeringQueue::default()));
             app.manage(Arc::new(commands::git::CloneCancellations::new()));
             app.manage(Arc::new(services::memory_pipeline::MemoryExtractGuard::new()));
+            app.manage(Arc::new(CalendarState::new()));
 
             // Fire-and-forget: metrics must neither delay startup nor
             // surface to the user. The install report runs first (it is
@@ -237,6 +240,35 @@ pub fn run() {
                     .await;
                 }
             });
+
+            // Background calendar refresh. Skips entirely when the calendar
+            // has no live session (unconfigured, or the password isn't
+            // remembered) and while the breaker is open, so an install that
+            // never touched the calendar never hits the network. A successful
+            // sync pushes the fresh events to whoever has the panel open.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(
+                            CALENDAR_SYNC_INTERVAL_SECS,
+                        ))
+                        .await;
+                        let state = match handle.try_state::<Arc<CalendarState>>() {
+                            Some(s) => Arc::clone(&s),
+                            None => continue,
+                        };
+                        if !state.status().connected || state.status().circuit_open {
+                            continue;
+                        }
+                        let events = tauri::async_runtime::spawn_blocking(move || state.sync())
+                            .await;
+                        if let Ok(Ok(events)) = events {
+                            let _ = handle.emit("calendar:updated", &events);
+                        }
+                    }
+                });
+            }
 
             Ok(())
         })
@@ -449,6 +481,16 @@ pub fn run() {
             commands::jira::jira_list_projects,
             commands::jira::jira_list_issue_types,
             commands::jira::jira_publish_ticket,
+            commands::calendar::calendar_get_settings,
+            commands::calendar::calendar_save_settings,
+            commands::calendar::calendar_set_password,
+            commands::calendar::calendar_has_password,
+            commands::calendar::calendar_forget,
+            commands::calendar::calendar_get_cached,
+            commands::calendar::calendar_status,
+            commands::calendar::calendar_sync,
+            commands::calendar::calendar_event_details,
+            commands::calendar::calendar_rsvp,
             commands::jira::jira_issue_url,
             commands::chat_history::chat_list,
             commands::chat_history::chat_load_messages,

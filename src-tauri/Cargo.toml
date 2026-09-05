@@ -17,6 +17,13 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-http = "2"
+base64 = "0.22"
+percent-encoding = "2"
+hmac = "0.12"
+md4 = "0.10"
+md-5 = "0.10"
+url = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_path_to_error = "0.1"
@@ -54,6 +61,9 @@ tree-sitter-java = "0.23.5"
 tree-sitter-asciidoc = "0.9.0"
 usearch = "2.26.0"
 ureq = { version = "3.3.0", features = ["json"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+
 # Already pulled in transitively by ureq (its `Response`/`Request` types are
 # `http::Response`/`http::Request`) — declared directly so
 # `infra::llm_providers::openai_compatible` can name `http::Response<ureq::Body>`

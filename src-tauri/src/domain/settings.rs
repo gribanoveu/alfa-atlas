@@ -324,6 +324,11 @@ pub struct AppSettings {
     /// `infra::jira_credentials_store`.
     #[serde(default)]
     pub jira: crate::domain::jira::JiraSettings,
+    /// Global — OWA/Exchange calendar instance + login. The domain password
+    /// is never in this (or any) `settings.json` — see
+    /// `infra::owa_credentials_store`.
+    #[serde(default)]
+    pub calendar: crate::domain::calendar::CalendarSettings,
 }
 
 #[derive(Debug, Error)]

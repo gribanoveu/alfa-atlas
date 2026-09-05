@@ -71,7 +71,9 @@ name = "alfa-atlas"
 version = "0.5.0"
 dependencies = [
  "aes-gcm",
+ "base64 0.22.1",
  "blake3",
+ "chrono",
  "cxx",
  "dashmap",
  "dirs",
@@ -81,17 +83,22 @@ dependencies = [
  "globset",
  "gouqi",
  "hf-hub",
+ "hmac",
  "http",
  "ignore",
  "keyring",
  "libssh2-sys",
+ "md-5",
+ "md4",
  "moka",
  "notify",
+ "percent-encoding",
  "pulldown-cmark 0.12.2",
  "rand 0.8.7",
  "regex",
  "reqwest 0.12.28",
  "rusqlite",
+ "rustls",
  "secrecy",
  "serde",
  "serde_json",
@@ -116,8 +123,10 @@ dependencies = [
  "tree-sitter-asciidoc",
  "tree-sitter-java",
  "ureq",
+ "url",
  "usearch",
  "uuid",
+ "webpki-roots",
  "yaml_serde",
  "zeroize",
 ]
@@ -3322,6 +3331,25 @@ checksum = "3f607c237553f086e7043417a51df26b2eb899d3caff94e6a67592ff992fedc7"
 dependencies = [
  "autocfg",
  "rawpointer",
+]
+
+[[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
+
+[[package]]
+name = "md4"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7da5ac363534dce5fabf69949225e174fbf111a498bf0ff794c8ea1fba9f3dda"
+dependencies = [
+ "digest",
 ]
 
 [[package]]
