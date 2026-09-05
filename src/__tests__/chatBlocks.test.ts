@@ -328,7 +328,7 @@ describe("correctRoundText", () => {
     // What the model is owed on the next turn is exactly what it said, once.
     // The provider accumulates every `content` delta of a round into one
     // string regardless of where the round's tool calls fell among them (see
-    // `chat_stream`'s `full`), and that string is what `llm:round-text`
+    // `chat_stream`'s `full`), and that string is what `roundCompleted`
     // reports — so for every possible interleaving, the round's blocks must
     // flatten back to it verbatim.
     const chunks = ["Смотрю ", "файл ", "конфигурации."];
@@ -405,7 +405,7 @@ describe("round boundaries", () => {
 
   test("a corrected round's block is closed, so a later round cannot claim it", () => {
     // `closeOpenBlocks` can never reach a text block sitting behind a tool
-    // call, so `llm:round-text` closing it is the only boundary that round
+    // call, so `roundCompleted` closing it is the only boundary that round
     // ever gets — without it a later round that called a tool and lost every
     // delta would overwrite this round's answer with its own text.
     const call = { id: "call_1", name: "readFile", argumentsJson: "{}" };

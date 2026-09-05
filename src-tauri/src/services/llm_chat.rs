@@ -26,13 +26,11 @@ use crate::domain::ai_access::{call_requires_confirmation, AiAccessMode, ToolNam
 use crate::domain::ai_tools::{Task, ToolResult, ToolScope};
 use crate::domain::conversation_mode::{mode_tools, ConversationMode};
 use crate::domain::llm::{
-    sanitize_tool_call_arguments, ChatDone, ChatEvent, ChatEventSink, ChatRequest,
-    ChatRetrying, ChatRoundText,
-    ChatStreamDelta,
-    ChatStreamResult,
-    ChatStreamOutcome, ChatStreamReasoning, LlmMessage, LlmProvider, LlmRole, LlmSettings,
-    LlmToolCall, LlmToolDefinition, PendingApproval, PendingToolCall, ToolCallDecision,
-    SteeringAppliedEvent, SteeringNote, SteeringSource, ToolCallEvent, ToolResultEvent,
+    sanitize_tool_call_arguments, ChatDone, ChatEventPayload, ChatEventSink, ChatRequest,
+    ChatRetrying, ChatRoundCompleted, ChatStreamDelta, ChatStreamOutcome, ChatStreamReasoning,
+    ChatStreamResult, ChatTurnEvent, LlmMessage, LlmProvider, LlmRole, LlmSettings, LlmToolCall,
+    LlmToolDefinition, PendingApproval, PendingToolCall, SteeringAppliedEvent, SteeringNote,
+    SteeringSource, ToolCallDecision, ToolCallEvent, ToolResultEvent,
 };
 use crate::domain::paths;
 use crate::domain::repo_index::FileId;
@@ -495,6 +493,37 @@ struct LoopCtx<'a> {
     conversation_mode: ConversationMode,
 }
 
+/// Assigns protocol metadata without leaking transport concerns into the
+/// tool loop. The cursor is restored from `PendingApproval` on resume.
+struct EventReporter<'a> {
+    sink: &'a ChatEventSink,
+    seq: Cell<u64>,
+}
+
+impl<'a> EventReporter<'a> {
+    fn new(sink: &'a ChatEventSink, seq: u64) -> Self {
+        Self {
+            sink,
+            seq: Cell::new(seq),
+        }
+    }
+
+    fn emit(&self, round: u32, target_id: Option<String>, event: ChatEventPayload) {
+        let seq = self.seq.get().saturating_add(1);
+        self.seq.set(seq);
+        (self.sink)(ChatTurnEvent {
+            seq,
+            round,
+            target_id,
+            event,
+        });
+    }
+
+    fn last_seq(&self) -> u64 {
+        self.seq.get()
+    }
+}
+
 /// The shared tool-calling loop both `llm_chat_stream` (fresh start,
 /// `resume: None`) and `llm_chat_stream_resume` (continuing a paused round,
 /// `resume: Some((calls, decisions))`) run. `scope`/`tools` are `mut`
@@ -549,7 +578,9 @@ fn run_tool_loop(
     mut budget_used: u32,
     mut resume: Option<(Vec<LlmToolCall>, Vec<ToolCallDecision>)>,
     mut todos: Vec<Task>,
+    event_seq: u64,
 ) -> Result<ChatStreamOutcome, String> {
+    let events = EventReporter::new(ctx.events, event_seq);
     // Computed once, before the loop can append anything of its own: the
     // nudge below is itself a `User` message mentioning «диаграмма», so
     // recomputing per round would make it self-triggering.
@@ -620,8 +651,11 @@ fn run_tool_loop(
                     // block in the transcript — an app-authored one (a
                     // failed diagram render) is not something they said.
                     if note.source == SteeringSource::User {
-                        (ctx.events)(
-                            ChatEvent::SteeringApplied(SteeringAppliedEvent {
+                        let target_id = format!("steer:{}", note.id);
+                        events.emit(
+                            round,
+                            Some(target_id),
+                            ChatEventPayload::SteeringApplied(SteeringAppliedEvent {
                                 id: note.id,
                                 text: note.text,
                             }),
@@ -631,7 +665,11 @@ fn run_tool_loop(
                 // Announced after the steering drain above, so the steer
                 // block and this boundary land in the transcript in the
                 // same order the history has them.
-                (ctx.events)(ChatEvent::RoundStarted);
+                events.emit(
+                    round,
+                    Some(format!("round:{round}")),
+                    ChatEventPayload::RoundStarted,
+                );
                 let request = ChatRequest {
                     messages: history.clone(),
                     tools: tools.clone(),
@@ -641,23 +679,35 @@ fn run_tool_loop(
                 let attempt_emitted_data = Cell::new(false);
                 let on_delta = |delta: &str| {
                     attempt_emitted_data.set(true);
-                    (ctx.events)(ChatEvent::Delta(ChatStreamDelta {
-                        delta: delta.to_string(),
-                    }));
+                    events.emit(
+                        round,
+                        Some(format!("round:{round}:text")),
+                        ChatEventPayload::Delta(ChatStreamDelta {
+                            delta: delta.to_string(),
+                        }),
+                    );
                 };
                 let on_reasoning = |delta: &str| {
                     attempt_emitted_data.set(true);
-                    (ctx.events)(ChatEvent::Reasoning(ChatStreamReasoning {
-                        delta: delta.to_string(),
-                    }));
+                    events.emit(
+                        round,
+                        Some(format!("round:{round}:reasoning")),
+                        ChatEventPayload::Reasoning(ChatStreamReasoning {
+                            delta: delta.to_string(),
+                        }),
+                    );
                 };
                 let on_tool_call_delta = |id: &str, name: &str, arguments: &str| {
                     attempt_emitted_data.set(true);
-                    (ctx.events)(ChatEvent::ToolCallDelta(ToolCallEvent {
-                        id: id.to_string(),
-                        name: name.to_string(),
-                        arguments: arguments.to_string(),
-                    }));
+                    events.emit(
+                        round,
+                        Some(format!("round:{round}:tool:{id}")),
+                        ChatEventPayload::ToolCallDelta(ToolCallEvent {
+                            id: id.to_string(),
+                            name: name.to_string(),
+                            arguments: arguments.to_string(),
+                        }),
+                    );
                 };
                 let cancelled = || ctx.cancel_flag.load(Ordering::SeqCst);
                 let mut retry_attempt = 0;
@@ -674,11 +724,15 @@ fn run_tool_loop(
                                 && is_peer_disconnected_error(&error.to_string()) =>
                         {
                             retry_attempt += 1;
-                            (ctx.events)(ChatEvent::Retrying(ChatRetrying {
-                                attempt: retry_attempt,
-                                max_attempts: MAX_PEER_DISCONNECTED_RETRIES,
-                                delay_seconds: PEER_DISCONNECTED_RETRY_DELAY_SECONDS,
-                            }));
+                            events.emit(
+                                round,
+                                Some(format!("round:{round}")),
+                                ChatEventPayload::Retrying(ChatRetrying {
+                                    attempt: retry_attempt,
+                                    max_attempts: MAX_PEER_DISCONNECTED_RETRIES,
+                                    delay_seconds: PEER_DISCONNECTED_RETRY_DELAY_SECONDS,
+                                }),
+                            );
                             for _ in 0..PEER_DISCONNECTED_RETRY_DELAY_SECONDS {
                                 if cancelled() {
                                     return Ok(ChatStreamOutcome::Cancelled(ChatDone {
@@ -701,16 +755,27 @@ fn run_tool_loop(
                 round_truncated = result.truncated;
                 if let Some(usage) = result.usage {
                     llm_rate_limit::record(ctx.provider_id, usage.prompt_tokens, usage.completion_tokens);
-                    (ctx.events)(ChatEvent::RateLimitChanged);
-                    (ctx.events)(ChatEvent::ContextUsage(usage));
+                    events.emit(round, None, ChatEventPayload::RateLimitChanged);
+                    events.emit(
+                        round,
+                        Some(format!("round:{round}")),
+                        ChatEventPayload::ContextUsage(usage),
+                    );
                 }
 
-                // The round's prose, stated outright instead of left to the
-                // deltas that streamed it — see `ChatEvent::RoundText`.
+                // The round's content, stated outright instead of left to
+                // the deltas that streamed it.
                 // Placed before Checkpoint 2 deliberately: a cancelled round
                 // still shows whatever it managed to say, and a round about
                 // to pause on a confirmation gate has already reported.
-                (ctx.events)(ChatEvent::RoundText(ChatRoundText { text: result.text.clone() }));
+                events.emit(
+                    round,
+                    Some(format!("round:{round}")),
+                    ChatEventPayload::RoundCompleted(ChatRoundCompleted {
+                        text: result.text.clone(),
+                        reasoning: result.reasoning.clone(),
+                    }),
+                );
 
                 // Checkpoint 2 — see this function's doc comment. Checked
                 // before either branch below so a stop that landed exactly
@@ -780,17 +845,25 @@ fn run_tool_loop(
                 let mut remaining_calls: Vec<LlmToolCall> = Vec::new();
                 for call in &result.tool_calls {
                     if let Err(e) = ai_tools::preflight_tool_call(&scope, call) {
-                        (ctx.events)(ChatEvent::ToolCall(ToolCallEvent {
-                            id: call.id.clone(),
-                            name: call.name.clone(),
-                            arguments: call.arguments.clone(),
-                        }));
+                        events.emit(
+                            round,
+                            Some(format!("round:{round}:tool:{}", call.id)),
+                            ChatEventPayload::ToolCall(ToolCallEvent {
+                                id: call.id.clone(),
+                                name: call.name.clone(),
+                                arguments: call.arguments.clone(),
+                            }),
+                        );
                         let err_str = e.to_string();
-                        (ctx.events)(ChatEvent::ToolResult(ToolResultEvent {
-                            id: call.id.clone(),
-                            result: None,
-                            error: Some(err_str.clone()),
-                        }));
+                        events.emit(
+                            round,
+                            Some(format!("round:{round}:tool:{}", call.id)),
+                            ChatEventPayload::ToolResult(ToolResultEvent {
+                                id: call.id.clone(),
+                                result: None,
+                                error: Some(err_str.clone()),
+                            }),
+                        );
                         history.push(LlmMessage {
                             role: LlmRole::Tool,
                             content: Some(truncated_round_note(
@@ -830,6 +903,7 @@ fn run_tool_loop(
                         history,
                         round,
                         budget_used,
+                        event_seq: events.last_seq(),
                         calls: pending,
                         todos,
                     }));
@@ -854,11 +928,15 @@ fn run_tool_loop(
             if ctx.cancel_flag.load(Ordering::SeqCst) {
                 break;
             }
-            (ctx.events)(ChatEvent::ToolCall(ToolCallEvent {
-                id: call.id.clone(),
-                name: call.name.clone(),
-                arguments: call.arguments.clone(),
-            }));
+            events.emit(
+                round,
+                Some(format!("round:{round}:tool:{}", call.id)),
+                ChatEventPayload::ToolCall(ToolCallEvent {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                }),
+            );
 
             // A bad tool call (unknown name, malformed arguments, a
             // NotAllowed hit against the allowlist, a missing file, ...) is
@@ -925,11 +1003,15 @@ fn run_tool_loop(
                 })
             };
 
-            (ctx.events)(ChatEvent::ToolResult(ToolResultEvent {
-                id: call.id.clone(),
-                result: outcome.as_ref().ok().cloned(),
-                error: outcome.as_ref().err().cloned(),
-            }));
+            events.emit(
+                round,
+                Some(format!("round:{round}:tool:{}", call.id)),
+                ChatEventPayload::ToolResult(ToolResultEvent {
+                    id: call.id.clone(),
+                    result: outcome.as_ref().ok().cloned(),
+                    error: outcome.as_ref().err().cloned(),
+                }),
+            );
 
             // A successful RequestFullRepoAccess must take effect for the
             // rest of THIS turn, not just the next `llm_chat_stream` call —
@@ -960,7 +1042,7 @@ fn run_tool_loop(
             }
 
             // Text the *model* reads for this call, as opposed to `outcome`
-            // itself (also emitted verbatim as `TOOL_RESULT_EVENT.error` for
+            // itself (also emitted verbatim as `ToolResult`'s `error` for
             // the UI, which pattern-matches the literal `"denied by user"`
             // string from above — see `describeToolResult` in
             // `assistantConfig.ts`). Kept in Russian here, independently of
@@ -1035,6 +1117,7 @@ pub struct ResumePoint {
     pub history: Vec<LlmMessage>,
     pub round: u32,
     pub budget_used: u32,
+    pub event_seq: u64,
     pub decisions: Vec<ToolCallDecision>,
     pub todos: Vec<Task>,
 }
@@ -1094,7 +1177,7 @@ pub fn stream(
         steering: &ctx.steering,
         conversation_mode: ctx.conversation_mode,
     };
-    run_tool_loop(&loop_ctx, setup.scope, setup.tools, messages, 0, 0, None, todos)
+    run_tool_loop(&loop_ctx, setup.scope, setup.tools, messages, 0, 0, None, todos, 0)
 }
 
 /// Continues a turn paused by `PendingApproval`. `resume` must be exactly
@@ -1109,7 +1192,7 @@ pub fn stream_resume(
 ) -> Result<ChatStreamOutcome, String> {
     let setup = setup(&mut ctx)?;
 
-    let ResumePoint { history, round, budget_used, decisions, todos } = resume;
+    let ResumePoint { history, round, budget_used, event_seq, decisions, todos } = resume;
     let last = history
         .last()
         .ok_or_else(|| "resume: history must not be empty".to_string())?;
@@ -1148,6 +1231,7 @@ pub fn stream_resume(
         budget_used,
         Some((calls, decisions)),
         todos,
+        event_seq,
     )
 }
 
@@ -1601,8 +1685,8 @@ mod tests {
         }
     }
 
-    fn collector() -> (ChatEventSink, Arc<Mutex<Vec<ChatEvent>>>) {
-        let seen: Arc<Mutex<Vec<ChatEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    fn collector() -> (ChatEventSink, Arc<Mutex<Vec<ChatTurnEvent>>>) {
+        let seen: Arc<Mutex<Vec<ChatTurnEvent>>> = Arc::new(Mutex::new(Vec::new()));
         let sink_target = seen.clone();
         let sink: ChatEventSink = Arc::new(move |e| sink_target.lock().unwrap().push(e));
         (sink, seen)
@@ -1677,7 +1761,7 @@ mod tests {
             steering,
             conversation_mode: ConversationMode::Agent,
         };
-        run_tool_loop(&ctx, scope, Vec::new(), history, 0, 0, None, Vec::new())
+        run_tool_loop(&ctx, scope, Vec::new(), history, 0, 0, None, Vec::new(), 0)
     }
 
     /// A turn run under the docs-only boundary: `repo` is the whole
@@ -1711,7 +1795,7 @@ mod tests {
             steering: &steering,
             conversation_mode: ConversationMode::Question,
         };
-        run_tool_loop(&ctx, scope, Vec::new(), Vec::new(), 0, 0, None, Vec::new())
+        run_tool_loop(&ctx, scope, Vec::new(), Vec::new(), 0, 0, None, Vec::new(), 0)
     }
 
     /// `run`, re-entered on a paused round — the shape
@@ -1763,26 +1847,16 @@ mod tests {
             tool_call_id: None,
             tool_calls: calls.clone(),
         }];
-        run_tool_loop(
-            &ctx,
-            scope,
-            Vec::new(),
-            history,
-            1,
-            0,
-            Some((calls, decisions)),
-            Vec::new(),
-        )
+        run_tool_loop(&ctx, scope, Vec::new(), history, 1, 0, Some((calls, decisions)), Vec::new(), 0)
     }
 
-
-    fn tool_events(seen: &Arc<Mutex<Vec<ChatEvent>>>) -> Vec<(String, String)> {
+    fn tool_events(seen: &Arc<Mutex<Vec<ChatTurnEvent>>>) -> Vec<(String, String)> {
         seen.lock()
             .unwrap()
             .iter()
-            .filter_map(|e| match e {
-                ChatEvent::ToolCall(c) => Some(("call".to_string(), c.id.clone())),
-                ChatEvent::ToolResult(r) => Some(("result".to_string(), r.id.clone())),
+            .filter_map(|e| match &e.event {
+                ChatEventPayload::ToolCall(c) => Some(("call".to_string(), c.id.clone())),
+                ChatEventPayload::ToolResult(r) => Some(("result".to_string(), r.id.clone())),
                 _ => None,
             })
             .collect()
@@ -1808,12 +1882,12 @@ mod tests {
     }
 
     /// Every `RoundText` the turn emitted, in order.
-    fn round_texts(seen: &Arc<Mutex<Vec<ChatEvent>>>) -> Vec<String> {
+    fn round_texts(seen: &Arc<Mutex<Vec<ChatTurnEvent>>>) -> Vec<String> {
         seen.lock()
             .unwrap()
             .iter()
-            .filter_map(|e| match e {
-                ChatEvent::RoundText(t) => Some(t.text.clone()),
+            .filter_map(|e| match &e.event {
+                ChatEventPayload::RoundCompleted(t) => Some(t.text.clone()),
                 _ => None,
             })
             .collect()
@@ -1863,9 +1937,9 @@ mod tests {
             .lock()
             .unwrap()
             .iter()
-            .filter_map(|e| match e {
-                ChatEvent::RoundText(_) => Some("text"),
-                ChatEvent::ToolCall(_) => Some("call"),
+            .filter_map(|e| match &e.event {
+                ChatEventPayload::RoundCompleted(_) => Some("text"),
+                ChatEventPayload::ToolCall(_) => Some("call"),
                 _ => None,
             })
             .collect();
@@ -2149,7 +2223,7 @@ mod tests {
             .lock()
             .unwrap()
             .iter()
-            .any(|event| matches!(event, ChatEvent::SteeringApplied(_))));
+            .any(|event| matches!(&event.event, ChatEventPayload::SteeringApplied(_))));
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -2270,8 +2344,8 @@ mod tests {
                 && m.content.as_deref() == Some(&format!("{STEERING_PREFIX}Проверь ru locale"))
         }));
         assert!(seen.lock().unwrap().iter().any(|event| matches!(
-            event,
-            ChatEvent::SteeringApplied(SteeringAppliedEvent { text, .. })
+            &event.event,
+            ChatEventPayload::SteeringApplied(SteeringAppliedEvent { text, .. })
                 if text == "Проверь ru locale"
         )));
 
@@ -2442,7 +2516,7 @@ mod tests {
 
         assert!(matches!(outcome, ChatStreamOutcome::Done(_)), "no approval card");
         let events = seen.lock().unwrap();
-        let errored = events.iter().any(|e| matches!(e, ChatEvent::ToolResult(r) if r.error.is_some()));
+        let errored = events.iter().any(|e| matches!(&e.event, ChatEventPayload::ToolResult(r) if r.error.is_some()));
         assert!(errored, "the rejected call should have reported a tool error");
 
         std::fs::remove_dir_all(&root).ok();
@@ -2557,14 +2631,11 @@ mod tests {
         run(&provider, &root, &events, &cancel).unwrap();
 
         assert!(
-            seen.lock().unwrap().iter().any(|e| matches!(e, ChatEvent::RateLimitChanged)),
+            seen.lock().unwrap().iter().any(|e| matches!(&e.event, ChatEventPayload::RateLimitChanged)),
             "the status-bar chip is driven by this event"
         );
         assert!(
-            seen.lock()
-                .unwrap()
-                .iter()
-                .any(|e| matches!(e, ChatEvent::ContextUsage(u) if u.total_tokens == 15)),
+            seen.lock().unwrap().iter().any(|e| matches!(&e.event, ChatEventPayload::ContextUsage(u) if u.total_tokens == 15)),
             "the chat panel's context ring is driven by this event"
         );
 

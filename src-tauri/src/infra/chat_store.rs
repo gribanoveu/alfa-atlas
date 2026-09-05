@@ -9,15 +9,12 @@
 //! which never contends with itself) covers the extra transient-lock risk
 //! that open-per-call introduces versus one long-lived connection.
 //!
-//! `messages.data` is an opaque JSON blob — this module never parses a
-//! message's internal shape (the frontend's `ChatMessage`/`MessageBlock`
-//! union, which evolves independently). Rust's only job is to store and
-//! return it byte-for-byte. `chats.todos`, by contrast, *is* typed
-//! (`Vec<domain::ai_tools::Task>`) — unlike `MessageBlock`, `Task` is
-//! already a stable, shared domain type used throughout the tool-calling
-//! boundary, so there's no independent-evolution risk to guard against by
-//! keeping it opaque too.
+//! `messages.data` uses the versioned envelope from `domain::chat`; legacy
+//! direct message objects are normalized on load and upgraded on the next
+//! normal save. Database schema upgrades are additive and tracked with
+//! `PRAGMA user_version`.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,9 +22,10 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use thiserror::Error;
 
 use crate::domain::ai_tools::Task;
-use crate::domain::chat::{ChatSummary, LoadedChat};
+use crate::domain::chat::{ChatSummary, LoadedChat, PersistedChatMessage};
 
 const DB_FILE_NAME: &str = "chat.db";
+const DB_SCHEMA_VERSION: i64 = 1;
 
 const SCHEMA_SQL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -68,6 +66,8 @@ pub enum ChatStoreError {
     Json(#[from] serde_json::Error),
     #[error("chat not found: {0}")]
     NotFound(String),
+    #[error("chat database schema version {found} is newer than supported version {supported}")]
+    UnsupportedSchemaVersion { found: i64, supported: i64 },
 }
 
 fn db_path() -> Result<PathBuf, ChatStoreError> {
@@ -79,82 +79,54 @@ fn open() -> Result<Connection, ChatStoreError> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let conn = Connection::open(path)?;
+    let mut conn = Connection::open(path)?;
     conn.execute_batch(SCHEMA_SQL)?;
-    migrate_add_todos_column(&conn)?;
-    migrate_add_active_plan_id_column(&conn)?;
-    migrate_add_memory_extracted_ordinal_column(&conn)?;
-    migrate_add_pending_resume_column(&conn)?;
+    run_migrations(&mut conn)?;
     Ok(conn)
 }
 
-/// Additive migration for a `chats` table created before this column
-/// existed — `CREATE TABLE IF NOT EXISTS` above only shapes brand-new
-/// databases. Checked-then-`ALTER` (SQLite has no `ADD COLUMN IF NOT
-/// EXISTS`) rather than blindly running the `ALTER` and swallowing a
-/// "duplicate column" error, which would also hide a real failure (a
-/// locked db, say) behind "already migrated". Runs on every `open()` call
-/// — cheap, one `PRAGMA table_info` query — since this store already
-/// opens a fresh connection per call with no persistent place to remember
-/// "already checked" (see this module's own doc comment). User data —
-/// unlike `index_store`'s rebuildable embeddings cache, this must never be
-/// wiped on a schema change.
-fn migrate_add_todos_column(conn: &Connection) -> Result<(), ChatStoreError> {
+fn run_migrations(conn: &mut Connection) -> Result<(), ChatStoreError> {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version > DB_SCHEMA_VERSION {
+        return Err(ChatStoreError::UnsupportedSchemaVersion {
+            found: version,
+            supported: DB_SCHEMA_VERSION,
+        });
+    }
+    if version == DB_SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    let tx = conn.transaction()?;
+    // All databases created before versioning report zero, but may contain
+    // any subset of columns added by earlier releases. Probe once, add only
+    // what is absent, then record the version atomically.
+    migrate_unversioned_schema(&tx)?;
+    tx.pragma_update(None, "user_version", DB_SCHEMA_VERSION)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn migrate_unversioned_schema(conn: &Connection) -> Result<(), ChatStoreError> {
     let mut stmt = conn.prepare("PRAGMA table_info(chats)")?;
-    let has_todos = stmt
+    let columns = stmt
         .query_map([], |row| row.get::<_, String>(1))? // column 1 = name
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|name| name == "todos");
-    if !has_todos {
+        .collect::<Result<HashSet<_>, _>>()?;
+    drop(stmt);
+
+    if !columns.contains("todos") {
         conn.execute("ALTER TABLE chats ADD COLUMN todos TEXT NOT NULL DEFAULT '[]'", [])?;
     }
-    Ok(())
-}
-
-fn migrate_add_active_plan_id_column(conn: &Connection) -> Result<(), ChatStoreError> {
-    let mut stmt = conn.prepare("PRAGMA table_info(chats)")?;
-    let has_col = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|name| name == "active_plan_id");
-    if !has_col {
+    if !columns.contains("active_plan_id") {
         conn.execute("ALTER TABLE chats ADD COLUMN active_plan_id TEXT", [])?;
     }
-    Ok(())
-}
-
-fn migrate_add_memory_extracted_ordinal_column(conn: &Connection) -> Result<(), ChatStoreError> {
-    let mut stmt = conn.prepare("PRAGMA table_info(chats)")?;
-    let has_col = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|name| name == "memory_extracted_ordinal");
-    if !has_col {
+    if !columns.contains("memory_extracted_ordinal") {
         conn.execute(
             "ALTER TABLE chats ADD COLUMN memory_extracted_ordinal INTEGER NOT NULL DEFAULT -1",
             [],
         )?;
     }
-    Ok(())
-}
-
-/// Opaque JSON blob of the frontend's `PendingApproval` — set when a turn
-/// pauses awaiting a tool-approval/`askUser` decision (before the turn as a
-/// whole has settled), cleared (`NULL`) once it resolves. Lets a chat
-/// reopened after a full app restart (not just a panel close within one
-/// running session) restore enough state (`history`/`round`/`budgetUsed`)
-/// to resume via `llm_chat_stream_resume` — see `commands::chat_history`.
-fn migrate_add_pending_resume_column(conn: &Connection) -> Result<(), ChatStoreError> {
-    let mut stmt = conn.prepare("PRAGMA table_info(chats)")?;
-    let has_col = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
-        .iter()
-        .any(|name| name == "pending_resume");
-    if !has_col {
+    if !columns.contains("pending_resume") {
         conn.execute("ALTER TABLE chats ADD COLUMN pending_resume TEXT", [])?;
     }
     Ok(())
@@ -202,18 +174,33 @@ pub fn list_chats(repo_root: &str, archived: bool) -> Result<Vec<ChatSummary>, C
     rows.collect::<Result<Vec<_>, _>>().map_err(ChatStoreError::from)
 }
 
-/// One chat's full state: its messages (opaque JSON, save order — each
-/// element exactly as `save_chat` received it) and its todo checklist.
+/// One chat's full state in save order. Legacy direct message objects are
+/// accepted by `PersistedChatMessage` and returned as current envelopes.
+///
+/// A row this build cannot read — a future `schemaVersion`, an unknown block
+/// shape, JSON that no longer parses — is quarantined rather than failing
+/// the load. One bad row must not put the rest of a user's conversation out
+/// of reach, and the placeholder carries the row verbatim, so the ordinary
+/// save that follows opening the chat writes it back untouched instead of
+/// overwriting it. See `PersistedChatMessage::quarantined`.
 pub fn load_chat(chat_id: &str) -> Result<LoadedChat, ChatStoreError> {
     let conn = open()?;
     let mut stmt = conn.prepare("SELECT data FROM messages WHERE chat_id = ?1 ORDER BY ordinal ASC")?;
     let raw: Vec<String> = stmt
         .query_map(params![chat_id], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
-    let messages = raw
+    let messages: Vec<PersistedChatMessage> = raw
         .iter()
-        .map(|s| serde_json::from_str(s).map_err(ChatStoreError::from))
-        .collect::<Result<Vec<_>, _>>()?;
+        .map(|row| match serde_json::from_str::<serde_json::Value>(row) {
+            Ok(value) => serde_json::from_value(value.clone()).unwrap_or_else(|error| {
+                PersistedChatMessage::quarantined(&value, &error.to_string())
+            }),
+            Err(error) => PersistedChatMessage::quarantined(
+                &serde_json::Value::String(row.clone()),
+                &error.to_string(),
+            ),
+        })
+        .collect();
 
     // No `chats` row (nothing saved yet for this id) yields empty
     // messages/todos rather than `NotFound` — keeps this function total
@@ -268,7 +255,7 @@ pub fn save_chat(
     repo_root: &str,
     chat_id: &str,
     title: &str,
-    messages: &[serde_json::Value],
+    messages: &[PersistedChatMessage],
     todos: &[Task],
     active_plan_id: Option<&str>,
     pending_resume: Option<&serde_json::Value>,
@@ -293,7 +280,7 @@ pub fn save_chat(
 
     tx.execute("DELETE FROM messages WHERE chat_id = ?1", params![chat_id])?;
     for (ordinal, message) in messages.iter().enumerate() {
-        let data = serde_json::to_string(message)?;
+        let data = message.storage_json()?;
         tx.execute(
             "INSERT INTO messages (chat_id, ordinal, data) VALUES (?1, ?2, ?3)",
             params![chat_id, ordinal as i64, data],
@@ -360,8 +347,11 @@ mod tests {
     use crate::domain::ai_tools::TodoStatus;
     use crate::infra::settings_store::test_support::with_temp_home;
 
-    fn sample_message(text: &str) -> serde_json::Value {
-        serde_json::json!({ "id": text, "role": "user", "content": text })
+    fn sample_message(text: &str) -> PersistedChatMessage {
+        PersistedChatMessage::new(
+            serde_json::json!({ "id": text, "role": "user", "content": text }),
+        )
+        .unwrap()
     }
 
     fn sample_todo(id: &str, title: &str) -> Task {
@@ -392,6 +382,155 @@ mod tests {
 
             let loaded = load_chat("chat-1").unwrap();
             assert_eq!(loaded.messages, messages);
+        });
+    }
+
+    #[test]
+    fn saved_message_rows_use_the_versioned_envelope() {
+        with_temp_home(|| {
+            save_chat(
+                "/repo/one",
+                "chat-1",
+                "t",
+                &[sample_message("hello")],
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+
+            let raw: String = Connection::open(db_path().unwrap())
+                .unwrap()
+                .query_row(
+                    "SELECT data FROM messages WHERE chat_id = 'chat-1' AND ordinal = 0",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(
+                value["schemaVersion"],
+                crate::domain::chat::CHAT_MESSAGE_SCHEMA_VERSION
+            );
+            assert_eq!(value["message"]["content"], "hello");
+        });
+    }
+
+    #[test]
+    fn legacy_message_rows_normalize_on_load_and_upgrade_only_on_resave() {
+        with_temp_home(|| {
+            save_chat(
+                "/repo/one",
+                "chat-1",
+                "t",
+                &[sample_message("placeholder")],
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+            let path = db_path().unwrap();
+            let legacy_json = r#"{"id":"assistant-old","role":"assistant","content":"old answer"}"#;
+            Connection::open(&path)
+                .unwrap()
+                .execute(
+                    "UPDATE messages SET data = ?1 WHERE chat_id = 'chat-1' AND ordinal = 0",
+                    params![legacy_json],
+                )
+                .unwrap();
+
+            let loaded = load_chat("chat-1").unwrap();
+            assert_eq!(
+                loaded.messages[0].message()["blocks"][0]["content"],
+                "old answer"
+            );
+            let after_load: String = Connection::open(&path)
+                .unwrap()
+                .query_row(
+                    "SELECT data FROM messages WHERE chat_id = 'chat-1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(after_load, legacy_json);
+
+            save_chat(
+                "/repo/one",
+                "chat-1",
+                "t",
+                &loaded.messages,
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+            let after_save: String = Connection::open(&path)
+                .unwrap()
+                .query_row(
+                    "SELECT data FROM messages WHERE chat_id = 'chat-1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&after_save).unwrap()["schemaVersion"],
+                crate::domain::chat::CHAT_MESSAGE_SCHEMA_VERSION
+            );
+        });
+    }
+
+    #[test]
+    fn an_unreadable_row_is_quarantined_instead_of_failing_the_whole_chat() {
+        with_temp_home(|| {
+            save_chat(
+                "/repo/one",
+                "chat-1",
+                "t",
+                &[sample_message("readable"), sample_message("placeholder")],
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+            let path = db_path().unwrap();
+            // A row this build has no rules for: written by a later version.
+            let future_row = r#"{"schemaVersion":99,"message":{"role":"oracle"}}"#;
+            Connection::open(&path)
+                .unwrap()
+                .execute(
+                    "UPDATE messages SET data = ?1 WHERE chat_id = 'chat-1' AND ordinal = 1",
+                    params![future_row],
+                )
+                .unwrap();
+
+            let loaded = load_chat("chat-1").unwrap();
+            assert_eq!(loaded.messages.len(), 2, "the readable row still loads");
+            assert_eq!(loaded.messages[0].message()["content"], "readable");
+            assert!(loaded.messages[1].is_unreadable());
+
+            // Reopening a chat saves it back; that must not destroy the row.
+            save_chat(
+                "/repo/one",
+                "chat-1",
+                "t",
+                &loaded.messages,
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+            let after_save: String = Connection::open(&path)
+                .unwrap()
+                .query_row(
+                    "SELECT data FROM messages WHERE chat_id = 'chat-1' AND ordinal = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&after_save).unwrap(),
+                serde_json::from_str::<serde_json::Value>(future_row).unwrap()
+            );
         });
     }
 
@@ -528,6 +667,11 @@ mod tests {
 
             let loaded = load_chat("chat-old").unwrap();
             assert!(loaded.todos.is_empty());
+            let version: i64 = Connection::open(&path)
+                .unwrap()
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .unwrap();
+            assert_eq!(version, DB_SCHEMA_VERSION);
 
             let updated =
                 save_chat(
@@ -642,6 +786,38 @@ mod tests {
             let pending = serde_json::json!({"round": 3});
             save_chat("/repo/one", "chat-old", "old chat", &[sample_message("a")], &[], None, Some(&pending)).unwrap();
             assert_eq!(load_chat("chat-old").unwrap().pending_resume, Some(pending));
+        });
+    }
+
+    #[test]
+    fn a_newer_database_version_is_refused_without_deleting_data() {
+        with_temp_home(|| {
+            save_chat(
+                "/repo/one",
+                "chat-1",
+                "keep me",
+                &[sample_message("a")],
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+            let path = db_path().unwrap();
+            Connection::open(&path)
+                .unwrap()
+                .pragma_update(None, "user_version", DB_SCHEMA_VERSION + 1)
+                .unwrap();
+
+            let error = list_chats("/repo/one", false).unwrap_err();
+            assert!(matches!(
+                error,
+                ChatStoreError::UnsupportedSchemaVersion { .. }
+            ));
+            let count: i64 = Connection::open(path)
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM chats", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 1);
         });
     }
 }

@@ -13,8 +13,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use crate::domain::llm::{
-    ChatEvent, ChatEventSink, ChatRequest, ChatResponse, LlmMessage, LlmProvider, LlmSettings,
-    ResolvedLlmProvider, SteeringNote,
+    ChatEventPayload, ChatEventSink, ChatRequest, ChatResponse, ChatTurnEvent, LlmMessage,
+    LlmProvider, LlmSettings, ResolvedLlmProvider, SteeringNote,
 };
 use crate::infra::{llm_credentials_store, llm_debug_log, llm_providers};
 use crate::services::{llm_config, llm_rate_limit};
@@ -32,7 +32,7 @@ pub type LlmProviderSlot =
 
 /// One flag for "the user asked the in-flight turn to stop" — this app has
 /// exactly one chat panel / one in-flight conversation at a time (same
-/// assumption `CHAT_STREAM_DELTA_EVENT` already makes), so a single
+/// assumption `CHAT_TURN_EVENT` already makes), so a single
 /// `Arc<AtomicBool>` needs no per-turn/per-request id to disambiguate.
 /// `llm_chat_stream` resets this to `false` at the start of every *fresh*
 /// turn (never `llm_chat_stream_resume`, which continues a turn already in
@@ -163,7 +163,7 @@ pub fn chat_once(
     if let Ok(ref response) = outcome {
         if let Some(usage) = response.usage {
             llm_rate_limit::record(&session.provider_id, usage.prompt_tokens, usage.completion_tokens);
-            events(ChatEvent::RateLimitChanged);
+            events(ChatTurnEvent::unscoped(ChatEventPayload::RateLimitChanged));
         }
     }
     outcome

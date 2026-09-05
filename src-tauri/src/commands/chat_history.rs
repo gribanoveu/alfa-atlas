@@ -6,7 +6,7 @@
 //! `commands::prefs`'s precedent for the same kind of store access.
 
 use crate::domain::ai_tools::Task;
-use crate::domain::chat::{ChatSummary, LoadedChat};
+use crate::domain::chat::{ChatSummary, LoadedChat, PersistedChatMessage};
 use crate::infra::chat_store;
 
 #[tauri::command]
@@ -24,7 +24,7 @@ pub fn chat_save(
     repo_root: String,
     chat_id: String,
     title: String,
-    messages: Vec<serde_json::Value>,
+    messages: Vec<PersistedChatMessage>,
     todos: Vec<Task>,
     active_plan_id: Option<String>,
     pending_resume: Option<serde_json::Value>,

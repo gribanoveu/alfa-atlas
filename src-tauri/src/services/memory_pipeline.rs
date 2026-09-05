@@ -213,7 +213,7 @@ impl MemoryExtractGuard {
 /// One extraction pass over whatever of `chat_id` is not yet extracted.
 ///
 /// Reports through `events` rather than emitting directly — the only thing
-/// it reports is `ChatEvent::RateLimitChanged`, after the extraction call's
+/// it reports is `ChatEventPayload::RateLimitChanged`, after the extraction call's
 /// token usage is recorded. That keeps this module free of `tauri::` and
 /// removes the last reason `commands::memory_pipeline` had to import from
 /// `commands::llm`.

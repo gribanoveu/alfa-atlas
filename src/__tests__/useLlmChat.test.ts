@@ -5,20 +5,39 @@ import * as actualAiTools from "../lib/aiTools";
 import * as actualPlans from "../lib/plans";
 import * as actualArtifacts from "../lib/artifacts";
 import type { ChatMessage } from "../lib/chatBlocks";
-import type { ChatStreamOutcome, ChatUsage, PendingApproval, PendingToolCall, ToolCallDecision } from "../lib/llm";
+import type {
+  ChatStreamOutcome,
+  ChatUsage,
+  LlmTurnEvent,
+  PendingApproval,
+  PendingToolCall,
+  ToolCallDecision,
+} from "../lib/llm";
 
 // --- backend doubles -------------------------------------------------------
 
-/** Every `llm:*` payload carries the turn that emitted it; the hook drops
- * anything stamped with a turn it is not currently running. */
+/** Every turn event carries the turn that emitted it; the hook drops
+ * anything stamped with a turn it is not currently running.
+ *
+ * There is one backend channel now (`llm:turn-event`), but the tests still
+ * emit per kind: an assertion reads better as "a tool result arrives" than
+ * as a hand-built envelope. The single `listenLlmTurnEvent` double below
+ * registers one shim per kind into these arrays and folds them all back
+ * into that one channel. */
 type Listener<T> = (payload: T & { turnId: string }) => void;
+
+/** What a test hands to `emit`. `turnId` is filled in by `emit` itself
+ * unless the test overrides it to play a foreign or stale turn. */
+type TestEmission<T> = T & { turnId?: string };
+type ToolCallEmission = { id: string; name: string; arguments: string };
+type ToolResultEmission = { id: string; result: unknown; error: string | null };
 
 let deltaListeners: Listener<{ delta: string }>[] = [];
 let reasoningListeners: Listener<{ delta: string }>[] = [];
-let steeringListeners: Listener<{ text: string }>[] = [];
-let toolCallDeltaListeners: Listener<{ id: string; name: string; arguments: string }>[] = [];
-let toolCallListeners: Listener<{ id: string; name: string; arguments: string }>[] = [];
-let toolResultListeners: Listener<{ id: string; result: unknown; error: string | null }>[] = [];
+let steeringListeners: Listener<{ id: string; text: string }>[] = [];
+let toolCallDeltaListeners: Listener<ToolCallEmission>[] = [];
+let toolCallListeners: Listener<ToolCallEmission>[] = [];
+let toolResultListeners: Listener<ToolResultEmission>[] = [];
 let contextUsageListeners: Listener<ChatUsage>[] = [];
 let roundStartedListeners: Listener<Record<string, never>>[] = [];
 
@@ -26,10 +45,31 @@ let roundStartedListeners: Listener<Record<string, never>>[] = [];
  * from whichever backend call it was handed to. Test emissions are stamped
  * with it, exactly as the real backend stamps its events. */
 let lastTurnId = "";
+let eventSeq = 0;
+let eventRound = 1;
 
-/** Fires one backend event at every subscriber, stamped with the live turn. */
-function emit<T>(listeners: Listener<T>[], payload: T) {
-  for (const l of [...listeners]) l({ ...payload, turnId: lastTurnId });
+/** Stamps one event of the unified channel. `turnId` defaults to the live
+ * turn, exactly as the backend stamps its own; a test that deliberately
+ * emits a foreign or stale turn passes it explicitly, and it must survive
+ * all the way to the hook — that is the whole point of those tests. */
+function turnEvent(
+  event: Omit<LlmTurnEvent, "turnId" | "seq" | "round" | "targetId">,
+  targetId: string | null,
+  turnId: string = lastTurnId,
+): LlmTurnEvent {
+  return {
+    ...event,
+    turnId,
+    seq: ++eventSeq,
+    round: eventRound,
+    targetId,
+  } as LlmTurnEvent;
+}
+
+/** Fires one backend event at every subscriber, stamped with the live turn
+ * unless the payload names one itself. */
+function emit<T>(listeners: Listener<T>[], payload: TestEmission<T>) {
+  for (const l of [...listeners]) l({ turnId: lastTurnId, ...payload });
 }
 
 /** Outcomes handed back by `streamLlmChat`, then `streamLlmChatResume`. */
@@ -64,6 +104,8 @@ mock.module("../lib/llm", () => ({
   streamLlmChat: (...a: unknown[]) => {
     streamCalls.push(a);
     lastTurnId = a[1] as string;
+    eventSeq = 0;
+    eventRound = 1;
     if (streamThrows) return Promise.reject(streamThrows);
     if (deferStream) {
       return new Promise<ChatStreamOutcome>((resolve) => pendingStream.push(resolve));
@@ -91,52 +133,63 @@ mock.module("../lib/llm", () => ({
     if (deferOnce) return new Promise((resolve) => pendingOnce.push(resolve));
     return Promise.resolve({ content: onceResponse, toolCalls: [], usage: null });
   },
-  listenLlmChatDelta: async (cb: Listener<{ delta: string }>) => {
-    deltaListeners.push(cb);
-    return () => {
-      deltaListeners = deltaListeners.filter((l) => l !== cb);
+  listenLlmTurnEvent: async (cb: (event: LlmTurnEvent) => void) => {
+    const delta = ({ turnId, delta }: TestEmission<{ delta: string }>) =>
+      cb(turnEvent({ type: "delta", payload: { delta } }, `round:${eventRound}:text`, turnId));
+    const reasoning = ({ turnId, delta }: TestEmission<{ delta: string }>) =>
+      cb(
+        turnEvent(
+          { type: "reasoning", payload: { delta } },
+          `round:${eventRound}:reasoning`,
+          turnId,
+        ),
+      );
+    const steering = ({ turnId, id, text }: TestEmission<{ id: string; text: string }>) =>
+      cb(turnEvent({ type: "steeringApplied", payload: { id, text } }, `steer:${id}`, turnId));
+    const toolDelta = ({ turnId, ...payload }: TestEmission<ToolCallEmission>) =>
+      cb(
+        turnEvent(
+          { type: "toolCallDelta", payload },
+          `round:${eventRound}:tool:${payload.id}`,
+          turnId,
+        ),
+      );
+    const toolCall = ({ turnId, ...payload }: TestEmission<ToolCallEmission>) =>
+      cb(
+        turnEvent({ type: "toolCall", payload }, `round:${eventRound}:tool:${payload.id}`, turnId),
+      );
+    const toolResult = ({ turnId, ...payload }: TestEmission<ToolResultEmission>) =>
+      cb(
+        turnEvent(
+          { type: "toolResult", payload } as never,
+          `round:${eventRound}:tool:${payload.id}`,
+          turnId,
+        ),
+      );
+    const roundStarted = ({ turnId }: TestEmission<Record<string, never>>) => {
+      eventRound += 1;
+      cb(turnEvent({ type: "roundStarted" }, `round:${eventRound}`, turnId));
     };
-  },
-  listenLlmChatReasoningDelta: async (cb: Listener<{ delta: string }>) => {
-    reasoningListeners.push(cb);
+    const usage = ({ turnId, ...payload }: TestEmission<ChatUsage>) =>
+      cb(turnEvent({ type: "contextUsage", payload }, `round:${eventRound}`, turnId));
+
+    deltaListeners.push(delta as never);
+    reasoningListeners.push(reasoning as never);
+    steeringListeners.push(steering as never);
+    toolCallDeltaListeners.push(toolDelta as never);
+    toolCallListeners.push(toolCall as never);
+    toolResultListeners.push(toolResult as never);
+    roundStartedListeners.push(roundStarted as never);
+    contextUsageListeners.push(usage as never);
     return () => {
-      reasoningListeners = reasoningListeners.filter((l) => l !== cb);
-    };
-  },
-  listenLlmSteeringApplied: async (cb: Listener<{ text: string }>) => {
-    steeringListeners.push(cb);
-    return () => {
-      steeringListeners = steeringListeners.filter((l) => l !== cb);
-    };
-  },
-  listenLlmToolCallDelta: async (cb: Listener<{ id: string; name: string; arguments: string }>) => {
-    toolCallDeltaListeners.push(cb);
-    return () => {
-      toolCallDeltaListeners = toolCallDeltaListeners.filter((l) => l !== cb);
-    };
-  },
-  listenLlmToolCall: async (cb: Listener<{ id: string; name: string; arguments: string }>) => {
-    toolCallListeners.push(cb);
-    return () => {
-      toolCallListeners = toolCallListeners.filter((l) => l !== cb);
-    };
-  },
-  listenLlmToolResult: async (cb: Listener<{ id: string; result: unknown; error: string | null }>) => {
-    toolResultListeners.push(cb);
-    return () => {
-      toolResultListeners = toolResultListeners.filter((l) => l !== cb);
-    };
-  },
-  listenLlmRoundStarted: async (cb: Listener<Record<string, never>>) => {
-    roundStartedListeners.push(cb);
-    return () => {
-      roundStartedListeners = roundStartedListeners.filter((l) => l !== cb);
-    };
-  },
-  listenLlmContextUsage: async (cb: Listener<ChatUsage>) => {
-    contextUsageListeners.push(cb);
-    return () => {
-      contextUsageListeners = contextUsageListeners.filter((l) => l !== cb);
+      deltaListeners = deltaListeners.filter((listener) => listener !== (delta as never));
+      reasoningListeners = reasoningListeners.filter((listener) => listener !== (reasoning as never));
+      steeringListeners = steeringListeners.filter((listener) => listener !== (steering as never));
+      toolCallDeltaListeners = toolCallDeltaListeners.filter((listener) => listener !== (toolDelta as never));
+      toolCallListeners = toolCallListeners.filter((listener) => listener !== (toolCall as never));
+      toolResultListeners = toolResultListeners.filter((listener) => listener !== (toolResult as never));
+      roundStartedListeners = roundStartedListeners.filter((listener) => listener !== (roundStarted as never));
+      contextUsageListeners = contextUsageListeners.filter((listener) => listener !== (usage as never));
     };
   },
 }));
@@ -254,6 +307,8 @@ beforeEach(() => {
   contextUsageListeners = [];
   roundStartedListeners = [];
   lastTurnId = "";
+  eventSeq = 0;
+  eventRound = 1;
   outcomes = [];
   deferOnce = false;
   pendingOnce = [];

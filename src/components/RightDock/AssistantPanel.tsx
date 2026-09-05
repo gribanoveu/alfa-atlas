@@ -100,8 +100,8 @@ type AssistantPanelProps = {
  *
  * Chat-switching/new-chat are disabled while a turn is in flight
  * (`conversationSending`, bubbled up from `AssistantConversation`) — not
- * just UX polish: `CHAT_STREAM_DELTA_EVENT`/`TOOL_CALL_EVENT`/
- * `TOOL_RESULT_EVENT` are global, unscoped Tauri events (`commands::llm`'s
+ * just UX polish: `delta`/`toolCall`/
+ * `toolResult` are global, unscoped Tauri events (`commands::llm`'s
  * own doc comment: "this app has exactly one chat panel / one in-flight
  * conversation at a time"). Allowing a remount mid-turn would let a
  * still-in-flight call's late-arriving events land on the new chat's fresh

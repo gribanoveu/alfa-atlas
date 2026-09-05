@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use super::chat::PersistedChatMessage;
+
 /// Which OptMem root a candidate fact belongs in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -196,10 +198,7 @@ fn strip_json_candidate(s: &str) -> &str {
 /// `infra::chat_store` (opaque there; this pipeline is the one reader).
 /// Returns `None` when that slice is empty. `last_ordinal` is always the
 /// last index of `messages` so a watermark can advance even with no pair.
-pub fn pending_turn(
-    messages: &[serde_json::Value],
-    after_ordinal: i64,
-) -> Option<PendingTurn> {
+pub fn pending_turn(messages: &[PersistedChatMessage], after_ordinal: i64) -> Option<PendingTurn> {
     if messages.is_empty() {
         return None;
     }
@@ -210,7 +209,13 @@ pub fn pending_turn(
     }
     let mut user: Option<String> = None;
     let mut assistant: Option<String> = None;
-    for msg in &messages[start..] {
+    for persisted in &messages[start..] {
+        // A quarantined row renders as a warning about itself; extracting
+        // facts from that text would just record this build's own failure.
+        if persisted.is_unreadable() {
+            continue;
+        }
+        let msg = persisted.message();
         match msg.get("role").and_then(|r| r.as_str()) {
             Some("user") => {
                 if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
@@ -275,6 +280,13 @@ fn assistant_plain_text(msg: &serde_json::Value) -> String {
 mod tests {
     use super::*;
 
+    fn messages(values: Vec<serde_json::Value>) -> Vec<PersistedChatMessage> {
+        values
+            .into_iter()
+            .map(|value| PersistedChatMessage::new(value).unwrap())
+            .collect()
+    }
+
     #[test]
     fn parse_accepts_bare_json() {
         let out = parse_extractor_output(
@@ -310,19 +322,20 @@ mod tests {
 
     #[test]
     fn pending_turn_skips_already_extracted_prefix() {
-        let messages = vec![
-            serde_json::json!({"role":"user","content":"old"}),
-            serde_json::json!({"role":"assistant","blocks":[{"type":"text","content":"old answer"}]}),
-            serde_json::json!({"role":"user","content":"new q"}),
+        let messages = messages(vec![
+            serde_json::json!({"id":"u1","role":"user","content":"old"}),
+            serde_json::json!({"id":"a1","role":"assistant","blocks":[{"type":"text","id":"t1","content":"old answer"}]}),
+            serde_json::json!({"id":"u2","role":"user","content":"new q"}),
             serde_json::json!({
+                "id":"a2",
                 "role":"assistant",
                 "blocks":[
-                    {"type":"reasoning","content":"think"},
-                    {"type":"text","content":"new a"},
-                    {"type":"toolCall","name":"readFile"}
+                    {"type":"reasoning","id":"r1","content":"think"},
+                    {"type":"text","id":"t2","content":"new a"},
+                    {"type":"toolCall","id":"c1","name":"readFile","argumentsJson":"{}","status":"done"}
                 ]
             }),
-        ];
+        ]);
         let pending = pending_turn(&messages, 1).unwrap();
         assert_eq!(pending.last_ordinal, 3);
         let t = pending.transcript.unwrap();
@@ -332,16 +345,41 @@ mod tests {
 
     #[test]
     fn pending_turn_none_when_watermark_is_current() {
-        let messages = vec![serde_json::json!({"role":"user","content":"hi"})];
+        let messages = messages(vec![
+            serde_json::json!({"id":"u1","role":"user","content":"hi"}),
+        ]);
         assert!(pending_turn(&messages, 0).is_none());
     }
 
     #[test]
     fn pending_turn_without_assistant_has_no_transcript_but_advances() {
-        let messages = vec![serde_json::json!({"role":"user","content":"hi"})];
+        let messages = messages(vec![
+            serde_json::json!({"id":"u1","role":"user","content":"hi"}),
+        ]);
         let pending = pending_turn(&messages, -1).unwrap();
         assert!(pending.transcript.is_none());
         assert_eq!(pending.last_ordinal, 0);
+    }
+
+    #[test]
+    fn shared_frontend_contract_fixture_is_read_by_memory_extraction() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../src/lib/chatPersistence.contract.json"
+        ))
+        .unwrap();
+        let messages: Vec<PersistedChatMessage> =
+            serde_json::from_value(fixture["versionedMessages"].clone()).unwrap();
+
+        let pending = pending_turn(&messages, -1).unwrap();
+        let transcript = pending.transcript.unwrap();
+        assert_eq!(
+            transcript.user_message,
+            "Remember that release branches require two approvals."
+        );
+        assert_eq!(
+            transcript.assistant_text,
+            "Release branches require two approvals.\nI will keep future release guidance concise."
+        );
     }
 
     #[test]

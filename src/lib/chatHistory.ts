@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Task } from "./aiTools";
 import { mergeInterleavedStreamBlocksInMessages, type ChatMessage } from "./chatBlocks";
+import {
+  decodePersistedChatMessages,
+  encodePersistedChatMessages,
+  type PersistedChatMessage,
+} from "./chatPersistence";
 import type { PendingApproval } from "./llm";
 
 // Mirrors `domain::chat::ChatSummary` in `src-tauri/src/domain/chat.rs`
@@ -21,12 +26,6 @@ export function listChats(repoRoot: string, archived: boolean): Promise<ChatSumm
   return invoke<ChatSummary[]>("chat_list", { repoRoot, archived });
 }
 
-// Mirrors `domain::chat::LoadedChat`. `messages` trusts the stored blob's
-// shape at runtime — same trust boundary every other `invoke<T>()` call in
-// this codebase already has; the backend never inspects a message's
-// internals (see `infra::chat_store`'s module doc), it only stores/returns
-// whatever JSON `saveChat` last wrote. `todos`, unlike `messages`, is a
-// real shared type (`Task`), not an opaque blob.
 export type LoadedChat = {
   messages: ChatMessage[];
   todos: Task[];
@@ -39,6 +38,10 @@ export type LoadedChat = {
   pendingResume: PendingApproval | null;
 };
 
+type PersistedLoadedChat = Omit<LoadedChat, "messages"> & {
+  messages: PersistedChatMessage[] | unknown[];
+};
+
 /** One chat's full state — messages (save order) and its todo checklist —
  * in one round trip, since every caller needs both together.
  *
@@ -48,8 +51,9 @@ export type LoadedChat = {
  * shredded across one block per SSE chunk, which this folds back together.
  * A no-op for everything else. */
 export async function loadChatMessages(chatId: string): Promise<LoadedChat> {
-  const loaded = await invoke<LoadedChat>("chat_load_messages", { chatId });
-  return { ...loaded, messages: mergeInterleavedStreamBlocksInMessages(loaded.messages) };
+  const loaded = await invoke<PersistedLoadedChat>("chat_load_messages", { chatId });
+  const messages = decodePersistedChatMessages(loaded.messages);
+  return { ...loaded, messages: mergeInterleavedStreamBlocksInMessages(messages) };
 }
 
 /** Upserts the chat row (title/todos/recency) and replaces its messages
@@ -71,7 +75,7 @@ export function saveChat(
     repoRoot,
     chatId,
     title,
-    messages,
+    messages: encodePersistedChatMessages(messages),
     todos,
     activePlanId,
     pendingResume,

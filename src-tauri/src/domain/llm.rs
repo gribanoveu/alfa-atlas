@@ -564,6 +564,12 @@ pub struct PendingApproval {
     /// `round`, but sensitive to which tools were actually called instead
     /// of treating every round as equal cost. See `MAX_TOOL_BUDGET`.
     pub budget_used: u32,
+    /// Last emitted `ChatTurnEvent::seq`. A resume starts at the next value,
+    /// preserving one monotonic event stream across stateless IPC calls.
+    /// `default` keeps checkpoints persisted before this field existed
+    /// resumable; their next event starts a fresh compatibility sequence.
+    #[serde(default)]
+    pub event_seq: u64,
     /// Every call this round requested, in original order — including
     /// non-risky calls bundled into the same round (their
     /// `requires_confirmation` is `false`; they need no decision and
@@ -693,17 +699,20 @@ pub struct ChatRetrying {
     pub delay_seconds: u64,
 }
 
-/// Payload of `ChatEvent::RoundText` — one round's finished prose, in full.
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChatRoundText {
-    pub text: String,
-}
-
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatStreamReasoning {
     pub delta: String,
+}
+
+/// The authoritative content accumulated for one completed provider round.
+/// Deltas are only the live rendering path; this event is the durable
+/// reconciliation point for both answer text and model reasoning.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatRoundCompleted {
+    pub text: String,
+    pub reasoning: String,
 }
 
 pub const STEERING_PREFIX: &str =
@@ -806,13 +815,11 @@ pub struct ToolResultEvent {
     pub error: Option<String>,
 }
 
-/// Everything a chat turn reports outward while it runs. `services::llm_chat`
-/// hands these to a sink; `commands::llm` is the only thing that knows they
-/// become Tauri events. Grouped into one enum rather than five separate
-/// callbacks so adding a sixth kind of report does not change every
-/// signature along the way.
-#[derive(Debug, Clone)]
-pub enum ChatEvent {
+/// Typed payload carried by [`ChatTurnEvent`]. The tagged representation is
+/// the frontend protocol's discriminant; command code only adds `turnId`.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", content = "payload", rename_all = "camelCase")]
+pub enum ChatEventPayload {
     Delta(ChatStreamDelta),
     Retrying(ChatRetrying),
     Reasoning(ChatStreamReasoning),
@@ -828,8 +835,8 @@ pub enum ChatEvent {
     /// boundary stated outright instead of inferred from what happened to
     /// come next.
     RoundStarted,
-    /// A model round has finished streaming, with the authoritative text it
-    /// produced.
+    /// A model round has finished streaming, with the authoritative answer
+    /// and reasoning content it produced.
     ///
     /// `Delta` is the only thing that builds a round's prose on the
     /// frontend, and a dropped delta there is permanent: the blocks are what
@@ -844,7 +851,7 @@ pub enum ChatEvent {
     /// final text agrees with it anyway — one rule is cheaper than a special
     /// case), and before the pending-approval check, so a round that pauses
     /// for a confirmation has already reported its prose.
-    RoundText(ChatRoundText),
+    RoundCompleted(ChatRoundCompleted),
     SteeringApplied(SteeringAppliedEvent),
     /// Fired while a tool call's `arguments` are still arriving on the
     /// SSE stream — same payload shape as `ToolCall`, but the JSON may be
@@ -871,14 +878,42 @@ pub enum ChatEvent {
     ContextUsage(ChatUsage),
 }
 
-/// Where a turn's `ChatEvent`s go. A port like `LlmProvider`: the services
+/// One ordered event in a logical chat turn. `seq` is monotonic across
+/// approval/resume IPC boundaries; `round` identifies the model/tool-loop
+/// iteration; `target_id` gives transcript-mutating events a stable block
+/// identity so reconciliation is an upsert rather than an append.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatTurnEvent {
+    pub seq: u64,
+    pub round: u32,
+    pub target_id: Option<String>,
+    #[serde(flatten)]
+    pub event: ChatEventPayload,
+}
+
+impl ChatTurnEvent {
+    /// Event outside a user-visible chat turn (currently rate-limit
+    /// accounting for one-shot completions). It is handled by the command
+    /// compatibility channel and never emitted as `llm:turn-event`.
+    pub fn unscoped(event: ChatEventPayload) -> Self {
+        Self {
+            seq: 0,
+            round: 0,
+            target_id: None,
+            event,
+        }
+    }
+}
+
+/// Where a turn's `ChatTurnEvent`s go. A port like `LlmProvider`: the services
 /// that report through it never learn what is on the other side, and
 /// `commands::chat_events` is the only implementation that turns them into
 /// Tauri events. `Arc<dyn Fn>` rather than a generic bound because the sink
 /// is moved into the `on_delta` / `on_reasoning` / `on_tool_call_delta`
 /// closures handed to `LlmProvider::chat_stream`, which outlive the call
 /// that installed them.
-pub type ChatEventSink = Arc<dyn Fn(ChatEvent) + Send + Sync>;
+pub type ChatEventSink = Arc<dyn Fn(ChatTurnEvent) + Send + Sync>;
 
 #[cfg(test)]
 mod tests {

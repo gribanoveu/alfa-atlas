@@ -35,22 +35,21 @@ import { gitBrowseTemplate } from "../lib/git";
 import { toMessage } from "../lib/errors";
 import type { SpecsRepoInfo } from "../lib/openapi";
 import {
-  appendDeltaToBlocks,
-  closeOpenBlocks,
   appendPendingApprovalBlock,
-  appendReasoningDeltaToBlocks,
-  appendSteerBlock,
-  appendToolCallBlock,
-  applyToolCallDelta,
   chatMessageToPlainText,
   estimateMessageContextTokens,
-  correctTrailingReasoning,
-  correctRoundText,
-  markRunningToolCallsAsInterrupted,
-  settleToolCallBlock,
   updateLastAssistantBlocks,
   type ChatMessage,
 } from "../lib/chatBlocks";
+import {
+  acceptChatTurnEvent,
+  chatTurnReducer,
+  closeChatTurnProtocol,
+  createChatTurnProtocol,
+  type ChatTurnAction,
+  type ChatTurnProtocolState,
+  type ChatTurnViewState,
+} from "../lib/chatTurnReducer";
 import {
   COMPACTION_RUNNING_NOTICE_TEXT,
   describeMessageForCompaction,
@@ -83,16 +82,7 @@ function requestedConversationMode(argumentsJson: string): string {
 }
 import {
   cancelLlmChat,
-  listenLlmChatDelta,
-  listenLlmChatReasoningDelta,
-  listenLlmContextUsage,
-  listenLlmRetrying,
-  listenLlmRoundStarted,
-  listenLlmRoundText,
-  listenLlmSteeringApplied,
-  listenLlmToolCall,
-  listenLlmToolCallDelta,
-  listenLlmToolResult,
+  listenLlmTurnEvent,
   llmChatOnce,
   streamLlmChat,
   streamLlmChatResume,
@@ -179,13 +169,28 @@ export function useLlmChat(
   taskDoneSoundEnabled: boolean,
   needAnswerSoundEnabled: boolean,
 ) {
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [turnView, setTurnView] = useState<ChatTurnViewState>({
+    messages: initialMessages,
+    retryState: null,
+    liveUsage: null,
+  });
+  const { messages, retryState, liveUsage } = turnView;
+  const setMessages = useCallback(
+    (update: ChatMessage[] | ((previous: ChatMessage[]) => ChatMessage[])) => {
+      setTurnView((previous) => ({
+        ...previous,
+        messages: typeof update === "function" ? update(previous.messages) : update,
+      }));
+    },
+    [],
+  );
+  const setRetryState = useCallback((retry: ChatTurnViewState["retryState"]) => {
+    setTurnView((previous) => ({ ...previous, retryState: retry }));
+  }, []);
+  const setLiveUsage = useCallback((usage: ChatUsage | null) => {
+    setTurnView((previous) => ({ ...previous, liveUsage: usage }));
+  }, []);
   const [sending, setSending] = useState(false);
-  const [retryState, setRetryState] = useState<{
-    attempt: number;
-    maxAttempts: number;
-    delaySeconds: number;
-  } | null>(null);
   // Уточнения, отправленные в очередь, но ещё не отданные модели. Хранятся
   // с идентификатором, а не одним текстом: два одинаковых уточнения иначе
   // неразличимы, и отмена одного снимала бы чужое.
@@ -198,7 +203,6 @@ export function useLlmChat(
    * `AssistantConversation` is rendered with `key={currentChatId}`, so this
    * whole hook remounts. `null` for the whole turn on a provider that
    * doesn't report usage. */
-  const [liveUsage, setLiveUsage] = useState<ChatUsage | null>(null);
 
   // Sound toggles live in refs so `collectDecisions` (empty deps — one
   // stable Promise factory for the panel's lifetime) always reads the
@@ -323,9 +327,10 @@ export function useLlmChat(
   //    synchronously, where `sending` (React state) is only visible on the
   //    next render and so lets two sends in the same tick both through.
   const activeTurnIdRef = useRef<string | null>(null);
+  const turnProtocolRef = useRef<ChatTurnProtocolState | null>(null);
 
   // Call ids the approval countdown denied on its own, so the settling
-  // `TOOL_RESULT_EVENT` can say *that* instead of the generic "Отклонено
+  // `toolResult` can say *that* instead of the generic "Отклонено
   // пользователем" — a user who was still reading the card never refused
   // anything, and reading the transcript later as if they had is how a
   // stalled turn becomes an unexplained one. Ids are never removed: a
@@ -336,7 +341,7 @@ export function useLlmChat(
   // `trustedToolsRef` (as opposed to the user just having clicked Approve)
   // — read by the `listenLlmToolCall` effect below so the resulting block
   // can carry `autoApproved: true` for display. Reassigned right before
-  // each `streamLlmChatResume`, since `TOOL_CALL_EVENT`s for that call only
+  // each `streamLlmChatResume`, since `toolCall`s for that call only
   // start arriving once it's in flight.
   const autoApprovedIdsRef = useRef<Set<string>>(new Set());
 
@@ -596,230 +601,62 @@ export function useLlmChat(
     }
   }, []);
 
-  // Live token deltas — subscribed once for the hook's lifetime, matching
-  // `useEmbeddingSetup`'s `listenSyncProgress` effect shape. Appends only
-  // to a message that's still `streaming` (via `updateLastAssistantBlocks`'s
-  // guard) — a straggler delta arriving after that message was already
-  // finalized is a no-op, not a misattribution.
+  // One ordered channel replaces the former per-kind subscriptions. The
+  // protocol layer buffers out-of-order delivery and removes duplicates
+  // before any normalized action reaches the pure view reducer.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    void listenLlmChatDelta(({ turnId, delta }) => {
-      if (turnId !== activeTurnIdRef.current) return;
-      setRetryState(null);
-      setMessages((prev) =>
-        updateLastAssistantBlocks(prev, (blocks) => appendDeltaToBlocks(blocks, delta), "text"),
-      );
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  // A provider retry happens inside the backend's current model round, before
-  // any tool execution. Keep this transient state separate from the persisted
-  // assistant message so the retry notice disappears automatically when the
-  // next attempt starts producing data.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenLlmRetrying(({ turnId, attempt, maxAttempts, delaySeconds }) => {
-      if (turnId !== activeTurnIdRef.current) return;
-      setRetryState({ attempt, maxAttempts, delaySeconds });
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenLlmSteeringApplied(({ turnId, id, text }) => {
-      if (turnId !== activeTurnIdRef.current) return;
-      setMessages((prev) =>
-        updateLastAssistantBlocks(prev, (blocks) => appendSteerBlock(blocks, text)),
-      );
-      setPendingSteers((prev) => prev.filter((steer) => steer.id !== id));
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  // Every model round of a turn announces itself here. Closing the open
-  // text/reasoning blocks is the whole handler: a round that ended in prose
-  // and was followed by another one (an app-authored note, or a steer the
-  // user typed mid-stream) used to have both answers concatenated into a
-  // single block, mid-sentence, permanently — including in the history
-  // replayed back to the model.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenLlmRoundStarted(({ turnId }) => {
-      if (turnId !== activeTurnIdRef.current) return;
-      setMessages((prev) => updateLastAssistantBlocks(prev, closeOpenBlocks));
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  // Each round's finished prose, as the backend actually received it. The
-  // deltas above are what builds the block; this is what makes a dropped one
-  // survivable. Without it a round that ended in a tool call was never
-  // reconciled against anything, and every such round in the transcript that
-  // prompted this ended mid-word.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenLlmRoundText(({ turnId, text }) => {
-      if (turnId !== activeTurnIdRef.current) return;
-      setRetryState(null);
-      setMessages((prev) => updateLastAssistantBlocks(prev, (blocks) => correctRoundText(blocks, text)));
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  // Live "thinking" deltas from a reasoning-capable model — same shape as
-  // the token-delta effect above, just routed into a `reasoning` block
-  // instead of `text`. Never fires for a provider/model that doesn't send
-  // `reasoning_content`.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenLlmChatReasoningDelta(({ turnId, delta }) => {
-      if (turnId !== activeTurnIdRef.current) return;
-      setRetryState(null);
-      setMessages((prev) =>
-        updateLastAssistantBlocks(prev, (blocks) => appendReasoningDeltaToBlocks(blocks, delta), "reasoning"),
-      );
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  // Fires while the model is still writing a tool call's arguments — the
-  // visualize/writeFile source can take many seconds, and without this the
-  // transcript sits empty as if the connection had died. Same `id` as the
-  // later `listenLlmToolCall` / `listenLlmToolResult` pair.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenLlmToolCallDelta(({ turnId, id, name, arguments: argumentsJson }) => {
-      if (turnId !== activeTurnIdRef.current) return;
-      setRetryState(null);
-      if (name) toolNamesRef.current.set(id, name);
-      setMessages((prev) =>
-        updateLastAssistantBlocks(prev, (blocks) => applyToolCallDelta(blocks, { id, name, argumentsJson })),
-      );
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  // Fires just before the backend executes each tool call — pushes a new
-  // permanent "running" block onto the in-flight assistant message (closing
-  // off whatever text preceded it), or transitions the block that
-  // `listenLlmToolCallDelta` already opened.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenLlmToolCall(({ turnId, id, name, arguments: argumentsJson }) => {
-      if (turnId !== activeTurnIdRef.current) return;
-      setRetryState(null);
-      const autoApproved = autoApprovedIdsRef.current.has(id);
-      toolNamesRef.current.set(id, name);
-      setMessages((prev) =>
-        updateLastAssistantBlocks(prev, (blocks) =>
-          appendToolCallBlock(blocks, { id, name, argumentsJson, autoApproved }),
-        ),
-      );
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
-
-  // Fires once a tool call announced above has settled — flips that block's
-  // status and attaches its result/error. The block is never removed.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenLlmToolResult(({ turnId, id, result, error: toolError }) => {
-      if (result?.tool === "artifact") {
-        // Вкладка артефакта читает запись один раз при открытии, поэтому
-        // правку ассистента она сама не увидит — до сих пор её приходилось
-        // закрывать и открывать заново. Результат вызова уже несёт свежую
-        // запись целиком; чья это версия и новее ли она, решает сама вкладка.
-        //
-        // Намеренно до проверки хода: запись на диске уже произошла, и от
-        // того, успел ли пользователь переключить чат, она не отменяется.
-        // От применения устаревшей записи защищает сравнение версий.
+    void listenLlmTurnEvent((event) => {
+      if (event.type === "toolResult" && event.payload.result?.tool === "artifact") {
         window.dispatchEvent(
           new CustomEvent<ArtifactUpdatedDetail>(ARTIFACT_UPDATED_EVENT, {
-            detail: { artifact: result.result.artifact },
+            detail: { artifact: event.payload.result.result.artifact },
           }),
         );
       }
-      if (turnId !== activeTurnIdRef.current) return;
-      const toolName = toolNamesRef.current.get(id);
-      if (toolName) {
-        const key = `${toolName}|${toolError ? "error" : "ok"}`;
-        turnToolTallyRef.current.set(key, (turnToolTallyRef.current.get(key) ?? 0) + 1);
-        toolNamesRef.current.delete(id);
-      }
-      if (result?.tool === "planCreated" || result?.tool === "planUpdated") {
-        setActivePlanId(result.result.planId);
-      } else if (result?.tool === "todoWritten" || result?.tool === "todoUpdated") {
-        // The tool's own result already carries the authoritative post-call
-        // checklist — reflect it in `TodoProgressWidget` the moment the
-        // call settles, rather than waiting for the whole round (which may
-        // still have several more tool calls left) to finish streaming.
-        setTodos(result.result);
-      }
-      const error =
-        toolError === "denied by user" && timedOutIdsRef.current.has(id)
-          ? APPROVAL_TIMED_OUT_ERROR
-          : toolError;
-      setMessages((prev) =>
-        updateLastAssistantBlocks(prev, (blocks) => settleToolCallBlock(blocks, { id, result, error })),
+
+      const protocol = turnProtocolRef.current;
+      if (!protocol || event.turnId !== activeTurnIdRef.current) return;
+      const accepted = acceptChatTurnEvent(protocol, event);
+      turnProtocolRef.current = accepted.state;
+      if (accepted.actions.length === 0) return;
+
+      const actions = accepted.actions.map((action): ChatTurnAction => {
+        if (action.type === "steeringApplied") {
+          setPendingSteers((previous) => previous.filter((steer) => steer.id !== action.id));
+        } else if (action.type === "toolCallDelta") {
+          if (action.name) toolNamesRef.current.set(action.id, action.name);
+        } else if (action.type === "toolCall") {
+          toolNamesRef.current.set(action.id, action.name);
+          return { ...action, autoApproved: autoApprovedIdsRef.current.has(action.id) };
+        } else if (action.type === "toolResult") {
+          const toolName = toolNamesRef.current.get(action.id);
+          if (toolName) {
+            const key = `${toolName}|${action.error ? "error" : "ok"}`;
+            turnToolTallyRef.current.set(key, (turnToolTallyRef.current.get(key) ?? 0) + 1);
+            toolNamesRef.current.delete(action.id);
+          }
+          if (action.result?.tool === "planCreated" || action.result?.tool === "planUpdated") {
+            setActivePlanId(action.result.result.planId);
+          } else if (
+            action.result?.tool === "todoWritten" ||
+            action.result?.tool === "todoUpdated"
+          ) {
+            setTodos(action.result.result);
+          }
+          if (
+            action.error === "denied by user" &&
+            timedOutIdsRef.current.has(action.id)
+          ) {
+            return { ...action, error: APPROVAL_TIMED_OUT_ERROR };
+          }
+        }
+        return action;
+      });
+
+      setTurnView((previous) =>
+        actions.reduce((next, action) => chatTurnReducer(next, action), previous),
       );
     }).then((fn) => {
       if (cancelled) fn();
@@ -830,28 +667,6 @@ export function useLlmChat(
       unlisten?.();
     };
   }, [setActivePlanId, setTodos]);
-
-  // Fires at each LLM round boundary of an in-flight turn, on providers
-  // that report usage — the authoritative context size as of that round.
-  // Unlike `llm:rate-limit-changed` (same trigger, no payload, feeds the
-  // status-bar chip) this one carries the counts, so `contextTokens` below
-  // can pin itself to the provider's number mid-turn instead of coasting on
-  // its character estimate until the turn ends.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenLlmContextUsage((usage) => {
-      if (usage.turnId !== activeTurnIdRef.current) return;
-      setLiveUsage(usage);
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
 
   // Context-window usage so far. Every request resends the *entire* message
   // history, so a completed turn's `usage.totalTokens` (prompt + completion,
@@ -988,6 +803,7 @@ export function useLlmChat(
           todoListRef.current,
           activeFilePath,
           conversationMode,
+          pending.eventSeq,
         );
       }
       return outcome;
@@ -1029,12 +845,11 @@ export function useLlmChat(
     [providerId],
   );
 
-  /** Applies a `"done"`/`"cancelled"` outcome's authoritative final text to
-   * the in-flight assistant message — shared by `runTurn` and the
-   * cold-hydrate effect below, same as `runPendingLoop`. */
-    const settleOutcome = useCallback(
+  /** Settles metadata through the same reducer as live protocol actions.
+   * Re-applying the authoritative final round is a compatibility safety net:
+   * stable target ids make it an idempotent upsert, never a second block. */
+  const settleOutcome = useCallback(
     (outcome: ChatStreamOutcome, assistantId: string, turnStartedAt: number) => {
-      setRetryState(null);
       // `runPendingLoop` never returns while `status === "pendingApproval"`
       // (that's its own while-loop's exit condition) — this guard is just
       // to satisfy the type checker across the function-call boundary, not
@@ -1046,32 +861,18 @@ export function useLlmChat(
       // `stopChat` auto-denied but that never got its settling event, since
       // `run_tool_loop` returned before reaching it.
       const stoppedByUser = outcome.status === "cancelled";
-      const { text, reasoning, usage, truncated, todos: finalTodos } = outcome.value;
+      const { todos: finalTodos } = outcome.value;
       setTodos(finalTodos);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId && m.role === "assistant"
-            ? {
-                ...m,
-                blocks: (() => {
-                  const corrected = correctRoundText(correctTrailingReasoning(m.blocks, reasoning ?? ""), text);
-                  return stoppedByUser
-                    ? markRunningToolCallsAsInterrupted(corrected, "Остановлено пользователем")
-                    : corrected;
-                })(),
-                streaming: false,
-                liveKind: undefined,
-                usage: usage ?? undefined,
-                cancelled: stoppedByUser,
-                // Independent of `cancelled`: a stop and a budget cut are
-                // different reasons for the same unfinished text, and a
-                // turn the user stopped can also have been truncated in the
-                // round that was in flight.
-                truncated: truncated === true,
-                durationMs: Date.now() - turnStartedAt,
-              }
-            : m,
-        ),
+      const finalRound = Math.max(1, turnProtocolRef.current?.lastRound ?? 1);
+      setTurnView((previous) =>
+        chatTurnReducer(previous, {
+          type: "turnSettled",
+          assistantId,
+          result: outcome.value,
+          stoppedByUser,
+          durationMs: Date.now() - turnStartedAt,
+          finalRound,
+        }),
       );
       if (!stoppedByUser && taskDoneSoundEnabledRef.current) {
         playTaskDoneSound();
@@ -1084,27 +885,20 @@ export function useLlmChat(
   /** Marks the in-flight assistant message as failed — shared by `runTurn`
    * and the cold-hydrate effect below, same as `runPendingLoop`. */
   const settleError = useCallback((e: unknown, assistantId: string, turnStartedAt: number) => {
-    setRetryState(null);
     const message = toMessage(e);
     // Best-effort: drives the "Сжать историю и повторить" retry action
     // (`retryWithCompaction`) rather than just showing raw error text — see
     // `isContextLengthError`'s doc comment for why this can't be a reliable
     // classification, only a heuristic.
     const contextLengthExceeded = isContextLengthError(message);
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === assistantId && m.role === "assistant"
-          ? {
-              ...m,
-              blocks: markRunningToolCallsAsInterrupted(m.blocks),
-              streaming: false,
-              failed: true,
-              errorMessage: message,
-              contextLengthExceeded,
-              durationMs: Date.now() - turnStartedAt,
-            }
-          : m,
-      ),
+    setTurnView((previous) =>
+      chatTurnReducer(previous, {
+        type: "turnFailed",
+        assistantId,
+        errorMessage: message,
+        contextLengthExceeded,
+        durationMs: Date.now() - turnStartedAt,
+      }),
     );
     // The class, never the provider's own error text — that is free-form
     // and can carry a prompt excerpt or an internal URL.
@@ -1152,6 +946,7 @@ export function useLlmChat(
       // than best-effort (`sending` only becomes visible a render later).
       const turnId = crypto.randomUUID();
       activeTurnIdRef.current = turnId;
+      turnProtocolRef.current = createChatTurnProtocol(turnId);
       setSending(true);
       setRetryState(null);
       setLiveUsage(null);
@@ -1416,7 +1211,7 @@ export function useLlmChat(
         // again. The outcome's authoritative full text belongs to the
         // *final* round, and goes through the same `correctRoundText` every
         // other round already reported through — which, having closed that
-        // round's block off when `llm:round-text` fired for it, is a no-op
+        // round's block off when `roundCompleted` fired for it, is a no-op
         // here unless that event never arrived.
         const outcome = await runPendingLoop(
           await streamLlmChat(
@@ -1435,6 +1230,9 @@ export function useLlmChat(
       } finally {
         // Released before anything else: from here on, a straggler event
         // from this turn belongs to no live turn and is dropped.
+        if (turnProtocolRef.current) {
+          turnProtocolRef.current = closeChatTurnProtocol(turnProtocolRef.current);
+        }
         activeTurnIdRef.current = null;
         setSending(false);
         // Reads the true final state for this turn via a functional-update
@@ -1491,6 +1289,10 @@ export function useLlmChat(
     // and nothing is still listening for its old one.
     const turnId = crypto.randomUUID();
     activeTurnIdRef.current = turnId;
+    turnProtocolRef.current = createChatTurnProtocol(
+      turnId,
+      (initialPendingResume.eventSeq ?? 0) + 1,
+    );
     setSending(true);
     setRetryState(null);
     setLiveUsage(null);
@@ -1508,6 +1310,9 @@ export function useLlmChat(
       } catch (e) {
         settleError(e, assistantId, turnStartedAt);
       } finally {
+        if (turnProtocolRef.current) {
+          turnProtocolRef.current = closeChatTurnProtocol(turnProtocolRef.current);
+        }
         activeTurnIdRef.current = null;
         setSending(false);
         setMessages((prev) => {

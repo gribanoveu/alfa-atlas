@@ -186,34 +186,17 @@ export type LlmMessage = {
  * history compaction and the memory pipeline. */
 export type TurnScoped = { turnId: string };
 
-export type LlmChatStreamDelta = TurnScoped & {
-  delta: string;
-};
-
-// Mirrors `domain::llm::ChatRetrying` — a transient network-retry status for
-// the current turn, emitted before the ten-second backoff.
-export type LlmChatRetrying = TurnScoped & {
-  attempt: number;
-  maxAttempts: number;
-  delaySeconds: number;
-};
-
-// Mirrors `commands::llm::ChatStreamReasoningPayload` — same shape/lifecycle
-// as `LlmChatStreamDelta`, but for a reasoning-capable model's "thinking"
-// text, fired ahead of any `LlmChatStreamDelta` for that round. Never fires
-// at all for a provider/model that doesn't send `reasoning_content`.
-export type LlmChatStreamReasoningDelta = TurnScoped & {
-  delta: string;
+export type LlmTurnEventBase = TurnScoped & {
+  /** Monotonic for the whole logical turn, including approval resumes. */
+  seq: number;
+  /** Backend tool-loop round. */
+  round: number;
+  /** Stable transcript target where this event mutates one. */
+  targetId: string | null;
 };
 
 export const STEERING_PREFIX =
   "[Уточнение от пользователя, не новое задание — учти в текущей работе]: ";
-
-export type LlmSteeringAppliedEvent = TurnScoped & {
-  /** Идентификатор заметки — по нему её снимают из «в очереди». */
-  id: string;
-  text: string;
-};
 
 // Mirrors `domain::llm::ChatUsage` — real token accounting for one completed
 // turn, when the provider reports it (requested via `stream_options.
@@ -271,6 +254,8 @@ export type PendingApproval = {
   history: LlmMessage[];
   round: number;
   budgetUsed: number;
+  /** Last emitted turn-event sequence; absent on legacy persisted pauses. */
+  eventSeq?: number;
   calls: PendingToolCall[];
   todos: Task[];
 };
@@ -496,6 +481,7 @@ export function streamLlmChatResume(
   todos: Task[],
   activeFilePath: string | null,
   conversationMode: ConversationMode,
+  eventSeq?: number,
 ): Promise<ChatStreamOutcome> {
   return invoke<ChatStreamOutcome>("llm_chat_stream_resume", {
     providerId,
@@ -503,6 +489,7 @@ export function streamLlmChatResume(
     history,
     round,
     budgetUsed,
+    eventSeq,
     decisions,
     todos,
     activeFilePath,
@@ -546,122 +533,52 @@ export function noteLlmChat(text: string): Promise<void> {
   return invoke("llm_note_chat", { text });
 }
 
-/** Fires once per non-empty text chunk while a `streamLlmChat()` call is in
- * flight. */
-export function listenLlmChatDelta(
-  onDelta: (payload: LlmChatStreamDelta) => void,
+/** Mirrors the tagged `domain::llm::ChatTurnEvent` payload.
+ *
+ * One union, one channel. Each variant used to be its own global Tauri
+ * topic (`llm:chat-stream-delta`, `llm:tool-call`, `llm:round-text`, …)
+ * with no stated ordering between them, which is why the transcript had to
+ * guess which block an event belonged to. `LlmTurnEventBase` states it
+ * instead: `seq` orders the whole turn across resume boundaries, and
+ * `targetId` names the block to mutate.
+ *
+ * `toolCall`'s `id` is the model's own tool-call id, so the matching
+ * `toolResult` settles the exact block `toolCall` opened; `arguments` stays
+ * a raw JSON string (and, on `toolCallDelta`, may still be incomplete). */
+export type LlmTurnEvent =
+  | (LlmTurnEventBase & { type: "delta"; payload: { delta: string } })
+  | (LlmTurnEventBase & {
+      type: "retrying";
+      payload: { attempt: number; maxAttempts: number; delaySeconds: number };
+    })
+  | (LlmTurnEventBase & { type: "reasoning"; payload: { delta: string } })
+  | (LlmTurnEventBase & { type: "roundStarted" })
+  | (LlmTurnEventBase & {
+      type: "roundCompleted";
+      payload: { text: string; reasoning: string };
+    })
+  | (LlmTurnEventBase & {
+      type: "steeringApplied";
+      payload: { id: string; text: string };
+    })
+  | (LlmTurnEventBase & {
+      type: "toolCallDelta" | "toolCall";
+      payload: { id: string; name: string; arguments: string };
+    })
+  | (LlmTurnEventBase & {
+      type: "toolResult";
+      payload: { id: string; result: ToolResult | null; error: string | null };
+    })
+  | (LlmTurnEventBase & { type: "rateLimitChanged" })
+  | (LlmTurnEventBase & { type: "contextUsage"; payload: ChatUsage });
+
+/** Everything one chat turn reports, in order — the only chat channel.
+ *
+ * `llm:rate-limit-changed` stays separate (see `useLlmRateLimit`): it is
+ * not turn-scoped, and also fires for the one-shot calls (compaction, the
+ * memory pipeline) that belong to no turn at all. */
+export function listenLlmTurnEvent(
+  onEvent: (payload: LlmTurnEvent) => void,
 ): Promise<UnlistenFn> {
-  return listen<LlmChatStreamDelta>("llm:chat-stream-delta", (event) => onDelta(event.payload));
-}
-
-/** Fires before a safe retry after the provider reports `Peer disconnected`.
- * The retry is performed inside the backend's current model round, before
- * any tool execution, so the same turn and history are preserved. */
-export function listenLlmRetrying(
-  onRetrying: (payload: LlmChatRetrying) => void,
-): Promise<UnlistenFn> {
-  return listen<LlmChatRetrying>("llm:chat-retrying", (event) => onRetrying(event.payload));
-}
-
-/** Fires once per non-empty `reasoning_content` chunk while a
- * `streamLlmChat()` call is in flight — ahead of any `listenLlmChatDelta`
- * event for that round. Never fires for a provider/model that doesn't send
- * `reasoning_content`. */
-export function listenLlmChatReasoningDelta(
-  onDelta: (payload: LlmChatStreamReasoningDelta) => void,
-): Promise<UnlistenFn> {
-  return listen<LlmChatStreamReasoningDelta>("llm:chat-stream-reasoning-delta", (event) => onDelta(event.payload));
-}
-
-/** Fires immediately before every model round of a turn, including the
- * first. The transcript closes the previous round's open text/reasoning
- * blocks on it, so prose from two rounds is never concatenated into one
- * block (see `chatBlocks.ts`'s `closeOpenBlocks`). */
-export function listenLlmRoundStarted(
-  onRoundStarted: (payload: TurnScoped) => void,
-): Promise<UnlistenFn> {
-  return listen<TurnScoped>("llm:round-started", (event) => onRoundStarted(event.payload));
-}
-
-/** Fires once a model round has finished streaming, carrying that round's
- * full text. The transcript overwrites the round's own text block with it,
- * so a dropped `llm:chat-stream-delta` cannot leave prose permanently cut
- * off mid-word — which is what used to happen to every round that ended in
- * a tool call (see `chatBlocks.ts`'s `correctRoundText`). */
-export function listenLlmRoundText(
-  onRoundText: (payload: TurnScoped & { text: string }) => void,
-): Promise<UnlistenFn> {
-  return listen<TurnScoped & { text: string }>("llm:round-text", (event) => onRoundText(event.payload));
-}
-
-export function listenLlmSteeringApplied(
-  onApplied: (payload: LlmSteeringAppliedEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<LlmSteeringAppliedEvent>("llm:steering-applied", (event) => onApplied(event.payload));
-}
-
-// Mirrors `domain::llm::ToolCallEvent` — fired just before the
-// backend executes one tool call inside a `streamLlmChat()` round (the
-// whole tool-calling loop is internal to that one call; this and
-// `LlmToolResultEvent` are what surface a round's activity mid-flight).
-// `id` is the model's own tool-call id, carried through so a later
-// `LlmToolResultEvent` can be matched back to the entry this created.
-// `arguments` stays a raw JSON string, same as `domain::llm::LlmToolCall`.
-export type LlmToolCallEvent = TurnScoped & {
-  id: string;
-  name: string;
-  arguments: string;
-};
-
-/** Fires while a tool call's arguments are still arriving on the SSE
- * stream — same payload as `listenLlmToolCall`, but `arguments` may be
- * incomplete JSON. The UI upserts a running block immediately so a long
- * `visualize`/`writeFile` argument stream does not look like a hang.
- * Always followed later by `listenLlmToolCall` with the same `id`, unless
- * the turn is cancelled first. */
-export function listenLlmToolCallDelta(
-  onDelta: (payload: LlmToolCallEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<LlmToolCallEvent>("llm:tool-call-delta", (event) => onDelta(event.payload));
-}
-
-/** Fires immediately before the backend executes one tool call while a
- * `streamLlmChat()` call is in flight — lets the UI show e.g. "Reading
- * docs/x.adoc…" while the (possibly slow) tool execution is actually
- * happening. Always followed by exactly one matching `LlmToolResultEvent`
- * (same `id`) once execution settles. */
-export function listenLlmToolCall(
-  onToolCall: (payload: LlmToolCallEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<LlmToolCallEvent>("llm:tool-call", (event) => onToolCall(event.payload));
-}
-
-// Mirrors `domain::llm::ToolResultEvent` — fires once the tool
-// call started by a matching `LlmToolCallEvent` (same `id`) has settled.
-// Exactly one of `result`/`error` is ever non-null.
-export type LlmToolResultEvent = TurnScoped & {
-  id: string;
-  result: ToolResult | null;
-  error: string | null;
-};
-
-/** Fires once a `streamLlmChat()` round's tool call (announced via
- * `listenLlmToolCall`) has settled — lets the UI flip that call's display
- * entry from "running" to "done"/"error" and show what actually happened. */
-export function listenLlmToolResult(
-  onToolResult: (payload: LlmToolResultEvent) => void,
-): Promise<UnlistenFn> {
-  return listen<LlmToolResultEvent>("llm:tool-result", (event) => onToolResult(event.payload));
-}
-
-/** Fires after each LLM round of an in-flight `streamLlmChat()` turn for
- * which the provider reported usage — `totalTokens` is the authoritative
- * context size as of that round (every request resends the whole history),
- * so the context ring can stop guessing at each round boundary instead of
- * waiting for the turn's final `ChatStreamResult.usage`. Never fires for a
- * provider that doesn't report usage. */
-export function listenLlmContextUsage(
-  onUsage: (usage: ChatUsage & TurnScoped) => void,
-): Promise<UnlistenFn> {
-  return listen<ChatUsage & TurnScoped>("llm:context-usage", (event) => onUsage(event.payload));
+  return listen<LlmTurnEvent>("llm:turn-event", (event) => onEvent(event.payload));
 }

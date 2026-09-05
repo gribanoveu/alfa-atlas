@@ -876,7 +876,7 @@ export function basename(path: string): string {
 // fine off the same phrasing; a separate icon and, once settled,
 // `describeToolResult`'s summary line carry the "it's done" signal).
 // `argumentsJson` is the raw JSON string off the wire
-// (`LlmToolCallEvent.arguments`) — parsed defensively since this is purely
+// (`toolCall`'s `arguments`) — parsed defensively since this is purely
 // cosmetic and must never throw regardless of what the model sent.
 export function describeToolActivity(name: string, argumentsJson: string): string {
   let args: Record<string, unknown> = {};

@@ -1,0 +1,78 @@
+{
+  "versionedMessages": [
+    {
+      "schemaVersion": 1,
+      "message": {
+        "id": "user-1",
+        "role": "user",
+        "content": "Remember that release branches require two approvals.",
+        "isPlanExecutionStart": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "message": {
+        "id": "assistant-1",
+        "role": "assistant",
+        "blocks": [
+          {
+            "type": "reasoning",
+            "id": "reasoning-1",
+            "content": "Checking the repository policy.",
+            "closed": true
+          },
+          {
+            "type": "text",
+            "id": "text-1",
+            "content": "Release branches require two approvals.",
+            "closed": true
+          },
+          {
+            "type": "toolCall",
+            "id": "tool-1",
+            "name": "readFile",
+            "argumentsJson": "{\"path\":\"CONTRIBUTING.md\"}",
+            "status": "done",
+            "result": {
+              "tool": "readFile",
+              "result": {
+                "path": "CONTRIBUTING.md",
+                "content": "Two approvals are required."
+              }
+            }
+          },
+          {
+            "type": "steer",
+            "id": "steer-1",
+            "text": "Keep the answer concise."
+          },
+          {
+            "type": "text",
+            "id": "text-2",
+            "content": "I will keep future release guidance concise."
+          }
+        ],
+        "streaming": false,
+        "truncated": false,
+        "usage": {
+          "promptTokens": 42,
+          "completionTokens": 17,
+          "totalTokens": 59
+        },
+        "durationMs": 1250
+      }
+    }
+  ],
+  "legacyUnversionedMessages": [
+    {
+      "id": "legacy-user",
+      "role": "user",
+      "content": "Use the legacy contract."
+    },
+    {
+      "id": "legacy-assistant",
+      "role": "assistant",
+      "content": "Legacy assistant text remains readable."
+    }
+  ]
+}

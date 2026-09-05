@@ -55,11 +55,11 @@ export type SteerBlock = {
 
 export type ToolCallStatus = "pendingApproval" | "running" | "done" | "error";
 
-/** `id` is the model's own `LlmToolCall.id` off the wire (see
- * `LlmToolCallEvent.id`/`LlmToolResultEvent.id`), not a freshly generated
- * uuid — so a later `TOOL_RESULT_EVENT` can find and settle the exact block
- * a `TOOL_CALL_EVENT` created, regardless of how many other blocks have
- * been appended since (it also doubles as the React list key). */
+/** `id` is the model's own `LlmToolCall.id` off the wire (carried on both
+ * the `toolCall` and `toolResult` variants of `LlmTurnEvent`), not a freshly
+ * generated uuid — so a later `toolResult` can find and settle the exact
+ * block a `toolCall` created, regardless of how many other blocks have been
+ * appended since (it also doubles as the React list key). */
 export type ToolCallBlock = {
   type: "toolCall";
   id: string;
@@ -282,8 +282,13 @@ function appendToOpenBlock(
   blocks: MessageBlock[],
   type: "text" | "reasoning",
   delta: string,
+  targetId?: string,
 ): MessageBlock[] {
-  const index = findOpenBlockIndex(blocks, type);
+  const targeted =
+    targetId === undefined
+      ? -1
+      : blocks.findIndex((block) => block.type === type && block.id === targetId && !block.closed);
+  const index = targeted !== -1 ? targeted : findOpenBlockIndex(blocks, type);
   if (index !== -1) {
     return blocks.map((b, i) =>
       i === index && (b.type === "text" || b.type === "reasoning")
@@ -291,24 +296,32 @@ function appendToOpenBlock(
         : b,
     );
   }
-  return [...blocks, { type, id: crypto.randomUUID(), content: delta }];
+  return [...blocks, { type, id: targetId ?? crypto.randomUUID(), content: delta }];
 }
 
-/** A `CHAT_STREAM_DELTA_EVENT` either extends this round's still-open text
+/** A `delta` either extends this round's still-open text
  * block, or opens a fresh one if the round hasn't produced any prose yet
  * (see `findOpenBlockIndex` for what "this round" means). */
-export function appendDeltaToBlocks(blocks: MessageBlock[], delta: string): MessageBlock[] {
-  return appendToOpenBlock(blocks, "text", delta);
+export function appendDeltaToBlocks(
+  blocks: MessageBlock[],
+  delta: string,
+  targetId?: string,
+): MessageBlock[] {
+  return appendToOpenBlock(blocks, "text", delta, targetId);
 }
 
-/** A `CHAT_STREAM_REASONING_EVENT` either extends this round's still-open
+/** A `reasoning` either extends this round's still-open
  * reasoning block, or opens a fresh one — same shape as
  * `appendDeltaToBlocks`, for a reasoning-capable model's "thinking" text
  * instead of its answer. A reasoning block is closed off by the next tool
  * call (or the end of the turn), not by the first `content` delta — a
  * provider that interleaves the two keeps filling this same block. */
-export function appendReasoningDeltaToBlocks(blocks: MessageBlock[], delta: string): MessageBlock[] {
-  return appendToOpenBlock(blocks, "reasoning", delta);
+export function appendReasoningDeltaToBlocks(
+  blocks: MessageBlock[],
+  delta: string,
+  targetId?: string,
+): MessageBlock[] {
+  return appendToOpenBlock(blocks, "reasoning", delta, targetId);
 }
 
 /** Repairs a persisted message whose rounds were split into many one-chunk
@@ -338,7 +351,7 @@ export function mergeInterleavedStreamBlocks(blocks: MessageBlock[]): MessageBlo
       continue;
     }
     // `correctRoundText` briefly lost its idempotency: the final round is
-    // reconciled once by `llm:round-text` and once more by the resolved IPC
+    // reconciled once by `roundCompleted` and once more by the resolved IPC
     // outcome, and the second pass appended an identical closed block. Keep
     // this load-time repair deliberately narrow — exact, adjacent, closed
     // text blocks only — so persisted transcripts created during that
@@ -411,7 +424,7 @@ export function openStreamingBlockIds(blocks: MessageBlock[]): Set<string> {
 /** A `TOOL_CALL_DELTA_EVENT` while the model is still writing a call's
  * arguments — same upsert-by-`id` as `appendToolCallBlock`, but it leaves
  * `status` alone on an existing block (a later pending-approval card, or
- * the eventual `TOOL_CALL_EVENT`, owns those transitions). A brand-new
+ * the eventual `toolCall`, owns those transitions). A brand-new
  * id opens a `"running"` block so the transcript shows the call the moment
  * its `id`/`name` arrive, instead of sitting silent while a long
  * `visualize` source streams in. */
@@ -444,7 +457,7 @@ export function applyToolCallDelta(
   ];
 }
 
-/** A `TOOL_CALL_EVENT` normally pushes a brand-new `toolCall` block — this
+/** A `toolCall` normally pushes a brand-new `toolCall` block — this
  * is what closes off any open text block (the next delta, if any, sees a
  * trailing `toolCall` block and starts fresh per `appendDeltaToBlocks`).
  * The one exception: a call that was already shown — either as a
@@ -489,15 +502,23 @@ export function appendToolCallBlock(
   ];
 }
 
-export function appendSteerBlock(blocks: MessageBlock[], text: string): MessageBlock[] {
-  return [...blocks, { type: "steer", id: crypto.randomUUID(), text }];
+export function appendSteerBlock(
+  blocks: MessageBlock[],
+  text: string,
+  targetId?: string,
+): MessageBlock[] {
+  const id = targetId ?? crypto.randomUUID();
+  const index = blocks.findIndex((block) => block.type === "steer" && block.id === id);
+  return index === -1
+    ? [...blocks, { type: "steer", id, text }]
+    : blocks.map((block, i) => (i === index && block.type === "steer" ? { ...block, text } : block));
 }
 
 /** Shows a call awaiting user approval inline in the transcript, right
  * where it happened — a card with Approve/Deny actions and a countdown
  * strip toward `deadlineAt`, after which `useLlmChat` treats it as denied.
  * Always the trailing block for its call `id` until the real
- * `TOOL_CALL_EVENT` (via `appendToolCallBlock`) confirms execution
+ * `toolCall` (via `appendToolCallBlock`) confirms execution
  * actually starting, whether the user decided manually or the timer ran
  * out. */
 export function appendPendingApprovalBlock(
@@ -526,7 +547,7 @@ export function appendPendingApprovalBlock(
   return [...blocks, next];
 }
 
-/** A `TOOL_RESULT_EVENT` finds the block by `id` (searching the whole
+/** A `toolResult` finds the block by `id` (searching the whole
  * array, not just the tail — the matching `toolCall` block can be several
  * blocks back by the time this fires) and settles it to `done`/`error`. A
  * `result` that isn't `null` always means success, matching
@@ -546,7 +567,7 @@ export function settleToolCallBlock(
 }
 
 /** Reconciles one finished round's prose with the authoritative text the
- * backend accumulated for it (`llm:round-text`), and closes it off.
+ * backend accumulated for it (`roundCompleted`), and closes it off.
  *
  * `findOpenBlockIndex` cannot find the block to correct: it gives up the
  * moment it meets a `toolCall` scanning back — so the prose of a round that
@@ -579,7 +600,7 @@ export function settleToolCallBlock(
  *   would throw away exactly the prose this event exists to rescue, both
  *   from the transcript and from what `flattenBlocksToText` replays to the
  *   model on the next turn. The exception is an exact content match: the
- *   final round is deliberately reconciled both by `llm:round-text` and by
+ *   final round is deliberately reconciled both by `roundCompleted` and by
  *   the resolved IPC outcome, so seeing its already-closed authoritative
  *   text with no intervening tool call makes the second pass a no-op rather
  *   than a duplicate.
@@ -597,8 +618,29 @@ export function settleToolCallBlock(
  * has no text block to correct, so an empty string here can only mean the
  * two sides disagree, and dropping visible content is the worse way to be
  * wrong. */
-export function correctRoundText(blocks: MessageBlock[], text: string): MessageBlock[] {
+export function correctRoundText(
+  blocks: MessageBlock[],
+  text: string,
+  targetId?: string,
+): MessageBlock[] {
   if (text === "") return blocks;
+  // The round names its own block, so there is nothing to infer: this is
+  // the round's text, wherever it sits and whatever came after it. The scan
+  // below is what the event stream needed back when it carried no ids, and
+  // it still runs for a block recorded before they existed, or for a round
+  // whose deltas were all dropped and so opened no block to address.
+  //
+  // Being an upsert is also what makes the repeated report harmless: the
+  // final round is reconciled once by `roundCompleted` and again by the
+  // resolved IPC outcome, and both name the same id.
+  if (targetId !== undefined) {
+    const index = blocks.findIndex((b) => b.type === "text" && b.id === targetId);
+    if (index !== -1) {
+      return blocks.map((b, i) =>
+        i === index && b.type === "text" ? { ...b, content: text, closed: true } : b,
+      );
+    }
+  }
   // Where a brand-new block goes if the round has none: in front of the
   // tool calls it opened, never after them.
   let insertAt = blocks.length;
@@ -651,7 +693,12 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
   if (stale || alreadyReconciled) return blocks;
   // Every delta for this round was dropped — the text still belongs in the
   // transcript, in the place the round would have put it.
-  const fresh: MessageBlock = { type: "text", id: crypto.randomUUID(), content: text, closed: true };
+  const fresh: MessageBlock = {
+    type: "text",
+    id: targetId ?? crypto.randomUUID(),
+    content: text,
+    closed: true,
+  };
   return [...blocks.slice(0, insertAt), fresh, ...blocks.slice(insertAt)];
 }
 
@@ -662,26 +709,38 @@ export function correctRoundText(blocks: MessageBlock[], text: string): MessageB
  * trailing one isn't a reasoning block: reasoning always precedes the
  * answer it led to, so a reasoning block can't correctly be tacked onto the
  * *end* of blocks that already moved on to text/tool-calls; if every
- * `CHAT_STREAM_REASONING_EVENT` for a round was somehow dropped (or the
+ * `reasoning` for a round was somehow dropped (or the
  * provider interleaved its thinking with the answer, leaving a text block
  * sitting after it), that
  * round's reasoning is simply lost, same tradeoff this codebase already
  * accepts for earlier, non-trailing blocks elsewhere. */
-export function correctTrailingReasoning(blocks: MessageBlock[], reasoning: string): MessageBlock[] {
-  const index = findOpenBlockIndex(blocks, "reasoning");
+export function correctTrailingReasoning(
+  blocks: MessageBlock[],
+  reasoning: string,
+  targetId?: string,
+): MessageBlock[] {
+  const targeted =
+    targetId === undefined
+      ? -1
+      : blocks.findIndex((block) => block.type === "reasoning" && block.id === targetId);
+  const index = targeted !== -1 ? targeted : findOpenBlockIndex(blocks, "reasoning");
   return index === -1
     ? blocks
-    : blocks.map((b, i) => (i === index && b.type === "reasoning" ? { ...b, content: reasoning } : b));
+    : blocks.map((b, i) =>
+        i === index && b.type === "reasoning"
+          ? { ...b, content: reasoning, ...(targetId ? { closed: true as const } : {}) }
+          : b,
+      );
 }
 
 /** Called when the overall `streamLlmChat()` promise rejects (hit
  * `MAX_TOOL_ITERATIONS`, a later round's HTTP call failed, `current_scope`
  * failed, or — the one case that can genuinely leave a call stuck — a panic
- * inside `execute_tool` on the Rust side, which skips its `TOOL_RESULT_EVENT`
+ * inside `execute_tool` on the Rust side, which skips its `toolResult`
  * entirely) — and, with `reason` set to something more specific, when a
  * `{status: "cancelled"}` outcome resolves instead of rejecting (see
  * `useLlmChat`'s `stopChat`): a pending-approval card auto-denied by
- * `stopChat` still never gets the `TOOL_CALL_EVENT`/`TOOL_RESULT_EVENT` pair
+ * `stopChat` still never gets the `toolCall`/`toolResult` pair
  * that would normally settle it, since `run_tool_loop` returns `Cancelled`
  * before ever reaching that round's calls once the flag is set. Any block
  * still `"running"` at that point will never receive its settling event

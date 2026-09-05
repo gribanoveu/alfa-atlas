@@ -14,8 +14,8 @@
 //! what the assistant can actually do, not just what its system prompt
 //! claims. Most of the loop is internal to one command call: the frontend
 //! sends one message list and gets back one resolved `ChatStreamOutcome`,
-//! unaware tool rounds happened at all except via the `TOOL_CALL_EVENT`/
-//! `TOOL_RESULT_EVENT` pair, which the frontend renders as permanent,
+//! unaware tool rounds happened at all except via the `ToolCall`/
+//! `ToolResult` events on `CHAT_TURN_EVENT`, which the frontend renders as permanent,
 //! chronological entries in the message transcript (not transient status —
 //! see `src/lib/chatBlocks.ts` on the frontend side). The one case where a
 //! single turn spans more than one command call: a round containing a call
@@ -329,8 +329,8 @@ pub fn llm_rate_limit_snapshot(provider_id: String) -> RateLimitSnapshot {
 /// a round requests a call that needs user confirmation, in which case this
 /// resolves with `ChatStreamOutcome::PendingApproval` instead and the
 /// frontend must call `llm_chat_stream_resume` to continue. Text still
-/// streams live as `CHAT_STREAM_DELTA_EVENT` deltas throughout every round;
-/// `TOOL_CALL_EVENT` fires before each tool execution so the UI can show
+/// streams live as `Delta` events on `CHAT_TURN_EVENT` throughout every
+/// round; `ToolCall` fires before each tool execution so the UI can show
 /// transient status. The authoritative full text (and real token usage, if
 /// the provider reported one) is returned once the loop ends — a safety net
 /// against a dropped delta event, and the only place usage arrives since
@@ -406,6 +406,8 @@ pub async fn llm_chat_stream_resume(
     history: Vec<LlmMessage>,
     round: u32,
     budget_used: u32,
+    // Missing on checkpoints saved before the unified turn-event protocol.
+    event_seq: Option<u64>,
     decisions: Vec<ToolCallDecision>,
     todos: Vec<Task>,
     active_file_path: Option<String>,
@@ -443,7 +445,9 @@ pub async fn llm_chat_stream_resume(
         &sync_guard,
         &workspace_index,
     );
-    let resume = llm_chat::ResumePoint { history, round, budget_used, decisions, todos };
+    let resume = llm_chat::ResumePoint {
+        history, round, budget_used, event_seq: event_seq.unwrap_or_default(), decisions, todos,
+    };
     let events = chat_event_sink(&app, turn_id);
 
     tauri::async_runtime::spawn_blocking(move || llm_chat::stream_resume(ctx, resume, &events))
