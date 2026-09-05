@@ -7,7 +7,7 @@ use domain::settings::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, WindowState}
 use services::window_settings;
 use std::collections::HashSet;
 use std::sync::Arc;
-use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
+use tauri::{LogicalPosition, LogicalSize, Manager, Position, Size, Window, WindowEvent};
 
 use crate::services::embedding_state::{
     BackgroundBacklogSlot, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard,
@@ -125,6 +125,8 @@ fn persist_window_state(window: &Window) {
 /// small file is rewritten while someone is working.
 const SESSION_CHECKPOINT_INTERVAL_SECS: u64 = 60;
 const CALENDAR_SYNC_INTERVAL_SECS: u64 = 300;
+/// Reminder resolution: a lead time lands within half a minute of its mark.
+const CALENDAR_REMINDER_TICK_SECS: u64 = 30;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -248,6 +250,7 @@ pub fn run() {
             // sync pushes the fresh events to whoever has the panel open.
             {
                 let handle = app.handle().clone();
+                let notify = commands::calendar_events::calendar_notice_sink(app.handle());
                 tauri::async_runtime::spawn(async move {
                     loop {
                         tokio::time::sleep(std::time::Duration::from_secs(
@@ -264,7 +267,39 @@ pub fn run() {
                         let events = tauri::async_runtime::spawn_blocking(move || state.sync())
                             .await;
                         if let Ok(Ok(events)) = events {
-                            let _ = handle.emit("calendar:updated", &events);
+                            notify(domain::calendar::CalendarNotice::Updated(events));
+                        }
+                    }
+                });
+            }
+
+            // Meeting reminders. Its own loop rather than a step of the sync
+            // above: a five-minute lead cannot be timed by a five-minute
+            // refresh. Reads only the cache the sync leaves behind, so it
+            // never touches the network and stays silent when the calendar is
+            // unconfigured, switched off (`reminder_minutes == 0`) or empty.
+            {
+                let handle = app.handle().clone();
+                let notify = commands::calendar_events::calendar_notice_sink(app.handle());
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(
+                            CALENDAR_REMINDER_TICK_SECS,
+                        ))
+                        .await;
+                        let state = match handle.try_state::<Arc<CalendarState>>() {
+                            Some(s) => Arc::clone(&s),
+                            None => continue,
+                        };
+                        let due = tauri::async_runtime::spawn_blocking(move || {
+                            let lead = services::calendar_config::load_settings()
+                                .map(|s| s.reminder_minutes)
+                                .unwrap_or(0);
+                            state.claim_due_reminders(lead, chrono::Utc::now())
+                        })
+                        .await;
+                        for (event, minutes) in due.unwrap_or_default() {
+                            notify(domain::calendar::CalendarNotice::Reminder { event, minutes });
                         }
                     }
                 });

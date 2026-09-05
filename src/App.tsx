@@ -75,6 +75,7 @@ import { useWorkspaceIndex } from "./hooks/useWorkspaceIndex";
 import { useStandardsCheck } from "./hooks/useStandardsCheck";
 import { useEmbeddingIndexWarmup } from "./hooks/useEmbeddingIndexWarmup";
 import { useEmbeddingPriorityFiles } from "./hooks/useEmbeddingPriorityFiles";
+import { useCalendarReminders } from "./hooks/useCalendarReminders";
 import { useEmbeddingSetup } from "./hooks/useEmbeddingSetup";
 import { useLlmSetup } from "./hooks/useLlmSetup";
 import { useLlmRateLimit } from "./hooks/useLlmRateLimit";
@@ -610,6 +611,8 @@ function App() {
   const [credentialsSettingsSignal, setCredentialsSettingsSignal] = useState(0);
   const [jiraSettingsSignal, setJiraSettingsSignal] = useState(0);
   const [calendarSettingsSignal, setCalendarSettingsSignal] = useState(0);
+  // Here rather than in the calendar panel: the panel unmounts when hidden.
+  useCalendarReminders();
 
 
 

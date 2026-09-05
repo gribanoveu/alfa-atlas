@@ -4,7 +4,9 @@
 //! only at the moment a session is built — from the store when remembered,
 //! or supplied by the user for this run only.
 
-use crate::domain::calendar::{CalendarPreset, CalendarSettings, CalendarSettingsView};
+use crate::domain::calendar::{
+    CalendarPreset, CalendarSettings, CalendarSettingsView, MAX_REMINDER_MINUTES,
+};
 use crate::domain::settings::SettingsError;
 use crate::infra::{llm_provider_manifest, owa_client::OwaSession, settings_store};
 
@@ -40,6 +42,7 @@ pub fn save_settings(settings: CalendarSettings) -> Result<(), String> {
         display_time_zone: settings.display_time_zone.trim().to_string(),
         remember_password: settings.remember_password,
         trusted_cert_pem: settings.trusted_cert_pem.as_deref().and_then(non_empty),
+        reminder_minutes: settings.reminder_minutes.min(MAX_REMINDER_MINUTES),
     };
     settings_store::save(&all).map_err(|e| e.to_string())
 }
@@ -58,6 +61,7 @@ pub fn resolve(settings: &CalendarSettings, preset: &CalendarPreset) -> Calendar
             .as_deref()
             .and_then(non_empty)
             .or_else(|| preset.trusted_cert_pem.as_deref().and_then(non_empty)),
+        reminder_minutes: settings.reminder_minutes,
     }
 }
 

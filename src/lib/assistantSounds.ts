@@ -4,6 +4,7 @@ import {
   requestPermission,
   sendNotification,
 } from "@tauri-apps/plugin-notification";
+import calendarUrl from "../assets/sounds/calendar.mp3";
 import needAnswerUrl from "../assets/sounds/need_answer.mp3";
 import taskDoneUrl from "../assets/sounds/task_done.mp3";
 
@@ -11,6 +12,7 @@ import taskDoneUrl from "../assets/sounds/task_done.mp3";
  * events rewinds and replays instead of stacking overlapping Audio elements. */
 let taskDoneAudio: HTMLAudioElement | null = null;
 let needAnswerAudio: HTMLAudioElement | null = null;
+let calendarAudio: HTMLAudioElement | null = null;
 
 function play(audio: HTMLAudioElement | null, url: string): HTMLAudioElement {
   const player = audio ?? new Audio(url);
@@ -23,10 +25,15 @@ function play(audio: HTMLAudioElement | null, url: string): HTMLAudioElement {
 }
 
 /** OS banner when the main window is not focused. Sound still plays either
- * way — the banner is only useful when the user isn't already looking. */
-async function sendOsNotification(title: string, body: string): Promise<void> {
+ * way — the banner is only useful when the user isn't already looking, unless
+ * `evenWhenFocused` (a meeting starts whether or not the app is on screen). */
+async function sendOsNotification(
+  title: string,
+  body: string,
+  evenWhenFocused = false,
+): Promise<void> {
   try {
-    if (await getCurrentWindow().isFocused()) return;
+    if (!evenWhenFocused && (await getCurrentWindow().isFocused())) return;
 
     let granted = await isPermissionGranted();
     if (!granted) {
@@ -53,4 +60,13 @@ export function playTaskDoneSound(): void {
 export function playNeedAnswerSound(): void {
   needAnswerAudio = play(needAnswerAudio, needAnswerUrl);
   void sendOsNotification("Ассистент", "Нужен ваш ответ");
+}
+
+/** Chime + OS banner shortly before a meeting starts. The banner shows even
+ * with the window focused: the user may be deep in another panel, and being
+ * late is the failure this is meant to prevent. Caller gates on
+ * `CalendarSettings.reminderMinutes`. */
+export function playCalendarReminder(title: string, body: string): void {
+  calendarAudio = play(calendarAudio, calendarUrl);
+  void sendOsNotification(title, body, true);
 }

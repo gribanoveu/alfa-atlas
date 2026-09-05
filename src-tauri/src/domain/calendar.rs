@@ -26,8 +26,14 @@ pub struct CalendarPreset {
     pub trusted_cert_pem: Option<String>,
 }
 
+/// Minutes before a meeting that the reminder chimes, when the user has never
+/// touched the setting. `0` disables reminders.
+pub const DEFAULT_REMINDER_MINUTES: u32 = 5;
+/// Nobody wants a reminder two hours out; also bounds what the UI can store.
+pub const MAX_REMINDER_MINUTES: u32 = 120;
+
 /// The user layer. Empty `base_url` falls back to `CalendarPreset`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CalendarSettings {
     /// Exchange root, e.g. `https://owa.company.ru` — no `/owa/...` path.
@@ -44,6 +50,24 @@ pub struct CalendarSettings {
     /// PEM bundle replacing the public trust roots. `None` falls back to the
     /// build's certificate, if it ships one.
     pub trusted_cert_pem: Option<String>,
+    /// Chime this many minutes before a meeting starts; `0` is off. The
+    /// countdown itself runs on the frontend (see `useCalendarReminders`).
+    pub reminder_minutes: u32,
+}
+
+// Hand-written so a settings file predating `reminder_minutes` — and a fresh
+// install — get reminders on at the default lead, not silently at zero.
+impl Default for CalendarSettings {
+    fn default() -> Self {
+        Self {
+            base_url: String::new(),
+            username: String::new(),
+            display_time_zone: String::new(),
+            remember_password: false,
+            trusted_cert_pem: None,
+            reminder_minutes: DEFAULT_REMINDER_MINUTES,
+        }
+    }
 }
 
 impl CalendarSettings {
@@ -193,6 +217,59 @@ pub struct CalendarEvent {
     pub platform: MeetingPlatform,
     pub response_type: MeetingResponseType,
 }
+
+impl CalendarEvent {
+    /// A meeting counts as cancelled when the server flags it *or* the subject
+    /// carries a cancellation prefix (common when a cancellation arrives via
+    /// an external mail client). The frontend mirrors this in
+    /// `isEffectivelyCancelled` for rendering; here it gates the reminder.
+    pub fn is_effectively_cancelled(&self) -> bool {
+        if self.is_cancelled {
+            return true;
+        }
+        let t = self.title.trim().to_lowercase();
+        t.starts_with("отменено:") || t.starts_with("cancelled:") || t.starts_with("canceled:")
+    }
+}
+
+/// Whether this meeting's reminder is due at `now`, and how many minutes out
+/// it is (rounded, never below 1 — "через 0 мин" reads as a bug).
+///
+/// `lead_minutes` of 0 disables reminders. A meeting already under way is
+/// silent: if the lead window passed while the app was closed, saying "через
+/// 5 минут" about something that started ten minutes ago is worse than
+/// nothing. All-day blocks, cancelled meetings and ones the user declined
+/// never chime.
+pub fn reminder_due_in(
+    event: &CalendarEvent,
+    lead_minutes: u32,
+    now: DateTime<Utc>,
+) -> Option<u32> {
+    if lead_minutes == 0
+        || event.is_all_day
+        || event.response_type == MeetingResponseType::Declined
+        || event.is_effectively_cancelled()
+    {
+        return None;
+    }
+    let secs = (event.start - now).num_seconds();
+    (secs > 0 && secs <= i64::from(lead_minutes) * 60)
+        .then(|| ((secs as f64) / 60.0).round().max(1.0) as u32)
+}
+
+/// What the background calendar loops report outward. A port, like
+/// `domain::workspace_index::WorkspaceIndexEventSink`: the services never
+/// learn what is on the other side, and `commands::calendar_events` is the
+/// only place these become Tauri events.
+#[derive(Debug, Clone)]
+pub enum CalendarNotice {
+    /// A sync refreshed the cache — the whole window, as the panel wants it.
+    Updated(Vec<CalendarEvent>),
+    /// A meeting starts in `minutes`. Emitted once per meeting per run.
+    Reminder { event: CalendarEvent, minutes: u32 },
+}
+
+pub type CalendarNoticeSink = std::sync::Arc<dyn Fn(CalendarNotice) + Send + Sync>;
 
 /// Validates a user-entered server URL before it is saved. Empty is allowed
 /// (the build preset fills in). Otherwise it must be `https://` with a real
@@ -467,5 +544,37 @@ mod tests {
         assert!(!b.is_open());
     }
 
+    #[test]
+    fn reminder_fires_inside_the_lead_window_only() {
+        let base = CalendarEvent {
+            id: "1".into(), change_key: None, title: "Standup".into(),
+            start: parse_owa_date("2026-09-04T10:00:00").unwrap(),
+            end: parse_owa_date("2026-09-04T10:30:00").unwrap(),
+            is_all_day: false, is_cancelled: false, is_organizer: false,
+            organizer: None, location: None, join_url: None,
+            platform: MeetingPlatform::Generic,
+            response_type: MeetingResponseType::Accepted,
+        };
+        let at = |t: &str| parse_owa_date(t).unwrap();
+
+        assert_eq!(reminder_due_in(&base, 5, at("2026-09-04T09:56:00")), Some(4));
+        assert_eq!(reminder_due_in(&base, 5, at("2026-09-04T09:54:00")), None); // too early
+        assert_eq!(reminder_due_in(&base, 5, at("2026-09-04T10:00:00")), None); // under way
+        assert_eq!(reminder_due_in(&base, 0, at("2026-09-04T09:56:00")), None); // off
+        // Never rounds down to a "через 0 мин" that reads as a bug.
+        assert_eq!(reminder_due_in(&base, 5, at("2026-09-04T09:59:50")), Some(1));
+
+        let mut declined = base.clone();
+        declined.response_type = MeetingResponseType::Declined;
+        assert_eq!(reminder_due_in(&declined, 5, at("2026-09-04T09:56:00")), None);
+
+        let mut all_day = base.clone();
+        all_day.is_all_day = true;
+        assert_eq!(reminder_due_in(&all_day, 5, at("2026-09-04T09:56:00")), None);
+
+        let mut cancelled = base.clone();
+        cancelled.title = "Отменено: Standup".into();
+        assert_eq!(reminder_due_in(&cancelled, 5, at("2026-09-04T09:56:00")), None);
+    }
 }
 

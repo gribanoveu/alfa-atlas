@@ -8,16 +8,19 @@
 //! re-enters the password (`set_password`), which is the deliberate "retry
 //! login" action.
 //!
-//! ponytail: no event-sink port — the single caller that emits to the UI is
-//! the background loop in `lib.rs` (app layer, allowed an `AppHandle`), so a
-//! `Arc<dyn Fn(Event)>` indirection would be one impl for one caller. Add it
-//! if a second emitter appears.
+//! Reports outward through `CalendarNoticeSink` (a port in `domain`), never
+//! an `AppHandle`: both background loops — the sync refresh and the reminder
+//! tick — go through it, and `commands::calendar_events` is the one place
+//! those become Tauri events.
 
+use std::collections::HashSet;
 use std::sync::Mutex;
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 
-use crate::domain::calendar::{CalendarError, CalendarEvent, CalendarStatus, CircuitBreaker};
+use crate::domain::calendar::{
+    reminder_due_in, CalendarError, CalendarEvent, CalendarStatus, CircuitBreaker,
+};
 use crate::infra::{owa_client::OwaSession, owa_credentials_store};
 use crate::services::calendar_config;
 
@@ -27,6 +30,11 @@ struct Inner {
     cache: Vec<CalendarEvent>,
     breaker: CircuitBreaker,
     last_error: Option<String>,
+    /// Meetings already announced this run, so a reminder fires once and not
+    /// on every tick of the lead window. Deliberately not persisted: after a
+    /// restart, re-announcing a meeting that has not started yet is the
+    /// helpful behaviour, not a duplicate.
+    announced: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -157,6 +165,28 @@ impl CalendarState {
 
     pub fn cached(&self) -> Vec<CalendarEvent> {
         self.lock().cache.clone()
+    }
+
+    /// Meetings whose reminder comes due at `now`, each with how many minutes
+    /// out it is. Claims them as it goes: a second call for the same meeting
+    /// returns nothing, which is what makes the reminder fire exactly once.
+    /// Reads only the cache — the sync loop is what keeps that fresh.
+    pub fn claim_due_reminders(
+        &self,
+        lead_minutes: u32,
+        now: DateTime<Utc>,
+    ) -> Vec<(CalendarEvent, u32)> {
+        let mut inner = self.lock();
+        let due: Vec<(CalendarEvent, u32)> = inner
+            .cache
+            .iter()
+            .filter(|e| !inner.announced.contains(&e.id))
+            .filter_map(|e| reminder_due_in(e, lead_minutes, now).map(|m| (e.clone(), m)))
+            .collect();
+        for (e, _) in &due {
+            inner.announced.insert(e.id.clone());
+        }
+        due
     }
 
     pub fn status(&self) -> CalendarStatus {

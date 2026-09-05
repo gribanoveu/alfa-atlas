@@ -61,6 +61,8 @@ export function CalendarTab() {
       displayTimeZone: tz.trim(),
       rememberPassword: view.settings.rememberPassword,
       trustedCertPem: pem.trim() ? pem : null,
+      // Owned by the notifications tab; carried through untouched.
+      reminderMinutes: view.settings.reminderMinutes,
     };
     if (saved.current && shallowEqual(saved.current, next)) return;
     setBusy(true);
@@ -205,6 +207,7 @@ function shallowEqual(a: CalendarSettings, b: CalendarSettings): boolean {
     a.username === b.username &&
     a.displayTimeZone === b.displayTimeZone &&
     a.rememberPassword === b.rememberPassword &&
+    a.reminderMinutes === b.reminderMinutes &&
     (a.trustedCertPem ?? null) === (b.trustedCertPem ?? null)
   );
 }

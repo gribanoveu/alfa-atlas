@@ -54,6 +54,13 @@ export type EventDetails = {
   bodyText: string | null;
 };
 
+/** Payload of the `calendar:reminder` event (`commands::calendar_events`).
+ *  `minutes` is how far out the meeting is, already worded for the banner. */
+export type CalendarReminder = {
+  event: CalendarEvent;
+  minutes: number;
+};
+
 /** Mirrors `domain::calendar::CalendarStatus`. */
 export type CalendarStatus = {
   configured: boolean;
@@ -70,6 +77,8 @@ export type CalendarSettings = {
   displayTimeZone: string;
   rememberPassword: boolean;
   trustedCertPem: string | null;
+  /** Chime this many minutes before a meeting starts; 0 is off. */
+  reminderMinutes: number;
 };
 
 /** Mirrors `domain::calendar::CalendarSettingsView`. */
