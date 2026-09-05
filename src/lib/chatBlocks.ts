@@ -780,25 +780,83 @@ export function updateLastAssistantBlocks(
   ];
 }
 
-// ---- Grouping pending approvals for render -----------------------------
+// ---- Grouping blocks for render ----------------------------------------
 
-/** What `AssistantConversation` actually renders per entry: either one
- * ordinary block, a run of `"pendingApproval"` mutating/mode-switch calls
- * collapsed into one approval card, a run of pending `askUser` calls
- * collapsed into one ask card, or a run of pending `requestArtifact` calls
- * collapsed into one artifact card. */
+/** A `createPlan`/`updatePlan` call renders as `AssistantPlanCard`. */
+export function isPlanToolBlock(block: ToolCallBlock): boolean {
+  return block.name === "createPlan" || block.name === "updatePlan";
+}
+
+/** An `artifact` call that creates or updates one renders as
+ * `AssistantTicketCard`; its read/list ops are ordinary tool calls. */
+export function isTicketToolBlock(block: ToolCallBlock): boolean {
+  if (block.name !== "artifact") return false;
+  try {
+    const op = (JSON.parse(block.argumentsJson) as { op?: string }).op;
+    return op === "create" || op === "update";
+  } catch {
+    return false;
+  }
+}
+
+/** A `visualize` call renders as `AssistantVisualCard`. */
+export function isVisualToolBlock(block: ToolCallBlock): boolean {
+  return block.name === "visualize";
+}
+
+/** Whether this call has a bespoke card of its own rather than the generic
+ * one-line `AssistantToolCallBlock`.
+ *
+ * These carry the turn's actual output — a plan to start, a ticket, a
+ * diagram — so they stay full-size entries in the transcript instead of
+ * disappearing into a collapsed activity line. Lives here, next to the
+ * grouping that has to skip them, so "which tools have their own card"
+ * has one answer rather than one per card component. */
+export function toolCallRendersOwnCard(block: ToolCallBlock): boolean {
+  return isPlanToolBlock(block) || isTicketToolBlock(block) || isVisualToolBlock(block);
+}
+
+/** True for a block that is the assistant *working* rather than answering:
+ * its private reasoning, and the ordinary tool calls it makes along the
+ * way. A run of these is what collapses into one activity line. */
+function isActivityBlock(block: MessageBlock): boolean {
+  if (block.type === "reasoning") return true;
+  return (
+    block.type === "toolCall" &&
+    block.status !== "pendingApproval" &&
+    !toolCallRendersOwnCard(block)
+  );
+}
+
+/** A run of adjacent activity blocks is only worth collapsing once there
+ * is more than one: a lone tool call is already a single compact line, and
+ * wrapping it would add a disclosure the user has to open to learn nothing
+ * they could not already see. */
+const MIN_ACTIVITY_GROUP = 2;
+
+/** What `AssistantTranscript` actually renders per entry: one ordinary
+ * block, a run of `"pendingApproval"` calls collapsed into one approval /
+ * ask / artifact card, or a run of reasoning-and-tool-call blocks collapsed
+ * into one expandable activity line. */
 export type RenderBlock =
   | { kind: "single"; block: MessageBlock }
   | { kind: "approvalGroup"; blocks: ToolCallBlock[] }
   | { kind: "askGroup"; blocks: ToolCallBlock[] }
-  | { kind: "artifactGroup"; blocks: ToolCallBlock[] };
+  | { kind: "artifactGroup"; blocks: ToolCallBlock[] }
+  | { kind: "activityGroup"; blocks: MessageBlock[] };
 
-/** Walks a message's flat `blocks`, merging any run of adjacent
- * `"pendingApproval"` `toolCall` blocks that share one `approvalGroupId`
- * into a single group entry — `askGroup` when every block is `askUser`,
- * `artifactGroup` when every block is `requestArtifact`, otherwise
- * `approvalGroup` (including a run of length one). Every other block passes
- * through as `"single"` unchanged. */
+/** Walks a message's flat `blocks` and merges two kinds of run:
+ *
+ * - adjacent `"pendingApproval"` calls sharing one `approvalGroupId`, into
+ *   `askGroup` when every block is `askUser`, `artifactGroup` when every
+ *   block is `requestArtifact`, otherwise `approvalGroup` (a run of one
+ *   included — a single call still needs its decision card);
+ * - adjacent reasoning/ordinary-tool-call blocks, into one `activityGroup`.
+ *
+ * Everything else — prose, steering, the cards above, a lone activity
+ * block — passes through as `"single"` unchanged. Prose deliberately breaks
+ * an activity run: it is the answer, and an answer is never something to
+ * fold away behind a disclosure. */
 export function groupBlocksForRender(blocks: MessageBlock[]): RenderBlock[] {
   const result: RenderBlock[] = [];
   for (const block of blocks) {
@@ -817,11 +875,21 @@ export function groupBlocksForRender(blocks: MessageBlock[]): RenderBlock[] {
       const kind =
         name === "askUser" ? "askGroup" : name === "requestArtifact" ? "artifactGroup" : "approvalGroup";
       result.push({ kind, blocks: [block as ToolCallBlock] });
+    } else if (isActivityBlock(block) && last?.kind === "activityGroup") {
+      last.blocks.push(block);
+    } else if (isActivityBlock(block)) {
+      result.push({ kind: "activityGroup", blocks: [block] });
     } else {
       result.push({ kind: "single", block });
     }
   }
-  return result;
+  // Unfolded last, not skipped while building: whether a run is long enough
+  // is only known once it has ended.
+  return result.map((item) =>
+    item.kind === "activityGroup" && item.blocks.length < MIN_ACTIVITY_GROUP
+      ? { kind: "single" as const, block: item.blocks[0]! }
+      : item,
+  );
 }
 
 // ---- Flattening back to plain text (replay into future requests) ------

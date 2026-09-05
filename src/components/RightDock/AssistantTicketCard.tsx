@@ -5,19 +5,6 @@ import { ARTIFACT_KIND_LABELS } from "../../lib/artifacts";
 import { AssistantLoadingBars } from "./AssistantLoadingBars";
 import "./AssistantTicketCard.css";
 
-/** Only the write ops get a card. `list`/`read` are the assistant consulting
- *  something that already exists — there is nothing new for the user to open,
- *  and a card per read would bury the conversation. */
-export function isTicketToolBlock(block: ToolCallBlock): boolean {
-  if (block.name !== "artifact") return false;
-  try {
-    const op = (JSON.parse(block.argumentsJson) as { op?: string }).op;
-    return op === "create" || op === "update";
-  } catch {
-    return false;
-  }
-}
-
 type CardFacts = {
   op: "create" | "update";
   /** Present as soon as the call is made; the result carries the real one. */

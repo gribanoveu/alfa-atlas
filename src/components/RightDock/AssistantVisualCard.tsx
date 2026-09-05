@@ -200,6 +200,4 @@ export function AssistantVisualCard({
   );
 }
 
-export function isVisualToolBlock(block: ToolCallBlock): boolean {
-  return block.name === "visualize";
-}
+

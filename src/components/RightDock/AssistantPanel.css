@@ -1718,6 +1718,174 @@
 }
 
 /* =========================================================
+   Activity group (AssistantActivityGroup) — one collapsed row standing in
+   for a whole run of reasoning + tool calls.
+
+   Same quiet container as a collapsed tool call: nothing here is a callout,
+   it is the least important part of the transcript by design. It only grows
+   a border once opened, matching
+   `.assistant-tool-call:has(.assistant-tool-call-detail)`.
+   ========================================================= */
+
+.assistant-activity {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0;
+
+  border: 1px solid transparent;
+  border-radius: 7px;
+
+  background: transparent;
+  color: var(--text-2);
+
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.assistant-activity:has(.assistant-activity-detail) {
+  border-color: var(--border);
+  background: var(--bg-1);
+}
+
+.assistant-activity-live {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.assistant-activity-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+
+  padding: 5px 7px;
+
+  border: none;
+  border-radius: 6px;
+
+  background: transparent;
+
+  font: inherit;
+  font-size: var(--font-ui-sm);
+  font-weight: 400;
+
+  color: var(--text-2);
+  text-align: left;
+
+  cursor: pointer;
+
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.assistant-activity-header:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.assistant-activity-live .assistant-activity-header {
+  color: var(--text-1);
+}
+
+.assistant-activity-chevron,
+.assistant-activity-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+
+.assistant-activity-chevron {
+  color: var(--text-2);
+  opacity: 0.75;
+}
+
+.assistant-activity-icon {
+  color: var(--text-2);
+  opacity: 0.7;
+}
+
+/* The label is the whole point of the collapsed row: while the run is live
+   it is replaced by whatever step is happening right now, so it must be the
+   element that gives way when the dock is narrow. */
+.assistant-activity-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Same sweeping gradient as a live reasoning card
+   (`.assistant-reasoning-thinking .assistant-reasoning-label`) rather than
+   an opacity pulse: this row is the assistant actively working, and reusing
+   that treatment keeps one visual vocabulary for "in progress". */
+.assistant-activity-live .assistant-activity-label {
+  background: linear-gradient(
+    90deg,
+    var(--text-2) 0%,
+    var(--text-2) 35%,
+    var(--text-0) 50%,
+    var(--text-2) 65%,
+    var(--text-2) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: assistant-reasoning-shimmer 1.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-activity-live .assistant-activity-label {
+    animation: none;
+    background: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    color: var(--text-0);
+  }
+}
+
+/* `margin-left: auto` on the first of the trailing bits parks the whole
+   run against the right edge; the rest follow on the header's own gap. */
+.assistant-activity-errors {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  margin-left: auto;
+
+  font-size: var(--font-ui-xs);
+  color: var(--red-tag);
+}
+
+.assistant-activity-count {
+  flex: none;
+  margin-left: auto;
+
+  font-size: var(--font-ui-xs);
+  color: var(--text-2);
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+
+.assistant-activity-errors ~ .assistant-activity-count {
+  margin-left: 0;
+}
+
+/* The expanded body is the ordinary cards, unchanged — indented under the
+   row's chevron so the run still reads as one thing. */
+.assistant-activity-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  padding: 2px 7px 7px 22px;
+}
+
+/* =========================================================
    Tool call
    ========================================================= */
 

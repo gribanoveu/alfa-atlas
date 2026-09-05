@@ -106,6 +106,4 @@ export function AssistantPlanCard({
   );
 }
 
-export function isPlanToolBlock(block: ToolCallBlock): boolean {
-  return block.name === "createPlan" || block.name === "updatePlan";
-}
+

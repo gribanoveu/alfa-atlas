@@ -1005,3 +1005,89 @@ describe("groupBlocksForRender", () => {
     expect(grouped.map((g) => g.kind)).toEqual(["single", "artifactGroup"]);
   });
 });
+
+describe("groupBlocksForRender — activity runs", () => {
+  const call = (
+    id: string,
+    name = "readFile",
+    status: ToolCallBlock["status"] = "done",
+  ): ToolCallBlock => ({
+    type: "toolCall",
+    id,
+    name,
+    argumentsJson: "{}",
+    status,
+  });
+  const think = (id: string): MessageBlock => ({ type: "reasoning", id, content: "думаю" });
+  const say = (id: string): MessageBlock => ({ type: "text", id, content: "Готово." });
+  const awaiting = (id: string, name: string, groupId: string): ToolCallBlock => ({
+    ...call(id, name, "pendingApproval"),
+    approvalGroupId: groupId,
+  });
+
+  test("reasoning and tool calls collapse into one activity line", () => {
+    const grouped = groupBlocksForRender([
+      think("r1"),
+      call("t1", "semanticSearch"),
+      call("t2"),
+      think("r2"),
+      call("t3", "semanticSearch"),
+    ]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]!.kind).toBe("activityGroup");
+    expect(grouped[0]!.kind === "activityGroup" && grouped[0]!.blocks).toHaveLength(5);
+  });
+
+  test("the answer breaks the run instead of being folded into it", () => {
+    const grouped = groupBlocksForRender([
+      think("r1"),
+      call("t1"),
+      say("a1"),
+      think("r2"),
+      call("t2"),
+    ]);
+    expect(grouped.map((g) => g.kind)).toEqual(["activityGroup", "single", "activityGroup"]);
+  });
+
+  test("a lone activity block is not wrapped in a disclosure", () => {
+    // One tool call is already one compact line; a group around it would be
+    // a control the user has to open to learn nothing new.
+    expect(groupBlocksForRender([call("t1")])).toEqual([
+      { kind: "single", block: call("t1") },
+    ]);
+    expect(groupBlocksForRender([think("r1")])).toEqual([
+      { kind: "single", block: think("r1") },
+    ]);
+  });
+
+  test("calls with a card of their own stay full-size entries", () => {
+    // A plan, a ticket and a diagram are the turn's output, not machinery.
+    const grouped = groupBlocksForRender([
+      call("t1"),
+      call("p1", "createPlan"),
+      call("v1", "visualize"),
+      call("t2"),
+    ]);
+    expect(grouped.map((g) => g.kind)).toEqual(["single", "single", "single", "single"]);
+  });
+
+  test("a decision card interrupts the run rather than hiding inside it", () => {
+    const grouped = groupBlocksForRender([
+      think("r1"),
+      call("t1"),
+      awaiting("w1", "writeFile", "approve"),
+      call("t2"),
+      call("t3"),
+    ]);
+    expect(grouped.map((g) => g.kind)).toEqual([
+      "activityGroup",
+      "approvalGroup",
+      "activityGroup",
+    ]);
+  });
+
+  test("a failed call is still part of the run, and still countable", () => {
+    const grouped = groupBlocksForRender([call("t1"), call("t2", "readFile", "error")]);
+    expect(grouped[0]!.kind === "activityGroup" && grouped[0]!.blocks).toHaveLength(2);
+  });
+});

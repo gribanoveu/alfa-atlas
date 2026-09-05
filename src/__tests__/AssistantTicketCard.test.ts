@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ToolCallBlock } from "../lib/chatBlocks";
-import { isTicketToolBlock } from "../components/RightDock/AssistantTicketCard";
+import { isTicketToolBlock } from "../lib/chatBlocks";
 
 function block(name: string, argumentsJson: string): ToolCallBlock {
   return { type: "toolCall", id: "1", name, argumentsJson, status: "done" };

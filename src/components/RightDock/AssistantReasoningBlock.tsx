@@ -10,7 +10,7 @@ import { AssistantElapsedTimer } from "./AssistantElapsedTimer";
  * gets clipped in a narrow dock. None of them claims the model is *writing*
  * — `AssistantThinkingIndicator` reuses this list for the silent gap after a
  * settled tool call, where no prose is being produced at all. */
-const THINKING_PHRASES = [
+export const THINKING_PHRASES = [
   "Обдумывает задачу…",
   "Взвешивает варианты…",
   "Прикидывает план…",

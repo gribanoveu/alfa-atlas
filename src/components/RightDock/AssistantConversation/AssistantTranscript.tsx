@@ -14,28 +14,32 @@ import type { AssistantSuggestion } from "../../../lib/assistantSuggestions";
 import type { ConversationMode } from "../../../lib/aiTools";
 import {
   groupBlocksForRender,
+  isPlanToolBlock,
+  isTicketToolBlock,
+  isVisualToolBlock,
   lastBlockShowsLiveProgress,
   openStreamingBlockIds,
   type ChatMessage,
 } from "../../../lib/chatBlocks";
 import type { AskUserAnswerPayload } from "../../../lib/llm";
 import type { Visual } from "../../../lib/visuals";
+import { AssistantActivityGroup } from "../AssistantActivityGroup";
 import { AssistantArtifactCard } from "../AssistantArtifactCard";
 import { AssistantAskUserCard } from "../AssistantAskUserCard";
 import { AssistantCompactionNotice } from "../AssistantCompactionNotice";
 import { AssistantMarkdown } from "../AssistantMarkdown";
-import { AssistantPlanCard, isPlanToolBlock } from "../AssistantPlanCard";
+import { AssistantPlanCard } from "../AssistantPlanCard";
 import {
   AssistantReasoningBlock,
   AssistantThinkingIndicator,
 } from "../AssistantReasoningBlock";
 import { AssistantSteerBlock } from "../AssistantSteerBlock";
 import { AssistantSuggestionChip } from "../AssistantSuggestionChip";
-import { AssistantTicketCard, isTicketToolBlock } from "../AssistantTicketCard";
+import { AssistantTicketCard } from "../AssistantTicketCard";
 import { AssistantToolApprovalGroup } from "../AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "../AssistantToolCallBlock";
 import { AssistantUserMessage } from "../AssistantUserMessage";
-import { AssistantVisualCard, isVisualToolBlock } from "../AssistantVisualCard";
+import { AssistantVisualCard } from "../AssistantVisualCard";
 import { CHAT_MODE_OPTIONS } from "./AssistantModelControls";
 
 const EMPTY_LIVE_BLOCK_IDS: ReadonlySet<string> = new Set<string>();
@@ -231,6 +235,18 @@ export function AssistantTranscript({
                 : EMPTY_LIVE_BLOCK_IDS;
             const liveKind =
               message.role === "assistant" ? message.liveKind : undefined;
+            const rendered =
+              message.role === "assistant"
+                ? groupBlocksForRender(message.blocks)
+                : [];
+            // A trailing activity group speaks for the whole in-flight run,
+            // including the silent gap between two tool calls — so the
+            // standalone thinking card below would be a second live line
+            // saying the same thing.
+            const liveActivityTail =
+              message.role === "assistant" &&
+              message.streaming === true &&
+              rendered[rendered.length - 1]?.kind === "activityGroup";
 
             return (
               <div
@@ -244,8 +260,18 @@ export function AssistantTranscript({
                     <AssistantThinkingIndicator />
                   ) : (
                     <div className="assistant-chat-blocks">
-                      {groupBlocksForRender(message.blocks).map((item) =>
-                        item.kind === "artifactGroup" ? (
+                      {rendered.map((item, index) =>
+                        item.kind === "activityGroup" ? (
+                          <AssistantActivityGroup
+                            key={item.blocks[0]!.id}
+                            blocks={item.blocks}
+                            active={
+                              liveActivityTail && index === rendered.length - 1
+                            }
+                            liveBlockIds={liveBlockIds}
+                            liveKind={liveKind}
+                          />
+                        ) : item.kind === "artifactGroup" ? (
                           <AssistantArtifactCard
                             key={item.blocks[0]!.id}
                             blocks={item.blocks}
@@ -326,6 +352,7 @@ export function AssistantTranscript({
                         ),
                       )}
                       {message.streaming &&
+                      !liveActivityTail &&
                       !lastBlockShowsLiveProgress(message.blocks) ? (
                         <AssistantThinkingIndicator />
                       ) : null}
