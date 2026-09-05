@@ -141,8 +141,9 @@ export function isCalendarAddressable(view: CalendarSettingsView): boolean {
   return Boolean(view.settings.baseUrl.trim() || view.bundledBaseUrl);
 }
 
-/** Mirrors `CalendarEvent::is_effectively_cancelled` — flag or a cancellation
- *  subject prefix. A cancelled meeting shows struck-through and offers no join. */
+/** Cancelled by the server flag, or by a cancellation subject prefix (common
+ *  when the cancellation arrives via an external mail client). A cancelled
+ *  meeting shows struck-through and offers no join link. */
 export function isEffectivelyCancelled(e: CalendarEvent): boolean {
   if (e.isCancelled) return true;
   const t = e.title.trim().toLowerCase();

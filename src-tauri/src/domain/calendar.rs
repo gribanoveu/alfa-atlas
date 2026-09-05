@@ -194,27 +194,6 @@ pub struct CalendarEvent {
     pub response_type: MeetingResponseType,
 }
 
-impl CalendarEvent {
-    /// A meeting counts as cancelled when the server flags it *or* the subject
-    /// carries a cancellation prefix (common when a cancellation arrives via
-    /// an external mail client). Its join link is then withheld.
-    pub fn is_effectively_cancelled(&self) -> bool {
-        if self.is_cancelled {
-            return true;
-        }
-        let t = self.title.trim().to_lowercase();
-        t.starts_with("отменено:") || t.starts_with("cancelled:") || t.starts_with("canceled:")
-    }
-
-    /// The join URL to actually offer — never for a cancelled meeting.
-    pub fn join_url_for_actions(&self) -> Option<&str> {
-        if self.is_effectively_cancelled() {
-            return None;
-        }
-        self.join_url.as_deref()
-    }
-}
-
 /// Validates a user-entered server URL before it is saved. Empty is allowed
 /// (the build preset fills in). Otherwise it must be `https://` with a real
 /// hostname — not `http`, not an IP literal — so a domain password is only
@@ -488,30 +467,5 @@ mod tests {
         assert!(!b.is_open());
     }
 
-    #[test]
-    fn effectively_cancelled_by_flag_or_prefix() {
-        let base = CalendarEvent {
-            id: "1".into(), change_key: None, title: "Standup".into(),
-            start: parse_owa_date("2026-09-04T10:00:00").unwrap(),
-            end: parse_owa_date("2026-09-04T10:30:00").unwrap(),
-            is_all_day: false, is_cancelled: false, is_organizer: false,
-            organizer: None, location: None,
-            join_url: Some("https://a.ru/x".into()),
-            platform: MeetingPlatform::Generic,
-            response_type: MeetingResponseType::Accepted,
-        };
-        assert!(!base.is_effectively_cancelled());
-        assert!(base.join_url_for_actions().is_some());
-
-        let mut flagged = base.clone();
-        flagged.is_cancelled = true;
-        assert!(flagged.is_effectively_cancelled());
-        assert!(flagged.join_url_for_actions().is_none());
-
-        let mut prefixed = base.clone();
-        prefixed.title = "Отменено: Standup".into();
-        assert!(prefixed.is_effectively_cancelled());
-        assert!(prefixed.join_url_for_actions().is_none());
-    }
 }
 
