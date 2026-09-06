@@ -76,14 +76,6 @@ export function parseRequestHeaders(text: string): Record<string, string> | null
   return Object.keys(out).length > 0 ? out : null;
 }
 
-// Mirrors `domain::embeddings::ModelStatus` (adjacently tagged,
-// `#[serde(tag = "status")]`).
-export type ModelStatus =
-  | { status: "notDownloaded" }
-  | { status: "downloading"; progress: number }
-  | { status: "ready" }
-  | { status: "error"; message: string };
-
 export type SyncStats = {
   embedded: number;
   skippedUnchanged: number;
@@ -117,12 +109,6 @@ export type RepoIndexSummary = {
   filesIndexed: number;
   byLanguage: Record<string, number>;
   chunksIndexed: number;
-};
-
-export type ModelDownloadProgress = {
-  progress: number;
-  error?: string;
-  cancelled?: boolean;
 };
 
 // Mirrors the Rust `SyncPhase`/`SyncProgressPayload` emitted by
@@ -172,23 +158,6 @@ export function deleteEmbeddingRemoteApiKey(): Promise<void> {
   return invoke("embedding_delete_remote_api_key");
 }
 
-export function getEmbeddingModelStatus(): Promise<ModelStatus> {
-  return invoke<ModelStatus>("embedding_model_status");
-}
-
-/** Resolves once the (potentially multi-minute) download finishes or fails
- * — subscribe via `listenModelDownloadProgress` for live status meanwhile. */
-export function downloadEmbeddingModel(): Promise<void> {
-  return invoke("embedding_download_model");
-}
-
-/** The underlying blocking download has no interrupt hook, so this can't
- * stop in-flight network I/O — it only tells the backend (and the UI) to
- * stop trusting whatever that attempt eventually reports back. */
-export function cancelEmbeddingModelDownload(): Promise<void> {
-  return invoke("embedding_cancel_model_download");
-}
-
 /** Rebuilds the repo/chunk index for the current project and reconciles
  * embeddings against it (new chunk → embed, changed hash → re-embed,
  * deleted chunk → drop its vector). */
@@ -210,14 +179,6 @@ export function getEmbeddingIndexStatus(): Promise<EmbeddingIndexStatus> {
  * discarded (`services::repo_index::RepoIndexStats`), now exposed directly. */
 export function getRepoIndexSummary(): Promise<RepoIndexSummary> {
   return invoke<RepoIndexSummary>("repo_index_summary");
-}
-
-export function listenModelDownloadProgress(
-  onProgress: (payload: ModelDownloadProgress) => void,
-): Promise<UnlistenFn> {
-  return listen<ModelDownloadProgress>("embedding:model-download-progress", (event) =>
-    onProgress(event.payload),
-  );
 }
 
 /** Fires repeatedly while a `syncEmbeddings()` call is in flight — first

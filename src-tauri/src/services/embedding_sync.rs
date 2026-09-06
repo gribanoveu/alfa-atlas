@@ -39,7 +39,7 @@ use crate::services::embedding_state::{
     attach_current, attach_embedding_index, attach_index_store, embedded_count, ensure_provider,
     is_current_index_root, lock_sync_guard, resolve_index_paths, AttachedIndex, BackgroundBacklog,
     BackgroundBacklogSlot, EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSession,
-    EmbeddingSyncGuard, FullSyncActiveGuard, IndexWatcherSlot, META_EMBEDDING_DIMENSIONS,
+    EmbeddingSyncGuard, FullSyncActiveGuard, IndexWatcherSlot,
 };
 use crate::services::index_store_ensure;
 use crate::services::index_watcher::{FileChangeKind, IndexWatcher};
@@ -278,15 +278,15 @@ fn run_incremental_sync(
 
     let config = embedding_config::resolve_embedding_config().map_err(|e| e.to_string())?;
     let dimensions = embedding_providers::expected_dimensions(&config);
+    let model_id = crate::domain::embeddings::embedding_model_id(&config);
 
-    // A dimension mismatch means whatever's persisted can't be trusted for
-    // this provider — only a deliberate manual sync repairs that
-    // (`allow_repair: true`, `embedding_sync`); an incremental tick just
-    // skips embedding reconciliation for this tick rather than risk a
-    // destructive repair from a background job. The chunk/repo-index
-    // updates above already landed and are valid regardless.
+    // A dimension mismatch for *this* model means its persisted vectors
+    // can't be trusted — only a deliberate manual sync repairs that
+    // (`allow_repair: true`). An incremental tick skips embedding
+    // reconciliation rather than risk a destructive repair from a
+    // background job. Other models' namespaces are left alone.
     let persisted_dimensions: Option<usize> = store
-        .read_meta(META_EMBEDDING_DIMENSIONS)
+        .read_meta(&crate::domain::embeddings::embedding_dimensions_meta_key(&model_id))
         .map_err(|e| e.to_string())?
         .and_then(|s| s.parse().ok());
     if persisted_dimensions.is_some() && persisted_dimensions != Some(dimensions) {
@@ -297,11 +297,11 @@ fn run_incremental_sync(
     let provider = ensure_provider(embedding_provider, &config, api_key)?;
     let builder = EmbeddingBuilder::new(provider);
 
-    attach_embedding_index(embedding_index, store, index_root, dimensions, false)?;
+    attach_embedding_index(embedding_index, store, index_root, dimensions, &model_id, false)?;
     let mut slot = embedding_index
         .lock()
         .map_err(|_| "embedding index lock poisoned".to_string())?;
-    let Some((_, _, index)) = slot.as_mut() else {
+    let Some((_, _, _, index)) = slot.as_mut() else {
         return Ok(());
     };
     index
@@ -380,15 +380,11 @@ fn sync_backlog_batch(
 
     let config = embedding_config::resolve_embedding_config().map_err(|e| e.to_string())?;
     let dimensions = embedding_providers::expected_dimensions(&config);
+    let model_id = crate::domain::embeddings::embedding_model_id(&config);
 
-    // Mirrors `run_incremental_sync`'s same guard: a dimension mismatch
-    // means whatever's persisted can't be trusted for this provider, and
-    // only a deliberate manual sync (`allow_repair: true`) repairs that —
-    // this background batch just skips embedding reconciliation for now.
-    // The chunk/repo-index updates above already landed and are valid
-    // regardless.
+    // Mirrors `run_incremental_sync`'s same guard, scoped to this model.
     let persisted_dimensions: Option<usize> = store
-        .read_meta(META_EMBEDDING_DIMENSIONS)
+        .read_meta(&crate::domain::embeddings::embedding_dimensions_meta_key(&model_id))
         .map_err(|e| e.to_string())?
         .and_then(|s| s.parse().ok());
     if persisted_dimensions.is_some() && persisted_dimensions != Some(dimensions) {
@@ -399,11 +395,11 @@ fn sync_backlog_batch(
     let provider = ensure_provider(embedding_provider, &config, api_key)?;
     let builder = EmbeddingBuilder::new(provider);
 
-    attach_embedding_index(embedding_index, store, index_root, dimensions, false)?;
+    attach_embedding_index(embedding_index, store, index_root, dimensions, &model_id, false)?;
     let mut slot = embedding_index
         .lock()
         .map_err(|_| "embedding index lock poisoned".to_string())?;
-    let Some((_, _, index)) = slot.as_mut() else {
+    let Some((_, _, _, index)) = slot.as_mut() else {
         return Ok(SyncStats::default());
     };
     index
@@ -917,12 +913,13 @@ pub fn sync(session: &EmbeddingSession, progress: &ProgressSink) -> Result<SyncS
         return Ok(SyncStats::default());
     }
 
-    attach_embedding_index(&embedding_index, &store, &index_root, dimensions, true)?;
+    let model_id = crate::domain::embeddings::embedding_model_id(&config);
+    attach_embedding_index(&embedding_index, &store, &index_root, dimensions, &model_id, true)?;
     let stats = {
         let mut slot = embedding_index
             .lock()
             .map_err(|_| "embedding index lock poisoned".to_string())?;
-        let (_, _, index) = slot.as_mut().expect("attach_embedding_index just set this");
+        let (_, _, _, index) = slot.as_mut().expect("attach_embedding_index just set this");
         let on_progress = |current: usize, total: usize| {
             progress(SyncProgress {
                 phase: SyncPhase::Embedding,
@@ -990,7 +987,7 @@ pub fn sync(session: &EmbeddingSession, progress: &ProgressSink) -> Result<SyncS
 /// constructs a real `EmbeddingProvider` — dimension lookup goes through
 /// `embedding_providers::expected_dimensions` (a plain config read) instead
 /// of `provider_for`, specifically so this stays cheap even for the Local
-/// provider (which would otherwise load the ~570MB ONNX model just to read
+/// provider (which would otherwise load the bundled Model2Vec table just to read
 /// a constant). If no project is open, reports `synced: false` rather than
 /// erroring — there is nothing to be out of sync with.
 pub fn status(
@@ -1142,7 +1139,7 @@ mod tests {
         // `with_open_project`) swapping the process-global `$HOME` in between
         // turns that into a cache miss, and `ensure_provider` then builds a
         // real provider — "remote provider selected without an API key", or a
-        // 570MB ONNX load. Taking the same lock serializes against that.
+        // bundled Model2Vec load. Taking the same lock serializes against that.
         with_temp_home(|| {
             let root = fixture_dir("repo");
             fs::write(root.join("a.json"), "0123456789").unwrap();
@@ -1188,7 +1185,7 @@ mod tests {
         // `with_open_project`) swapping the process-global `$HOME` in between
         // turns that into a cache miss, and `ensure_provider` then builds a
         // real provider — "remote provider selected without an API key", or a
-        // 570MB ONNX load. Taking the same lock serializes against that.
+        // bundled Model2Vec load. Taking the same lock serializes against that.
         with_temp_home(|| {
             let root = fixture_dir("repo");
             fs::write(root.join("a.json"), "0123456789").unwrap();
@@ -1247,7 +1244,7 @@ mod tests {
         // `with_open_project`) swapping the process-global `$HOME` in between
         // turns that into a cache miss, and `ensure_provider` then builds a
         // real provider — "remote provider selected without an API key", or a
-        // 570MB ONNX load. Taking the same lock serializes against that.
+        // bundled Model2Vec load. Taking the same lock serializes against that.
         with_temp_home(|| {
             let root = fixture_dir("repo");
             fs::write(root.join("existing.json"), "1").unwrap();
@@ -1299,7 +1296,7 @@ mod tests {
         // `with_open_project`) swapping the process-global `$HOME` in between
         // turns that into a cache miss, and `ensure_provider` then builds a
         // real provider — "remote provider selected without an API key", or a
-        // 570MB ONNX load. Taking the same lock serializes against that.
+        // bundled Model2Vec load. Taking the same lock serializes against that.
         with_temp_home(|| {
             let root = fixture_dir("repo");
             git2::Repository::init(&root).unwrap();

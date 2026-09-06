@@ -1,16 +1,15 @@
 //! Types for the embedding layer built on top of the Chunk Index:
 //! `Chunk -> Embedding -> vector index`. This module knows nothing about
-//! `fastembed`, ONNX, `usearch`, or HTTP — those are `infra` concerns
-//! implementing `EmbeddingProvider`/the vector store against these types.
+//! Model2Vec, `usearch`, or HTTP — those are `infra` concerns implementing
+//! `EmbeddingProvider`/the vector store against these types.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use thiserror::Error;
 
-/// A dense embedding vector. BGE-M3 (the local provider) produces 1024
+/// A dense embedding vector. The local Model2Vec provider produces 256
 /// dimensions; a remote provider may differ — `EmbeddingProvider::dimensions`
-/// is how a caller finds out which, rather than assuming 1024 everywhere.
+/// is how a caller finds out which.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Embedding(pub Vec<f32>);
 
@@ -43,8 +42,8 @@ pub enum EmbeddingProviderKind {
 /// `embedding` section (see `infra::embedding_provider_manifest`) — a
 /// global default, independent of any LLM provider id. Deserialize-only;
 /// every field is `Option` so a fork can leave the template as explicit
-/// `null`s (meaning "use the Local BGE-M3 provider") and fill them later
-/// without touching Rust.
+/// `null`s (meaning "use the bundled local Model2Vec provider") and fill
+/// them later without touching Rust.
 #[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EmbeddingPreset {
@@ -166,17 +165,32 @@ impl Default for ResolvedEmbeddingConfig {
 /// Fallback when neither the override nor the preset sets dimensions.
 pub const DEFAULT_REMOTE_DIMENSIONS: usize = 1536;
 
-/// Local model download/readiness state. `Downloading` only carries a
-/// meaningful `progress` if the download path used one of `fastembed`'s
-/// coarse-grained hooks — see `services::embedding_model` for the current
-/// caveat on how fine-grained this actually is.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "status", rename_all = "camelCase")]
-pub enum ModelStatus {
-    NotDownloaded,
-    Downloading { progress: f32 },
-    Ready,
-    Error { message: String },
+/// Namespace for the bundled Model2Vec local provider. Changing the baked
+/// model means changing this string so the previous index becomes an orphan.
+pub const LOCAL_MODEL_ID: &str = "local-potion-multilingual-128m-int8";
+
+/// Frozen id for a pre-Model2Vec local BGE-M3 ONNX index. Nothing searches
+/// it; the files stay on disk until the user deletes them.
+pub const LEGACY_LOCAL_BGE_M3_MODEL_ID: &str = "legacy-local-bge-m3-1024";
+
+/// Short, filename-safe id for the vectors belonging to `config`.
+pub fn embedding_model_id(config: &ResolvedEmbeddingConfig) -> String {
+    match config.kind {
+        EmbeddingProviderKind::Local => LOCAL_MODEL_ID.to_string(),
+        EmbeddingProviderKind::Remote => {
+            let url = config.remote_base_url.as_deref().unwrap_or("");
+            let model = config.remote_model.as_deref().unwrap_or("");
+            let dim = config
+                .remote_dimensions
+                .unwrap_or(DEFAULT_REMOTE_DIMENSIONS);
+            let digest = blake3::hash(format!("{url}\0{model}\0{dim}").as_bytes());
+            format!("remote-{}", &digest.to_hex()[..16])
+        }
+    }
+}
+
+pub fn embedding_dimensions_meta_key(model_id: &str) -> String {
+    format!("embedding_dimensions:{model_id}")
 }
 
 #[derive(Debug, Error)]
@@ -197,11 +211,11 @@ pub enum EmbeddingError {
 
 /// One embedding backend — local on-device inference or a remote HTTP API,
 /// selected by `ResolvedEmbeddingConfig.kind`. Synchronous (not `async fn`):
-/// both concrete implementations are naturally blocking (`fastembed`'s
-/// inference has no Tokio dependency; the remote provider uses a blocking
-/// HTTP client rather than expanding this project's minimal `tokio`
-/// features), so callers run this inside `spawn_blocking` — the same
-/// pattern `services::standards::check_standards` and
+/// both concrete implementations are naturally blocking (Model2Vec is a
+/// table lookup; the remote provider uses a blocking HTTP client rather
+/// than expanding this project's minimal `tokio` features), so callers run
+/// this inside `spawn_blocking` — the same pattern
+/// `services::standards::check_standards` and
 /// `services::ai_tools::execute_tool` already use on the IPC boundary.
 pub trait EmbeddingProvider: Send + Sync {
     /// Batched — callers embed every pending chunk in one call, not one
@@ -259,7 +273,7 @@ pub enum SyncPhase {
     /// large `FullRepo` change set can take a few seconds on its own.
     Chunking,
     /// Calling the embedding provider for pending chunks, in batches of
-    /// `EMBED_PROGRESS_BATCH` — the slow phase (network or ONNX inference).
+    /// `EMBED_PROGRESS_BATCH` — the slow phase (network or local encode).
     Embedding,
 }
 
@@ -287,20 +301,6 @@ pub struct SyncProgress {
     pub total: usize,
     pub trigger: SyncTrigger,
 }
-
-/// One step of the local model download, as the UI sees it.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ModelDownloadProgress {
-    pub progress: f32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cancelled: Option<bool>,
-}
-
-/// Where download progress goes. A port, like `ChatEventSink`: the download
-/// never learns what is on the other side.
-pub type ModelDownloadSink = Arc<dyn Fn(ModelDownloadProgress) + Send + Sync>;
 
 #[cfg(test)]
 mod tests {
@@ -354,8 +354,30 @@ mod tests {
     }
 
     #[test]
-    fn model_status_json_shape_is_tagged_by_status() {
-        let json = serde_json::to_string(&ModelStatus::Downloading { progress: 0.5 }).unwrap();
-        assert_eq!(json, r#"{"status":"downloading","progress":0.5}"#);
+    fn local_model_id_is_stable() {
+        let config = ResolvedEmbeddingConfig::default();
+        assert_eq!(embedding_model_id(&config), LOCAL_MODEL_ID);
+    }
+
+    #[test]
+    fn remote_model_id_changes_with_url_or_dimensions() {
+        let a = ResolvedEmbeddingConfig {
+            kind: EmbeddingProviderKind::Remote,
+            remote_base_url: Some("https://a.example".into()),
+            remote_model: Some("m".into()),
+            remote_dimensions: Some(1024),
+            ..ResolvedEmbeddingConfig::default()
+        };
+        let b = ResolvedEmbeddingConfig {
+            remote_base_url: Some("https://b.example".into()),
+            ..a.clone()
+        };
+        let c = ResolvedEmbeddingConfig {
+            remote_dimensions: Some(256),
+            ..a.clone()
+        };
+        assert_ne!(embedding_model_id(&a), embedding_model_id(&b));
+        assert_ne!(embedding_model_id(&a), embedding_model_id(&c));
+        assert!(embedding_model_id(&a).starts_with("remote-"));
     }
 }

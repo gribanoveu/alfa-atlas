@@ -35,7 +35,7 @@ const PROVIDER_OPTIONS: { value: EmbeddingProviderKind; label: string; hint: str
   {
     value: "local",
     label: "Локально",
-    hint: "BGE-M3 (int8, ONNX), выполняется на устройстве. Модель ~570 МБ, загружается один раз.",
+    hint: "Model2Vec (potion-multilingual-128M, int8), выполняется на устройстве. Модель встроена в приложение, сеть не нужна.",
   },
   {
     value: "remote",
@@ -51,7 +51,6 @@ type EmbeddingsTabProps = {
 export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
   const {
     config,
-    modelStatus,
     hasApiKey,
     busy,
     error,
@@ -63,8 +62,6 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
     updateConfig,
     saveApiKey,
     deleteApiKey,
-    downloadModel,
-    cancelDownload,
     sync,
   } = useEmbeddingSetup(repoRoot);
 
@@ -178,65 +175,9 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
         <>
           <hr className="settings-card-divider" />
           <div className="settings-section-title">Модель</div>
-          {modelStatus.status === "notDownloaded" ? (
-            <>
-              <p className="settings-hint settings-hint-compact">
-                Модель ещё не загружена.
-              </p>
-              <div className="settings-actions">
-                <button
-                  type="button"
-                  className="settings-btn primary"
-                  disabled={busy}
-                  onClick={() => void downloadModel()}
-                >
-                  Скачать модель (~570 МБ)
-                </button>
-              </div>
-            </>
-          ) : null}
-          {modelStatus.status === "downloading" ? (
-            <div className="embeddings-progress">
-              <div className="embeddings-progress-track">
-                <div
-                  className="embeddings-progress-fill"
-                  style={{ width: `${Math.round(modelStatus.progress * 100)}%` }}
-                />
-              </div>
-              <div className="embeddings-progress-row">
-                <span className="embeddings-progress-label">
-                  Загрузка модели… {Math.round(modelStatus.progress * 100)}%
-                </span>
-                <button
-                  type="button"
-                  className="settings-link-btn danger"
-                  onClick={() => void cancelDownload()}
-                >
-                  Отменить
-                </button>
-              </div>
-            </div>
-          ) : null}
-          {modelStatus.status === "ready" ? (
-            <span className="embeddings-status-badge ok">Модель готова</span>
-          ) : null}
-          {modelStatus.status === "error" ? (
-            <>
-              <span className="embeddings-status-badge error">
-                Ошибка: {modelStatus.message}
-              </span>
-              <div className="settings-actions">
-                <button
-                  type="button"
-                  className="settings-btn"
-                  disabled={busy}
-                  onClick={() => void downloadModel()}
-                >
-                  Повторить загрузку
-                </button>
-              </div>
-            </>
-          ) : null}
+          <p className="settings-hint settings-hint-compact">
+            Модель встроена в приложение, сеть не нужна.
+          </p>
         </>
       ) : (
         <>
@@ -438,9 +379,7 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
         </div>
         {!providerConfigured ? (
           <p className="settings-hint settings-hint-compact">
-            Провайдер ещё не готов — {config.kind === "local"
-              ? "загрузите модель"
-              : "укажите base URL, модель и API ключ"}.
+            Провайдер ещё не готов — укажите base URL, модель и API ключ.
           </p>
         ) : null}
         {lastSync ? (

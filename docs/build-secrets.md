@@ -11,7 +11,7 @@ At compile time, `build.rs` reads the key from (first match wins):
 1. Environment variable `EMBEDDING_API_KEY`
 2. Gitignored file `src-tauri/.secrets/embedding_api_key` (single line, no trailing newline required)
 
-If neither is set, the build has no bundled key — local/dev behavior unchanged (user enters key in Settings or uses local BGE-M3).
+If neither is set, the build has no bundled key — local/dev behavior unchanged (user enters key in Settings or uses the bundled local Model2Vec provider).
 
 ### CI (GitHub Actions)
 

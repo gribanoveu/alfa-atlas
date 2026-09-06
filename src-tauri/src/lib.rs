@@ -17,7 +17,6 @@ use crate::services::llm_session::{ChatCancelFlag, LlmProviderSlot, SteeringQueu
 use crate::infra::parsers::registry::ParserRegistry;
 use crate::services::calendar_sync::CalendarState;
 use crate::services::chunk_builder::ChunkIndex;
-use crate::services::embedding_model::DownloadState;
 use crate::services::repo_index::RepositoryIndex;
 use crate::services::spellcheck::SpellcheckEngine;
 use crate::services::workspace_index::WorkspaceIndex;
@@ -182,7 +181,6 @@ pub fn run() {
             app.manage(Arc::new(IndexWatcherSlot::new(None)));
             app.manage(Arc::new(PriorityFilesSlot::new(HashSet::new())));
             app.manage(Arc::new(BackgroundBacklogSlot::new(None)));
-            app.manage(Arc::new(DownloadState::default()));
             app.manage(Arc::new(LlmProviderSlot::new(None)));
             app.manage(Arc::new(ChatCancelFlag::new(false)));
             app.manage(Arc::new(SteeringQueue::default()));
@@ -481,9 +479,6 @@ pub fn run() {
             commands::embeddings::embedding_has_remote_api_key,
             commands::embeddings::embedding_test_connection,
             commands::embeddings::embedding_delete_remote_api_key,
-            commands::embeddings::embedding_model_status,
-            commands::embeddings::embedding_download_model,
-            commands::embeddings::embedding_cancel_model_download,
             commands::embeddings::embedding_sync,
             commands::embeddings::embedding_index_status,
             commands::embeddings::embedding_index_teardown,

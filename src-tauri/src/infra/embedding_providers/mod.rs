@@ -45,8 +45,8 @@ pub fn provider_for(
 
 /// The dimension count `provider_for` would produce for `config`, without
 /// constructing the provider — for `Local` that means not loading the
-/// ~570MB ONNX model just to read a compile-time constant. Callers that
-/// only need to know "would a persisted index at dimension N still be
+/// bundled Model2Vec table just to read a compile-time constant. Callers
+/// that only need to know "would a persisted index at dimension N still be
 /// usable" (e.g. a read-only status check) should use this instead of
 /// `provider_for(...).dimensions()`; callers that are about to actually
 /// call `embed()` need the real provider anyway and should keep using

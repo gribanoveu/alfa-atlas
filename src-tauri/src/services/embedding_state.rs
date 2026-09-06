@@ -16,7 +16,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::domain::embeddings::{EmbeddingProvider, ResolvedEmbeddingConfig};
+use crate::domain::embeddings::{
+    embedding_dimensions_meta_key, embedding_model_id, EmbeddingProvider, ResolvedEmbeddingConfig,
+    LEGACY_LOCAL_BGE_M3_MODEL_ID,
+};
 use crate::domain::project_config::OpenedProject;
 use crate::domain::repo_index::FileId;
 use crate::infra::index_store::IndexStore;
@@ -38,11 +41,10 @@ pub(crate) const META_EMBEDDING_DIMENSIONS: &str = "embedding_dimensions";
 /// count) is known, and switching provider can change that dimension — so
 /// the managed state is a lazily-(re)built slot, not a bare `EmbeddingIndex`
 /// constructed once at app startup like `RepositoryIndex`/`ChunkIndex` are.
-/// Keyed by `(index_root, dimensions)` — either changing (a different
-/// project opened, or the provider's dimension count changed) invalidates
-/// the resident index the same way. `AiAccessMode` no longer affects
-/// `index_root`, so switching it is a no-op here.
-pub type EmbeddingIndexSlot = Mutex<Option<(PathBuf, usize, EmbeddingIndex)>>;
+/// Keyed by `(index_root, model_id, dimensions)` — a different project,
+/// provider namespace, or dimension count invalidates the resident index.
+/// `AiAccessMode` no longer affects `index_root`, so switching it is a no-op here.
+pub type EmbeddingIndexSlot = Mutex<Option<(PathBuf, String, usize, EmbeddingIndex)>>;
 
 /// One `IndexStore` (SQLite connection) per `index_root`, shared by
 /// `ChunkIndex` and `EmbeddingIndex`'s persistence for that project. The
@@ -54,9 +56,8 @@ pub type EmbeddingIndexSlot = Mutex<Option<(PathBuf, usize, EmbeddingIndex)>>;
 pub type IndexStoreSlot = Mutex<Option<(PathBuf, Arc<IndexStore>, bool)>>;
 
 /// Caches the constructed `EmbeddingProvider` across calls — for the Local
-/// provider, `provider_for` constructs `LocalEmbeddingProvider::try_new()`,
-/// a full ONNX model load (~570MB); doing that on every sync (and, once
-/// wired up, every incremental file-watcher tick) would be unacceptable.
+/// provider, `provider_for` loads the bundled Model2Vec table (~512MB RSS);
+/// doing that on every sync would be unacceptable.
 /// Keyed by `(config, api-key fingerprint)` rather than `config` alone — a
 /// `Remote` provider closes over the API key at construction time, so a key
 /// rotation with an otherwise-unchanged config must still invalidate the
@@ -327,78 +328,127 @@ pub(crate) fn attach_index_store(
     Ok((store.clone(), *stale))
 }
 
-/// Attaches `index_root` + `dimensions`'s `EmbeddingIndex` to the managed
-/// slot — reusing what's already resident when both match, otherwise
-/// reloading from `store` (`vectors.usearch` + the SQLite `chunk_hash`
-/// mirror) when compatible, or starting blank when there's nothing
-/// (compatible) to reload. Never embeds anything itself.
+/// Attaches `index_root` + `model_id` + `dimensions`'s `EmbeddingIndex` to
+/// the managed slot — reusing what's already resident when all three match,
+/// otherwise reloading from `store` when compatible, or starting blank.
+/// Never embeds anything itself. Other models' files are left alone.
 ///
-/// `allow_repair` gates what happens on a *dimension* mismatch (different
-/// from `IndexStore`-level staleness — this is "the persisted vectors were
-/// written for a different embedding provider/model"): `true` (only from
-/// `embedding_sync`, already a real mutating sync) drops the mismatched
-/// `vectors.usearch`/`embeddings` rows so a fresh embed can start clean;
-/// `false` (from the read-only `embedding_index_status`) just returns a
-/// blank in-memory index without touching disk, leaving whatever's
-/// persisted for that other dimension alone.
+/// `allow_repair` gates a dimension mismatch **for this `model_id` only**.
 pub(crate) fn attach_embedding_index(
     embedding_index: &EmbeddingIndexSlot,
     store: &IndexStore,
     index_root: &Path,
     dimensions: usize,
+    model_id: &str,
     allow_repair: bool,
 ) -> Result<(), String> {
+    adopt_legacy_embeddings(store, model_id, dimensions)?;
+
     let mut slot = embedding_index
         .lock()
         .map_err(|_| "embedding index lock poisoned".to_string())?;
-    let needs_reload =
-        !matches!(slot.as_ref(), Some((root, d, _)) if root == index_root && *d == dimensions);
+    let needs_reload = !matches!(
+        slot.as_ref(),
+        Some((root, id, d, _)) if root == index_root && id == model_id && *d == dimensions
+    );
     if needs_reload {
+        let meta_key = embedding_dimensions_meta_key(model_id);
         let persisted_dimensions: Option<usize> = store
-            .read_meta(META_EMBEDDING_DIMENSIONS)
+            .read_meta(&meta_key)
             .map_err(|e| e.to_string())?
             .and_then(|s| s.parse().ok());
 
         let fresh = if persisted_dimensions == Some(dimensions) {
-            let persisted_hashes = store.load_all_embedding_hashes().map_err(|e| e.to_string())?;
+            let persisted_hashes = store
+                .load_all_embedding_hashes(model_id)
+                .map_err(|e| e.to_string())?;
             eprintln!(
-                "[embedding] loaded {} persisted embeddings ({dimensions} dims)",
+                "[embedding] loaded {} persisted embeddings ({model_id}, {dimensions} dims)",
                 persisted_hashes.len()
             );
-            EmbeddingIndex::load(dimensions, &store.vectors_path(), persisted_hashes)
-                .map_err(|e| e.to_string())?
+            EmbeddingIndex::load(
+                dimensions,
+                &store.vectors_path(model_id),
+                persisted_hashes,
+                model_id.to_string(),
+            )
+            .map_err(|e| e.to_string())?
         } else if allow_repair {
             eprintln!(
-                "[embedding] dimension mismatch (persisted={persisted_dimensions:?}, expected={dimensions}) — clearing and rebuilding index"
+                "[embedding] dimension mismatch for {model_id} (persisted={persisted_dimensions:?}, expected={dimensions}) — clearing this namespace"
             );
-            // No persisted vectors for this dimension (first sync ever, or
-            // the provider's dimension changed since last time) — whatever
-            // is on disk for a *different* dimension can't be reused, so
-            // drop it rather than risk loading it anyway.
-            store.clear_embeddings().map_err(|e| e.to_string())?;
-            let vectors_path = store.vectors_path();
+            store
+                .clear_embeddings(model_id)
+                .map_err(|e| e.to_string())?;
+            let vectors_path = store.vectors_path(model_id);
             if vectors_path.exists() {
                 std::fs::remove_file(&vectors_path).map_err(|e| e.to_string())?;
             }
             store
-                .write_meta(META_EMBEDDING_DIMENSIONS, &dimensions.to_string())
+                .write_meta(&meta_key, &dimensions.to_string())
                 .map_err(|e| e.to_string())?;
-            // `EmbeddingIndex::load`, not `::new` — the vectors file was
-            // just deleted (or never existed), so `persisted_hashes` is
-            // correctly empty, but `VectorStore` still needs a real path
-            // remembered so `EmbeddingIndex::sync`'s `save()` actually
-            // fires later. `::new` leaves `VectorStore.path` as `None`,
-            // which silently makes every sync after this one skip
-            // persisting to `vectors.usearch` entirely — the first sync of
-            // every new project would go unsaved forever.
-            EmbeddingIndex::load(dimensions, &store.vectors_path(), Vec::new())
-                .map_err(|e| e.to_string())?
+            EmbeddingIndex::load(
+                dimensions,
+                &store.vectors_path(model_id),
+                Vec::new(),
+                model_id.to_string(),
+            )
+            .map_err(|e| e.to_string())?
         } else {
-            // Read-only path: report as empty for this dimension without
-            // touching whatever's actually persisted on disk.
             EmbeddingIndex::new(dimensions).map_err(|e| e.to_string())?
         };
-        *slot = Some((index_root.to_path_buf(), dimensions, fresh));
+        *slot = Some((
+            index_root.to_path_buf(),
+            model_id.to_string(),
+            dimensions,
+            fresh,
+        ));
+    }
+    Ok(())
+}
+
+/// Moves a pre-namespace `vectors.usearch` + unassigned `embeddings` rows
+/// into either the current model (dimensions match) or the frozen local
+/// BGE-M3 orphan id (they don't). Never deletes the files.
+fn adopt_legacy_embeddings(
+    store: &IndexStore,
+    current_model_id: &str,
+    current_dimensions: usize,
+) -> Result<(), String> {
+    let legacy_file = store.legacy_vectors_path();
+    let has_rows = store
+        .has_unassigned_embeddings()
+        .map_err(|e| e.to_string())?;
+    if !has_rows && !legacy_file.exists() {
+        return Ok(());
+    }
+
+    let persisted_dim: Option<usize> = store
+        .read_meta(META_EMBEDDING_DIMENSIONS)
+        .map_err(|e| e.to_string())?
+        .and_then(|s| s.parse().ok());
+    let target_id = if persisted_dim == Some(current_dimensions) {
+        current_model_id
+    } else {
+        LEGACY_LOCAL_BGE_M3_MODEL_ID
+    };
+
+    store
+        .assign_unassigned_embeddings(target_id)
+        .map_err(|e| e.to_string())?;
+    if legacy_file.exists() {
+        let dest = store.vectors_path(target_id);
+        if !dest.exists() {
+            std::fs::rename(&legacy_file, &dest).map_err(|e| e.to_string())?;
+        }
+    }
+    if let Some(dim) = persisted_dim {
+        store
+            .write_meta(&embedding_dimensions_meta_key(target_id), &dim.to_string())
+            .map_err(|e| e.to_string())?;
+        store
+            .delete_meta(META_EMBEDDING_DIMENSIONS)
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -488,11 +538,12 @@ pub fn embedded_count(
 ) -> Result<usize, String> {
     let config = embedding_config::resolve_embedding_config().map_err(|e| e.to_string())?;
     let dimensions = embedding_providers::expected_dimensions(&config);
-    attach_embedding_index(embedding_index, store, index_root, dimensions, false)?;
+    let model_id = embedding_model_id(&config);
+    attach_embedding_index(embedding_index, store, index_root, dimensions, &model_id, false)?;
     let slot = embedding_index
         .lock()
         .map_err(|_| "embedding index lock poisoned".to_string())?;
-    let (_, _, index) = slot.as_ref().expect("attach_embedding_index just set this");
+    let (_, _, _, index) = slot.as_ref().expect("attach_embedding_index just set this");
     Ok(index.len())
 }
 
@@ -539,7 +590,7 @@ pub(crate) mod tests {
         dir
     }
 
-    /// Deterministic fake — never touches `fastembed`/network. Dimension is
+    /// Deterministic fake — never touches Model2Vec/network. Dimension is
     /// configurable so a test can match whatever `expected_dimensions`
     /// resolves to for the real config on the machine running the test.
     pub(crate) struct MockProvider {
@@ -767,6 +818,88 @@ pub(crate) mod tests {
 
         fs::remove_dir_all(&store_dir).ok();
         fs::remove_dir_all(&index_root).ok();
+    }
+
+    #[test]
+    fn adopt_legacy_orphans_mismatched_dimensions_and_keeps_the_file() {
+        let store_dir = fixture_dir("legacy-orphan");
+        let store = IndexStore::open(&store_dir).unwrap();
+        let file_hash = blake3::hash(b"x");
+        store
+            .upsert_files(&[crate::domain::repo_index::FileMetadata {
+                relative_path: "a.json".to_string(),
+                size_bytes: 1,
+                modified_at: SystemTime::now(),
+                hash: file_hash,
+                language: crate::domain::repo_index::Language::Json,
+            }])
+            .unwrap();
+        let chunk_id = crate::domain::chunk_index::ChunkId("a.json#0-1".to_string());
+        store
+            .replace_chunks_for_file(
+                &FileId("a.json".to_string()),
+                &[crate::domain::chunk_index::Chunk {
+                    metadata: crate::domain::chunk_index::ChunkMetadata {
+                        id: chunk_id.clone(),
+                        file_id: FileId("a.json".to_string()),
+                        language: crate::domain::repo_index::Language::Json,
+                        kind: crate::domain::chunk_index::ChunkKind::File,
+                        start_byte: 0,
+                        end_byte: 1,
+                        file_hash,
+                        hash: blake3::hash(b"y"),
+                        qualified_name: None,
+                        ordinal: 0,
+                    },
+                    text: "{}".to_string(),
+                }],
+            )
+            .unwrap();
+        store
+            .upsert_embedding(&chunk_id, blake3::hash(b"y"), "")
+            .unwrap();
+        store.write_meta(META_EMBEDDING_DIMENSIONS, "1024").unwrap();
+        std::fs::write(store.legacy_vectors_path(), b"old").unwrap();
+
+        adopt_legacy_embeddings(&store, "local-potion-multilingual-128m-int8", 256).unwrap();
+
+        assert!(!store.legacy_vectors_path().exists());
+        assert!(store.vectors_path(LEGACY_LOCAL_BGE_M3_MODEL_ID).exists());
+        assert_eq!(
+            store
+                .load_all_embedding_hashes(LEGACY_LOCAL_BGE_M3_MODEL_ID)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(store
+            .load_all_embedding_hashes("local-potion-multilingual-128m-int8")
+            .unwrap()
+            .is_empty());
+
+        fs::remove_dir_all(&store_dir).ok();
+    }
+
+    #[test]
+    fn adopt_legacy_assigns_matching_dimensions_to_the_current_model() {
+        let store_dir = fixture_dir("legacy-adopt");
+        let store = IndexStore::open(&store_dir).unwrap();
+        store.write_meta(META_EMBEDDING_DIMENSIONS, "1024").unwrap();
+        std::fs::write(store.legacy_vectors_path(), b"remote").unwrap();
+
+        adopt_legacy_embeddings(&store, "remote-abc", 1024).unwrap();
+
+        assert!(!store.legacy_vectors_path().exists());
+        assert!(store.vectors_path("remote-abc").exists());
+        assert_eq!(
+            store
+                .read_meta(&crate::domain::embeddings::embedding_dimensions_meta_key("remote-abc"))
+                .unwrap()
+                .as_deref(),
+            Some("1024")
+        );
+
+        fs::remove_dir_all(&store_dir).ok();
     }
 
     #[test]

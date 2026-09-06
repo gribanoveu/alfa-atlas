@@ -1,104 +1,159 @@
-//! Wraps `fastembed::Bgem3Embedding` (BGE-M3, INT8-quantized ONNX, 1024
-//! dense dimensions). Chosen over a smaller multilingual model because this
-//! product's primary content language is Russian and BGE-M3 is the
-//! stronger multilingual performer of the realistic local options — see
-//! `AI_HARNESS.md` for the full tradeoff.
-//!
-//! Only the dense output is used. BGE-M3 also produces sparse and ColBERT
-//! vectors in the same forward pass (useful for hybrid retrieval later),
-//! but this vector index is dense-only for now — nothing here prevents
-//! surfacing those later without changing the `EmbeddingProvider` trait.
+//! Bundled Model2Vec static embeddings (`potion-multilingual-128M` int8).
+//! Weights live on disk next to the crate / the packaged app — no network
+//! at runtime, no ONNX.
 
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-use fastembed::{Bgem3Embedding, Bgem3InitOptions, Bgem3Model};
+use model2vec_rs::model::StaticModel;
 
 use crate::domain::embeddings::{Embedding, EmbeddingError, EmbeddingProvider};
 
-pub(crate) const DIMENSIONS: usize = 1024;
+pub(crate) const DIMENSIONS: usize = 256;
+const MODEL_DIR_NAME: &str = "potion-multilingual-128M-int8";
+const LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/v1";
 
-/// The Hugging Face repo/file `Bgem3Model::BGEM3Q` resolves to (per
-/// `fastembed`'s own `models_list()`) — `services::embedding_model` needs
-/// these to check download status via `hf_hub::Cache` without triggering a
-/// download itself (`Bgem3Embedding::try_new` would download on a cache
-/// miss, which a mere status check must not do).
-pub const MODEL_REPO: &str = "gpahal/bge-m3-onnx-int8";
-pub const MODEL_FILE: &str = "model_quantized.onnx";
+static MODEL: OnceLock<Result<StaticModel, String>> = OnceLock::new();
 
-/// `fastembed`'s own default cache dir is a *relative* path
-/// (`.fastembed_cache`, resolved against the process's current directory)
-/// — fragile for a desktop app where CWD isn't guaranteed stable. Both this
-/// provider and `services::embedding_model`'s status check use this
-/// absolute path instead, under the same `~/.atlas` directory every other
-/// persistent app file lives in.
-pub fn model_cache_dir() -> Result<PathBuf, EmbeddingError> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| EmbeddingError::Message("could not resolve home directory".into()))?;
-    Ok(home.join(".atlas").join("models"))
-}
-
-/// `Bgem3Embedding::embed` takes `&mut self` — the ONNX Runtime session is
-/// mutably borrowed per call — so this wraps it in a `Mutex` to satisfy
-/// `EmbeddingProvider: Send + Sync`'s `&self` signature. Inference is
-/// already CPU-bound and effectively serialized inside ONNX Runtime, so
-/// this isn't giving up meaningful parallelism.
-pub struct LocalEmbeddingProvider {
-    model: Mutex<Bgem3Embedding>,
-}
+pub struct LocalEmbeddingProvider;
 
 impl LocalEmbeddingProvider {
-    /// Loads the model from `fastembed`'s cache directory. Fails if the
-    /// model hasn't been downloaded yet — callers should check
-    /// `services::embedding_model::model_status` first.
     pub fn try_new() -> Result<Self, EmbeddingError> {
-        let options =
-            Bgem3InitOptions::new(Bgem3Model::BGEM3Q).with_cache_dir(model_cache_dir()?);
-        // `anyhow::Error::to_string()` only prints the outermost context
-        // message, silently dropping the real cause chained underneath it
-        // (network/TLS/timeout error) — `{:#}` prints the full chain.
-        let model = Bgem3Embedding::try_new(options)
-            .map_err(|e| EmbeddingError::Provider(format!("{e:#}")))?;
-        Ok(Self {
-            model: Mutex::new(model),
-        })
+        model()?;
+        Ok(Self)
     }
 }
 
-/// Bounds how many chunks go into one `Bgem3Embedding::embed` call.
-/// `fastembed`'s own `batch_size` argument only bounds the ONNX
-/// `session.run()` tensor size for its *internal* batching loop — the
-/// dense/sparse/ColBERT outputs from every internal batch still accumulate
-/// across the **entire** input slice before `embed()` returns. ColBERT in
-/// particular is a per-token multi-vector (up to ~511 × 1024 floats *per
-/// chunk*, not one vector like dense), and this provider discards it
-/// immediately — but calling `embed()` once with an entire sync's pending
-/// chunks (thousands, for a real repo) buffers tens of GB of it first, just
-/// to throw it away. Looping in small groups here bounds that peak to one
-/// group's worth instead of the whole pending set.
-const EMBED_BATCH_SIZE: usize = 32;
-
 impl EmbeddingProvider for LocalEmbeddingProvider {
     fn embed(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError> {
-        let mut model = self
-            .model
-            .lock()
-            .map_err(|_| EmbeddingError::Provider("model lock poisoned".to_string()))?;
-
-        let mut results = Vec::with_capacity(texts.len());
-        for group in texts.chunks(EMBED_BATCH_SIZE) {
-            let sentences: Vec<&str> = group.to_vec();
-            let output = model
-                .embed(sentences, Some(EMBED_BATCH_SIZE))
-                .map_err(|e| EmbeddingError::Provider(format!("{e:#}")))?;
-            // `output`'s sparse/ColBERT vectors drop here, per group, rather
-            // than accumulating for the whole `texts` slice.
-            results.extend(output.dense.into_iter().map(Embedding));
-        }
-        Ok(results)
+        let model = model()?;
+        let sentences: Vec<String> = texts.iter().map(|text| (*text).to_string()).collect();
+        Ok(model
+            .encode_with_args(&sentences, Some(512), 512)
+            .into_iter()
+            .map(Embedding)
+            .collect())
     }
 
     fn dimensions(&self) -> usize {
         DIMENSIONS
+    }
+}
+
+fn model() -> Result<&'static StaticModel, EmbeddingError> {
+    match MODEL.get_or_init(load_model) {
+        Ok(model) => Ok(model),
+        Err(err) => Err(EmbeddingError::Provider(err.clone())),
+    }
+}
+
+fn load_model() -> Result<StaticModel, String> {
+    let dir = resolve_model_dir()?;
+    let tokenizer = read_model_file(&dir.join("tokenizer.json"))?;
+    let weights = read_model_file(&dir.join("model.safetensors"))?;
+    let config = read_model_file(&dir.join("config.json"))?;
+    StaticModel::from_bytes(&tokenizer, &weights, &config, None)
+        .map_err(|e| format!("bundled Model2Vec failed to parse: {e}"))
+}
+
+fn read_model_file(path: &Path) -> Result<Vec<u8>, String> {
+    let bytes = fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    if bytes.starts_with(LFS_POINTER_PREFIX) {
+        return Err(format!(
+            "{} is a Git LFS pointer — run `git lfs pull` or scripts/build-embedding-model.py",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+fn resolve_model_dir() -> Result<PathBuf, String> {
+    for dir in candidate_model_dirs() {
+        if dir.join("model.safetensors").is_file() && dir.join("tokenizer.json").is_file() {
+            return Ok(dir);
+        }
+    }
+    Err(format!(
+        "bundled Model2Vec files not found (looked for {MODEL_DIR_NAME}/model.safetensors)"
+    ))
+}
+
+fn candidate_model_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    dirs.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models")
+            .join(MODEL_DIR_NAME),
+    );
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            dirs.push(parent.join("models").join(MODEL_DIR_NAME));
+            dirs.push(parent.join("resources").join("models").join(MODEL_DIR_NAME));
+            dirs.push(
+                parent
+                    .join("../Resources")
+                    .join("models")
+                    .join(MODEL_DIR_NAME),
+            );
+        }
+    }
+    dirs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rust_matches_python_parity_fixture() {
+        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("models")
+            .join(MODEL_DIR_NAME)
+            .join("parity.json");
+        let Ok(raw) = fs::read_to_string(&fixture_path) else {
+            return;
+        };
+        let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let phrases: Vec<String> = fixture["phrases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        let expected: Vec<Vec<f32>> = fixture["vectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                row.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|n| n.as_f64().unwrap() as f32)
+                    .collect()
+            })
+            .collect();
+
+        let model = match load_model() {
+            Ok(model) => model,
+            Err(_) => return,
+        };
+        let got = model.encode_with_args(&phrases, Some(512), 512);
+        assert_eq!(got.len(), expected.len());
+        for (i, (a, b)) in got.iter().zip(expected.iter()).enumerate() {
+            let cos = cosine(a, b);
+            assert!(
+                cos >= 0.999,
+                "phrase {} cosine {cos} below 0.999",
+                phrases[i]
+            );
+        }
+    }
+
+    fn cosine(a: &[f32], b: &[f32]) -> f32 {
+        let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+        let na = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let nb = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        dot / (na * nb).max(1e-12)
     }
 }

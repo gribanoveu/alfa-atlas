@@ -32,8 +32,7 @@ impl EmbeddingBuilder {
 
 /// How many pending chunks `EmbeddingIndex::sync` embeds per
 /// `EmbeddingProvider::embed` call — bounds how granular `on_progress`
-/// reporting is, independent of the local provider's own internal
-/// (smaller) batching in `LocalEmbeddingProvider`.
+/// reporting is.
 const EMBED_PROGRESS_BATCH: usize = 32;
 
 /// Stores `ChunkId -> EmbeddingRecord` plus the vectors themselves
@@ -45,6 +44,7 @@ pub struct EmbeddingIndex {
     records: DashMap<ChunkId, EmbeddingRecord>,
     key_to_chunk: DashMap<u64, ChunkId>,
     vectors: VectorStore,
+    model_id: String,
 }
 
 impl EmbeddingIndex {
@@ -53,6 +53,7 @@ impl EmbeddingIndex {
             records: DashMap::new(),
             key_to_chunk: DashMap::new(),
             vectors: VectorStore::new(dimensions)?,
+            model_id: String::new(),
         })
     }
 
@@ -67,6 +68,7 @@ impl EmbeddingIndex {
         dimensions: usize,
         vectors_path: &std::path::Path,
         persisted_hashes: Vec<(ChunkId, blake3::Hash)>,
+        model_id: String,
     ) -> Result<Self, EmbeddingError> {
         let records = DashMap::new();
         let key_to_chunk = DashMap::new();
@@ -78,6 +80,7 @@ impl EmbeddingIndex {
             records,
             key_to_chunk,
             vectors: VectorStore::load(dimensions, vectors_path)?,
+            model_id,
         })
     }
 
@@ -135,20 +138,6 @@ impl EmbeddingIndex {
             }
         }
 
-        // Sorted by text length before batching — the local BGE-M3 provider
-        // pads each batch to its longest member (`PaddingStrategy::
-        // BatchLongest`), and ONNX Runtime's memory-pattern optimizer caches
-        // one allocation plan per distinct `[batch_size, seq_len]` shape a
-        // session ever sees, for the life of that session, with no eviction.
-        // Chunks arrive here in arbitrary `ChunkId` order, so unsorted
-        // batching produces a new seq_len on nearly every batch (a repo
-        // mixes byte-sized JSON chunks with 16KB Java methods) — resident
-        // memory then climbs with corpus size and never comes back down.
-        // Grouping similarly-sized chunks together collapses that to a
-        // handful of distinct shapes, independent of how many chunks or
-        // files are being synced.
-        pending.sort_by_key(|(_, text, _)| text.len());
-
         let total_pending = pending.len();
         let mut embedded_so_far = 0usize;
         for batch in pending.chunks(EMBED_PROGRESS_BATCH) {
@@ -167,7 +156,7 @@ impl EmbeddingIndex {
                 self.records.insert(id.clone(), EmbeddingRecord { chunk_hash: *chunk_hash });
                 if let Some(store) = store {
                     store
-                        .upsert_embedding(id, *chunk_hash)
+                        .upsert_embedding(id, *chunk_hash, &self.model_id)
                         .map_err(|e| EmbeddingError::Message(e.to_string()))?;
                 }
                 stats.embedded += 1;
@@ -190,7 +179,7 @@ impl EmbeddingIndex {
             self.records.remove(&id);
             if let Some(store) = store {
                 store
-                    .delete_embedding(&id)
+                    .delete_embedding(&id, &self.model_id)
                     .map_err(|e| EmbeddingError::Message(e.to_string()))?;
             }
             stats.removed += 1;
@@ -254,7 +243,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// Deterministic fake — never touches real `fastembed`/network. Each
+    /// Deterministic fake — never touches the bundled Model2Vec table. Each
     /// input's embedding is derived from its own length so distinct texts
     /// produce distinct (but reproducible) vectors, and records how many
     /// times it was called so tests can assert unchanged chunks are

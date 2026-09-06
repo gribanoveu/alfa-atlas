@@ -13,7 +13,6 @@ pub mod docs_fs;
 pub mod docs_search;
 pub mod embedding_config;
 pub mod embedding_index;
-pub mod embedding_model;
 pub mod embedding_state;
 pub mod embedding_sync;
 pub mod file_watcher;

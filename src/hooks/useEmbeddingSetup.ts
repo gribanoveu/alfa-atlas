@@ -1,21 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  cancelEmbeddingModelDownload,
   deleteEmbeddingRemoteApiKey,
-  downloadEmbeddingModel,
   getEmbeddingConfig,
   getEmbeddingIndexStatus,
-  getEmbeddingModelStatus,
   getRepoIndexSummary,
   hasEmbeddingRemoteApiKey,
-  listenModelDownloadProgress,
   listenSyncProgress,
   setEmbeddingConfig,
   setEmbeddingRemoteApiKey,
   syncEmbeddings,
   type EmbeddingIndexStatus,
   type EmbeddingProviderConfig,
-  type ModelStatus,
   type RepoIndexSummary,
   type ResolvedEmbeddingConfig,
   type SyncProgress,
@@ -24,12 +19,12 @@ import {
 import { toMessage } from "../lib/errors";
 
 /**
- * Embedding provider config + local-model readiness + last sync result, in
- * one place — both `EmbeddingsTab` (Settings) and `AssistantPanel`
- * (RightDock checklist) call this so they read the same backend state via
- * the same logic, even though each holds its own React state instance
- * (the two are never visible at once — Settings is a modal overlay — so
- * there's no simultaneous-divergence case to guard against here).
+ * Embedding provider config + last sync result, in one place — both
+ * `EmbeddingsTab` (Settings) and `AssistantPanel` (RightDock checklist)
+ * call this so they read the same backend state via the same logic, even
+ * though each holds its own React state instance (the two are never
+ * visible at once — Settings is a modal overlay — so there's no
+ * simultaneous-divergence case to guard against here).
  *
  * `lastSync` is this-session-only (the delta from the last `sync()` call);
  * `indexStatus` is fetched fresh on every `refresh()` (including the
@@ -46,7 +41,6 @@ import { toMessage } from "../lib/errors";
  */
 export function useEmbeddingSetup(repoRoot: string | null = null) {
   const [config, setConfigState] = useState<ResolvedEmbeddingConfig | null>(null);
-  const [modelStatus, setModelStatus] = useState<ModelStatus>({ status: "notDownloaded" });
   const [hasApiKey, setHasApiKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,11 +53,6 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
   // below) so it never makes the manual "Синхронизировать" action look
   // busy while it runs.
   const [backgroundSyncProgress, setBackgroundSyncProgress] = useState<SyncProgress | null>(null);
-  // The backend can't truly abort an in-flight download (see
-  // `cancelEmbeddingModelDownload`'s doc comment) — this just tells
-  // `downloadModel`'s catch block that a rejection is an expected
-  // cancellation, not a real failure to surface as an error.
-  const cancelRequestedRef = useRef(false);
   // Bumped on every `repoRoot` change so in-flight IPC / progress from the
   // previous project can't write into the new project's UI state.
   const generationRef = useRef(0);
@@ -74,10 +63,9 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
     const generation = generationRef.current;
     const root = repoRootRef.current;
     try {
-      const [nextConfig, nextStatus, nextHasKey, nextIndexStatus, nextRepoIndexSummary] =
+      const [nextConfig, nextHasKey, nextIndexStatus, nextRepoIndexSummary] =
         await Promise.all([
           getEmbeddingConfig(),
-          getEmbeddingModelStatus(),
           hasEmbeddingRemoteApiKey(),
           root ? getEmbeddingIndexStatus() : Promise.resolve(null),
           root ? getRepoIndexSummary() : Promise.resolve(null),
@@ -86,7 +74,6 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
         return;
       }
       setConfigState(nextConfig);
-      setModelStatus(nextStatus);
       setHasApiKey(nextHasKey);
       setIndexStatus(nextIndexStatus);
       setRepoIndexSummary(nextRepoIndexSummary);
@@ -110,38 +97,6 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
     setBusy(false);
     void refresh();
   }, [repoRoot, refresh]);
-
-  // Live download progress, independent of `refresh` — the backend emits
-  // this while `downloadEmbeddingModel()`'s promise is still in flight.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void listenModelDownloadProgress((payload) => {
-      if (payload.cancelled) {
-        setModelStatus({ status: "notDownloaded" });
-        return;
-      }
-      if (payload.error) {
-        setModelStatus({ status: "error", message: payload.error });
-        return;
-      }
-      setModelStatus(
-        payload.progress >= 1
-          ? { status: "ready" }
-          : { status: "downloading", progress: payload.progress },
-      );
-    }).then((fn) => {
-      if (cancelled) {
-        fn();
-      } else {
-        unlisten = fn;
-      }
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
 
   // Live sync progress — the backend emits this while `syncEmbeddings()`'s
   // promise is still in flight, and separately while a fresh project's
@@ -287,42 +242,6 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
     }
   }, [refresh]);
 
-  const downloadModel = useCallback(async () => {
-    cancelRequestedRef.current = false;
-    setModelStatus({ status: "downloading", progress: 0 });
-    setBusy(true);
-    try {
-      await downloadEmbeddingModel();
-      await refresh();
-    } catch (e) {
-      // A cancellation surfaces here as a rejection too (the backend
-      // reports it as an error at the IPC layer) — the "cancelled" progress
-      // event already reset `modelStatus`, so don't clobber it with an
-      // "error" state for something the user asked for.
-      if (cancelRequestedRef.current) return;
-      const message = toMessage(e);
-      setError(message);
-      setModelStatus({ status: "error", message });
-    } finally {
-      setBusy(false);
-    }
-  }, [refresh]);
-
-  /** Intentionally leaves `busy` untouched: the backend can't stop the
-   * in-flight download, so starting a second attempt before this one's
-   * `downloadModel()` promise actually settles would race the abandoned
-   * attempt over the same on-disk cache file. `busy` only clears once the
-   * real (possibly successful, possibly cancelled) result comes back. */
-  const cancelDownload = useCallback(async () => {
-    cancelRequestedRef.current = true;
-    setModelStatus({ status: "notDownloaded" });
-    try {
-      await cancelEmbeddingModelDownload();
-    } catch (e) {
-      setError(toMessage(e));
-    }
-  }, []);
-
   const sync = useCallback(async () => {
     const generation = generationRef.current;
     const root = repoRootRef.current;
@@ -358,12 +277,13 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
 
   const providerConfigured =
     config?.kind === "local"
-      ? modelStatus.status === "ready"
-      : Boolean(config?.remoteBaseUrl && config?.remoteModel && hasApiKey);
+      ? true
+      : config?.kind === "remote"
+        ? Boolean(config.remoteBaseUrl && config.remoteModel && hasApiKey)
+        : false;
 
   return {
     config,
-    modelStatus,
     hasApiKey,
     busy,
     error,
@@ -376,8 +296,6 @@ export function useEmbeddingSetup(repoRoot: string | null = null) {
     updateConfig,
     saveApiKey,
     deleteApiKey,
-    downloadModel,
-    cancelDownload,
     sync,
     refresh,
   };

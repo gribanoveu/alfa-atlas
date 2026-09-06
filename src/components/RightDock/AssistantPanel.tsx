@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
-import { RefreshCw, Settings2 } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import { toMessage } from "../../lib/errors";
 import { useAiAccessMode } from "../../hooks/useAiAccessMode";
 import { useChatHistory } from "../../hooks/useChatHistory";
@@ -130,7 +130,6 @@ export function AssistantPanel({
   panelActive = true,
 }: AssistantPanelProps) {
   const {
-    config: embeddingConfig,
     providerConfigured: embeddingConfigured,
     indexStatus,
     lastSync,
@@ -199,25 +198,16 @@ export function AssistantPanel({
   // refetch.
   const indexReady = Boolean(indexStatus?.synced) || lastSync !== null;
 
-  // A remote provider has no ~570MB-download-style cost/surprise a local
-  // one does, so it's still safe to start without asking — see the local
-  // case's suggestion button below instead.
-  const isRemoteEmbeddingProvider = embeddingConfig?.kind === "remote";
-
-  // Fires once per mount rather than requiring the user to click
-  // "Синхронизировать" — `embedding_sync`'s own hash comparison makes a
-  // redundant call cheap, but there's no reason to re-trigger on every
-  // render, and `indexReady` flips true as soon as *anything* is embedded
-  // (not full completeness), so in practice this only ever does real work
-  // the first time a project has never been synced. Remote-only: a local
-  // provider instead waits for the user to click the suggestion button in
-  // the `!indexReady` note below.
+  // Local Model2Vec is bundled and cheap to encode; remote has no download
+  // cost either. Auto-sync on first open — `embedding_sync`'s hash
+  // comparison makes a redundant call cheap, and `indexReady` flips true
+  // as soon as *anything* is embedded.
   const autoSyncTriggered = useRef(false);
   useEffect(() => {
-    if (!embeddingConfigured || !isRemoteEmbeddingProvider || indexReady || busy || autoSyncTriggered.current) return;
+    if (!embeddingConfigured || indexReady || busy || autoSyncTriggered.current) return;
     autoSyncTriggered.current = true;
     void sync();
-  }, [embeddingConfigured, isRemoteEmbeddingProvider, indexReady, busy, sync]);
+  }, [embeddingConfigured, indexReady, busy, sync]);
 
   const handleShowArchive = () => {
     setArchiveOpen(true);
@@ -317,28 +307,9 @@ export function AssistantPanel({
               </p>
             ) : !indexReady ? (
               <p className="assistant-chat-index-note">
-                {busy && syncProgress ? (
-                  `Строится индекс: ${syncProgress.current}/${syncProgress.total}…`
-                ) : isRemoteEmbeddingProvider ? (
-                  "Индекс ещё строится — ответы будут менее точными, пока индексация не завершится."
-                ) : (
-                  <span className="assistant-chat-index-row">
-                    <span>
-                      Индекс ещё не построен — поиск по документации будет менее
-                      точным. Нажмите, чтобы начать синхронизацию.
-                    </span>
-                    <button
-                      type="button"
-                      className="assistant-chat-index-sync-btn"
-                      disabled={busy}
-                      onClick={() => void sync()}
-                      title="Синхронизировать"
-                      aria-label="Синхронизировать"
-                    >
-                      <RefreshCw size={14} strokeWidth={1.75} aria-hidden />
-                    </button>
-                  </span>
-                )}
+                {busy && syncProgress
+                  ? `Строится индекс: ${syncProgress.current}/${syncProgress.total}…`
+                  : "Индекс ещё строится — ответы будут менее точными, пока индексация не завершится."}
               </p>
             ) : null}
 

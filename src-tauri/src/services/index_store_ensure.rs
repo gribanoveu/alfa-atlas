@@ -67,10 +67,7 @@ pub fn open_for(storage_dir: &Path) -> Result<IndexAttachment, String> {
 /// from a read-only status/attach path.
 pub fn repair_stale(store: &IndexStore, index_root: &Path) -> Result<(), String> {
     store.wipe().map_err(|e| e.to_string())?;
-    let vectors_path = store.vectors_path();
-    if vectors_path.exists() {
-        std::fs::remove_file(&vectors_path).map_err(|e| e.to_string())?;
-    }
+    store.remove_all_vector_files().map_err(|e| e.to_string())?;
     store
         .write_meta(META_CHUNK_VERSION, &CHUNK_VERSION.to_string())
         .map_err(|e| e.to_string())?;
@@ -188,10 +185,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(store.load_all_chunks().unwrap().len(), 1);
+        let namespaced = store.vectors_path("local-potion-multilingual-128m-int8");
+        let legacy = store.legacy_vectors_path();
+        std::fs::write(&namespaced, b"x").unwrap();
+        std::fs::write(&legacy, b"y").unwrap();
 
         repair_stale(&store, &root).unwrap();
 
         assert!(store.load_all_chunks().unwrap().is_empty());
+        assert!(!namespaced.exists());
+        assert!(!legacy.exists());
         assert_eq!(
             store.read_meta("chunk_version").unwrap().as_deref(),
             Some(CHUNK_VERSION.to_string().as_str())

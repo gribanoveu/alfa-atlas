@@ -213,8 +213,16 @@ pub(super) fn semantic_matches(
     let config = embedding_config::resolve_embedding_config()
         .map_err(|e| ToolError::SemanticSearch(e.to_string()))?;
     let dimensions = embedding_providers::expected_dimensions(&config);
-    attach_embedding_index(&deps.embedding_index, &store, &index_root, dimensions, false)
-        .map_err(ToolError::SemanticSearch)?;
+    let model_id = crate::domain::embeddings::embedding_model_id(&config);
+    attach_embedding_index(
+        &deps.embedding_index,
+        &store,
+        &index_root,
+        dimensions,
+        &model_id,
+        false,
+    )
+    .map_err(ToolError::SemanticSearch)?;
 
     let api_key = embedding_credentials_store::get_api_key();
     let provider = ensure_provider(&deps.embedding_provider, &config, api_key)
@@ -246,7 +254,7 @@ pub(super) fn semantic_matches(
         let slot = deps.embedding_index.lock().map_err(|_| {
             ToolError::SemanticSearch("embedding index lock poisoned".to_string())
         })?;
-        let Some((_, _, index)) = slot.as_ref() else {
+        let Some((_, _, _, index)) = slot.as_ref() else {
             return Ok(Vec::new());
         };
         // This `usearch` wrapper has no predicate-aware ANN search — when

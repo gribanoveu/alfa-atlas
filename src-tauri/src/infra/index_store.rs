@@ -1,7 +1,7 @@
 //! SQLite-backed durable mirror of `ChunkIndex`/`EmbeddingIndex` metadata —
 //! everything needed to reload both without a full repo rescan, and to
 //! diff incrementally against what's on disk now. Deliberately stores no
-//! embedding vectors (they live in `vectors.usearch`, see
+//! embedding vectors (they live in `vectors-{model_id}.usearch`, see
 //! `infra::vector_store`) — the relational tables here are only ids, byte
 //! offsets, and hashes.
 //!
@@ -96,12 +96,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
 );
 
 -- `chunk_hash` here mirrors `EmbeddingRecord.chunk_hash`, written only once
--- a vector actually lands in `vectors.usearch` — deliberately a separate
+-- a vector actually lands in `vectors-{model_id}.usearch` — deliberately a separate
 -- write from `chunks.chunk_hash` (see module docs on `EmbeddingIndex::sync`
 -- for why that gap is a crash-safety feature, not a bug).
 CREATE TABLE IF NOT EXISTS embeddings (
-  chunk_id   TEXT PRIMARY KEY REFERENCES chunks(chunk_id) ON DELETE CASCADE,
-  chunk_hash BLOB NOT NULL
+  chunk_id   TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+  model_id   TEXT NOT NULL,
+  chunk_hash BLOB NOT NULL,
+  PRIMARY KEY (chunk_id, model_id)
 );
 
 -- One row per `Symbol` a `LanguageIndexer` extracted, mirroring
@@ -170,8 +172,33 @@ impl IndexStore {
         })
     }
 
-    pub fn vectors_path(&self) -> PathBuf {
+    pub fn vectors_path(&self, model_id: &str) -> PathBuf {
+        self.dir.join(format!("vectors-{model_id}.usearch"))
+    }
+
+    pub fn legacy_vectors_path(&self) -> PathBuf {
         self.dir.join(VECTORS_FILE_NAME)
+    }
+
+    /// Drops every `vectors.usearch` / `vectors-*.usearch` in this store —
+    /// used by `repair_stale` when chunking itself is invalid, so every
+    /// model's vectors are stale together.
+    pub fn remove_all_vector_files(&self) -> Result<(), IndexStoreError> {
+        let entries = match std::fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(IndexStoreError::Io(e)),
+        };
+        for entry in entries {
+            let path = entry.map_err(IndexStoreError::Io)?.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name == VECTORS_FILE_NAME
+                || (name.starts_with("vectors-") && name.ends_with(".usearch"))
+            {
+                std::fs::remove_file(&path).map_err(IndexStoreError::Io)?;
+            }
+        }
+        Ok(())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, IndexStoreError> {
@@ -194,6 +221,12 @@ impl IndexStore {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
         )?;
+        Ok(())
+    }
+
+    pub fn delete_meta(&self, key: &str) -> Result<(), IndexStoreError> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM meta WHERE key = ?1", params![key])?;
         Ok(())
     }
 
@@ -423,36 +456,63 @@ impl IndexStore {
         &self,
         chunk_id: &ChunkId,
         chunk_hash: blake3::Hash,
+        model_id: &str,
     ) -> Result<(), IndexStoreError> {
         let conn = self.lock()?;
         conn.execute(
-            "INSERT INTO embeddings (chunk_id, chunk_hash) VALUES (?1, ?2)
-             ON CONFLICT(chunk_id) DO UPDATE SET chunk_hash = excluded.chunk_hash",
-            params![chunk_id.0, chunk_hash.as_bytes().to_vec()],
+            "INSERT INTO embeddings (chunk_id, model_id, chunk_hash) VALUES (?1, ?2, ?3)
+             ON CONFLICT(chunk_id, model_id) DO UPDATE SET chunk_hash = excluded.chunk_hash",
+            params![chunk_id.0, model_id, chunk_hash.as_bytes().to_vec()],
         )?;
         Ok(())
     }
 
-    pub fn delete_embedding(&self, chunk_id: &ChunkId) -> Result<(), IndexStoreError> {
+    pub fn delete_embedding(&self, chunk_id: &ChunkId, model_id: &str) -> Result<(), IndexStoreError> {
         let conn = self.lock()?;
-        conn.execute("DELETE FROM embeddings WHERE chunk_id = ?1", params![chunk_id.0])?;
+        conn.execute(
+            "DELETE FROM embeddings WHERE chunk_id = ?1 AND model_id = ?2",
+            params![chunk_id.0, model_id],
+        )?;
         Ok(())
     }
 
-    pub fn clear_embeddings(&self) -> Result<(), IndexStoreError> {
+    pub fn clear_embeddings(&self, model_id: &str) -> Result<(), IndexStoreError> {
         let conn = self.lock()?;
-        conn.execute("DELETE FROM embeddings", [])?;
+        conn.execute("DELETE FROM embeddings WHERE model_id = ?1", params![model_id])?;
         Ok(())
     }
 
-    /// What `EmbeddingIndex::ensure_loaded`/`load` reconstructs its
-    /// resident `records` map from — pairs with `vectors.usearch` (loaded
-    /// separately by `VectorStore::load`) to fully restore the index
-    /// without re-embedding anything that hasn't changed.
-    pub fn load_all_embedding_hashes(&self) -> Result<Vec<(ChunkId, blake3::Hash)>, IndexStoreError> {
+    pub fn has_unassigned_embeddings(&self) -> Result<bool, IndexStoreError> {
         let conn = self.lock()?;
-        let mut stmt = conn.prepare("SELECT chunk_id, chunk_hash FROM embeddings")?;
-        let rows = stmt.query_map([], |row| {
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM embeddings WHERE model_id = ''",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    pub fn assign_unassigned_embeddings(&self, model_id: &str) -> Result<(), IndexStoreError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE embeddings SET model_id = ?1 WHERE model_id = ''",
+            params![model_id],
+        )?;
+        Ok(())
+    }
+
+    /// What `EmbeddingIndex::load` reconstructs its resident `records` map
+    /// from — pairs with `vectors-{model_id}.usearch` to restore one
+    /// model's index without re-embedding unchanged chunks.
+    pub fn load_all_embedding_hashes(
+        &self,
+        model_id: &str,
+    ) -> Result<Vec<(ChunkId, blake3::Hash)>, IndexStoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT chunk_id, chunk_hash FROM embeddings WHERE model_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![model_id], |row| {
             let chunk_id: String = row.get(0)?;
             let hash_bytes: Vec<u8> = row.get(1)?;
             Ok((chunk_id, hash_bytes))
@@ -623,6 +683,23 @@ fn migrate(conn: &Connection) -> Result<(), IndexStoreError> {
         .exists([])?;
     if !has_fts_rowid {
         conn.execute_batch("ALTER TABLE chunks ADD COLUMN fts_rowid INTEGER")?;
+    }
+    let has_model_id = conn
+        .prepare("SELECT 1 FROM pragma_table_info('embeddings') WHERE name = 'model_id'")?
+        .exists([])?;
+    if !has_model_id {
+        conn.execute_batch(
+            "CREATE TABLE embeddings_new (
+               chunk_id   TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+               model_id   TEXT NOT NULL,
+               chunk_hash BLOB NOT NULL,
+               PRIMARY KEY (chunk_id, model_id)
+             );
+             INSERT INTO embeddings_new (chunk_id, model_id, chunk_hash)
+               SELECT chunk_id, '', chunk_hash FROM embeddings;
+             DROP TABLE embeddings;
+             ALTER TABLE embeddings_new RENAME TO embeddings;",
+        )?;
     }
     Ok(())
 }
@@ -836,12 +913,12 @@ mod tests {
             .unwrap();
         store.replace_chunks_for_file(&file_id, &chunks).unwrap();
         store
-            .upsert_embedding(&chunks[0].metadata.id, chunks[0].metadata.hash)
+            .upsert_embedding(&chunks[0].metadata.id, chunks[0].metadata.hash, "test")
             .unwrap();
-        assert_eq!(store.load_all_embedding_hashes().unwrap().len(), 1);
+        assert_eq!(store.load_all_embedding_hashes("test").unwrap().len(), 1);
 
         store.replace_chunks_for_file(&file_id, &[]).unwrap();
-        assert!(store.load_all_embedding_hashes().unwrap().is_empty());
+        assert!(store.load_all_embedding_hashes("test").unwrap().is_empty());
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -858,14 +935,14 @@ mod tests {
             .unwrap();
         store.replace_chunks_for_file(&file_id, &chunks).unwrap();
         store
-            .upsert_embedding(&chunks[0].metadata.id, chunks[0].metadata.hash)
+            .upsert_embedding(&chunks[0].metadata.id, chunks[0].metadata.hash, "test")
             .unwrap();
 
         store.wipe().unwrap();
 
         assert_eq!(store.read_meta("k").unwrap(), None);
         assert!(store.load_all_chunks().unwrap().is_empty());
-        assert!(store.load_all_embedding_hashes().unwrap().is_empty());
+        assert!(store.load_all_embedding_hashes("test").unwrap().is_empty());
         // `chunks_fts` is a virtual table: no foreign key reaches it, so a
         // wipe that forgot it would leave the search tier answering from
         // chunks that no longer exist.
@@ -1026,7 +1103,7 @@ mod tests {
         let chunk = sample_chunk_with_text("a.json", 0, 10, "текст чанка", None);
         index_chunks(&store, "a.json", std::slice::from_ref(&chunk));
         store
-            .upsert_embedding(&chunk.metadata.id, chunk.metadata.hash)
+            .upsert_embedding(&chunk.metadata.id, chunk.metadata.hash, "test")
             .unwrap();
 
         // Same chunk, now carrying the heading breadcrumb a build without
@@ -1037,7 +1114,7 @@ mod tests {
 
         // The whole reason this is a separate write path from
         // `replace_chunks_for_file`: that one cascades embeddings away.
-        assert_eq!(store.load_all_embedding_hashes().unwrap().len(), 1);
+        assert_eq!(store.load_all_embedding_hashes("test").unwrap().len(), 1);
         let chunks = store.load_all_chunks().unwrap();
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].qualified_name.as_deref(), Some("Уведомления > Сроки"));
@@ -1221,6 +1298,86 @@ mod tests {
         }
         let reopened = IndexStore::open(&dir).unwrap();
         assert_eq!(reopened.read_meta("k").unwrap().as_deref(), Some("v"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn embeddings_are_isolated_per_model_id() {
+        let dir = fixture_dir();
+        let store = IndexStore::open(&dir).unwrap();
+        let chunks = vec![sample_chunk("a.json", 0, 10)];
+        store
+            .upsert_files(&[sample_file("a.json", chunks[0].metadata.file_hash)])
+            .unwrap();
+        store
+            .replace_chunks_for_file(&FileId("a.json".to_string()), &chunks)
+            .unwrap();
+
+        store
+            .upsert_embedding(&chunks[0].metadata.id, chunks[0].metadata.hash, "local")
+            .unwrap();
+        store
+            .upsert_embedding(&chunks[0].metadata.id, chunks[0].metadata.hash, "remote")
+            .unwrap();
+        assert_eq!(store.load_all_embedding_hashes("local").unwrap().len(), 1);
+        assert_eq!(store.load_all_embedding_hashes("remote").unwrap().len(), 1);
+
+        store.clear_embeddings("local").unwrap();
+        assert!(store.load_all_embedding_hashes("local").unwrap().is_empty());
+        assert_eq!(store.load_all_embedding_hashes("remote").unwrap().len(), 1);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn migrate_rewrites_legacy_embeddings_without_model_id() {
+        let dir = fixture_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = Connection::open(dir.join(DB_FILE_NAME)).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE embeddings (
+                   chunk_id TEXT PRIMARY KEY,
+                   chunk_hash BLOB NOT NULL
+                 );
+                 CREATE TABLE chunks (
+                   chunk_id TEXT PRIMARY KEY,
+                   file_id TEXT NOT NULL,
+                   language TEXT NOT NULL,
+                   kind TEXT NOT NULL,
+                   start_byte INTEGER NOT NULL,
+                   end_byte INTEGER NOT NULL,
+                   file_hash BLOB NOT NULL,
+                   chunk_hash BLOB NOT NULL,
+                   qualified_name TEXT,
+                   ordinal INTEGER NOT NULL
+                 );
+                 INSERT INTO chunks VALUES (
+                   'c1','f.json','json','file',0,1,
+                   X'0000000000000000000000000000000000000000000000000000000000000001',
+                   X'0000000000000000000000000000000000000000000000000000000000000002',
+                   NULL,0
+                 );
+                 INSERT INTO embeddings VALUES (
+                   'c1',
+                   X'0000000000000000000000000000000000000000000000000000000000000003'
+                 );",
+            )
+            .unwrap();
+        }
+
+        let store = IndexStore::open(&dir).unwrap();
+        assert!(store.has_unassigned_embeddings().unwrap());
+        store.assign_unassigned_embeddings("legacy-local-bge-m3-1024").unwrap();
+        assert!(!store.has_unassigned_embeddings().unwrap());
+        assert_eq!(
+            store
+                .load_all_embedding_hashes("legacy-local-bge-m3-1024")
+                .unwrap()
+                .len(),
+            1
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

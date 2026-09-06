@@ -70,9 +70,8 @@ webpki-roots = "1"
 # in its own error-handling helper instead of duplicating status-check logic
 # per call site with an inferred, unnameable type.
 http = "1"
-fastembed = { version = "5.17.4", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
+model2vec-rs = { version = "0.2.1", default-features = false, features = ["fancy-regex", "local-only"] }
 cxx = "1.0.198"
-hf-hub = { version = "0.5.0", default-features = false }
 rusqlite = { version = "0.32", features = ["bundled"] }
 moka = { version = "0.12", features = ["sync"] }
 sha2 = "0.10"
