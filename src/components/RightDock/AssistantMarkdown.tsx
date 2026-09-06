@@ -60,10 +60,25 @@ type AssistantMarkdownProps = {
 
 /** Renders one assistant chat message's Markdown — headless Streamdown (no
  * Tailwind, see `components` above), chosen for `remend`'s streaming-safe
- * incomplete-Markdown handling while `streaming` is true. */
+ * incomplete-Markdown handling while `streaming` is true.
+ *
+ * That handling is tied to `streaming` rather than left on by default,
+ * because it is a bet that the half-written markup will be finished by the
+ * next delta — and it deletes text to make the bet. `Текст с ![картинкой и
+ * хвост` renders as `Текст с`: everything after an unmatched `![` is
+ * dropped, and an unmatched `[` loses its bracket and gains a stray blocked
+ * link. Mid-stream that costs a frame; on a finished answer, where nothing
+ * more is coming, it is permanent content loss — and brackets in prose
+ * (`arr[0`, AsciiDoc macros) are ordinary here. */
 export function AssistantMarkdown({ content, streaming }: AssistantMarkdownProps) {
   return (
-    <Streamdown className="assistant-md" isAnimating={streaming} linkSafety={{ enabled: false }} components={components}>
+    <Streamdown
+      className="assistant-md"
+      isAnimating={streaming}
+      parseIncompleteMarkdown={streaming}
+      linkSafety={{ enabled: false }}
+      components={components}
+    >
       {wrapAsciiTrees(content)}
     </Streamdown>
   );
