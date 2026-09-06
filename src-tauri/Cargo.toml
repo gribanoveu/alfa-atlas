@@ -70,7 +70,15 @@ webpki-roots = "1"
 # in its own error-handling helper instead of duplicating status-check logic
 # per call site with an inferred, unnameable type.
 http = "1"
-model2vec-rs = { version = "0.2.1", default-features = false, features = ["fancy-regex", "local-only"] }
+# Фича `fancy-regex` у model2vec-rs форвардит не только одноимённую фичу
+# tokenizers, но и `esaxx_fast`, а тот включает `esaxx-rs/cpp`, чей build.rs
+# собирает C++ с жёстко зашитым `.static_crt(true)` (то есть /MT). Остальной
+# MSVC-код линкуется с /MD, и сборка под Windows падает на
+# `LNK2038: mismatch detected for 'RuntimeLibrary'`. Поэтому те же фичи
+# tokenizers объявлены здесь напрямую, без `esaxx_fast`: он ускоряет только
+# обучение Unigram-токенизатора, а здесь идёт исключительно инференс.
+model2vec-rs = { version = "0.2.1", default-features = false, features = ["local-only"] }
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex", "progressbar"] }
 cxx = "1.0.198"
 rusqlite = { version = "0.32", features = ["bundled"] }
 moka = { version = "0.12", features = ["sync"] }
