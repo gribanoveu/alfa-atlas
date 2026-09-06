@@ -946,6 +946,13 @@ const SEARCH_TOOLS = new Set(["grep", "semanticSearch"]);
 const TOOL_LEDGER_MAX_SEARCHES = 8;
 const TOOL_LEDGER_MAX_FAILURES = 6;
 
+/** Caps for the three sections that record work which left no file behind.
+ * All small: a turn validates a handful of documents, touches one or two
+ * artifacts, and fetches templates once. */
+const TOOL_LEDGER_MAX_CHECKS = 6;
+const TOOL_LEDGER_MAX_ARTIFACTS = 4;
+const TOOL_LEDGER_MAX_TEMPLATES = 6;
+
 /** A `semanticSearch` query can be a whole sentence and a `grep` pattern a
  * long regex; the ledger only has to make the search recognizable as one
  * already tried. */
@@ -1006,6 +1013,45 @@ function describeSearch(block: ToolCallBlock): string | null {
   return `«${truncateForLedger(raw, TOOL_LEDGER_MAX_QUERY_CHARS)}» (${block.name}${found})`;
 }
 
+/** One settled `check` as the ledger records it — `docs/a.adoc (3)`, or
+ * `docs/a.adoc (без замечаний)`.
+ *
+ * `check` names a path but is in no tool-category set (it reports *about*
+ * a file rather than showing it), so without this a validation run left no
+ * trace at all: the next turn re-ran the identical check, or forgot a
+ * finding its own prose had only summarized. The count is the half worth
+ * replaying, exactly as with a search's hit count.
+ *
+ * A standards report has no diagnostic list — its verdict is pass/fail per
+ * folder, so that is what it contributes. */
+function describeCheck(block: ToolCallBlock): string | null {
+  const { path } = toolCallPaths(block);
+  const result = block.result;
+  if (!result) return null;
+  if (result.tool === "checkResults") {
+    const count = result.result.diagnostics.length;
+    const target = path ?? result.result.kind;
+    return `${target} (${count === 0 ? "без замечаний" : count})`;
+  }
+  if (result.tool === "standardsChecked") {
+    const failed = result.result.report.folders.filter((f) => !f.passed).length;
+    const target = path ?? "стандарты";
+    return `${target} (${failed === 0 ? "стандарты пройдены" : `не по стандарту: ${failed}`})`;
+  }
+  return null;
+}
+
+/** One settled artifact read (or a `requestArtifact` the user filled in) —
+ * `art_123 «Перевод средств»`. Identity only: the record itself is one
+ * cheap `artifact` `op: "read"` away and can run to pages of tables, but
+ * *which* artifact this work is about is not recoverable from a list of
+ * every artifact in the project. */
+function describeArtifact(block: ToolCallBlock): string | null {
+  if (block.result?.tool !== "artifact") return null;
+  const { id, title } = block.result.result.artifact;
+  return title ? `${id} «${truncateForLedger(title, TOOL_LEDGER_MAX_QUERY_CHARS)}»` : id;
+}
+
 /** One call that did not happen, and why. The refusal markers are spelled
  * out rather than folded into "ошибка": a turn that reads its own history
  * as a failed write retries it, while one that reads a refusal asks first —
@@ -1064,6 +1110,9 @@ export function toolLedger(blocks: MessageBlock[]): string {
   const written: string[] = [];
   const deleted: string[] = [];
   const searched: string[] = [];
+  const checked: string[] = [];
+  const artifacts: string[] = [];
+  const templates: string[] = [];
   const failed: string[] = [];
 
   for (const block of blocks) {
@@ -1078,15 +1127,41 @@ export function toolLedger(blocks: MessageBlock[]): string {
       if (search) searched.push(search);
       continue;
     }
+    // Three kinds of work that touch no file of their own, and so fell
+    // through every branch below: a validation run, an artifact, a
+    // template fetch.
+    if (block.name === "check") {
+      const check = describeCheck(block);
+      if (check) checked.push(check);
+      continue;
+    }
+    if (block.result?.tool === "artifact") {
+      const artifact = describeArtifact(block);
+      if (artifact) artifacts.push(artifact);
+      continue;
+    }
+    if (block.result?.tool === "asciidocTemplates") {
+      templates.push(...block.result.result.templates.map((t) => t.id));
+      continue;
+    }
     const { path, newPath } = toolCallPaths(block);
     if (block.name === "move") {
-      if (path && newPath) written.push(`${path} → ${newPath}`);
+      // How many files had their references rewritten is the part a later
+      // turn cannot re-derive from the two paths.
+      const updated =
+        block.result?.tool === "moved" ? block.result.result.updatedFiles.length : 0;
+      if (path && newPath) written.push(`${path} → ${newPath}${updated > 0 ? ` (+${updated} ссылок)` : ""}`);
       continue;
     }
     if (!path) continue;
     if (READ_TOOLS.has(block.name)) read.push(path);
-    else if (WRITE_TOOLS.has(block.name)) written.push(path);
-    else if (DELETE_TOOLS.has(block.name)) deleted.push(path);
+    else if (WRITE_TOOLS.has(block.name)) {
+      // Same for a directory created from a template: the path says where,
+      // not what landed inside it.
+      const created =
+        block.result?.tool === "directoryCreated" ? block.result.result.createdFiles.length : 0;
+      written.push(`${path}${created > 0 ? ` (+${created} файлов)` : ""}`);
+    } else if (DELETE_TOOLS.has(block.name)) deleted.push(path);
   }
 
   // Writes and deletes lead: they changed the project, so a later turn
@@ -1123,6 +1198,9 @@ export function toolLedger(blocks: MessageBlock[]): string {
   const rest: string[] = [];
   for (const [label, entries, cap] of [
     ["искали", searched, TOOL_LEDGER_MAX_SEARCHES],
+    ["проверено", checked, TOOL_LEDGER_MAX_CHECKS],
+    ["артефакты", artifacts, TOOL_LEDGER_MAX_ARTIFACTS],
+    ["шаблоны", templates, TOOL_LEDGER_MAX_TEMPLATES],
     ["не выполнено", failed, TOOL_LEDGER_MAX_FAILURES],
   ] as const) {
     const unique = [...new Set(entries)];

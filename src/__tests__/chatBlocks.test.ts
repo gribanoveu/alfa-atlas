@@ -823,6 +823,101 @@ describe("toolLedger", () => {
     })),
   });
 
+  // A validation run names a path but shows no file, so it is in no tool
+  // category — before its own arm it left the ledger empty and the next
+  // turn re-ran the identical check.
+  test("records a check and how much it found", () => {
+    const ledger = toolLedger([
+      call("check", { path: "docs/a.adoc" }, "done", {
+        result: {
+          tool: "checkResults",
+          result: {
+            kind: "asciidoc",
+            diagnostics: [
+              { kind: "parseError", message: "x", document: "docs/a.adoc", line: 1, column: 1, severity: "error" },
+              { kind: "missingInclude", message: "y", document: "docs/a.adoc", line: 2, column: 1, severity: "error" },
+            ],
+            truncated: false,
+          },
+        } as ToolResult,
+      }),
+      call("check", { path: "docs/b.adoc" }, "done", {
+        result: {
+          tool: "checkResults",
+          result: { kind: "asciidoc", diagnostics: [], truncated: false },
+        } as ToolResult,
+      }),
+    ]);
+    expect(ledger).toContain("проверено: docs/a.adoc (2), docs/b.adoc (без замечаний)");
+  });
+
+  // Which artifact the work is about cannot be recovered from a list of
+  // every artifact in the project — the content still can, with one call.
+  test("records the artifact a turn worked with, by id and title", () => {
+    const ledger = toolLedger([
+      call("artifact", { op: "read", id: "art_1" }, "done", {
+        result: {
+          tool: "artifact",
+          result: {
+            artifact: { id: "art_1", kind: "httpRequest", title: "Перевод средств" },
+            rendered: {},
+          },
+        } as unknown as ToolResult,
+      }),
+    ]);
+    expect(ledger).toContain("артефакты: art_1 «Перевод средств»");
+  });
+
+  test("records which templates were fetched", () => {
+    const ledger = toolLedger([
+      call("getAsciidocTemplates", { ids: ["rest-method", "error-table"] }, "done", {
+        result: {
+          tool: "asciidocTemplates",
+          result: {
+            templates: [
+              { id: "rest-method", label: "REST", template: "..." },
+              { id: "error-table", label: "Ошибки", template: "..." },
+            ],
+            notFound: [],
+          },
+        } as unknown as ToolResult,
+      }),
+    ]);
+    expect(ledger).toContain("шаблоны: rest-method, error-table");
+  });
+
+  test("a move says how many references it rewrote", () => {
+    const ledger = toolLedger([
+      call("move", { path: "docs/a.adoc", newPath: "docs/b.adoc" }, "done", {
+        result: {
+          tool: "moved",
+          result: {
+            from: "docs/a.adoc",
+            to: "docs/b.adoc",
+            updatedFiles: [{ path: "docs/x.adoc" }, { path: "docs/y.adoc" }],
+          },
+        } as unknown as ToolResult,
+      }),
+    ]);
+    expect(ledger).toContain("docs/a.adoc → docs/b.adoc (+2 ссылок)");
+  });
+
+  test("a directory created from a template says how much landed in it", () => {
+    const ledger = toolLedger([
+      call("createDirectory", { path: "docs/newMethod", template: "rest" }, "done", {
+        result: {
+          tool: "directoryCreated",
+          result: {
+            path: "docs/newMethod",
+            template: "rest",
+            createdFiles: ["request.adoc", "response.adoc", "index.adoc"],
+          },
+        } as ToolResult,
+      }),
+    ]);
+    expect(ledger).toContain("docs/newMethod (+3 файлов)");
+  });
+
   test("records read, changed and deleted paths, changes first", () => {
     const ledger = toolLedger([
       call("readFile", { path: "src/api/AusnController.java" }),

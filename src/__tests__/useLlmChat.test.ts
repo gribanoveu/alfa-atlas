@@ -1431,6 +1431,55 @@ describe("useLlmChat — a loaded skill survives the turn that loaded it", () =>
     expect(skillBlock!.content).toContain("jira-task-description");
   });
 
+  // The one tool result that cannot be fetched again: re-reading an
+  // `askUser` answer means stopping and asking the person a second time.
+  test("re-injects what the user answered to an earlier askUser", async () => {
+    const priorTurn: ChatMessage = {
+      id: "a1",
+      role: "assistant",
+      streaming: false,
+      blocks: [
+        {
+          type: "toolCall",
+          id: "call_ask",
+          name: "askUser",
+          argumentsJson: JSON.stringify({
+            title: null,
+            questions: [{ id: "q1", prompt: "Какой формат таблицы?", options: [], allowMultiple: false }],
+          }),
+          status: "done",
+          result: {
+            tool: "askUser",
+            result: {
+              answers: [
+                {
+                  questionId: "q1",
+                  selectedOptionIds: ["o2"],
+                  selectedLabels: ["Расширенный"],
+                  customText: null,
+                },
+              ],
+            },
+          },
+        },
+      ],
+    };
+    outcomes = [done("Ответ")];
+    const { result } = render({
+      initialMessages: [{ id: "u1", role: "user", content: "опиши метод" }, priorTurn],
+    });
+
+    await act(async () => {
+      await result.current.sendMessage("продолжай");
+    });
+
+    const wire = streamCalls[0]![2] as Array<{ role: string; content: string }>;
+    const answers = wire.find((m) => m.role === "system" && m.content.includes("[Answers]"));
+    expect(answers).toBeDefined();
+    expect(answers!.content).toContain("Какой формат таблицы?");
+    expect(answers!.content).toContain("Расширенный");
+  });
+
   test("an ordinary conversation sends no skill block at all", async () => {
     outcomes = [done("Ответ")];
     const { result } = render();
@@ -1439,6 +1488,7 @@ describe("useLlmChat — a loaded skill survives the turn that loaded it", () =>
     });
     const wire = streamCalls[0]![2] as Array<{ role: string; content: string }>;
     expect(wire.some((m) => m.content.includes("[Skill]"))).toBe(false);
+    expect(wire.some((m) => m.content.includes("[Answers]"))).toBe(false);
   });
 
   test("the context breakdown attributes the skill's tokens to it", async () => {

@@ -16,6 +16,7 @@ import {
   buildActivePlanContextBlock,
   buildArtifactsContextBlock,
   buildLoadedSkillsContextBlock,
+  buildUserAnswersContextBlock,
   buildRepositoryLinkContextBlock,
   buildCompactionSummaryBlock,
   buildHistoryCompactionPrompt,
@@ -995,6 +996,9 @@ export function useLlmChat(
       // `buildLoadedSkillsContextBlock`. Computed here rather than beside
       // the other blocks below because the compaction trigger needs it too.
       const loadedSkillsBlock = buildLoadedSkillsContextBlock(real);
+      // Same source and the same reason: an answer the user gave is not
+      // part of the transcript compaction is entitled to fold away.
+      const userAnswersBlock = buildUserAnswersContextBlock(real);
 
       // A cache surviving from a foreign/removed conversation, or from the
       // planning transcript we just dropped, must never be used — drop it
@@ -1027,6 +1031,7 @@ export function useLlmChat(
         // the provider to reject the request outright. No double count —
         // `chatMessageToPlainText` drops tool blocks entirely.
         estimateTokenCount(loadedSkillsBlock ?? "") +
+        estimateTokenCount(userAnswersBlock ?? "") +
         scoped.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
 
       if (opts.aggressiveCompaction || shouldCompact(scopedTokens, contextLimit, scoped)) {
@@ -1241,6 +1246,9 @@ export function useLlmChat(
         // `buildAccessModeChangeNotice` relies on.
         ...(loadedSkillsBlock
           ? [{ role: "system" as const, content: loadedSkillsBlock, toolCallId: null }]
+          : []),
+        ...(userAnswersBlock
+          ? [{ role: "system" as const, content: userAnswersBlock, toolCallId: null }]
           : []),
         ...(memoryBlock ? [{ role: "system" as const, content: memoryBlock, toolCallId: null }] : []),
         ...(activeFileBlock ? [{ role: "system" as const, content: activeFileBlock, toolCallId: null }] : []),

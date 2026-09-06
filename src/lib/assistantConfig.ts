@@ -875,6 +875,82 @@ export function buildLoadedSkillsContextBlock(messages: ChatMessage[]): string |
   return parts.join("\n\n");
 }
 
+/** Question/answer pairs the block reproduces, and the ceiling it stops at.
+ * An answer is a handful of words, so the cap is about a runaway
+ * conversation rather than any realistic one — and it counts pairs, not
+ * characters, because a truncated answer is worse than a missing one. */
+export const USER_ANSWERS_CONTEXT_LIMIT = 20;
+
+/** Replays what the user answered to earlier `askUser` calls as a fresh
+ * `system` message on every send — the same ephemeral treatment as
+ * `buildLoadedSkillsContextBlock`, and for a sharper reason.
+ *
+ * An `askUser` answer is the one kind of tool result that cannot be
+ * fetched again: "re-reading" it means stopping the turn and asking the
+ * person a second time. And it is the *user's* content, not the
+ * repository's — nothing in the transcript necessarily restates it, since
+ * the answer arrives through the question card rather than as a chat
+ * message. Yet cross-turn replay drops it exactly like any other tool
+ * block: `askUser` has no `path` argument and belongs to no tool category,
+ * so `toolLedger` skips it too. The turn after a clarifying question knew
+ * the answer; the one after that did not.
+ *
+ * Pairs each answer with the prompt it answered, read off the call's own
+ * arguments — an answer with no question in front of it ("Расширенный") is
+ * not usable a turn later. A question whose arguments no longer parse is
+ * dropped rather than shown bare, for the same reason.
+ *
+ * Last-wins per question id: a re-asked question means the user changed
+ * their mind, and the later answer is the one that binds. */
+export function buildUserAnswersContextBlock(messages: ChatMessage[]): string | null {
+  const pairs = new Map<string, string>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const block of message.blocks) {
+      if (block.type !== "toolCall" || block.status !== "done" || !block.result) continue;
+      if (block.result.tool !== "askUser") continue;
+      const prompts = askUserPrompts(block);
+      for (const answer of block.result.result.answers) {
+        const prompt = prompts.get(answer.questionId);
+        if (!prompt) continue;
+        const chosen = [answer.selectedLabels.join(", "), answer.customText?.trim()]
+          .filter((part): part is string => Boolean(part))
+          .join("; ");
+        if (!chosen) continue;
+        pairs.delete(answer.questionId);
+        pairs.set(answer.questionId, `- «${prompt}» → «${chosen}»`);
+      }
+    }
+  }
+  if (pairs.size === 0) return null;
+
+  const lines = [...pairs.values()].slice(-USER_ANSWERS_CONTEXT_LIMIT);
+  return `[Answers] The user has already answered these questions in this conversation — an earlier turn called \`askUser\` and waited for them. Each answer is the user's own decision and stays binding for the rest of the conversation. Do not ask any of them again, and do not act against one without the user first saying so themselves.
+
+${lines.join("\n")}`;
+}
+
+/** Question id → prompt text, off an `askUser` call's own arguments.
+ * Cosmetic-grade parsing like `chatBlocks.toolCallPaths`: arguments that
+ * don't parse yield no pairs rather than throwing inside a render. */
+function askUserPrompts(block: ToolCallBlock): Map<string, string> {
+  const prompts = new Map<string, string>();
+  try {
+    const parsed: unknown = JSON.parse(block.argumentsJson);
+    const questions = (parsed as { questions?: unknown })?.questions;
+    if (!Array.isArray(questions)) return prompts;
+    for (const question of questions) {
+      const { id, prompt } = (question ?? {}) as { id?: unknown; prompt?: unknown };
+      if (typeof id === "string" && typeof prompt === "string" && prompt.trim()) {
+        prompts.set(id, prompt.trim());
+      }
+    }
+  } catch {
+    return prompts;
+  }
+  return prompts;
+}
+
 /** How many finished artifacts the per-turn context block advertises.
  * This is a pointer list, not the data — the model reads the one it wants
  * with `artifact read` — so a handful of the most recent is enough to make

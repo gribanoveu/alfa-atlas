@@ -60,6 +60,9 @@ describe("context ring breakdown popover", () => {
       "Свободно",
     ]);
     expect(dialog.textContent).toContain("56K");
+    // The small per-turn blocks are named rather than folded into a bucket
+    // that would look precise without being it.
+    expect(dialog.textContent).toContain("в разбивку не входят");
   });
 
   // While a turn is in flight the ring is floored by the provider's own

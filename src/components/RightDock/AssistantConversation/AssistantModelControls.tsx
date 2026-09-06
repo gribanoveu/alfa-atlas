@@ -228,6 +228,10 @@ function ContextBreakdownPopover({
           Последний отправленный запрос: {lastRequestTokens.toLocaleString("ru-RU")}
         </div>
       ) : null}
+      <div className="assistant-context-popover-note">
+        Оценка. Небольшие поблочные вставки — память, ответы на вопросы, открытый файл, TODO,
+        план, артефакты — добавляются на лету и в разбивку не входят.
+      </div>
     </div>
   );
 }
