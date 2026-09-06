@@ -1547,11 +1547,56 @@
   font-variant-numeric: tabular-nums;
 }
 
-.assistant-chat-duration {
+.assistant-chat-answer-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 4px;
+}
+
+.assistant-chat-duration {
   font-size: var(--font-ui-xs);
   color: var(--text-2);
   opacity: 0.6;
+}
+
+.assistant-chat-answer-copy {
+  /* Pushed to the right edge of the answer, away from the duration line. */
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-2);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.assistant-chat-message.assistant:hover .assistant-chat-answer-copy,
+.assistant-chat-answer-copy:focus-visible,
+.assistant-chat-answer-copy.copied {
+  opacity: 1;
+}
+
+.assistant-chat-answer-copy:hover {
+  background: var(--bg-2);
+  color: var(--text-0);
+}
+
+.assistant-chat-answer-copy.copied {
+  color: var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-chat-answer-copy {
+    transition: none;
+  }
 }
 
 

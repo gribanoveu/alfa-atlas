@@ -66,8 +66,6 @@ pub enum ChatStoreError {
     Json(#[from] serde_json::Error),
     #[error("chat not found: {0}")]
     NotFound(String),
-    #[error("chat database schema version {found} is newer than supported version {supported}")]
-    UnsupportedSchemaVersion { found: i64, supported: i64 },
 }
 
 fn db_path() -> Result<PathBuf, ChatStoreError> {
@@ -87,13 +85,17 @@ fn open() -> Result<Connection, ChatStoreError> {
 
 fn run_migrations(conn: &mut Connection) -> Result<(), ChatStoreError> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version > DB_SCHEMA_VERSION {
-        return Err(ChatStoreError::UnsupportedSchemaVersion {
-            found: version,
-            supported: DB_SCHEMA_VERSION,
-        });
-    }
-    if version == DB_SCHEMA_VERSION {
+    // A database written by a newer build is read as-is, with its
+    // `user_version` left untouched so that build's own migrations still see
+    // the version they wrote. Refusing it instead cost a user their whole
+    // history: every `chat_*` command opens this store, so one newer
+    // `user_version` turned listing, loading *and* saving into errors the
+    // frontend swallows — the chat list simply showed nothing. Schema
+    // upgrades here are additive columns with defaults (see
+    // `migrate_unversioned_schema`), so every column this build reads and
+    // writes is present in any later schema, and columns it doesn't know
+    // about keep their defaults.
+    if version >= DB_SCHEMA_VERSION {
         return Ok(());
     }
 
@@ -789,8 +791,11 @@ mod tests {
         });
     }
 
+    /// A database a newer build has upgraded — a bumped `user_version` plus
+    /// an additive column this build knows nothing about — still lists,
+    /// loads and saves, and keeps the newer version number.
     #[test]
-    fn a_newer_database_version_is_refused_without_deleting_data() {
+    fn a_newer_database_version_still_opens() {
         with_temp_home(|| {
             save_chat(
                 "/repo/one",
@@ -803,21 +808,36 @@ mod tests {
             )
             .unwrap();
             let path = db_path().unwrap();
-            Connection::open(&path)
-                .unwrap()
-                .pragma_update(None, "user_version", DB_SCHEMA_VERSION + 1)
+            {
+                let conn = Connection::open(&path).unwrap();
+                conn.execute(
+                    "ALTER TABLE chats ADD COLUMN future_column TEXT NOT NULL DEFAULT '{}'",
+                    [],
+                )
                 .unwrap();
+                conn.pragma_update(None, "user_version", DB_SCHEMA_VERSION + 1)
+                    .unwrap();
+            }
 
-            let error = list_chats("/repo/one", false).unwrap_err();
-            assert!(matches!(
-                error,
-                ChatStoreError::UnsupportedSchemaVersion { .. }
-            ));
-            let count: i64 = Connection::open(path)
-                .unwrap()
-                .query_row("SELECT COUNT(*) FROM chats", [], |row| row.get(0))
+            assert_eq!(list_chats("/repo/one", false).unwrap().len(), 1);
+            assert_eq!(load_chat("chat-1").unwrap().messages.len(), 1);
+            save_chat(
+                "/repo/one",
+                "chat-2",
+                "and me",
+                &[sample_message("b")],
+                &[],
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(list_chats("/repo/one", false).unwrap().len(), 2);
+
+            let conn = Connection::open(path).unwrap();
+            let version: i64 = conn
+                .pragma_query_value(None, "user_version", |row| row.get(0))
                 .unwrap();
-            assert_eq!(count, 1);
+            assert_eq!(version, DB_SCHEMA_VERSION + 1);
         });
     }
 }

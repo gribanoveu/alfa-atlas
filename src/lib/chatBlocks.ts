@@ -917,6 +917,20 @@ export function flattenBlocksToText(blocks: MessageBlock[]): string {
     .join("\n\n");
 }
 
+/** What the assistant actually *answered*, for copying out of the app and
+ * pasting somewhere else: prose only, `\n\n`-separated. Unlike
+ * `flattenBlocksToText` it drops the user's own steering notes too — a
+ * shared answer should read as the model's reply, not as a transcript of
+ * how the turn was steered — and like it, tool calls and reasoning
+ * contribute nothing. Empty for a turn that only ran tools. */
+export function assistantAnswerText(blocks: MessageBlock[]): string {
+  return blocks
+    .filter((b): b is TextBlock => b.type === "text" && b.content !== "")
+    .map((b) => b.content.trim())
+    .filter((content) => content !== "")
+    .join("\n\n");
+}
+
 /** Upper bound on paths in one turn's ledger. A 48-call research turn is
  * real (see `toolLedger`'s doc comment), and replaying every path from it
  * would cost more than the facts are worth — the most recent ones are the

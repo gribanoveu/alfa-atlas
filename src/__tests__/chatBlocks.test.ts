@@ -10,6 +10,7 @@ import {
   closeOpenBlocks,
   correctRoundText,
   correctTrailingReasoning,
+  assistantAnswerText,
   flattenBlocksToText,
   groupBlocksForRender,
   lastBlockShowsLiveProgress,
@@ -685,6 +686,27 @@ describe("markRunningToolCallsAsInterrupted", () => {
     expect(swept[0]).toBe(text);
     expect(swept[1]).toBe(done);
     expect(swept[2]).toMatchObject({ status: "error" });
+  });
+});
+
+describe("assistantAnswerText", () => {
+  test("keeps only prose — no tool calls, reasoning or steering notes", () => {
+    const blocks: MessageBlock[] = [
+      { type: "reasoning", id: "r1", content: "Надо посмотреть файл." },
+      { type: "text", id: "t1", content: "Смотрю файл.\n" },
+      { type: "toolCall", id: "call_1", name: "readFile", argumentsJson: "{}", status: "done" },
+      { type: "steer", id: "s1", text: "Проверь ru locale" },
+      { type: "text", id: "t2", content: "Готово: локаль на месте." },
+      { type: "text", id: "t3", content: "   " },
+    ];
+    expect(assistantAnswerText(blocks)).toBe("Смотрю файл.\n\nГотово: локаль на месте.");
+  });
+
+  test("is empty for a turn that only ran tools", () => {
+    const blocks: MessageBlock[] = [
+      { type: "toolCall", id: "call_1", name: "grep", argumentsJson: "{}", status: "done" },
+    ];
+    expect(assistantAnswerText(blocks)).toBe("");
   });
 });
 

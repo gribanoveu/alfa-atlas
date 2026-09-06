@@ -13,6 +13,7 @@ import { formatElapsedDuration } from "../../../hooks/useElapsedSeconds";
 import type { AssistantSuggestion } from "../../../lib/assistantSuggestions";
 import type { ConversationMode } from "../../../lib/aiTools";
 import {
+  assistantAnswerText,
   groupBlocksForRender,
   isPlanToolBlock,
   isTicketToolBlock,
@@ -40,6 +41,7 @@ import { AssistantToolApprovalGroup } from "../AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "../AssistantToolCallBlock";
 import { AssistantUserMessage } from "../AssistantUserMessage";
 import { AssistantVisualCard } from "../AssistantVisualCard";
+import { CopyTextButton } from "../CopyTextButton";
 import { CHAT_MODE_OPTIONS } from "./AssistantModelControls";
 
 const EMPTY_LIVE_BLOCK_IDS: ReadonlySet<string> = new Set<string>();
@@ -243,6 +245,10 @@ export function AssistantTranscript({
             // including the silent gap between two tool calls — so the
             // standalone thinking card below would be a second live line
             // saying the same thing.
+            const answerText =
+              message.role === "assistant" && !message.streaming
+                ? assistantAnswerText(message.blocks)
+                : "";
             const liveActivityTail =
               message.role === "assistant" &&
               message.streaming === true &&
@@ -410,12 +416,25 @@ export function AssistantTranscript({
                           ) : null}
                         </div>
                       ) : null}
-                      {typeof message.durationMs === "number" ? (
-                        <div className="assistant-chat-duration">
-                          Готово за{" "}
-                          {formatElapsedDuration(
-                            Math.round(message.durationMs / 1000),
-                          )}
+                      {!message.streaming &&
+                      (typeof message.durationMs === "number" ||
+                        answerText !== "") ? (
+                        <div className="assistant-chat-answer-footer">
+                          {typeof message.durationMs === "number" ? (
+                            <span className="assistant-chat-duration">
+                              Готово за{" "}
+                              {formatElapsedDuration(
+                                Math.round(message.durationMs / 1000),
+                              )}
+                            </span>
+                          ) : null}
+                          {answerText !== "" ? (
+                            <CopyTextButton
+                              text={answerText}
+                              className="assistant-chat-answer-copy"
+                              label="Копировать ответ"
+                            />
+                          ) : null}
                         </div>
                       ) : null}
                     </div>
