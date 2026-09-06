@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   describeMessageForCompaction,
+  estimateWireChatTokens,
   formatCompactionNoticeText,
   insertMessageBefore,
   isCacheValid,
@@ -11,7 +12,9 @@ import {
   shouldCompact,
   type CompactionCache,
 } from "../lib/contextCompaction";
-import type { ChatMessage, MessageBlock, ToolCallBlock } from "../lib/chatBlocks";
+import { estimateTokenCount } from "../lib/tokens";
+import { buildCompactionSummaryBlock } from "../lib/assistantConfig";
+import { estimateMessageContextTokens, type ChatMessage, type MessageBlock, type ToolCallBlock } from "../lib/chatBlocks";
 
 function userMsg(id: string, content: string): ChatMessage {
   return { id, role: "user", content };
@@ -234,5 +237,29 @@ describe("insertMessageBefore", () => {
     const messages = [userMsg("u1", "первое")];
     insertMessageBefore(messages, "u1", notice);
     expect(messages.map((m) => m.id)).toEqual(["u1"]);
+  });
+});
+
+describe("estimateWireChatTokens", () => {
+  test("with no cache, sums the scoped messages", () => {
+    const messages = conversation(4);
+    const expected = messages.reduce((sum, m) => sum + estimateMessageContextTokens(m), 0);
+    expect(estimateWireChatTokens(messages, null)).toBe(expected);
+  });
+
+  test("with a valid cache, counts the summary plus the tail after the boundary", () => {
+    const messages = conversation(8);
+    const cache: CompactionCache = { summaryText: "earlier work on auth", boundaryMessageId: "m3" };
+    const tail = messages.slice(4);
+    const expected =
+      estimateTokenCount(buildCompactionSummaryBlock(cache.summaryText)) +
+      tail.reduce((sum, m) => sum + estimateMessageContextTokens(m), 0);
+    expect(estimateWireChatTokens(messages, cache)).toBe(expected);
+  });
+
+  test("an invalid cache is ignored", () => {
+    const messages = conversation(4);
+    const cache: CompactionCache = { summaryText: "stale", boundaryMessageId: "missing" };
+    expect(estimateWireChatTokens(messages, cache)).toBe(estimateWireChatTokens(messages, null));
   });
 });

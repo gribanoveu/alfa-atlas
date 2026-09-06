@@ -39,7 +39,6 @@ import type { SpecsRepoInfo } from "../lib/openapi";
 import {
   appendPendingApprovalBlock,
   chatMessageToPlainText,
-  estimateMessageContextTokens,
   updateLastAssistantBlocks,
   type ChatMessage,
 } from "../lib/chatBlocks";
@@ -57,6 +56,7 @@ import {
   describeMessageForCompaction,
   formatCompactionNoticeText,
   insertMessageBefore,
+  estimateWireChatTokens,
   isCacheValid,
   isContextLengthError,
   planCompaction,
@@ -72,16 +72,17 @@ import { METRICS } from "../data/metricsCatalog";
  * breakdown popover. Same numbers the ring itself sums — split, not
  * recomputed — so the popover can never disagree with the label above it.
  *
- * Deliberately does not enumerate the small per-turn system blocks
- * (memory, open file, TODO, plan, artifacts): they are a few hundred
- * tokens each, several need an `await` the render path does not have, and
- * a row that says "~200" for five different things is noise. The popover
- * says so rather than folding them into a bucket that looks precise. */
+ * Still omitted (a few dozen to a few hundred tokens, several need an
+ * `await` the render path does not have): TODO, open file, artifacts,
+ * repo-link template, mode-change notices. */
 export type ContextBreakdown = {
   systemPrompt: number;
   toolSchemas: number;
   chat: number;
   skills: number;
+  userAnswers: number;
+  plan: number;
+  memory: number;
   total: number;
 };
 
@@ -319,6 +320,43 @@ export function useLlmChat(
     activePlanIdRef.current = next;
     setActivePlanIdState(next);
   }, []);
+
+  const [memoryWake, setMemoryWake] = useState<string | null>(null);
+  const [planRecord, setPlanRecord] = useState<PlanRecord | null>(null);
+
+  useEffect(() => {
+    if (sending) return;
+    let cancelled = false;
+    void getMemoryWake()
+      .then((text) => {
+        if (!cancelled) setMemoryWake(text?.trim() ? text : null);
+      })
+      .catch(() => {
+        if (!cancelled) setMemoryWake(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sending]);
+
+  useEffect(() => {
+    if (sending) return;
+    if (!activePlanId || conversationMode !== "agent") {
+      setPlanRecord(null);
+      return;
+    }
+    let cancelled = false;
+    void planGet(activePlanId)
+      .then((record) => {
+        if (!cancelled) setPlanRecord(record);
+      })
+      .catch(() => {
+        if (!cancelled) setPlanRecord(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sending, activePlanId, conversationMode]);
 
   // The in-flight batch of pending decisions, if any — `decide` is what
   // `AssistantToolApprovalGroup`'s Approve/Deny buttons (via `decideToolCall`
@@ -720,6 +758,9 @@ export function useLlmChat(
    * — a question that became worth answering once a loaded skill could add
    * ~12k tokens to every request on its own.
    *
+   * `chat` follows the wire (compaction summary + tail, plan-execution
+   * slice), not the on-screen transcript.
+   *
    * Known, accepted over-count: during the very turn that loads a skill,
    * the streaming message's `skillLoaded` result is counted by
    * `estimateMessageContextTokens` *and* again by `skills` below. It is a
@@ -727,6 +768,7 @@ export function useLlmChat(
    * its imprecision), and filtering `m.streaming` out here costs more than
    * the inaccuracy is worth. */
   const contextBreakdown = useMemo((): ContextBreakdown => {
+    const real = realMessages(messages);
     const systemPrompt = estimateTokenCount(
       buildSystemPromptForConversationMode(
         conversationMode,
@@ -737,10 +779,37 @@ export function useLlmChat(
       ),
     );
     const toolSchemas = estimateToolSchemaTokens(toolDefinitions);
-    const chat = messages.reduce((sum, m) => sum + estimateMessageContextTokens(m), 0);
-    const skills = estimateTokenCount(buildLoadedSkillsContextBlock(realMessages(messages)) ?? "");
-    return { systemPrompt, toolSchemas, chat, skills, total: systemPrompt + toolSchemas + chat + skills };
-  }, [messages, accessMode, conversationMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
+    const chat = estimateWireChatTokens(
+      sliceMessagesForPlanExecution(real, false),
+      compactionCacheRef.current,
+    );
+    const skills = estimateTokenCount(buildLoadedSkillsContextBlock(real) ?? "");
+    const userAnswers = estimateTokenCount(buildUserAnswersContextBlock(real) ?? "");
+    const plan = estimateTokenCount(
+      buildActivePlanContextBlock(activePlanId, conversationMode === "agent" ? planRecord : null) ?? "",
+    );
+    const memory = estimateTokenCount(buildMemoryContextBlock(memoryWake) ?? "");
+    return {
+      systemPrompt,
+      toolSchemas,
+      chat,
+      skills,
+      userAnswers,
+      plan,
+      memory,
+      total: systemPrompt + toolSchemas + chat + skills + userAnswers + plan + memory,
+    };
+  }, [
+    messages,
+    accessMode,
+    conversationMode,
+    specsRepoInfo,
+    toolDefinitions,
+    docsRootRelativeToRepo,
+    activePlanId,
+    planRecord,
+    memoryWake,
+  ]);
 
   const contextTokens = contextBreakdown.total;
 
@@ -1032,7 +1101,14 @@ export function useLlmChat(
         // `chatMessageToPlainText` drops tool blocks entirely.
         estimateTokenCount(loadedSkillsBlock ?? "") +
         estimateTokenCount(userAnswersBlock ?? "") +
-        scoped.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
+        estimateTokenCount(
+          buildActivePlanContextBlock(
+            activePlanIdRef.current,
+            conversationMode === "agent" ? planRecord : null,
+          ) ?? "",
+        ) +
+        estimateTokenCount(buildMemoryContextBlock(memoryWake) ?? "") +
+        estimateWireChatTokens(scoped, compactionCacheRef.current);
 
       if (opts.aggressiveCompaction || shouldCompact(scopedTokens, contextLimit, scoped)) {
         // Identifies the notice across the three `setMessages` calls below —
@@ -1148,16 +1224,17 @@ export function useLlmChat(
       const activeFileBlock = buildActiveFileContextBlock(activeFileForPrompt);
 
       const planId = activePlanIdRef.current;
-      let planRecord: PlanRecord | null = null;
+      let fetchedPlan: PlanRecord | null = null;
       if (planId && conversationMode === "agent") {
         try {
-          planRecord = await planGet(planId);
+          fetchedPlan = await planGet(planId);
         } catch (e) {
           console.error("Не удалось прочитать активный план", e);
-          planRecord = null;
+          fetchedPlan = null;
         }
       }
-      const activePlanBlock = buildActivePlanContextBlock(planId, planRecord);
+      setPlanRecord(fetchedPlan);
+      const activePlanBlock = buildActivePlanContextBlock(planId, fetchedPlan);
 
       // Pointer list only — this is what makes an artifact filled in during
       // one conversation discoverable from any later one, since the pause
@@ -1192,7 +1269,9 @@ export function useLlmChat(
 
       let memoryBlock: string | null = null;
       try {
-        memoryBlock = buildMemoryContextBlock(await getMemoryWake());
+        const wake = await getMemoryWake();
+        setMemoryWake(wake?.trim() ? wake : null);
+        memoryBlock = buildMemoryContextBlock(wake);
       } catch (e) {
         // "No project open" is expected and not worth logging; anything
         // else (a corrupt store, an I/O error, a bad hand-edited config
@@ -1203,6 +1282,7 @@ export function useLlmChat(
         if (!message.includes("no project open")) {
           console.error("Не удалось прочитать память ассистента", e);
         }
+        setMemoryWake(null);
         memoryBlock = null;
       }
 
@@ -1319,6 +1399,8 @@ export function useLlmChat(
       settleError,
       onTurnSettled,
       activeFilePath,
+      planRecord,
+      memoryWake,
     ],
   );
 

@@ -181,6 +181,9 @@ function contextRows(breakdown: ContextBreakdown, displayedTokens: number): Cont
     { label: "Скиллы", tokens: breakdown.skills },
     { label: "Системный промпт", tokens: breakdown.systemPrompt },
     { label: "Схемы инструментов", tokens: breakdown.toolSchemas },
+    { label: "Ответы пользователя", tokens: breakdown.userAnswers },
+    { label: "План", tokens: breakdown.plan },
+    { label: "Память", tokens: breakdown.memory },
     { label: "Прочее (замер провайдера)", tokens: other },
   ]
     .filter((row) => row.tokens > 0)

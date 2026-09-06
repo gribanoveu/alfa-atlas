@@ -11,6 +11,9 @@ const breakdown: ContextBreakdown = {
   toolSchemas: 9_000,
   chat: 20_000,
   skills: 12_000,
+  userAnswers: 0,
+  plan: 0,
+  memory: 0,
   total: 44_000,
 };
 
@@ -60,9 +63,6 @@ describe("context ring breakdown popover", () => {
       "Свободно",
     ]);
     expect(dialog.textContent).toContain("56K");
-    // The small per-turn blocks are named rather than folded into a bucket
-    // that would look precise without being it.
-    expect(dialog.textContent).toContain("в разбивку не входят");
   });
 
   // While a turn is in flight the ring is floored by the provider's own
@@ -72,6 +72,37 @@ describe("context ring breakdown popover", () => {
     renderBar({ contextTokens: 50_000 });
     fireEvent.click(screen.getByRole("button", { name: /100K/ }));
     expect(screen.getByRole("dialog").textContent).toContain("Прочее (замер провайдера)");
+  });
+
+  test("lists plan, memory and user-answer rows when they have tokens", () => {
+    render(
+      <AssistantModelControls
+        providerId="openai"
+        activeProvider={provider}
+        sending={false}
+        accessMode={"docsOnly" as never}
+        accessModeBusy={false}
+        conversationMode={"agent" as never}
+        contextTokens={50_000}
+        contextBreakdown={{
+          ...breakdown,
+          userAnswers: 800,
+          plan: 3_000,
+          memory: 2_000,
+          total: 49_800,
+        }}
+        lastRequestTokens={null}
+        onConversationModeChange={() => {}}
+        onAccessModeChange={() => {}}
+        updateProviderConfig={async () => {}}
+        refreshLlmSetup={async () => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /100K/ }));
+    const text = screen.getByRole("dialog").textContent;
+    expect(text).toContain("Ответы пользователя");
+    expect(text).toContain("План");
+    expect(text).toContain("Память");
   });
 
   test("Escape closes it", () => {

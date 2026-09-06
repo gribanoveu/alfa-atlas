@@ -194,6 +194,9 @@ mock.module("../lib/llm", () => ({
   },
 }));
 
+let memoryWakeText = "";
+let planRecordForGet: import("../lib/plans").PlanRecord | null = null;
+
 mock.module("../lib/aiTools", () => ({
   ...actualAiTools,
   getAutoApprovedTools: async () => autoApprovedTools,
@@ -201,7 +204,7 @@ mock.module("../lib/aiTools", () => ({
     setAutoApprovedCalls.push([tool, on]);
   },
   onAutoApprovedToolsChange: () => () => {},
-  getMemoryWake: async () => null,
+  getMemoryWake: async () => memoryWakeText,
 }));
 
 mock.module("../lib/assistantSounds", () => ({
@@ -211,7 +214,7 @@ mock.module("../lib/assistantSounds", () => ({
 // Both spread the real module rather than standing in for it wholesale:
 // `mock.module` is global for the whole `bun test` run, so a replacement that
 // drops the other exports is what every later test file importing them sees.
-mock.module("../lib/plans", () => ({ ...actualPlans, planGet: async () => null }));
+mock.module("../lib/plans", () => ({ ...actualPlans, planGet: async () => planRecordForGet }));
 mock.module("../lib/artifacts", () => ({ ...actualArtifacts, artifactList: async () => [] }));
 
 const { useLlmChat } = await import("../hooks/useLlmChat");
@@ -254,6 +257,7 @@ function render(
     contextLimit?: number | null;
     initialMessages?: ChatMessage[];
     initialPendingResume?: PendingApproval | null;
+    initialActivePlanId?: string | null;
   } = {},
 ) {
   const cbs: Callbacks = { onTurnSettled: mock(() => {}), onTurnPaused: mock(() => {}) };
@@ -268,7 +272,7 @@ function render(
       null,
       over.initialMessages ?? [],
       [],
-      null,
+      over.initialActivePlanId ?? null,
       over.initialPendingResume ?? null,
       cbs.onTurnSettled,
       cbs.onTurnPaused,
@@ -325,6 +329,8 @@ beforeEach(() => {
   onceResponse = "сводка";
   deferStream = false;
   pendingStream = [];
+  memoryWakeText = "";
+  planRecordForGet = null;
 });
 
 // --- tests -----------------------------------------------------------------
@@ -1519,7 +1525,77 @@ describe("useLlmChat — a loaded skill survives the turn that loaded it", () =>
     const breakdown = result.current.contextBreakdown;
     expect(breakdown.skills).toBeGreaterThan(1500);
     expect(breakdown.total).toBe(
-      breakdown.systemPrompt + breakdown.toolSchemas + breakdown.chat + breakdown.skills,
+      breakdown.systemPrompt +
+        breakdown.toolSchemas +
+        breakdown.chat +
+        breakdown.skills +
+        breakdown.userAnswers +
+        breakdown.plan +
+        breakdown.memory,
     );
+  });
+
+  test("the context breakdown attributes askUser answers to their own bucket", () => {
+    const { result } = render({
+      initialMessages: [
+        {
+          id: "u1",
+          role: "user",
+          content: "опиши метод",
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          streaming: false,
+          blocks: [
+            {
+              type: "toolCall",
+              id: "call_ask",
+              name: "askUser",
+              argumentsJson: JSON.stringify({
+                title: null,
+                questions: [{ id: "q1", prompt: "Какой формат таблицы?", options: [], allowMultiple: false }],
+              }),
+              status: "done",
+              result: {
+                tool: "askUser",
+                result: {
+                  answers: [
+                    {
+                      questionId: "q1",
+                      selectedOptionIds: ["o2"],
+                      selectedLabels: ["Расширенный"],
+                      customText: null,
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(result.current.contextBreakdown.userAnswers).toBeGreaterThan(0);
+  });
+
+  test("the context breakdown counts a live plan and memory wake", async () => {
+    memoryWakeText = "z".repeat(4000);
+    planRecordForGet = {
+      id: "p1",
+      name: "План",
+      overview: "обзор",
+      plan: "y".repeat(4000),
+      todos: [],
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      chatId: null,
+      repoRoot: null,
+    };
+    const { result } = render({ initialActivePlanId: "p1" });
+    await waitFor(() => {
+      expect(result.current.contextBreakdown.memory).toBeGreaterThan(500);
+      expect(result.current.contextBreakdown.plan).toBeGreaterThan(500);
+    });
   });
 });

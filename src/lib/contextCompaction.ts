@@ -1,11 +1,18 @@
-import { CONTEXT_COMPACTION_MIN_MESSAGES, CONTEXT_COMPACTION_TRIGGER_RATIO, describeToolResult } from "./assistantConfig";
+import {
+  buildCompactionSummaryBlock,
+  CONTEXT_COMPACTION_MIN_MESSAGES,
+  CONTEXT_COMPACTION_TRIGGER_RATIO,
+  describeToolResult,
+} from "./assistantConfig";
 import {
   chatMessageToPlainText,
+  estimateMessageContextTokens,
   flattenBlocksToText,
   toolCallPaths,
   type ChatMessage,
   type ToolCallBlock,
 } from "./chatBlocks";
+import { estimateTokenCount } from "./tokens";
 
 /** What one proactive compaction pass leaves behind — cached by
  * `useLlmChat` (in a `useRef`, never persisted) so a later pass only has to
@@ -45,9 +52,30 @@ export function realMessages(messages: ChatMessage[]): ChatMessage[] {
  * weakens) or one whose boundary message was somehow removed. Callers
  * should drop an invalid cache (treat it as `null`) rather than pass it to
  * `planCompaction`/use its `summaryText`. */
-export function isCacheValid(cache: CompactionCache | null, priorTurns: ChatMessage[]): boolean {
+export function isCacheValid(cache: CompactionCache | null, priorTurns: ChatMessage[]): cache is CompactionCache {
   if (!cache) return false;
   return realMessages(priorTurns).some((m) => m.id === cache.boundaryMessageId);
+}
+
+/** Token estimate for the transcript the next request will actually send:
+ * compacted summary + verbatim tail, or the whole `scoped` history when
+ * there is no valid cache. `scoped` is already `realMessages` (and, when
+ * executing a plan, the post-«Начать» slice) — this function does not
+ * filter again. */
+export function estimateWireChatTokens(
+  scoped: ChatMessage[],
+  cache: CompactionCache | null,
+): number {
+  let tail = scoped;
+  let summaryTokens = 0;
+  if (isCacheValid(cache, scoped)) {
+    const boundaryIndex = scoped.findIndex((m) => m.id === cache.boundaryMessageId);
+    if (boundaryIndex !== -1) {
+      tail = scoped.slice(boundaryIndex + 1);
+      summaryTokens = estimateTokenCount(buildCompactionSummaryBlock(cache.summaryText));
+    }
+  }
+  return summaryTokens + tail.reduce((sum, m) => sum + estimateMessageContextTokens(m), 0);
 }
 
 /** Whether it's worth even attempting a compaction pass right now. `false`
