@@ -97,16 +97,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      # Тег аннотированный, и его сообщение - это описание релиза. Checkout
-      # идёт до скачивания артефактов: он чистит рабочую директорию и снёс бы
-      # уже разложенный dist/.
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
+      # Описание релиза - тело сообщения аннотированного тега, и берётся оно
+      # через API, а не из клона: actions/checkout заводит у себя легковесный
+      # тег, а на нём `git tag --format=%(contents:body)` молча отдаёт тело
+      # сообщения коммита вместо тега (так в релиз 0.6.1 уехал один trailer
+      # Co-Authored-By). Первые две строки - заголовок тега и пустая строка за
+      # ним - отбрасываются: заголовок уже стоит в названии релиза.
       - name: Release notes from the tag message
-        run: git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object.sha')
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.message' \
+            | tail -n +3 > "$RUNNER_TEMP/notes.md"
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
