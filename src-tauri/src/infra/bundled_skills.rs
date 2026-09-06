@@ -66,7 +66,32 @@ const JIRA_TASK_DECOMPOSITION: BundledSkill = BundledSkill {
 const SERVICE_DESIGN_SPEC_DRIVEN: BundledSkill = BundledSkill {
     name: "service-design-spec-driven",
     skill_md: include_str!("../../assets/skills/service-design-spec-driven/SKILL.md"),
-    files: &[],
+    files: &[
+        BundledFile {
+            path: "references/structure.md",
+            content: include_str!(
+                "../../assets/skills/service-design-spec-driven/references/structure.md"
+            ),
+        },
+        BundledFile {
+            path: "references/templates.md",
+            content: include_str!(
+                "../../assets/skills/service-design-spec-driven/references/templates.md"
+            ),
+        },
+        BundledFile {
+            path: "references/principles.md",
+            content: include_str!(
+                "../../assets/skills/service-design-spec-driven/references/principles.md"
+            ),
+        },
+        BundledFile {
+            path: "references/antipatterns.md",
+            content: include_str!(
+                "../../assets/skills/service-design-spec-driven/references/antipatterns.md"
+            ),
+        },
+    ],
 };
 
 pub const BUNDLED_SKILLS: &[BundledSkill] = &[
