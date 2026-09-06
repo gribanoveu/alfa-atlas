@@ -7,6 +7,7 @@ import {
   CONTEXT_NEAR_LIMIT_RATIO,
 } from "../../../lib/assistantConfig";
 import type { AiAccessMode, ConversationMode } from "../../../lib/aiTools";
+import type { ContextBreakdown } from "../../../hooks/useLlmChat";
 import type { LlmProviderConfig, ResolvedLlmProvider } from "../../../lib/llm";
 import { trackMetric } from "../../../lib/metrics";
 import { METRICS } from "../../../data/metricsCatalog";
@@ -161,6 +162,76 @@ function contextUsageTitle(
     : `${head}\nПоследний отправленный запрос: ${ru(lastRequestTokens)}`;
 }
 
+/** One row of the ring's breakdown popover. `tokens` is already the final
+ * number — the popover only formats and sorts. */
+type ContextRow = { label: string; tokens: number };
+
+/** Rows for the breakdown popover, largest first, zero-token rows dropped.
+ *
+ * `other` closes the gap between the estimate's parts and what the ring
+ * actually displays: while a turn is in flight the ring is floored by the
+ * provider's own `totalTokens` (see `displayedContextTokens`), which counts
+ * things no client-side projection sees. Showing the difference as its own
+ * row is honest; silently letting the rows disagree with the label above
+ * them is not. */
+function contextRows(breakdown: ContextBreakdown, displayedTokens: number): ContextRow[] {
+  const other = Math.max(0, displayedTokens - breakdown.total);
+  return [
+    { label: "История чата", tokens: breakdown.chat },
+    { label: "Скиллы", tokens: breakdown.skills },
+    { label: "Системный промпт", tokens: breakdown.systemPrompt },
+    { label: "Схемы инструментов", tokens: breakdown.toolSchemas },
+    { label: "Прочее (замер провайдера)", tokens: other },
+  ]
+    .filter((row) => row.tokens > 0)
+    .sort((a, b) => b.tokens - a.tokens);
+}
+
+function ContextBreakdownPopover({
+  breakdown,
+  displayedTokens,
+  contextLimit,
+  lastRequestTokens,
+}: {
+  breakdown: ContextBreakdown;
+  displayedTokens: number;
+  contextLimit: number;
+  lastRequestTokens: number | null;
+}) {
+  const rows = contextRows(breakdown, displayedTokens);
+  const free = Math.max(0, contextLimit - displayedTokens);
+  const share = (tokens: number) => `${Math.round((tokens / contextLimit) * 100)}%`;
+
+  return (
+    <div className="assistant-context-popover" role="dialog" aria-label="Из чего состоит контекст">
+      <div className="assistant-context-popover-title">
+        ~{displayedTokens.toLocaleString("ru-RU")} из {contextLimit.toLocaleString("ru-RU")} токенов
+      </div>
+      <ul className="assistant-context-popover-rows">
+        {rows.map((row) => (
+          <li key={row.label}>
+            <span className="assistant-context-popover-label">{row.label}</span>
+            <span className="assistant-context-popover-value">
+              {formatTokenCount(row.tokens)} · {share(row.tokens)}
+            </span>
+          </li>
+        ))}
+        <li className="is-free">
+          <span className="assistant-context-popover-label">Свободно</span>
+          <span className="assistant-context-popover-value">
+            {formatTokenCount(free)} · {share(free)}
+          </span>
+        </li>
+      </ul>
+      {lastRequestTokens !== null ? (
+        <div className="assistant-context-popover-note">
+          Последний отправленный запрос: {lastRequestTokens.toLocaleString("ru-RU")}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const CONTEXT_RING_RADIUS = 8;
 const CONTEXT_RING_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_RING_RADIUS;
 
@@ -172,6 +243,7 @@ type AssistantModelControlsProps = {
   accessModeBusy: boolean;
   conversationMode: ConversationMode;
   contextTokens: number;
+  contextBreakdown: ContextBreakdown;
   lastRequestTokens: number | null;
   onConversationModeChange: (mode: ConversationMode) => void;
   onAccessModeChange: (mode: AiAccessMode) => void;
@@ -190,6 +262,7 @@ export function AssistantModelControls({
   accessModeBusy,
   conversationMode,
   contextTokens,
+  contextBreakdown,
   lastRequestTokens,
   onConversationModeChange,
   onAccessModeChange,
@@ -198,6 +271,8 @@ export function AssistantModelControls({
 }: AssistantModelControlsProps) {
   const [modelSelectOpen, setModelSelectOpen] = useState(false);
   const modelSelectRef = useRef<HTMLDivElement>(null);
+  const [contextPopoverOpen, setContextPopoverOpen] = useState(false);
+  const contextBarRef = useRef<HTMLDivElement>(null);
   const contextLimit = activeProvider?.limit?.context ?? null;
   const contextUsageRatio = contextLimit
     ? Math.min(1, contextTokens / contextLimit)
@@ -225,6 +300,27 @@ export function AssistantModelControls({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [modelSelectOpen]);
+
+  // Same dismissal contract as the model picker above — outside pointer or
+  // Escape closes it. Two small effects rather than one generalized hook:
+  // there are exactly two popovers in this file.
+  useEffect(() => {
+    if (!contextPopoverOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!contextBarRef.current?.contains(event.target as Node)) {
+        setContextPopoverOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setContextPopoverOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [contextPopoverOpen]);
 
   const handleToggleModelSelect = () => {
     setModelSelectOpen((open) => {
@@ -337,13 +433,29 @@ export function AssistantModelControls({
               ? " near-limit"
               : ""
           }`}
-          title={contextUsageTitle(
-            contextTokens,
-            contextLimit,
-            lastRequestTokens,
-            sending,
-          )}
+          ref={contextBarRef}
         >
+          {contextPopoverOpen ? (
+            <ContextBreakdownPopover
+              breakdown={contextBreakdown}
+              displayedTokens={contextTokens}
+              contextLimit={contextLimit}
+              lastRequestTokens={lastRequestTokens}
+            />
+          ) : null}
+          <button
+            type="button"
+            className="assistant-context-bar-trigger"
+            aria-haspopup="dialog"
+            aria-expanded={contextPopoverOpen}
+            title={contextUsageTitle(
+              contextTokens,
+              contextLimit,
+              lastRequestTokens,
+              sending,
+            )}
+            onClick={() => setContextPopoverOpen((open) => !open)}
+          >
           <svg
             className="assistant-context-ring"
             width="20"
@@ -371,6 +483,7 @@ export function AssistantModelControls({
           <span className="assistant-context-bar-label">
             {formatTokenCount(contextTokens)} / {formatTokenCount(contextLimit)}
           </span>
+          </button>
         </div>
       ) : null}
     </div>

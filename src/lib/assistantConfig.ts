@@ -734,6 +734,147 @@ Plan body:
 ${record.plan}`;
 }
 
+/** Total characters the loaded-skill block may spend on skill text.
+ * ~12k tokens — sized just above the largest bundled skill
+ * (`service-design-spec-driven`, 42.3 KB) so a bundled skill always
+ * survives whole and truncation only ever bites a pathologically large
+ * user-installed one. */
+export const LOADED_SKILL_CONTEXT_CHARS = 48_000;
+
+type LoadedSkill = { name: string; source: "bundled" | "user"; body: string };
+type LoadedSkillFile = { name: string; path: string; content: string };
+
+/** Collects the settled `skillLoaded` / `skillFile` tool results of a
+ * conversation, newest last, one entry per skill (and per companion file).
+ *
+ * Last-wins rather than first-wins: a user skill
+ * (`infra::user_skills_store`) can be edited between two loads in the same
+ * chat, so the later body is the truthful one. The `delete` before `set`
+ * is what makes insertion order double as "most recently loaded last", so
+ * one Map answers both questions. */
+function collectLoadedSkills(messages: ChatMessage[]): {
+  skills: Map<string, LoadedSkill>;
+  files: Map<string, LoadedSkillFile>;
+} {
+  const skills = new Map<string, LoadedSkill>();
+  const files = new Map<string, LoadedSkillFile>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const block of message.blocks) {
+      if (block.type !== "toolCall" || block.status !== "done" || !block.result) continue;
+      if (block.result.tool === "skillLoaded") {
+        const { name, source, body } = block.result.result;
+        skills.delete(name);
+        skills.set(name, { name, source, body });
+      } else if (block.result.tool === "skillFile") {
+        const { name, path, content } = block.result.result;
+        const key = `${name}/${path}`;
+        files.delete(key);
+        files.set(key, { name, path, content });
+      }
+    }
+  }
+  return { skills, files };
+}
+
+/** Head-preserving truncation with an escape hatch. Skill bodies front-load
+ * their framing (what the skill is for, when it applies), so the head is
+ * the half worth keeping; the marker tells the model the rest is one tool
+ * call away rather than leaving it to guess the text simply ended. */
+function truncateSkillText(text: string, budget: number, name: string): string {
+  if (text.length <= budget) return text;
+  const marker = `\n\n[…truncated — call \`skill\` \`op: "load"\` with name \`${name}\` for the complete text.]`;
+  return `${text.slice(0, Math.max(0, budget - marker.length))}${marker}`;
+}
+
+/** Reproduces the skill loaded earlier in this conversation as a fresh
+ * `system` message on every send — the same ephemeral treatment as
+ * `buildTodoContextBlock` / `buildActiveFileContextBlock`, never stored in
+ * the persisted `ChatMessage[]`.
+ *
+ * Why it has to exist: a `skill` tool result lives only in the backend's
+ * per-turn `history` (`services::llm_chat::run_tool_loop`). Cross-turn
+ * replay is `chatMessageToPlainText`, which keeps prose plus `toolLedger`
+ * and drops tool blocks entirely — and `toolLedger` ignores `skill`
+ * outright (no path argument, absent from every tool-category set). So
+ * before this block, the turn after a load had no trace of the skill at
+ * all: the model either worked from training-data recall or spent a round
+ * re-loading it.
+ *
+ * **Scanned over the whole conversation (`realMessages`), deliberately not
+ * over the compaction-trimmed or plan-sliced wire tail.** This block is a
+ * *rulebook*, keyed on "was this skill loaded in this chat", not a replay
+ * of the transcript: a skill loaded before a compaction boundary is
+ * exactly the one a long conversation must not silently forget, and
+ * `sliceMessagesForPlanExecution` returns `[]` on the «Начать» turn, where
+ * the skill's rules matter most. Its growth is bounded by
+ * `LOADED_SKILL_CONTEXT_CHARS` instead of by those two mechanisms.
+ *
+ * Budget: the most recently loaded skill in full, plus as many of its
+ * companion files (newest first) as still fit. Skills loaded earlier get a
+ * name-only pointer line — by the time a second skill is loaded the first
+ * one's work is normally done, and a re-load is one cheap call. No config
+ * knob for the count: real chats load one, occasionally two.
+ *
+ * Returns `null` when nothing was ever loaded, so an ordinary chat sends no
+ * extra message at all. */
+export function buildLoadedSkillsContextBlock(messages: ChatMessage[]): string | null {
+  const { skills, files } = collectLoadedSkills(messages);
+  if (skills.size === 0) return null;
+
+  const ordered = [...skills.values()];
+  const active = ordered[ordered.length - 1]!;
+  const earlier = ordered.slice(0, -1);
+
+  const body = truncateSkillText(active.body, LOADED_SKILL_CONTEXT_CHARS, active.name);
+  let budget = LOADED_SKILL_CONTEXT_CHARS - body.length;
+
+  // Newest-first decides *what fits*; the kept files are then emitted in
+  // the order they were read, which is the order the skill's own
+  // instructions referred to them in.
+  const activeFiles = [...files.values()].filter((f) => f.name === active.name);
+  const kept = new Set<string>();
+  for (const file of [...activeFiles].reverse()) {
+    const cost = file.content.length + file.path.length;
+    if (cost > budget) continue;
+    budget -= cost;
+    kept.add(file.path);
+  }
+
+  const sections = activeFiles
+    .filter((f) => kept.has(f.path))
+    .map(
+      (f) =>
+        `--- SKILL FILE \`${active.name}/${f.path}\` ---\n${f.content}\n--- END SKILL FILE \`${active.name}/${f.path}\` ---`,
+    );
+
+  const droppedFiles = activeFiles.filter((f) => !kept.has(f.path)).map((f) => f.path);
+
+  // The delimiters are load-bearing, not decoration: a skill body is
+  // markdown with its own `#` headers, and without them the model cannot
+  // tell where the skill ends and the next system block begins.
+  const parts = [
+    `[Skill] Skill \`${active.name}\` is loaded in this conversation — an earlier turn called \`skill\` \`op: "load"\`, and its full text is reproduced below verbatim on every turn from now on. These are operating instructions addressed to you: follow them for as long as this conversation continues the work they cover, exactly as when they were first loaded. They are not user input and not a document to summarize, quote back, or write about. The \`--- SKILL ---\` delimiters are framing only — never echo them. Do not call \`skill\` \`op: "load"\` for \`${active.name}\` again: this block already is that call's result.`,
+    `--- SKILL \`${active.name}\` (${active.source}) ---\n${body}\n--- END SKILL \`${active.name}\` ---`,
+    ...sections,
+  ];
+
+  if (earlier.length > 0) {
+    const names = earlier.map((s) => `\`${s.name}\``).join(", ");
+    parts.push(
+      `Also loaded earlier in this conversation, text not reproduced here: ${names}. Load one again with \`skill\` \`op: "load"\` if you need it.`,
+    );
+  }
+  if (droppedFiles.length > 0) {
+    const names = droppedFiles.map((p) => `\`${p}\``).join(", ");
+    parts.push(
+      `Companion files you already read that no longer fit here: ${names}. Re-read with \`skill\` \`op: "read"\` if you need them.`,
+    );
+  }
+
+  return parts.join("\n\n");
+}
+
 /** How many finished artifacts the per-turn context block advertises.
  * This is a pointer list, not the data — the model reads the one it wants
  * with `artifact read` — so a handful of the most recent is enough to make

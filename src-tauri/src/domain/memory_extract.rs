@@ -320,6 +320,48 @@ mod tests {
         );
     }
 
+    /// A loaded skill must never become a remembered fact: its rules are a
+    /// product capability, not something learned about this user or repo.
+    /// The guarantee is structural rather than a blocklist — the extractor
+    /// reads `text` blocks only, so a `skill` tool result cannot reach it —
+    /// and this pins that structure, because the ephemeral system block
+    /// that replays a skill across turns rests on it.
+    #[test]
+    fn pending_turn_never_sees_a_loaded_skill_body() {
+        let messages = messages(vec![
+            serde_json::json!({"id":"u1","role":"user","content":"составь тикет"}),
+            serde_json::json!({
+                "id":"a1",
+                "role":"assistant",
+                "blocks":[
+                    {
+                        "type":"toolCall",
+                        "id":"call_1",
+                        "name":"skill",
+                        "argumentsJson":"{\"op\":\"load\",\"name\":\"jira-task-description\"}",
+                        "status":"done",
+                        "result":{
+                            "tool":"skillLoaded",
+                            "result":{
+                                "name":"jira-task-description",
+                                "source":"bundled",
+                                "body":"SKILL-BODY-MARKER: always write Acceptance Criteria",
+                                "files":[]
+                            }
+                        }
+                    },
+                    {"type":"text","id":"t1","content":"Готово"}
+                ]
+            }),
+        ]);
+
+        let turn = pending_turn(&messages, -1).expect("a settled turn");
+        let transcript = turn.transcript.expect("a transcript worth extracting");
+        assert_eq!(transcript.assistant_text, "Готово");
+        assert!(!transcript.assistant_text.contains("SKILL-BODY-MARKER"));
+        assert!(!transcript.user_message.contains("SKILL-BODY-MARKER"));
+    }
+
     #[test]
     fn pending_turn_skips_already_extracted_prefix() {
         let messages = messages(vec![

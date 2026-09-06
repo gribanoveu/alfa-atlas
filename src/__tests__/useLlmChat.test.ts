@@ -1384,3 +1384,92 @@ describe("useLlmChat — the compaction notice", () => {
     expect(noticeIndex(result.current.messages)).toBe(-1);
   });
 });
+
+describe("useLlmChat — a loaded skill survives the turn that loaded it", () => {
+  // Before the loaded-skills block existed, a `skill` result lived only in
+  // the backend's per-turn history: `chatMessageToPlainText` drops tool
+  // blocks and `toolLedger` has no arm for `skill`, so the next turn saw no
+  // trace of it at all.
+  test("re-injects the skill body as a system message on the next turn", async () => {
+    const priorTurn: ChatMessage = {
+      id: "a1",
+      role: "assistant",
+      streaming: false,
+      blocks: [
+        {
+          type: "toolCall",
+          id: "call_skill",
+          name: "skill",
+          argumentsJson: JSON.stringify({ op: "load", name: "jira-task-description" }),
+          status: "done",
+          result: {
+            tool: "skillLoaded",
+            result: {
+              name: "jira-task-description",
+              source: "bundled",
+              body: "SKILL-BODY-MARKER",
+              files: [],
+            },
+          },
+        },
+        { type: "text", id: "t1", content: "Готово." },
+      ],
+    };
+    outcomes = [done("Ответ")];
+    const { result } = render({
+      initialMessages: [{ id: "u1", role: "user", content: "составь тикет" }, priorTurn],
+    });
+
+    await act(async () => {
+      await result.current.sendMessage("а теперь добавь AC");
+    });
+
+    const wire = streamCalls[0]![2] as Array<{ role: string; content: string }>;
+    const skillBlock = wire.find((m) => m.role === "system" && m.content.includes("[Skill]"));
+    expect(skillBlock).toBeDefined();
+    expect(skillBlock!.content).toContain("SKILL-BODY-MARKER");
+    expect(skillBlock!.content).toContain("jira-task-description");
+  });
+
+  test("an ordinary conversation sends no skill block at all", async () => {
+    outcomes = [done("Ответ")];
+    const { result } = render();
+    await act(async () => {
+      await result.current.sendMessage("вопрос");
+    });
+    const wire = streamCalls[0]![2] as Array<{ role: string; content: string }>;
+    expect(wire.some((m) => m.content.includes("[Skill]"))).toBe(false);
+  });
+
+  test("the context breakdown attributes the skill's tokens to it", async () => {
+    const body = "z".repeat(8000);
+    const { result } = render({
+      initialMessages: [
+        {
+          id: "a1",
+          role: "assistant",
+          streaming: false,
+          blocks: [
+            {
+              type: "toolCall",
+              id: "call_skill",
+              name: "skill",
+              argumentsJson: JSON.stringify({ op: "load", name: "method-spec" }),
+              status: "done",
+              result: {
+                tool: "skillLoaded",
+                result: { name: "method-spec", source: "bundled", body, files: [] },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const breakdown = result.current.contextBreakdown;
+    expect(breakdown.skills).toBeGreaterThan(1500);
+    expect(breakdown.total).toBe(
+      breakdown.systemPrompt + breakdown.toolSchemas + breakdown.chat + breakdown.skills,
+    );
+  });
+});

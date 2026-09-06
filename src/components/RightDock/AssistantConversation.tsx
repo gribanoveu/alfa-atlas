@@ -169,6 +169,7 @@ export function AssistantConversation({
     retryWithCompaction,
     stopChat,
     contextTokens,
+    contextBreakdown,
     lastRequestTokens,
     decideToolCall,
     answerAskUser,
@@ -563,6 +564,7 @@ export function AssistantConversation({
         accessModeBusy={accessModeBusy}
         conversationMode={conversationMode}
         contextTokens={contextTokens}
+        contextBreakdown={contextBreakdown}
         lastRequestTokens={lastRequestTokens}
         onConversationModeChange={onConversationModeChange}
         onAccessModeChange={onAccessModeChange}

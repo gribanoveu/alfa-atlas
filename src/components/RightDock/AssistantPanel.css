@@ -3173,10 +3173,102 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
    ========================================================= */
 
 .assistant-context-bar {
+  position: relative;
+
   flex: none;
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.assistant-context-bar-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  padding: 0;
+
+  background: none;
+  border: none;
+
+  cursor: pointer;
+}
+
+/* Opens upward: the model bar sits directly above the composer at the
+   bottom of the panel, so a downward menu would be clipped. */
+.assistant-context-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 20;
+
+  width: 260px;
+  padding: 8px 10px;
+
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+
+  cursor: default;
+}
+
+.assistant-context-popover-title {
+  margin-bottom: 6px;
+
+  font-size: var(--font-ui-sm);
+
+  color: var(--text-0);
+}
+
+.assistant-context-popover-rows {
+  margin: 0;
+  padding: 0;
+
+  list-style: none;
+}
+
+.assistant-context-popover-rows li {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+
+  padding: 2px 0;
+
+  font-size: var(--font-ui-sm);
+
+  color: var(--text-1);
+}
+
+.assistant-context-popover-rows li.is-free {
+  margin-top: 4px;
+  padding-top: 4px;
+
+  border-top: 1px solid var(--border);
+
+  color: var(--text-2);
+}
+
+.assistant-context-popover-label {
+  overflow: hidden;
+
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.assistant-context-popover-value {
+  flex: none;
+
+  font-variant-numeric: tabular-nums;
+}
+
+.assistant-context-popover-note {
+  margin-top: 6px;
+
+  font-size: var(--font-ui-xs);
+  line-height: 1.4;
+
+  color: var(--text-2);
 }
 
 .assistant-context-ring {

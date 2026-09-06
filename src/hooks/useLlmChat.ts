@@ -15,6 +15,7 @@ import {
   buildActiveFileContextBlock,
   buildActivePlanContextBlock,
   buildArtifactsContextBlock,
+  buildLoadedSkillsContextBlock,
   buildRepositoryLinkContextBlock,
   buildCompactionSummaryBlock,
   buildHistoryCompactionPrompt,
@@ -65,6 +66,23 @@ import {
 import { trackMetric } from "../lib/metrics";
 import { classifyLlmError } from "../lib/metrics/classifyLlmError";
 import { METRICS } from "../data/metricsCatalog";
+
+/** Where the next request's estimated tokens go, for the context ring's
+ * breakdown popover. Same numbers the ring itself sums — split, not
+ * recomputed — so the popover can never disagree with the label above it.
+ *
+ * Deliberately does not enumerate the small per-turn system blocks
+ * (memory, open file, TODO, plan, artifacts): they are a few hundred
+ * tokens each, several need an `await` the render path does not have, and
+ * a row that says "~200" for five different things is noise. The popover
+ * says so rather than folding them into a bucket that looks precise. */
+export type ContextBreakdown = {
+  systemPrompt: number;
+  toolSchemas: number;
+  chat: number;
+  skills: number;
+  total: number;
+};
 
 /** Reads the `mode` a `requestModeSwitch` call is asking for. Cosmetic-grade
  * parsing, like `chatBlocks.toolCallPaths`: arguments that don't parse
@@ -696,21 +714,34 @@ export function useLlmChat(
   // to be visible at the point they're read, even though every hook call
   // here still runs top-to-bottom on each render regardless of declaration
   // order.
-  const contextTokens = useMemo(
-    () =>
-      estimateTokenCount(
-        buildSystemPromptForConversationMode(
-          conversationMode,
-          accessMode,
-          specsRepoInfo,
-          toolDefinitions,
-          docsRootRelativeToRepo,
-        ),
-      ) +
-      estimateToolSchemaTokens(toolDefinitions) +
-      messages.reduce((sum, m) => sum + estimateMessageContextTokens(m), 0),
-    [messages, accessMode, conversationMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo],
-  );
+  /** The same estimate the ring has always shown, kept split by where the
+   * tokens go so the ring's popover can answer "what is filling this up?"
+   * — a question that became worth answering once a loaded skill could add
+   * ~12k tokens to every request on its own.
+   *
+   * Known, accepted over-count: during the very turn that loads a skill,
+   * the streaming message's `skillLoaded` result is counted by
+   * `estimateMessageContextTokens` *and* again by `skills` below. It is a
+   * progress indicator (see `estimateMessageContextTokens`'s own note on
+   * its imprecision), and filtering `m.streaming` out here costs more than
+   * the inaccuracy is worth. */
+  const contextBreakdown = useMemo((): ContextBreakdown => {
+    const systemPrompt = estimateTokenCount(
+      buildSystemPromptForConversationMode(
+        conversationMode,
+        accessMode,
+        specsRepoInfo,
+        toolDefinitions,
+        docsRootRelativeToRepo,
+      ),
+    );
+    const toolSchemas = estimateToolSchemaTokens(toolDefinitions);
+    const chat = messages.reduce((sum, m) => sum + estimateMessageContextTokens(m), 0);
+    const skills = estimateTokenCount(buildLoadedSkillsContextBlock(realMessages(messages)) ?? "");
+    return { systemPrompt, toolSchemas, chat, skills, total: systemPrompt + toolSchemas + chat + skills };
+  }, [messages, accessMode, conversationMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo]);
+
+  const contextTokens = contextBreakdown.total;
 
   /** The provider's own `totalTokens` for the last turn that reported any —
    * shown in the ring's tooltip, deliberately *not* folded into the number
@@ -958,6 +989,13 @@ export function useLlmChat(
       const real = realMessages(priorTurns);
       const scoped = sliceMessagesForPlanExecution(real, opts.planExecutionStart === true);
 
+      // Built from `real`, not `scoped`/`wireTail`: a loaded skill is a
+      // rulebook for the conversation, not part of the transcript that
+      // compaction and plan-slicing exist to bound — see
+      // `buildLoadedSkillsContextBlock`. Computed here rather than beside
+      // the other blocks below because the compaction trigger needs it too.
+      const loadedSkillsBlock = buildLoadedSkillsContextBlock(real);
+
       // A cache surviving from a foreign/removed conversation, or from the
       // planning transcript we just dropped, must never be used — drop it
       // before either deciding whether to compact or building `wireMessages`.
@@ -983,6 +1021,12 @@ export function useLlmChat(
           ),
         ) +
         estimateToolSchemaTokens(toolDefinitions) +
+        // Same reasoning as the tool schemas above: a re-injected skill is
+        // ~12k tokens the request really carries and this sum cannot see,
+        // and under-counting here means compaction fires late enough for
+        // the provider to reject the request outright. No double count —
+        // `chatMessageToPlainText` drops tool blocks entirely.
+        estimateTokenCount(loadedSkillsBlock ?? "") +
         scoped.reduce((sum, m) => sum + estimateTokenCount(chatMessageToPlainText(m)), 0);
 
       if (opts.aggressiveCompaction || shouldCompact(scopedTokens, contextLimit, scoped)) {
@@ -1190,6 +1234,13 @@ export function useLlmChat(
           : []),
         ...(conversationModeChanged
           ? [{ role: "system" as const, content: buildModeChangeNotice(conversationMode), toolCallId: null }]
+          : []),
+        // First among the ephemeral blocks: this one can run to 48 KB, and
+        // putting it after the short ones would push every short block far
+        // from the user's question — the exact adjacency
+        // `buildAccessModeChangeNotice` relies on.
+        ...(loadedSkillsBlock
+          ? [{ role: "system" as const, content: loadedSkillsBlock, toolCallId: null }]
           : []),
         ...(memoryBlock ? [{ role: "system" as const, content: memoryBlock, toolCallId: null }] : []),
         ...(activeFileBlock ? [{ role: "system" as const, content: activeFileBlock, toolCallId: null }] : []),
@@ -1413,6 +1464,7 @@ export function useLlmChat(
     unsteerChat,
     retryWithCompaction,
     contextTokens: displayedContextTokens,
+    contextBreakdown,
     lastRequestTokens,
     todos,
     clearTodos,
