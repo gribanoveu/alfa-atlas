@@ -570,12 +570,9 @@ function App() {
     active: hasProject,
   });
   useEmbeddingIndexWarmup(project.repoRoot, { active: hasProject });
-  // Feeds the status bar's embedding-index segment — mostly a read-only
-  // observer of whatever `AssistantPanel`/`EmbeddingsTab`'s own instances
-  // (or the incremental file watcher) triggered, except for the segment's
-  // own click-to-sync handler below, which calls this instance's `sync()`
-  // directly. See those hooks' doc comment on why each panel keeps its own
-  // separate instance rather than sharing one.
+  // Status bar + first-open auto-sync. Other panels keep their own
+  // `useEmbeddingSetup` instances; this one owns the click-to-sync and the
+  // automatic first pass so the bar can show "Строится N/M" immediately.
   const embeddingSetup = useEmbeddingSetup(project.repoRoot);
   const llmSetup = useLlmSetup();
   const selectionAiProviderId =
@@ -595,6 +592,28 @@ function App() {
   // (it never rejects — see `useEmbeddingSetup.ts`), so this only fires on
   // a real success.
   const [embedJustSynced, setEmbedJustSynced] = useState(false);
+  const embedAutoSyncRoot = useRef<string | null>(null);
+  useEffect(() => {
+    const root = project.repoRoot;
+    if (!hasProject || !root) {
+      embedAutoSyncRoot.current = null;
+      return;
+    }
+    if (!embeddingSetup.providerConfigured) return;
+    if (embeddingSetup.indexStatus === null || embeddingSetup.busy) return;
+    if (embeddingSetup.indexStatus.synced || embeddingSetup.lastSync !== null) return;
+    if (embedAutoSyncRoot.current === root) return;
+    embedAutoSyncRoot.current = root;
+    void embeddingSetup.sync();
+  }, [
+    hasProject,
+    project.repoRoot,
+    embeddingSetup.providerConfigured,
+    embeddingSetup.indexStatus,
+    embeddingSetup.lastSync,
+    embeddingSetup.busy,
+    embeddingSetup.sync,
+  ]);
   const handleEmbedSyncClick = () => {
     void embeddingSetup.sync().then((stats) => {
       if (!stats) return;
@@ -1239,6 +1258,7 @@ function App() {
         indexStats={workspaceIndex.stats}
         embedIndexStatus={hasProject ? embeddingSetup.indexStatus : null}
         embedSyncProgress={hasProject ? embeddingSetup.syncProgress : null}
+        embedBusy={hasProject && embeddingSetup.busy}
         onEmbedSyncClick={hasProject ? handleEmbedSyncClick : undefined}
         embedSyncDisabled={embeddingSetup.busy || !embeddingSetup.providerConfigured}
         embedJustSynced={embedJustSynced}

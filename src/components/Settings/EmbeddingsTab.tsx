@@ -125,6 +125,7 @@ export function EmbeddingsTab({ repoRoot }: EmbeddingsTabProps) {
     setApiKeyInput("");
     setApiKeySaved(true);
     setTimeout(() => setApiKeySaved(false), 2000);
+    if (!indexStatus?.synced) void sync();
   };
 
   // Also clears whatever was typed but not saved: leaving a half-entered

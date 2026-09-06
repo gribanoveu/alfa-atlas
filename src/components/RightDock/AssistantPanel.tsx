@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { Settings2 } from "lucide-react";
 import { toMessage } from "../../lib/errors";
@@ -135,7 +135,6 @@ export function AssistantPanel({
     lastSync,
     syncProgress,
     busy,
-    sync,
   } = useEmbeddingSetup(repoRoot);
   const {
     mode: accessMode,
@@ -197,17 +196,6 @@ export function AssistantPanel({
   // right after a sync finishes, until the next `embedding_index_status`
   // refetch.
   const indexReady = Boolean(indexStatus?.synced) || lastSync !== null;
-
-  // Local Model2Vec is bundled and cheap to encode; remote has no download
-  // cost either. Auto-sync on first open — `embedding_sync`'s hash
-  // comparison makes a redundant call cheap, and `indexReady` flips true
-  // as soon as *anything* is embedded.
-  const autoSyncTriggered = useRef(false);
-  useEffect(() => {
-    if (!embeddingConfigured || indexReady || busy || autoSyncTriggered.current) return;
-    autoSyncTriggered.current = true;
-    void sync();
-  }, [embeddingConfigured, indexReady, busy, sync]);
 
   const handleShowArchive = () => {
     setArchiveOpen(true);

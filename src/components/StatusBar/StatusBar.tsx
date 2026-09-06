@@ -20,6 +20,10 @@ type StatusBarProps = {
    * the workspace index segment hides for `indexStatus === "idle"`. */
   embedIndexStatus: EmbeddingIndexStatus | null;
   embedSyncProgress: SyncProgress | null;
+  /** True from the moment `sync()` is called until it settles — the first
+   * progress event can lag, so the segment must not stay on
+   * "нажмите, чтобы синхронизировать" in that window. */
+  embedBusy?: boolean;
   /** Clicking the embeddings segment triggers the same sync
    * `EmbeddingsTab.tsx`'s own button calls. `undefined` (no project open)
    * renders the segment as a plain, non-interactive `<div>` again. */
@@ -44,8 +48,9 @@ type EmbedIndexState = "syncing" | "stale" | "synced" | "unsynced";
 function embedIndexState(
   status: EmbeddingIndexStatus | null,
   progress: SyncProgress | null,
+  busy?: boolean,
 ): EmbedIndexState | null {
-  if (progress) return "syncing";
+  if (progress || busy) return "syncing";
   if (!status) return null;
   if (status.stale) return "stale";
   if (status.synced) return "synced";
@@ -58,12 +63,10 @@ function embedIndexLabel(
   progress: SyncProgress | null,
 ): string {
   switch (state) {
-    case "syncing": {
-      const phase = progress?.phase === "chunking" ? "Индексация файлов" : "Расчёт эмбеддингов";
+    case "syncing":
       return progress && progress.total > 0
-        ? `${phase}: ${progress.current}/${progress.total}`
-        : `${phase}…`;
-    }
+        ? `Строится ${progress.current}/${progress.total}`
+        : "Строится…";
     case "stale":
       return "Индекс устарел";
     case "synced": {
@@ -145,6 +148,7 @@ export function StatusBar({
   indexStats,
   embedIndexStatus,
   embedSyncProgress,
+  embedBusy,
   onEmbedSyncClick,
   embedSyncDisabled,
   embedJustSynced,
@@ -164,7 +168,10 @@ export function StatusBar({
             ? AlertCircle
             : null;
 
-  const embedState = embedIndexState(embedIndexStatus, embedSyncProgress);
+  const embedState = embedIndexState(embedIndexStatus, embedSyncProgress, embedBusy);
+  const embedLabel = embedState
+    ? embedIndexLabel(embedState, embedIndexStatus, embedSyncProgress)
+    : "";
   const EmbedIcon =
     embedState === "syncing"
       ? Loader2
@@ -200,9 +207,11 @@ export function StatusBar({
             type="button"
             className={`seg embed clickable ${embedState}${embedJustSynced ? " just-synced" : ""}`}
             title={
-              embedSyncDisabled
-                ? "Индекс эмбеддингов (документация и репозиторий)"
-                : "Индекс эмбеддингов (документация и репозиторий) — нажмите, чтобы синхронизировать"
+              embedState === "syncing"
+                ? embedLabel
+                : embedSyncDisabled
+                  ? "Индекс эмбеддингов (документация и репозиторий)"
+                  : "Индекс эмбеддингов (документация и репозиторий) — нажмите, чтобы синхронизировать"
             }
             aria-disabled={embedSyncDisabled || undefined}
             onClick={() => {
@@ -215,14 +224,14 @@ export function StatusBar({
             ) : EmbedIcon ? (
               <EmbedIcon size={11} className={embedState === "syncing" ? "spin" : ""} />
             ) : null}
-            {embedJustSynced ? "Синхронизировано" : embedIndexLabel(embedState, embedIndexStatus, embedSyncProgress)}
+            {embedJustSynced ? "Синхронизировано" : embedLabel}
           </button>
         ) : (
           <div className={`seg embed ${embedState}`} title="Индекс эмбеддингов (документация и репозиторий)">
             {EmbedIcon ? (
               <EmbedIcon size={11} className={embedState === "syncing" ? "spin" : ""} />
             ) : null}
-            {embedIndexLabel(embedState, embedIndexStatus, embedSyncProgress)}
+            {embedLabel}
           </div>
         )
       ) : null}
