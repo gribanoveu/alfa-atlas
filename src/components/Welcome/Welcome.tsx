@@ -40,96 +40,95 @@ export function Welcome({
   return (
     <section className="welcome">
       <div className="welcome-layout">
-        <div className="welcome-inner">
-          <header className="welcome-brand">
-            <div className="welcome-brand-row">
-              <span className="welcome-dot" />
-              <h1 className="welcome-title">Alfa Atlas</h1>
-            </div>
-            <p className="welcome-subtitle">
-              Добро пожаловать в редактор документации.
-              Откройте папку проекта или склонируйте git-репозиторий,
-              чтобы начать работу.
-            </p>
-          </header>
+        <header className="welcome-brand">
+          <div className="welcome-brand-row">
+            <span className="welcome-dot" />
+            <h1 className="welcome-title">Alfa Atlas</h1>
+          </div>
+          <p className="welcome-subtitle">
+            Добро пожаловать в редактор документации.
+            Откройте папку проекта или склонируйте git-репозиторий,
+            чтобы начать работу.
+          </p>
+        </header>
 
-          <section className="welcome-section">
-            <h2 className="welcome-section-title">Начало работы</h2>
-            <div className="welcome-actions">
-              <button
-                type="button"
-                className="welcome-action"
-                disabled={busy}
-                onClick={() => void openFolder()}
-              >
-                <span className="welcome-action-label">
-                  <FolderOpen className="welcome-action-icon" size={16} aria-hidden />
-                  Открыть папку…
-                </span>
-                <span className="welcome-action-hint">
-                  Выбрать локальный каталог с документацией
-                </span>
-              </button>
-              <button
-                type="button"
-                className="welcome-action"
-                onClick={() => setCloneOpen(true)}
-              >
-                <span className="welcome-action-label">
-                  <FolderGit2 className="welcome-action-icon" size={16} aria-hidden />
-                  Клонировать репозиторий…
-                </span>
-                <span className="welcome-action-hint">
-                  Склонировать git-репозиторий и открыть его
-                </span>
-              </button>
-            </div>
-            {displayError ? (
-              <div className="welcome-error">{displayError}</div>
-            ) : null}
-          </section>
+        <section className="welcome-section">
+          <h2 className="welcome-section-title">Начало работы</h2>
+          <div className="welcome-actions">
+            <button
+              type="button"
+              className="welcome-action"
+              disabled={busy}
+              onClick={() => void openFolder()}
+            >
+              <span className="welcome-action-label">
+                <FolderOpen className="welcome-action-icon" size={16} aria-hidden />
+                Открыть папку…
+              </span>
+              <span className="welcome-action-hint">
+                Выбрать локальный каталог с документацией
+              </span>
+            </button>
+            <button
+              type="button"
+              className="welcome-action"
+              onClick={() => setCloneOpen(true)}
+            >
+              <span className="welcome-action-label">
+                <FolderGit2 className="welcome-action-icon" size={16} aria-hidden />
+                Клонировать репозиторий…
+              </span>
+              <span className="welcome-action-hint">
+                Склонировать git-репозиторий и открыть его
+              </span>
+            </button>
+          </div>
+          {displayError ? (
+            <div className="welcome-error">{displayError}</div>
+          ) : null}
+        </section>
 
-          <section className="welcome-section">
-            <h2 className="welcome-section-title">Недавние</h2>
-            {recent.length === 0 ? (
-              <div className="welcome-recent-empty">Пока нет недавних проектов</div>
-            ) : (
-              <ul className="welcome-recent-list">
-                {recent.map((item) => (
-                  <li key={item.root} className="welcome-recent-item">
-                    <button
-                      type="button"
-                      className="welcome-recent-open"
-                      disabled={busy}
-                      onClick={() => void openRecent(item.root)}
-                    >
-                      <span className="welcome-recent-name">{item.name}</span>
-                      <span className="welcome-recent-path">{item.root}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="welcome-recent-remove"
-                      aria-label={`Убрать «${item.name}» из недавних`}
-                      disabled={busy}
-                      onClick={() => void removeRecent(item.root)}
-                    >
-                      <X size={14} aria-hidden />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-        </div>
+        <section className="welcome-section">
+          <h2 className="welcome-section-title">Недавние</h2>
+          {recent.length === 0 ? (
+            <div className="welcome-recent-empty">Пока нет недавних проектов</div>
+          ) : (
+            <ul className="welcome-recent-list">
+              {recent.map((item) => (
+                <li key={item.root} className="welcome-recent-item">
+                  <button
+                    type="button"
+                    className="welcome-recent-open"
+                    disabled={busy}
+                    title={item.root}
+                    onClick={() => void openRecent(item.root)}
+                  >
+                    <span className="welcome-recent-name">{item.name}</span>
+                    <span className="welcome-recent-path">{item.root}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="welcome-recent-remove"
+                    aria-label={`Убрать «${item.name}» из недавних`}
+                    disabled={busy}
+                    onClick={() => void removeRecent(item.root)}
+                  >
+                    <X size={14} aria-hidden />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
         {onOpenGitKeySettings && onOpenLlmKeySettings ? (
-          <aside className="welcome-side">
+          <section className="welcome-section">
             <h2 className="welcome-section-title">Первые шаги</h2>
             <WelcomeGuides
               onOpenGitKey={onOpenGitKeySettings}
               onOpenLlmKey={onOpenLlmKeySettings}
             />
-          </aside>
+          </section>
         ) : null}
       </div>
 

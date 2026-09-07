@@ -3,35 +3,20 @@
   min-height: 0;
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   background: var(--bg-editor);
   overflow: auto;
-  padding: 32px 24px;
+  padding: clamp(20px, 6vh, 48px) clamp(12px, 3vw, 24px);
 }
 
-/* Онбординг-карточки живут в отдельной колонке справа, чтобы не сдвигать
- * список недавних проектов. На узком окне колонка переносится под него. */
+/* Одна колонка на всю ширину: секции внутри сами перестраиваются в грид,
+ * поэтому экран не ломается ни на узком окне, ни при длинных путях. */
 .welcome-layout {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 32px;
-}
-
-.welcome-inner {
-  width: min(520px, 100%);
+  width: min(760px, 100%);
   display: flex;
   flex-direction: column;
   gap: 28px;
-}
-
-.welcome-side {
-  width: min(240px, 100%);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 .welcome-brand {
@@ -82,23 +67,28 @@
 }
 
 .welcome-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 8px;
 }
 
 .welcome-action {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
   text-align: left;
-  padding: 8px 10px;
-  border-radius: 5px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-1);
   color: var(--text-0);
 }
 
-.welcome-action:hover {
-  background: var(--bg-1);
+.welcome-action:hover:not(:disabled) {
+  background: var(--bg-2);
+  border-color: var(--accent);
 }
 
 .welcome-action:disabled {
@@ -112,7 +102,6 @@
   gap: 8px;
   color: var(--accent);
   font-weight: 500;
-  min-width: 220px;
 }
 
 .welcome-action-icon {
@@ -184,6 +173,16 @@
   cursor: default;
 }
 
+/* Путь в одну строку с многоточием: иначе длинные пути раздували колонку
+ * и рвали раскладку. Полный путь — в title кнопки. */
+.welcome-recent-name,
+.welcome-recent-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .welcome-recent-name {
   color: var(--accent);
   font-weight: 500;
@@ -193,7 +192,6 @@
 .welcome-recent-path {
   color: var(--text-2);
   font-size: var(--font-ui-sm);
-  word-break: break-all;
   line-height: 1.35;
 }
 
