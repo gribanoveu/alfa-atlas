@@ -1049,6 +1049,9 @@ function App() {
                       repoRoot: project.repoRoot,
                       docsRoot: project.docsRoot,
                       loadFileDiff: git.loadFileDiff,
+                      // Новый объект статуса на каждое обновление git —
+                      // жёлоб перечитывает по нему базу дифа.
+                      revision: git.status,
                     }
                   : null
               }

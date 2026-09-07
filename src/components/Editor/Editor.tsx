@@ -55,6 +55,9 @@ type GitGutterConfig = {
     path: string,
     scope: "unstaged",
   ) => Promise<GitFileDiff | null>;
+  /** Новое значение на каждое обновление git-состояния — жёлоб перечитывает
+   * по нему базу дифа (см. `useGitGutter`). */
+  revision?: unknown;
 };
 
 type RevealRequest = {
@@ -340,6 +343,7 @@ export function EditorPane({
       gitGutter?.loadFileDiff ??
       (async () => null),
     onContentChange: onChangeContent,
+    gitRevision: gitGutter?.revision,
   });
 
   // Регистрируется после useGitGutter — см. useMonacoIncludeGutter.ts о том,

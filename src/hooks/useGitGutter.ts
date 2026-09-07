@@ -29,6 +29,11 @@ type UseGitGutterOptions = {
   docsRoot: string | null;
   loadFileDiff: LoadFileDiff;
   onContentChange: (content: string) => void;
+  /** Меняется при каждом обновлении git-состояния (коммит, stage, discard,
+   * pull, срабатывание файлового вотчера). Без него база дифа перечитывалась
+   * только при переключении вкладки, и после коммита в жёлобе оставались
+   * полоски уже закоммиченных изменений. */
+  gitRevision?: unknown;
 };
 
 const GUTTER_TARGET_TYPES = new Set<number>();
@@ -275,6 +280,7 @@ export function useGitGutter({
   docsRoot,
   loadFileDiff,
   onContentChange,
+  gitRevision,
 }: UseGitGutterOptions) {
   const baselineRef = useRef<string | null>(null);
   const hunksRef = useRef<GitGutterHunk[]>([]);
@@ -450,28 +456,23 @@ export function useGitGutter({
       debounceRef.current = null;
     }
 
-    baselineRef.current = null;
-    hunksRef.current = [];
-    decorationsRef.current?.clear();
-    decorationsRef.current = null;
+    const repoPath =
+      viewMode !== "render" && activeTab && repoRoot && docsRoot
+        ? toRepoRelativePath(activeTab.path, repoRoot, docsRoot)
+        : null;
 
-    if (
-      viewMode === "render" ||
-      !monaco ||
-      !editor ||
-      !activeTab ||
-      !repoRoot ||
-      !docsRoot
-    ) {
-      return;
+    // Сброс — только при смене файла (или уходе в режим просмотра). Обновление
+    // git-состояния перечитывает диф поверх уже нарисованных полосок: иначе они
+    // мигали бы на каждом автосохранении, которое дёргает вотчер.
+    if (repoPath !== repoPathRef.current) {
+      baselineRef.current = null;
+      hunksRef.current = [];
+      decorationsRef.current?.clear();
+      decorationsRef.current = null;
+      repoPathRef.current = repoPath;
     }
 
-    const repoPath = toRepoRelativePath(
-      activeTab.path,
-      repoRoot,
-      docsRoot,
-    );
-    repoPathRef.current = repoPath;
+    if (!repoPath || !monaco || !editor || !activeTab) return;
 
     let cancelled = false;
 
@@ -482,6 +483,9 @@ export function useGitGutter({
         if (!editor.getModel() || editor.getModel()?.isDisposed()) return;
         if (!diff || diff.isBinary) {
           baselineRef.current = null;
+          hunksRef.current = [];
+          decorationsRef.current?.clear();
+          decorationsRef.current = null;
           return;
         }
         baselineRef.current = diff.original;
@@ -502,7 +506,7 @@ export function useGitGutter({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, docsRoot, editor, monaco, repoRoot, viewMode]);
+  }, [activeTab, docsRoot, editor, gitRevision, monaco, repoRoot, viewMode]);
 
   useEffect(() => {
     if (

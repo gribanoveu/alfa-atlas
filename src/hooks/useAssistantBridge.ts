@@ -84,6 +84,10 @@ export function useAssistantBridge({
     ({ tool, path }: { tool: string; path: string }) => {
       void tree.refresh();
       if (openApiBundle.bundle) void openApiBundle.reload();
+      // Как и в `onFileMoved`: файловый вотчер шлёт indexUpdated только для
+      // индексируемых расширений, поэтому на запись ассистента статус git
+      // обновляем сами.
+      git.scheduleRefresh();
       const docsPath = toDocs(path);
       switch (tool) {
         case "writeFile":
@@ -98,7 +102,7 @@ export function useAssistantBridge({
           break;
       }
     },
-    [tree, editor, openApiBundle, toDocs],
+    [tree, editor, git, openApiBundle, toDocs],
   );
 
   /** Same idea as `onFileWritten`, but a `move` has both an old and a new
