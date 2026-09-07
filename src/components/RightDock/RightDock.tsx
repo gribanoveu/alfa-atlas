@@ -87,8 +87,7 @@ const TOOL_STRIPE_GROUPS: RightTool[][] = [
   ["suggestions", "assistant"],
   ["branches", "git"],
   ["asciidoc", "utilities"],
-  ["jira"],
-  ["calendar"],
+  ["jira", "calendar"],
 ];
 
 export type GitPanelViewProps = {
