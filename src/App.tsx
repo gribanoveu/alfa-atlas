@@ -962,7 +962,12 @@ function App() {
             onResizeExternal={panels.resizeExternalBy}
             onResizeExternalEnd={panels.persistLayout}
           />
-          {hasProject ? (
+          {/* The tab area used not to mount at all without a project, so
+              everything that lives in a tab yet needs no repository — an
+              artifact (a ticket the assistant wrote in a project-less chat),
+              a converter, a diagram — had nowhere to open. The condition is
+              about open tabs now: close the last one and Welcome is back. */}
+          {hasProject || displayTabs.length > 0 ? (
             <EditorPane
               tabs={displayTabs}
               activeTabId={
@@ -1130,23 +1135,24 @@ function App() {
                 : null
             }
             utilities={
-              // Вкладки живут только внутри EditorPane, а он монтируется
-              // вместе с проектом — без проекта карточке некуда открываться.
-              hasProject
-                ? {
-                    onOpen: openUtilityTab,
-                    activeId: activeKind === "utility" ? activeUtility : null,
-                    onNewArtifact: (kind) => {
-                      const label = ARTIFACT_KINDS.find((k) => k.id === kind)?.newLabel ?? "Новый артефакт";
-                      void createAndOpenArtifact(kind, label).catch((e) =>
-                        setFolderError(toMessage(e)),
-                      );
-                    },
-                    onOpenArtifacts: () => {
-                      window.dispatchEvent(new CustomEvent("atlas-open-artifacts"));
-                    },
-                  }
-                : null
+              // Neither the converters nor artifacts depend on a
+              // repository: converters compute in the browser, and a new
+              // artifact with no project open goes to its own bucket
+              // (`services::artifacts`). The tab area now mounts for any
+              // open tab, so both have somewhere to open.
+              {
+                onOpen: openUtilityTab,
+                activeId: activeKind === "utility" ? activeUtility : null,
+                onNewArtifact: (kind) => {
+                  const label = ARTIFACT_KINDS.find((k) => k.id === kind)?.newLabel ?? "Новый артефакт";
+                  void createAndOpenArtifact(kind, label).catch((e) =>
+                    setFolderError(toMessage(e)),
+                  );
+                },
+                onOpenArtifacts: () => {
+                  window.dispatchEvent(new CustomEvent("atlas-open-artifacts"));
+                },
+              }
             }
             branches={
               hasProject

@@ -77,6 +77,14 @@ export function SkillsTab() {
                       <span className="skills-source">
                         {item.source === "bundled" ? "встроенный" : "пользовательский"}
                       </span>
+                      {item.requiresProject ? (
+                        <span
+                          className="skills-source"
+                          title="Скил написан под открытый репозиторий — ассистент не увидит его, пока проект не открыт (requires-project в SKILL.md)"
+                        >
+                          нужен проект
+                        </span>
+                      ) : null}
                     </span>
                   </label>
                   {hasDetail ? (

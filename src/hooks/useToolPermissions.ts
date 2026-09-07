@@ -5,6 +5,7 @@ import {
   listPermissionTools,
   setToolAllowed,
   setToolAutoApproved,
+  type PermissionTool,
 } from "../lib/aiTools";
 import { toMessage } from "../lib/errors";
 
@@ -45,7 +46,7 @@ function isNoProject(message: string): boolean {
 export function useToolPermissions() {
   const [autoApproved, setAutoApproved] = useState<ToolList>(EMPTY);
   const [allowed, setAllowed] = useState<ToolList>(EMPTY);
-  const [permissionCatalog, setPermissionCatalog] = useState<string[]>([]);
+  const [permissionCatalog, setPermissionCatalog] = useState<PermissionTool[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const mounted = useRef(true);

@@ -119,6 +119,7 @@ pub fn bundled_metas() -> Result<Vec<SkillMeta>, SkillError> {
                 name: parsed.name,
                 description: parsed.description,
                 source: SkillSource::Bundled,
+                requires_project: parsed.requires_project,
             })
         })
         .collect()

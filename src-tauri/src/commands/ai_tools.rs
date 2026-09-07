@@ -5,7 +5,7 @@ use tauri::State;
 use crate::services::embedding_state::{
     EmbeddingIndexSlot, EmbeddingProviderSlot, EmbeddingSyncGuard, IndexStoreSlot,
 };
-use crate::domain::ai_access::{AiAccessMode, ToolName};
+use crate::domain::ai_access::{no_project_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{Task, ToolCall, ToolResult};
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::LlmToolDefinition;
@@ -152,12 +152,32 @@ pub fn ai_get_allowed_tools() -> Result<Vec<ToolName>, String> {
         .collect())
 }
 
+/// One row of the Permissions tab. `requires_project` is the same split
+/// `services::ai_tools::current_scope_or_empty` enforces at runtime
+/// (`domain::ai_access::no_project_tools`) — read from here rather than
+/// re-listed in the UI, so the two can never drift.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionTool {
+    pub name: ToolName,
+    pub requires_project: bool,
+}
+
 /// Every tool the Permissions tab can show and toggle — same order as
 /// `services::ai_tools::permission_tool_catalog` (mirrors `DEFINITIONS`).
-/// Project-independent; does not require an open repo.
+/// Project-independent; does not require an open repo, which is what lets
+/// the tab render the (read-only) list with no project open instead of one
+/// bare hint.
 #[tauri::command]
-pub fn ai_list_permission_tools() -> Vec<ToolName> {
+pub fn ai_list_permission_tools() -> Vec<PermissionTool> {
+    let project_free = no_project_tools();
     ai_tools::permission_tool_catalog()
+        .into_iter()
+        .map(|name| PermissionTool {
+            requires_project: !project_free.contains(&name),
+            name,
+        })
+        .collect()
 }
 
 /// Persists (or revokes) one tool's membership in `ai_allowed_tools` for the

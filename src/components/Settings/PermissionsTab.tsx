@@ -28,6 +28,15 @@ const PERMISSION_TOOL_LABELS: Record<string, string> = {
   visualize: "Схемы и визуализации (visualize)",
 };
 
+/** The list's two groups: tools that work with no project open
+ * (`domain::ai_access::no_project_tools` — exactly what a project-less chat
+ * gets) and the rest. Project-free first, because those are the ones that
+ * matter when there is no project and everything else is inactive. */
+const GROUPS: { requiresProject: boolean; title: string }[] = [
+  { requiresProject: false, title: "Работают без открытого проекта" },
+  { requiresProject: true, title: "Требуют открытого проекта" },
+];
+
 /** Per-project "always allow" list for the assistant's tool-calling loop
  * (`ProjectConfig.ai_auto_approved_tools`, see AI_HARNESS.md's "Tool-calling
  * loop") — granting happens from an approval card's "Разрешать всегда"
@@ -64,26 +73,50 @@ export function PermissionsTab() {
           <p className="settings-hint settings-hint-compact">
             Загрузка…
           </p>
-        ) : allowedNoProject ? (
-          <p className="settings-hint settings-hint-compact">
-            Откройте проект, чтобы посмотреть и изменить список разрешённых инструментов.
-          </p>
         ) : (
-          <ul className="permissions-list">
-            {permissionCatalog.map((tool) => (
-              <li key={tool} className="permissions-item">
-                <label className="permissions-item-label permissions-item-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={allowedTools.includes(tool)}
-                    disabled={togglingTool === tool}
-                    onChange={(e) => void toggleAllowed(tool, e.target.checked)}
-                  />
-                  {PERMISSION_TOOL_LABELS[tool] ?? tool}
-                </label>
-              </li>
-            ))}
-          </ul>
+          <>
+            {allowedNoProject ? (
+              <p className="settings-hint settings-hint-compact">
+                Список разрешённых инструментов хранится в проекте — откройте проект,
+                чтобы его изменить. Пока проекта нет, ассистенту доступна только первая
+                группа.
+              </p>
+            ) : null}
+            {GROUPS.map(({ requiresProject, title }) => {
+              const tools = permissionCatalog.filter(
+                (tool) => tool.requiresProject === requiresProject,
+              );
+              if (tools.length === 0) return null;
+              return (
+                <div key={title} className="permissions-group">
+                  <div className="permissions-group-title">{title}</div>
+                  <ul className="permissions-list">
+                    {tools.map(({ name }) => (
+                      <li key={name} className="permissions-item">
+                        <label className="permissions-item-label permissions-item-checkbox-label">
+                          <input
+                            type="checkbox"
+                            // With no project the checkboxes show what the
+                            // assistant can actually reach right now rather
+                            // than a saved list (there is none): the
+                            // project-free group is on, the rest is not.
+                            checked={
+                              allowedNoProject
+                                ? !requiresProject
+                                : allowedTools.includes(name)
+                            }
+                            disabled={allowedNoProject || togglingTool === name}
+                            onChange={(e) => void toggleAllowed(name, e.target.checked)}
+                          />
+                          {PERMISSION_TOOL_LABELS[name] ?? name}
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </>
         )}
 
         {catalogError ? <div className="settings-error">{catalogError}</div> : null}

@@ -71,6 +71,7 @@ pub fn valid_user_metas() -> Result<Vec<SkillMeta>, SkillError> {
                 name: p.name,
                 description: p.description,
                 source: SkillSource::User,
+                requires_project: p.requires_project,
             })
         })
         .collect())
@@ -176,6 +177,7 @@ pub fn import_skill_dir(src_dir: &Path) -> Result<SkillMeta, SkillError> {
         name: parsed.name,
         description: parsed.description,
         source: SkillSource::User,
+        requires_project: parsed.requires_project,
     })
 }
 

@@ -16,8 +16,28 @@ use crate::domain::artifact_render::{self, RenderedArtifact};
 use crate::infra::artifact_store;
 use crate::services::repository_scope;
 
-fn open_repo_id() -> Result<(String, String), ArtifactError> {
-    repository_scope::open_repository().map_err(|e| ArtifactError::Project(e.to_string()))
+/// Storage bucket for artifacts written with no project open. A repository
+/// id is always a 64-char SHA-256 hex string
+/// (`infra::repository_identity::repository_id`), so this hyphenated name
+/// can never collide with a real one. Everything after creation is already
+/// project-blind (`owning_repo_id`), so such an artifact is listed, read,
+/// updated and published exactly like any other — it simply carries no
+/// project name.
+pub const NO_PROJECT_REPO_ID: &str = "no-project";
+
+/// Where a *new* artifact goes: under the open project, or in the
+/// no-project bucket when there is none. `None` for the root means exactly
+/// that — no repository path to stamp on the record or to seed defaults
+/// from. Any other project failure still errors: a project that is open but
+/// unreadable must not quietly file its artifacts somewhere else.
+fn open_repo_id() -> Result<(String, Option<String>), ArtifactError> {
+    match repository_scope::open_repository() {
+        Ok((repo_id, repo_root)) => Ok((repo_id, Some(repo_root))),
+        Err(e) if e.to_string().contains("no project is open") => {
+            Ok((NO_PROJECT_REPO_ID.to_string(), None))
+        }
+        Err(e) => Err(ArtifactError::Project(e.to_string())),
+    }
 }
 
 /// The repository an existing artifact lives in — which is not necessarily
@@ -71,7 +91,9 @@ pub fn create_draft(
     // (`https://{host}/<сервис>/<путь>/...`) is a real, known value for the
     // open repo, so it's filled in literally rather than left as a token.
     // Only when the model's own prefill didn't already say something.
-    seed_repo_path_default(&mut content, &repo_root);
+    if let Some(root) = repo_root.as_deref() {
+        seed_repo_path_default(&mut content, root);
+    }
     let title = title.trim();
     let record = artifact_store::stamp_new(ArtifactRecord {
         id: Uuid::new_v4().to_string(),
@@ -87,7 +109,7 @@ pub fn create_draft(
         created_at_ms: 0,
         updated_at_ms: 0,
         chat_id,
-        repo_root: Some(repo_root),
+        repo_root,
     });
     artifact_store::save(&repo_id, &record)?;
     Ok(record)
@@ -136,7 +158,7 @@ pub fn create_agent(
         created_at_ms: 0,
         updated_at_ms: 0,
         chat_id,
-        repo_root: Some(repo_root),
+        repo_root,
     });
     artifact_store::save(&repo_id, &record)?;
     Ok(record)
@@ -311,6 +333,40 @@ mod tests {
             stored_in("some-other-repo", "written-elsewhere");
             let loaded = get("written-elsewhere").expect("get");
             assert_eq!(loaded.id, "written-elsewhere");
+        });
+    }
+
+    /// Drafting a Jira ticket with no project open has to land somewhere,
+    /// and stay reachable afterwards — that is the whole point of the
+    /// reserved bucket.
+    #[test]
+    fn an_artifact_created_without_a_project_lands_in_the_reserved_bucket() {
+        with_temp_home(|| {
+            let record = create_agent(
+                ArtifactKind::JiraTicket,
+                "Черновик тикета".into(),
+                ArtifactContent::JiraTicket(Default::default()),
+                None,
+            )
+            .expect("create");
+            assert_eq!(record.repo_root, None);
+            assert_eq!(
+                artifact_store::find_repository(&record.id).expect("find"),
+                Some(NO_PROJECT_REPO_ID.to_string())
+            );
+
+            // Read/update/list stay project-blind, so it behaves like any
+            // other artifact from here on.
+            assert_eq!(get(&record.id).expect("get").title, "Черновик тикета");
+            let listed = list().expect("list");
+            assert!(listed.iter().any(|s| s.id == record.id && s.repo_name.is_empty()));
+            update_agent(
+                &record.id,
+                Some("Уточнённый тикет".into()),
+                ArtifactContent::JiraTicket(Default::default()),
+            )
+            .expect("update");
+            assert_eq!(get(&record.id).expect("get").title, "Уточнённый тикет");
         });
     }
 

@@ -8,6 +8,10 @@ export type SkillListItem = {
   source: SkillSource;
   enabled: boolean;
   error: string | null;
+  /** `requires-project: true` in SKILL.md — the skill is written for an
+   * open repository and stays hidden from the router while there is no
+   * project (see `services::agent_skills::enabled_catalog`). */
+  requiresProject: boolean;
 };
 
 export type SkillMeta = {

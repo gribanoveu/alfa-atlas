@@ -162,11 +162,12 @@ export function AssistantPanel({
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;
   const llmReady = activeProviderId !== null && Boolean(hasApiKeyMap[activeProviderId]);
 
-  // Без открытого проекта чат остаётся рабочим, но безынструментальным:
-  // бэкенд отдаёт пустой `ToolScope` (`current_scope_or_empty`), так что
-  // ни файлов, ни поиска, ни правок — только общие вопросы и черновики
-  // (например, текст задачи в Jira, который потом публикуется из панели
-  // Jira). История таких чатов копится под отдельным ключом, а не теряется.
+  // With no project open the chat still works, with the project-free
+  // tools only: the backend resolves a rootless `ToolScope`
+  // (`current_scope_or_empty`), so no files, no search and no edits —
+  // general questions, skills, and drafts (a Jira ticket the user can
+  // publish from its own tab). Those chats keep their own history under a
+  // separate key rather than being lost.
   const chatHistory = useChatHistory(repoRoot ?? NO_PROJECT_REPO_ROOT);
   // The documentation root's path relative to the repository root (e.g.
   // `"src/docs/asciidoc"`), or `null` when the distinction doesn't matter —
@@ -293,13 +294,14 @@ export function AssistantPanel({
           />
         ) : llmReady ? (
           <>
-            {/* Заметки про эмбеддинги и индекс относятся к открытому
-                проекту: без него ничего не индексируется, и обе они врали
-                бы («Индекс ещё строится» при простое). */}
+            {/* The embedding/index notes are about the open project:
+                without one nothing is indexed, and both would be lying
+                («Индекс ещё строится» while nothing is running). */}
             {!repoRoot ? (
               <p className="assistant-chat-index-note">
-                Проект не открыт — доступны только общие вопросы и черновики.
-                Чтение, поиск и правка файлов появятся после открытия проекта.
+                Проект не открыт — доступны общие вопросы, черновики (например,
+                описание задачи в Jira) и скилы. Чтение, поиск и правка файлов
+                появятся после открытия проекта.
               </p>
             ) : !embeddingConfigured ? (
               <p className="assistant-chat-index-note">

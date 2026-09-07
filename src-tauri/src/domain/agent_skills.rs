@@ -66,6 +66,15 @@ pub struct SkillMeta {
     pub name: String,
     pub description: String,
     pub source: SkillSource,
+    /// `requires-project: true` in the frontmatter — the skill's
+    /// instructions only make sense against an open repository (they tell
+    /// the model to read the docs tree, follow a spec layout, write files).
+    /// Such a skill is hidden from `search`/`load` while no project is open,
+    /// see `services::agent_skills::enabled_catalog`. Defaults to `false`:
+    /// a skill that is pure guidance (how to word a Jira ticket, how to
+    /// decompose a task) needs nothing from the filesystem.
+    #[serde(default)]
+    pub requires_project: bool,
 }
 
 /// One row in the Settings list — includes invalid user folders so the UI
@@ -79,6 +88,9 @@ pub struct SkillListItem {
     pub source: SkillSource,
     pub enabled: bool,
     pub error: Option<String>,
+    /// Mirrors `SkillMeta::requires_project` — shown as a badge so the flag
+    /// is discoverable to whoever writes the next skill.
+    pub requires_project: bool,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -99,6 +111,8 @@ pub enum SkillError {
     EmptyQuery,
     #[error("unknown skill op {0:?} (expected search, load, or read)")]
     UnknownOp(String),
+    #[error("skill {0:?} needs an open project")]
+    RequiresProject(String),
     #[error("skill {0:?} is disabled")]
     Disabled(String),
     #[error("path escapes skill root: {0}")]
@@ -130,6 +144,11 @@ struct SkillFrontmatter {
     #[serde(default, rename = "allowed-tools")]
     #[allow(dead_code)]
     allowed_tools: Option<String>,
+    /// Our own extension to the spec (unknown keys are ignored by other
+    /// readers, so a skill carrying it stays portable) — see
+    /// `SkillMeta::requires_project`.
+    #[serde(default, rename = "requires-project")]
+    requires_project: bool,
 }
 
 /// Parsed `SKILL.md`: validated meta plus markdown body (frontmatter stripped).
@@ -138,6 +157,7 @@ pub struct ParsedSkill {
     pub name: String,
     pub description: String,
     pub body: String,
+    pub requires_project: bool,
 }
 
 /// Spec `name` field: 1–64 chars, `[a-z0-9-]`, no leading/trailing/
@@ -196,6 +216,7 @@ pub fn parse_skill_md(contents: &str, dir_name: &str) -> Result<ParsedSkill, Ski
         name: front.name,
         description: front.description,
         body: body.to_string(),
+        requires_project: front.requires_project,
     })
 }
 
@@ -319,7 +340,22 @@ mod tests {
             name: name.to_string(),
             description: description.to_string(),
             source,
+            requires_project: false,
         }
+    }
+
+    #[test]
+    fn requires_project_defaults_to_false_and_is_read_from_frontmatter() {
+        let plain = parse_skill_md(&md("a-skill", "Does a thing when asked.", "body"), "a-skill")
+            .expect("parse");
+        assert!(!plain.requires_project);
+
+        let scoped = parse_skill_md(
+            "---\nname: a-skill\ndescription: Does a thing when asked.\nrequires-project: true\n---\nbody",
+            "a-skill",
+        )
+        .expect("parse");
+        assert!(scoped.requires_project);
     }
 
     #[test]

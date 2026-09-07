@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::domain::ai_access::{AiAccessMode, ToolName, default_allowed_tools};
+use crate::domain::ai_access::{AiAccessMode, ToolName, default_allowed_tools, no_project_tools};
 use crate::domain::ai_tools::ToolScope;
 use crate::domain::project_config::{ProjectConfig, ProjectError};
 use crate::infra::project_store;
@@ -202,16 +202,22 @@ pub fn current_scope() -> Result<ToolScope, ProjectError> {
 }
 
 /// `current_scope()`, but "no project is open" resolves to a scope with no
-/// roots and an empty allowlist instead of an error — that's what lets the
-/// assistant chat stay usable with no project (general questions, drafting
-/// a Jira ticket), just with zero repository tools advertised to the model
-/// and, since `ToolScope::allows` reads the same empty set, zero executable
-/// even if one were hallucinated. Every *other* failure (an unreadable or
-/// corrupt `project.json`) still errors: silently degrading a real project
-/// to a tool-less assistant would hide it.
+/// roots and only `no_project_tools()` allowed, instead of an error — that's
+/// what lets the assistant chat stay usable with no project (general
+/// questions, a skill-guided Jira ticket draft, a diagram). Every repository
+/// tool is absent from the allowlist, so none is advertised to the model
+/// and, since `execute_tool` re-checks the same set, none is executable even
+/// if one were hallucinated. Every *other* failure (an unreadable or corrupt
+/// `project.json`) still errors: silently degrading a real project to a
+/// near-tool-less assistant would hide it.
 pub fn current_scope_or_empty() -> Result<ToolScope, ProjectError> {
     Ok(open_project_scope()?.unwrap_or_else(|| {
-        ToolScope::new(Path::new(""), Path::new(""), AiAccessMode::DocsOnly, HashSet::new())
+        ToolScope::new(
+            Path::new(""),
+            Path::new(""),
+            AiAccessMode::DocsOnly,
+            no_project_tools(),
+        )
     }))
 }
 
@@ -236,22 +242,29 @@ mod tests {
     use super::super::testing::*;
     use super::*;
 
-    /// The chat stays available with no project open, but with nothing to
-    /// call — `current_scope` still errors for `ai_execute_tool`, while
-    /// `current_scope_or_empty` degrades to a scope that advertises and
-    /// permits zero tools.
+    /// The chat stays available with no project open, but only the
+    /// project-free tools are reachable — `current_scope` still errors for
+    /// `ai_execute_tool`, while `current_scope_or_empty` degrades to a scope
+    /// that advertises and permits exactly `no_project_tools()`.
     #[test]
-    fn current_scope_or_empty_is_tool_less_when_no_project_is_open() {
+    fn current_scope_or_empty_offers_only_project_free_tools() {
         crate::infra::settings_store::test_support::with_temp_home(|| {
             assert!(current_scope().is_err());
 
             let scope = current_scope_or_empty().unwrap();
-            assert!(super::super::llm_tool_definitions(
+            assert!(scope.allows(ToolName::Skill));
+            assert!(!scope.allows(ToolName::ReadFile));
+
+            let advertised: Vec<String> = super::super::llm_tool_definitions(
                 &scope,
                 crate::domain::conversation_mode::ConversationMode::Agent,
             )
-            .is_empty());
-            assert!(!scope.allows(ToolName::ReadFile));
+            .into_iter()
+            .map(|d| d.name)
+            .collect();
+            assert!(advertised.contains(&"skill".to_string()));
+            assert!(advertised.contains(&"visualize".to_string()));
+            assert!(!advertised.iter().any(|n| n == "readFile" || n == "writeFile"));
         });
     }
 

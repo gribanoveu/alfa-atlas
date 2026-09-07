@@ -1,6 +1,7 @@
 ---
 name: openapi-specs-layout
 description: OpenAPI multi-file spec layout used by Atlas (specs root with schemas, responses, parameters, operations, and $ref). Use when the user mentions OpenAPI, swagger, schemas, operations, $ref, or Project type is OpenAPI Specification. Русские формы — спецификация, спецификации, спецификацию, спеку openapi, схемы openapi, операции openapi.
+requires-project: true
 ---
 
 # OpenAPI multi-file spec layout

@@ -502,10 +502,19 @@ export function getAllowedTools(): Promise<string[]> {
   return invoke<string[]>("ai_get_allowed_tools");
 }
 
+/** One row of the Settings → Permissions list. `requiresProject` is the
+ * same split that is enforced at runtime
+ * (`domain::ai_access::no_project_tools`): with no project open the
+ * assistant only gets the tools marked `requiresProject: false`. */
+export type PermissionTool = {
+  name: string;
+  requiresProject: boolean;
+};
+
 /** Every tool shown in Settings → Permissions — mirrors
  * `services::ai_tools::permission_tool_catalog` on the Rust side. */
-export function listPermissionTools(): Promise<string[]> {
-  return invoke<string[]>("ai_list_permission_tools");
+export function listPermissionTools(): Promise<PermissionTool[]> {
+  return invoke<PermissionTool[]>("ai_list_permission_tools");
 }
 
 /** Persists (or revokes) one tool's membership in `ai_allowed_tools` for the

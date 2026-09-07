@@ -303,9 +303,78 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
     .collect()
 }
 
+/// Tools that need no open project to work, and so stay available in a
+/// chat started with none (`services::ai_tools::current_scope_or_empty`).
+/// Every one of them is either pure (`Todo` edits the turn's own checklist,
+/// `RequestModeSwitch` is a bare acknowledgement, `Visualize` renders what
+/// the model itself wrote, `GetAsciidocTemplates` reads a compiled-in
+/// catalog), resolved by the user rather than executed (`AskUser`, answered
+/// on resume), or backed by app-level storage instead of the repository
+/// (`Skill` — bundled + `~/.atlas/skills`, see `services::agent_skills`).
+///
+/// `Artifact` is here too: listing, reading and updating were always
+/// project-blind, and a new one now goes to a reserved bucket
+/// (`services::artifacts::NO_PROJECT_REPO_ID`) — which is what lets the
+/// model draft a Jira ticket with no project open and the user publish it.
+///
+/// Everything else is left out on purpose, and not for symmetry:
+/// file/git/search/check tools resolve paths against a root that does not
+/// exist here; `RequestFullRepoAccess` persists into `project.json`; the
+/// plan tools key their store by repository id; and `RequestArtifact` asks
+/// the user to fill in an `httpRequest` — facts for documentation that
+/// cannot be written without a project to write it into.
+pub fn no_project_tools() -> HashSet<ToolName> {
+    [
+        ToolName::Todo,
+        ToolName::RequestModeSwitch,
+        ToolName::GetAsciidocTemplates,
+        ToolName::AskUser,
+        ToolName::Skill,
+        ToolName::Visualize,
+        ToolName::Artifact,
+    ]
+    .into_iter()
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fails if a new tool is added to the no-project set without checking
+    /// that it really runs with no repository — every member here has been
+    /// read end to end for that (see the doc comment above).
+    #[test]
+    fn no_project_tools_is_the_audited_project_free_set() {
+        let tools = no_project_tools();
+        assert_eq!(tools.len(), 7);
+        for tool in [
+            ToolName::Todo,
+            ToolName::RequestModeSwitch,
+            ToolName::GetAsciidocTemplates,
+            ToolName::AskUser,
+            ToolName::Skill,
+            ToolName::Visualize,
+            ToolName::Artifact,
+        ] {
+            assert!(tools.contains(&tool));
+        }
+        for tool in [
+            ToolName::ReadFile,
+            ToolName::ListFiles,
+            ToolName::Grep,
+            ToolName::SemanticSearch,
+            ToolName::GitDiff,
+            ToolName::Check,
+            ToolName::WriteFile,
+            ToolName::RequestFullRepoAccess,
+            ToolName::CreatePlan,
+            ToolName::ReadPlan,
+            ToolName::RequestArtifact,
+        ] {
+            assert!(!tools.contains(&tool), "{tool:?} needs an open project");
+        }
+    }
 
     #[test]
     fn requires_confirmation_is_true_only_for_mutating_and_access_escalation_tools() {

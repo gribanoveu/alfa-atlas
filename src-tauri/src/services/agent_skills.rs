@@ -22,15 +22,34 @@ pub fn save_skills_settings(skills: SkillsSettings) -> Result<(), SettingsError>
     settings_store::save(&settings)
 }
 
-/// Enabled skills only — what the `skill` router searches.
+/// Enabled skills only — what the `skill` router searches. A skill marked
+/// `requires-project` is additionally hidden while no project is open: its
+/// instructions are written for a repository the model cannot reach there
+/// (`current_scope_or_empty` grants no file tools), so loading one would
+/// only produce a confident answer about files nobody can read.
 pub fn enabled_catalog() -> Result<Vec<SkillMeta>, SkillError> {
+    enabled_catalog_with(has_open_project())
+}
+
+/// The seam `enabled_catalog` is built on — takes the project state as an
+/// argument so the catalog can be asserted both ways in tests (which run
+/// against a temp home with no project of their own).
+fn enabled_catalog_with(project_open: bool) -> Result<Vec<SkillMeta>, SkillError> {
     let settings = load_skills_settings().unwrap_or_default();
     let bundled = bundled_skills::bundled_metas()?;
     let user = user_skills_store::valid_user_metas()?;
     Ok(merge_catalog(bundled, user)
         .into_iter()
         .filter(|s| settings.is_enabled(s.source, &s.name))
+        .filter(|s| project_open || !s.requires_project)
         .collect())
+}
+
+/// Deliberately treats an unreadable project state as "no project": the
+/// only consequence is that a project-requiring skill stays hidden, which
+/// is the safe direction.
+fn has_open_project() -> bool {
+    matches!(crate::services::project_open::get_project(), Ok(Some(_)))
 }
 
 /// Settings list: bundled + user (including invalid user folders).
@@ -52,6 +71,7 @@ pub fn list_skills() -> Result<Vec<SkillListItem>, SkillError> {
             name: meta.name,
             description: meta.description,
             source: meta.source,
+            requires_project: meta.requires_project,
         });
     }
     for entry in user_entries {
@@ -62,6 +82,7 @@ pub fn list_skills() -> Result<Vec<SkillListItem>, SkillError> {
                 name: parsed.name,
                 description: parsed.description,
                 source: SkillSource::User,
+                requires_project: parsed.requires_project,
             }),
             Err(err) => items.push(SkillListItem {
                 enabled: false,
@@ -69,6 +90,7 @@ pub fn list_skills() -> Result<Vec<SkillListItem>, SkillError> {
                 name: entry.dir_name,
                 description: String::new(),
                 source: SkillSource::User,
+                requires_project: false,
             }),
         }
     }
@@ -186,6 +208,13 @@ fn enabled_meta(name: &str) -> Result<SkillMeta, SkillError> {
                     if !settings.is_enabled(found.source, &found.name) {
                         return SkillError::Disabled(name.to_string());
                     }
+                    // Named directly (from an older chat, or the model
+                    // guessing) while it is filtered out — say why, so the
+                    // model tells the user to open a project instead of
+                    // reporting the skill as missing.
+                    if found.requires_project {
+                        return SkillError::RequiresProject(name.to_string());
+                    }
                 }
             }
             SkillError::NotFound(name.to_string())
@@ -216,6 +245,7 @@ fn load_enabled(name: &str) -> Result<(SkillMeta, String, Vec<String>), SkillErr
                     name: parsed.name,
                     description: parsed.description,
                     source: SkillSource::User,
+                    requires_project: parsed.requires_project,
                 },
                 parsed.body,
                 files,
@@ -314,11 +344,47 @@ mod tests {
         });
     }
 
+    /// Ranks against the catalog as it looks *with* a project open — this
+    /// suite is about which phrases hit which skill, not about the
+    /// no-project filter (`project_requiring_skills_are_hidden_without_a_project`
+    /// covers that), and a temp home has no project.
     fn search_hits(query: &str) -> Vec<String> {
-        let ToolResult::SkillSearch(SkillSearchResult { matches }) = search(query).unwrap() else {
-            panic!("expected search result");
-        };
-        matches.into_iter().map(|m| m.name).collect()
+        let catalog = enabled_catalog_with(true).unwrap();
+        search_skills(query, &catalog)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn project_requiring_skills_are_hidden_without_a_project() {
+        with_temp_home(|| {
+            let names = |project_open: bool| -> Vec<String> {
+                enabled_catalog_with(project_open)
+                    .unwrap()
+                    .into_iter()
+                    .map(|s| s.name)
+                    .collect()
+            };
+
+            let without = names(false);
+            assert!(!without.contains(&"method-spec".to_string()));
+            assert!(!without.contains(&"openapi-specs-layout".to_string()));
+            // Pure guidance stays available — that is the point of the flag.
+            assert!(without.contains(&"jira-task-description".to_string()));
+            assert!(without.contains(&"jira-task-decomposition".to_string()));
+
+            let with = names(true);
+            assert!(with.contains(&"method-spec".to_string()));
+            assert!(with.contains(&"openapi-specs-layout".to_string()));
+
+            // Naming it directly says why, instead of "not found".
+            assert!(matches!(
+                load("method-spec"),
+                Err(SkillError::RequiresProject(_))
+            ));
+        });
     }
 
     /// Nothing lists the catalog for the model — a skill exists only if
@@ -417,7 +483,7 @@ mod tests {
     #[test]
     fn enabled_catalog_includes_bundled_by_default() {
         with_temp_home(|| {
-            let catalog = enabled_catalog().unwrap();
+            let catalog = enabled_catalog_with(true).unwrap();
             assert!(catalog.iter().any(|s| s.name == "method-spec"));
             assert!(catalog.iter().any(|s| s.name == "openapi-specs-layout"));
             assert!(catalog.iter().any(|s| s.name == "jira-task-description"));

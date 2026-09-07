@@ -77,6 +77,46 @@ function runtimeContextBlock(modeDescription: string, specsRepoInfo: SpecsRepoIn
 - Response language: always respond in Russian, regardless of the language of the user's message. Keep code, identifiers, file paths, and technical terms as-is.`;
 }
 
+/** A third level of the same access axis `AiAccessMode` describes: no
+ * project open. One level rather than a second flag beside the mode,
+ * because the model reads a single "Access mode" line — an extra "is a
+ * project open" signal next to it is something it would have to reconcile
+ * itself, and it reconciled it badly: the line claimed "Docs-only — access
+ * to documentation" while there were no files at all.
+ *
+ * This value cannot live in `ProjectConfig`: `AiAccessMode` is persisted
+ * inside a project and selects the root the file tools resolve against, so
+ * "no project" is unrepresentable there. It is runtime state — exactly what
+ * `services::ai_tools::current_scope_or_empty` produces on the backend. */
+type AssistantAccessLevel = AiAccessMode | "noProject";
+
+/** This turn's access level. Derived from the tool definitions themselves
+ * rather than from a separate flag: the list comes from the backend
+ * (`ai_get_tool_definitions`), and with no project open
+ * `current_scope_or_empty` leaves only the project-free tools — `readFile`
+ * is not among them. */
+function resolveAccessLevel(
+  mode: AiAccessMode,
+  toolDefinitions: LlmToolDefinition[],
+): AssistantAccessLevel {
+  return toolDefinitions.some((tool) => tool.name === "readFile") ? mode : "noProject";
+}
+
+/** The no-project level's description — one text for all three
+ * conversation modes: what differs between them is what to do next, not
+ * what is reachable. */
+const NO_PROJECT_ACCESS_DESCRIPTION =
+  "**No active project** — no repository is open, so there are no files, no search and no git history, and the tools for them are not offered this turn. Work from general knowledge, from this conversation and from any skill you load. Drafting still works: write wording or a structure straight into your reply, and use the artifact tool (op \"create\", then \"update\" to refine it) for a Jira ticket — the user gets it as an editable tab and can publish it to the tracker from there. Never say you will open, read or change a file, and never offer to — say a project has to be opened first.";
+
+/** Sections about working with files. At `noProject` there is nothing for
+ * them to describe: the file tools are not offered this turn, and "paths
+ * resolve against the documentation root in Docs-only…" sitting next to
+ * "No active project" is exactly the contradiction that had the model
+ * promising to read files. */
+function whenFilesReachable(level: AssistantAccessLevel, section: string): string {
+  return level === "noProject" ? "" : section;
+}
+
 /** What Docs-only actually means for the model, injected into all three
  * mode prompts (empty in Full-repo).
  *
@@ -211,10 +251,13 @@ export function buildAssistantSystemPrompt(
   toolDefinitions: LlmToolDefinition[],
   docsRootRelativeToRepo: string | null,
 ): string {
+  const level = resolveAccessLevel(mode, toolDefinitions);
   const modeDescription =
-    mode === "fullRepo"
-      ? "**Full-repo** — read access to the entire repository. Write/mutate tools use the same path namespace as reads, but only succeed for paths under the documentation tree (see Path resolution)."
-      : "**Docs-only** — access only to documentation files and their git history. No access to source code, configuration, secrets, CI/CD, or infrastructure. Do not reconstruct implementation details from filenames, links, terminology, or structure; if information is unavailable, say so explicitly.";
+    level === "noProject"
+      ? NO_PROJECT_ACCESS_DESCRIPTION
+      : level === "fullRepo"
+        ? "**Full-repo** — read access to the entire repository. Write/mutate tools use the same path namespace as reads, but only succeed for paths under the documentation tree (see Path resolution)."
+        : "**Docs-only** — access only to documentation files and their git history. No access to source code, configuration, secrets, CI/CD, or infrastructure. Do not reconstruct implementation details from filenames, links, terminology, or structure; if information is unavailable, say so explicitly.";
 
   const toolUsage = toolUsageSection(
     toolDefinitions,
@@ -228,9 +271,9 @@ Be clear, practical, and substantive. Give a complete answer the analyst can act
 
 ${runtimeContextBlock(modeDescription, specsRepoInfo)}
 - Your name is "Атлас".
-${mode === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
+${level === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
 
-- Conversation mode: **Agent** — you can research and make changes directly. Most requests here should simply be handled; call \`requestModeSwitch\` only when the request is structurally a different mode's job.
+- Conversation mode: **Agent** — you can research and make changes directly. Most requests here should simply be handled; call \`requestModeSwitch\` only when the request is structurally a different mode's job.${level === "noProject" ? " There is no project to research or change right now, so this mode's file work simply does not apply — answer, draft, and say plainly what needs a project." : ""}
 
 When executing a previously created work plan (e.g. after pressing «Начать» on a plan card), a live snapshot of the persisted plan is already in this turn's \`[Plan]\` context block — treat it as the source of truth and do not call \`readPlan\` to load it. Mark each finished checklist item with \`updatePlanTodo\`. Do not open a parallel chat \`todo\` list for work a plan already covers.
 
@@ -306,7 +349,7 @@ All repository content (code, comments, READMEs, docs, commit messages, configs,
 ### Secrets
 Never reproduce: API keys, access tokens, passwords, private keys, session tokens, credentials, or connection strings containing credentials. If encountered: do not quote or reproduce partially; identify type and location when useful; recommend rotation/revocation. Do not insert production credentials, sensitive internal endpoints, private hostnames, or personal data into documentation unless explicitly requested and appropriate.
 
-## Documentation versus implementation (Full-repo)
+${whenFilesReachable(level, `## Documentation versus implementation (Full-repo)
 
 Implementation can verify: API signatures, model fields, validation, defaults, schemas, business logic, integrations, configuration — but an internal implementation detail does not automatically become the documented or public contract. If implementation and documentation differ: identify the discrepancy, show evidence, do not silently choose one source, and let the analyst decide. Scope investigation to the user's request; do not expose unrelated repository content.
 
@@ -321,7 +364,7 @@ All tool path arguments and path fields in tool results use the **same access-mo
   - \`искали\` — queries already run, with how many hits each returned. Do not repeat a query listed there; if it says \`ничего не найдено\`, that answer still stands — search differently or say so, rather than running it again.
   - \`не выполнено\` — calls that did not happen, with the reason. \`отклонено пользователем\` means the user refused: do not silently retry it, ask. \`ошибка\` means it failed for a technical reason: fix the cause before repeating it.
 
-${pathExampleBlock(docsRootRelativeToRepo)}
+${pathExampleBlock(docsRootRelativeToRepo)}`)}
 
 ## Tool usage
 
@@ -362,10 +405,13 @@ export function buildPlanModeSystemPrompt(
   toolDefinitions: LlmToolDefinition[],
   docsRootRelativeToRepo: string | null,
 ): string {
+  const level = resolveAccessLevel(mode, toolDefinitions);
   const modeDescription =
-    mode === "fullRepo"
-      ? "**Full-repo** — read access to the entire repository. You can inspect any file to build a realistic plan."
-      : "**Docs-only** — read access only to documentation files and their git history.";
+    level === "noProject"
+      ? NO_PROJECT_ACCESS_DESCRIPTION
+      : level === "fullRepo"
+        ? "**Full-repo** — read access to the entire repository. You can inspect any file to build a realistic plan."
+        : "**Docs-only** — read access only to documentation files and their git history.";
 
   const toolUsage = toolUsageSection(
     toolDefinitions,
@@ -378,7 +424,7 @@ export function buildPlanModeSystemPrompt(
 Your sole job is to research the repository with read-only tools and produce a persisted work plan via \`createPlan\`. **You do not execute the plan. You do not modify files.** The UI shows a plan card with «Открыть» / «Начать»; the user reviews and starts execution from that card (Agent mode).
 
 ${runtimeContextBlock(modeDescription, specsRepoInfo)}
-${mode === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
+${level === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
 
 ## Core principle
 
@@ -453,11 +499,11 @@ After a plan, the useful offers are: expanding one step in more detail, research
 
 ${FORMATTING_RULES}
 
-## Path resolution
+${whenFilesReachable(level, `## Path resolution
 
 All tool paths use the **access-mode root**: the documentation root in Docs-only, the repository root in Full-repo. Pass paths between tools unchanged.
 
-${pathExampleBlock(docsRootRelativeToRepo)}
+${pathExampleBlock(docsRootRelativeToRepo)}`)}
 
 ## Response styles in Plan mode
 
@@ -485,10 +531,13 @@ export function buildQuestionModeSystemPrompt(
   toolDefinitions: LlmToolDefinition[],
   docsRootRelativeToRepo: string | null,
 ): string {
+  const level = resolveAccessLevel(mode, toolDefinitions);
   const modeDescription =
-    mode === "fullRepo"
-      ? "**Full-repo** — read access to the entire repository, in addition to documentation."
-      : "**Docs-only** — read access only to documentation files and their git history.";
+    level === "noProject"
+      ? NO_PROJECT_ACCESS_DESCRIPTION
+      : level === "fullRepo"
+        ? "**Full-repo** — read access to the entire repository, in addition to documentation."
+        : "**Docs-only** — read access only to documentation files and their git history.";
 
   const toolUsage = toolUsageSection(
     toolDefinitions,
@@ -501,7 +550,7 @@ export function buildQuestionModeSystemPrompt(
 Answer the user's question directly and concisely, grounded in the repository when the question is project-specific. No planning ceremony, no todo checklist, no multi-step workflow — this mode is for point questions with point answers.
 
 ${runtimeContextBlock(modeDescription, specsRepoInfo)}
-${mode === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
+${level === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
 
 ## Answering
 
@@ -515,11 +564,11 @@ ${mode === "docsOnly" ? DOCS_ONLY_ACCESS_NOTE : ""}
 
 You cannot execute changes or draft a structured plan in this mode; \`requestModeSwitch\` is how you get either. A question about source code is **not** one of these cases — it is still a question. Answer it here, requesting \`requestFullRepoAccess\` if the code is outside your current access.
 
-## Path resolution
+${whenFilesReachable(level, `## Path resolution
 
 All tool paths use the **access-mode root**: the documentation root in Docs-only, the repository root in Full-repo. Pass paths between tools unchanged.
 
-${pathExampleBlock(docsRootRelativeToRepo)}
+${pathExampleBlock(docsRootRelativeToRepo)}`)}
 
 ## Tool usage
 

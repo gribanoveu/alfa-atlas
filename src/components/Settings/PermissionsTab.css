@@ -46,3 +46,13 @@
   gap: 8px;
   cursor: pointer;
 }
+
+.permissions-group + .permissions-group {
+  margin-top: 12px;
+}
+
+.permissions-group-title {
+  font-size: var(--font-ui-xs);
+  color: var(--text-2);
+  margin-bottom: 6px;
+}

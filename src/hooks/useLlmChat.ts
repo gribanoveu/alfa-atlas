@@ -275,9 +275,9 @@ export function useLlmChat(
   // auto-approving that "revoked" tool for the rest of its mounted lifetime.
   useEffect(() => {
     let cancelled = false;
-    // Ошибка тут не стоит ничего, кроме отсутствия предодобрений: с
-    // закрытым проектом («no project is open») их и не может быть — чат
-    // без проекта работает вовсе без инструментов.
+    // Failing here costs nothing but the pre-approvals: with no project
+    // open ("no project is open") there cannot be any — a project-less
+    // chat only gets tools that never pause for approval.
     void getAutoApprovedTools()
       .then((tools) => {
         if (cancelled) return;
