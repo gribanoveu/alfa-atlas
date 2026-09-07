@@ -218,7 +218,7 @@ export function buildAssistantSystemPrompt(
 
   const toolUsage = toolUsageSection(
     toolDefinitions,
-    "No repository tools are currently available.",
+    "No repository tools are currently available — no project is open, or every tool is disallowed. Answer from general knowledge and the conversation itself, and draft text (a ticket description, wording, a structure) directly in your reply. Do not claim you will read, search, or change any file, and do not ask the user to wait while you do.",
     `Use tools only when the answer depends on project-specific information that is not already established in the current context. Use the minimum number of calls. Start a search with \`semanticSearch\`; reach for \`grep\` only when you need every exact occurrence. If a tool fails, report the limitation instead of guessing. Never repeatedly search for information already in context, and do not run exploratory searches unrelated to the request.`,
   );
 

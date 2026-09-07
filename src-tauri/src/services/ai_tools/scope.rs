@@ -198,14 +198,33 @@ pub fn scope_for_config(repo_root: &Path, docs_root: &Path, config: &ProjectConf
 /// `ai_allowed_tools` (it discards the rest of `ProjectConfig`), so those
 /// are loaded separately here.
 pub fn current_scope() -> Result<ToolScope, ProjectError> {
-    let opened = project_open::get_project()?
-        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    open_project_scope()?.ok_or_else(|| ProjectError::Message("no project is open".to_string()))
+}
+
+/// `current_scope()`, but "no project is open" resolves to a scope with no
+/// roots and an empty allowlist instead of an error — that's what lets the
+/// assistant chat stay usable with no project (general questions, drafting
+/// a Jira ticket), just with zero repository tools advertised to the model
+/// and, since `ToolScope::allows` reads the same empty set, zero executable
+/// even if one were hallucinated. Every *other* failure (an unreadable or
+/// corrupt `project.json`) still errors: silently degrading a real project
+/// to a tool-less assistant would hide it.
+pub fn current_scope_or_empty() -> Result<ToolScope, ProjectError> {
+    Ok(open_project_scope()?.unwrap_or_else(|| {
+        ToolScope::new(Path::new(""), Path::new(""), AiAccessMode::DocsOnly, HashSet::new())
+    }))
+}
+
+fn open_project_scope() -> Result<Option<ToolScope>, ProjectError> {
+    let Some(opened) = project_open::get_project()? else {
+        return Ok(None);
+    };
     let config = load_project_config_migrated(&opened.root, &opened.docs_root)?;
-    Ok(scope_for_config(
+    Ok(Some(scope_for_config(
         Path::new(&opened.root),
         Path::new(&opened.docs_root),
         &config,
-    ))
+    )))
 }
 
 #[cfg(test)]
@@ -216,6 +235,25 @@ mod tests {
 
     use super::super::testing::*;
     use super::*;
+
+    /// The chat stays available with no project open, but with nothing to
+    /// call — `current_scope` still errors for `ai_execute_tool`, while
+    /// `current_scope_or_empty` degrades to a scope that advertises and
+    /// permits zero tools.
+    #[test]
+    fn current_scope_or_empty_is_tool_less_when_no_project_is_open() {
+        crate::infra::settings_store::test_support::with_temp_home(|| {
+            assert!(current_scope().is_err());
+
+            let scope = current_scope_or_empty().unwrap();
+            assert!(super::super::llm_tool_definitions(
+                &scope,
+                crate::domain::conversation_mode::ConversationMode::Agent,
+            )
+            .is_empty());
+            assert!(!scope.allows(ToolName::ReadFile));
+        });
+    }
 
     #[test]
     fn scope_for_config_defaults_to_both_tools_when_unset() {

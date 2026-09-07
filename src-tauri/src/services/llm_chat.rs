@@ -1138,9 +1138,14 @@ fn setup(ctx: &mut ChatTurnContext) -> Result<TurnSetup, String> {
     // turn is already using for chat, rather than resolving a second one.
     ctx.deps.fast_apply = Some((provider.clone(), model.clone()));
 
-    // No project open is not something the model can recover from by trying
-    // again — hard-fail the whole turn, same as `ai_execute_tool` does.
-    let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
+    // No project open is not a reason to refuse the turn: the chat is still
+    // useful for general questions and for drafting (a Jira ticket, wording,
+    // a structure) that needs no repository at all. It resolves to a scope
+    // with an empty allowlist, so `llm_tool_definitions` below advertises
+    // nothing and `run_tool_loop`'s own re-check would refuse any call the
+    // model invented anyway. A project that *is* open but whose config can't
+    // be read still hard-fails, same as `ai_execute_tool`.
+    let scope = ai_tools::current_scope_or_empty().map_err(|e| e.to_string())?;
     ctx.deps.active_file = resolve_active_file(&scope, ctx.active_file_path.take());
     let tools = ai_tools::llm_tool_definitions(&scope, ctx.conversation_mode);
 

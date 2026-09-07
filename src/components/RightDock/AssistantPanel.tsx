@@ -10,7 +10,7 @@ import { useToolDefinitions } from "../../hooks/useToolDefinitions";
 import type { AiAccessMode, ConversationMode } from "../../lib/aiTools";
 import type { ChatExportFormat } from "../../lib/chatExport";
 import { chatMessagesToJson, chatMessagesToMarkdown, sanitizeFilename, writeExportFile } from "../../lib/chatExport";
-import { deriveChatTitle } from "../../lib/chatHistory";
+import { deriveChatTitle, NO_PROJECT_REPO_ROOT } from "../../lib/chatHistory";
 import type { SpecsRepoInfo } from "../../lib/openapi";
 import type { UpdatedReference } from "../../lib/project";
 import { docsRootRelativeToRepo } from "../../lib/paths";
@@ -162,7 +162,12 @@ export function AssistantPanel({
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;
   const llmReady = activeProviderId !== null && Boolean(hasApiKeyMap[activeProviderId]);
 
-  const chatHistory = useChatHistory(repoRoot);
+  // Без открытого проекта чат остаётся рабочим, но безынструментальным:
+  // бэкенд отдаёт пустой `ToolScope` (`current_scope_or_empty`), так что
+  // ни файлов, ни поиска, ни правок — только общие вопросы и черновики
+  // (например, текст задачи в Jira, который потом публикуется из панели
+  // Jira). История таких чатов копится под отдельным ключом, а не теряется.
+  const chatHistory = useChatHistory(repoRoot ?? NO_PROJECT_REPO_ROOT);
   // The documentation root's path relative to the repository root (e.g.
   // `"src/docs/asciidoc"`), or `null` when the distinction doesn't matter —
   // fed into the system prompt so it states the real Full-repo-mode path
@@ -288,7 +293,15 @@ export function AssistantPanel({
           />
         ) : llmReady ? (
           <>
-            {!embeddingConfigured ? (
+            {/* Заметки про эмбеддинги и индекс относятся к открытому
+                проекту: без него ничего не индексируется, и обе они врали
+                бы («Индекс ещё строится» при простое). */}
+            {!repoRoot ? (
+              <p className="assistant-chat-index-note">
+                Проект не открыт — доступны только общие вопросы и черновики.
+                Чтение, поиск и правка файлов появятся после открытия проекта.
+              </p>
+            ) : !embeddingConfigured ? (
               <p className="assistant-chat-index-note">
                 Провайдер эмбеддингов не настроен — поиск будет ограничен. Настройте
                 его в Настройки → Эмбеддинги.

@@ -4,6 +4,7 @@ import type { ChatMessage } from "../lib/chatBlocks";
 import {
   deriveChatTitle,
   listChats,
+  NO_PROJECT_REPO_ROOT,
   loadChatMessages,
   saveChat,
   setChatArchived,
@@ -181,6 +182,11 @@ export function useChatHistory(repoRoot: string | null) {
       void saveChat(repoRoot, currentChatId, title, messages, todos, activePlanId, null)
         .then((summary) => {
           setActiveChats((prev) => [summary, ...prev.filter((c) => c.id !== summary.id)]);
+          // Память проекта пишется в файлы под корнем репозитория
+          // (`services::memory_pipeline::run_turn`), а у чата без проекта
+          // корня нет — только группирующий ключ в SQLite. Извлекать
+          // нечего и некуда.
+          if (repoRoot === NO_PROJECT_REPO_ROOT) return;
           void memoryExtractTurn(repoRoot, currentChatId).catch((e: unknown) => {
             console.error("Не удалось запустить извлечение памяти", e);
           });

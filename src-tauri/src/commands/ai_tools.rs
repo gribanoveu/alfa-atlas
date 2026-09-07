@@ -99,11 +99,15 @@ pub fn ai_get_access_mode() -> Result<AiAccessMode, String> {
 /// hand-duplicating it. `conversation_mode` must match whatever the caller
 /// intends to actually chat in (see `domain::conversation_mode`) — this
 /// endpoint has no chat turn of its own to infer it from.
+///
+/// Resolves through `current_scope_or_empty` for the same reason
+/// `services::llm_chat::setup` does: with no project open the answer is an
+/// empty list (the chat still works, it just has no tools), not an error.
 #[tauri::command]
 pub fn ai_get_tool_definitions(
     conversation_mode: ConversationMode,
 ) -> Result<Vec<LlmToolDefinition>, String> {
-    let scope = ai_tools::current_scope().map_err(|e| e.to_string())?;
+    let scope = ai_tools::current_scope_or_empty().map_err(|e| e.to_string())?;
     Ok(ai_tools::llm_tool_definitions(&scope, conversation_mode))
 }
 
