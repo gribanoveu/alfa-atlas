@@ -214,3 +214,103 @@
 .markdown-tbody .markdown-tr:nth-child(even) .markdown-td {
   background: var(--bg-0);
 }
+
+/* Схема из ```mermaid: низкий кадр в ленте, разглядывание — в модалке
+   (`AssistantMermaidBlock`). Высота держится маленькой намеренно: чат
+   узкий, и полноразмерный граф вытеснял бы из него текст ответа. */
+.markdown-mermaid {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-height: 180px;
+  overflow: hidden;
+  margin: 8px 0;
+  padding: 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-0);
+  cursor: zoom-in;
+}
+
+.markdown-mermaid.is-loading {
+  min-height: 56px;
+  color: var(--text-2);
+  cursor: default;
+}
+
+.markdown-mermaid.is-error {
+  flex-direction: column;
+  align-items: stretch;
+  max-height: none;
+  gap: 6px;
+  cursor: default;
+}
+
+.markdown-mermaid-error-title {
+  color: var(--red, #d05c5c);
+  font-weight: 600;
+  font-size: var(--font-ui);
+}
+
+.markdown-mermaid-error-message,
+.markdown-mermaid-source {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--text-1);
+}
+
+.markdown-mermaid-svg {
+  display: block;
+  max-width: 100%;
+}
+
+/* Схема вписывается в кадр целиком, а не обрезается им. */
+.markdown-mermaid-svg svg {
+  max-width: 100%;
+  max-height: 164px;
+  height: auto;
+}
+
+.markdown-mermaid-zoom-hint {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.markdown-mermaid:hover .markdown-mermaid-zoom-hint,
+.markdown-mermaid:focus-visible .markdown-mermaid-zoom-hint {
+  opacity: 1;
+}
+
+/* Модалка отдаёт всю высоту вьюпорту AscMermaid — свой скролл у него уже
+   есть, второй от .tool-log-body только мешал бы панорамированию. */
+.markdown-mermaid-dialog-body {
+  overflow: hidden;
+  padding: 12px;
+}
+
+.markdown-mermaid-dialog-body .asc-mermaid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.markdown-mermaid-dialog-body .asc-mermaid-viewport {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}

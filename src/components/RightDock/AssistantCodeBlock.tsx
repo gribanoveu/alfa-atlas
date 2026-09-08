@@ -9,6 +9,7 @@ import {
   splitCodeLines,
   themedTokenStyle,
 } from "../../lib/shikiHighlight";
+import { AssistantMermaidBlock } from "./AssistantMermaidBlock";
 
 function fencedLang(className: string | undefined): string | null {
   const match = /language-(\S+)/.exec(className ?? "");
@@ -79,10 +80,13 @@ export function AssistantCodeBlock({ className, children }: AssistantCodeBlockPr
   const source = isFenced ? childrenToText(children) : "";
   const lines = splitCodeLines(source);
   const incomplete = useIsCodeFenceIncomplete();
+  // Drawn as a diagram, not as code — but only once the fence is closed, so a
+  // half-streamed graph is not fed to Mermaid on every delta.
+  const isMermaid = isFenced && rawLang === "mermaid" && !incomplete;
   const [tokens, setTokens] = useState<ThemedToken[][] | null>(null);
 
   useEffect(() => {
-    if (!isFenced || incomplete) {
+    if (!isFenced || incomplete || isMermaid) {
       setTokens(null);
       return;
     }
@@ -94,10 +98,14 @@ export function AssistantCodeBlock({ className, children }: AssistantCodeBlockPr
     return () => {
       cancelled = true;
     };
-  }, [source, rawLang, incomplete, isFenced]);
+  }, [source, rawLang, incomplete, isFenced, isMermaid]);
 
   if (!isFenced) {
     return <code className="markdown-code-inline">{children}</code>;
+  }
+
+  if (isMermaid) {
+    return <AssistantMermaidBlock source={source} />;
   }
 
   const showHighlight = !incomplete && tokens !== null;
