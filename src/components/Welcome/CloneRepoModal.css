@@ -96,6 +96,12 @@
   flex-shrink: 0;
 }
 
+.clone-modal-hint {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  line-height: 1.4;
+}
+
 .clone-modal-message {
   font-size: var(--font-ui);
   color: var(--text-1);

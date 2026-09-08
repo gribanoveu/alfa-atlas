@@ -1,8 +1,16 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toMessage } from "../../lib/errors";
-import { ensureAtlasGitignore } from "../../lib/project";
+import { ensureAtlasGitignore, probeOpenPath } from "../../lib/project";
 import type { DocsCandidate, ProbeResult } from "../../lib/project";
+import {
+  gitCheckoutBranch,
+  gitCheckoutRemoteBranch,
+  gitListBranches,
+  localBranchName,
+  openableBranches,
+  type GitBranchInfo,
+} from "../../lib/git";
 import "./CloneRepoModal.css";
 
 type ConfirmOpenProjectModalProps = {
@@ -28,20 +36,68 @@ export function ConfirmOpenProjectModal({
   const [candidatesOpen, setCandidatesOpen] = useState(false);
   const [addToGitignore, setAddToGitignore] = useState(true);
   const candidatesRef = useRef<HTMLDivElement>(null);
+  /** Candidates re-scanned after a branch switch; the probe's own list until then. */
+  const [candidates, setCandidates] = useState<DocsCandidate[]>(probe.candidates);
+  const [branches, setBranches] = useState<GitBranchInfo[]>([]);
+  const [branchesOpen, setBranchesOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const branchesRef = useRef<HTMLDivElement>(null);
 
-  const candidates: DocsCandidate[] = probe.candidates;
   const selectedCandidate = candidates.find((c) => c.path === docsRoot) ?? null;
 
+  /** A plain folder is not a repository — no branches, no picker, no error. */
   useEffect(() => {
-    if (!candidatesOpen) return;
+    let cancelled = false;
+    gitListBranches(probe.root)
+      .then((list) => {
+        if (!cancelled) setBranches(list);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [probe.root]);
+
+  const offeredBranches = useMemo(() => openableBranches(branches), [branches]);
+  const currentBranch = branches.find((b) => b.isCurrent)?.name ?? "";
+
+  /** Checking out rewrites the working tree, so the docs scan has to run
+   * again — a template branch is precisely the case where the previous
+   * branch had nothing to find. */
+  const switchBranch = async (name: string) => {
+    const target = offeredBranches.find((b) => b.name === name);
+    if (!target || target.isCurrent) return;
+    setSwitching(true);
+    setError(null);
+    try {
+      if (target.isRemote) {
+        await gitCheckoutRemoteBranch(probe.root, target.name);
+      } else {
+        await gitCheckoutBranch(probe.root, target.name);
+      }
+      const rescanned = await probeOpenPath(probe.root);
+      setCandidates(rescanned.candidates);
+      setDocsRoot(rescanned.suggestedDocsRoot ?? rescanned.docsRoot ?? "");
+      setBranches(await gitListBranches(probe.root));
+    } catch (e) {
+      setError(toMessage(e));
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!candidatesOpen && !branchesOpen) return;
 
     const onPointerDown = (event: PointerEvent) => {
-      if (!candidatesRef.current?.contains(event.target as Node)) {
-        setCandidatesOpen(false);
-      }
+      const target = event.target as Node;
+      if (!candidatesRef.current?.contains(target)) setCandidatesOpen(false);
+      if (!branchesRef.current?.contains(target)) setBranchesOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setCandidatesOpen(false);
+      if (event.key !== "Escape") return;
+      setCandidatesOpen(false);
+      setBranchesOpen(false);
     };
 
     document.addEventListener("pointerdown", onPointerDown);
@@ -50,7 +106,7 @@ export function ConfirmOpenProjectModal({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [candidatesOpen]);
+  }, [branchesOpen, candidatesOpen]);
 
   const docsUnderRepo = useMemo(() => {
     if (!docsRoot) return false;
@@ -117,7 +173,7 @@ export function ConfirmOpenProjectModal({
         style={{ width: "min(520px, 100%)" }}
       >
         <div className="clone-modal-title" id="confirm-open-title">
-          Корень документации
+          Укажите корень документации
         </div>
 
         <div className="clone-modal-message">
@@ -127,10 +183,72 @@ export function ConfirmOpenProjectModal({
           </div>
         </div>
 
-        <p style={{ margin: 0, fontSize: 12.5, color: "var(--text-1)", lineHeight: 1.45 }}>
-          Рабочее пространство редактора — только документация. Подтвердите
-          найденную папку или укажите её вручную.
-        </p>
+        {offeredBranches.length > 1 ? (
+          <div className="clone-modal-field">
+            <span className="clone-modal-label" id="branches-label">
+              Ветка
+            </span>
+            <div className="clone-select" ref={branchesRef}>
+              <button
+                type="button"
+                className={`clone-select-trigger${branchesOpen ? " is-open" : ""}`}
+                aria-haspopup="listbox"
+                aria-expanded={branchesOpen}
+                aria-labelledby="branches-label"
+                disabled={switching || busy}
+                onClick={() => setBranchesOpen((isOpen) => !isOpen)}
+              >
+                <span className="clone-select-value">
+                  {currentBranch ? (
+                    <span className="clone-select-path">{currentBranch}</span>
+                  ) : (
+                    // Unborn HEAD: a clone with no commit on the default
+                    // branch has no current branch to show.
+                    <span className="clone-select-placeholder">Выберите…</span>
+                  )}
+                  {switching ? (
+                    <span className="clone-select-reason">Переключение…</span>
+                  ) : null}
+                </span>
+                <span className="clone-select-chevron" aria-hidden>
+                  ▾
+                </span>
+              </button>
+              {branchesOpen ? (
+                <div className="clone-select-menu" role="listbox">
+                  {offeredBranches.map((b) => (
+                    <button
+                      key={`${b.isRemote ? "remote" : "local"}:${b.name}`}
+                      type="button"
+                      role="option"
+                      aria-selected={b.isCurrent}
+                      className={`clone-select-option${b.isCurrent ? " is-active" : ""}`}
+                      onClick={() => {
+                        setBranchesOpen(false);
+                        void switchBranch(b.name);
+                      }}
+                    >
+                      <span className="clone-select-path">{localBranchName(b)}</span>
+                      <span className="clone-select-reason">
+                        {b.isCurrent
+                          ? "текущая"
+                          : b.isRemote
+                            ? "удалённая"
+                            : "локальная"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            {candidates.length === 0 ? (
+              <span className="clone-modal-hint">
+                В этой ветке документация не найдена. Если репозиторий новый,
+                шаблон может лежать в другой ветке — выберите её здесь.
+              </span>
+            ) : null}
+          </div>
+        ) : null}
 
         {candidates.length > 0 ? (
           <div className="clone-modal-field">
@@ -192,8 +310,9 @@ export function ConfirmOpenProjectModal({
           </div>
         ) : (
           <div className="clone-modal-message">
-            Автоматически найти папку документации не удалось. Укажите её
-            вручную.
+            Автоматически найти корень документации не удалось. 
+            <br />
+            Укажите папку с документацией проекта самостоятельно.
           </div>
         )}
 

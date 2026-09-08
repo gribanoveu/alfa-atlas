@@ -62,6 +62,33 @@ export type GitBranchInfo = {
   tipOid: string | null;
 };
 
+/** Local name a checkout of `origin/doc/template` would land on: `doc/template`. */
+export function localBranchName(branch: GitBranchInfo): string {
+  if (!branch.isRemote) return branch.name;
+  const idx = branch.name.indexOf("/");
+  return idx < 0 ? branch.name : branch.name.slice(idx + 1);
+}
+
+/** Branches worth offering when opening a project: every local one plus the
+ * remote-only ones. A freshly cloned repo has a single local branch and all
+ * the interesting content — a template branch, say — sits behind
+ * `origin/*`, so listing locals alone would offer no choice at all.
+ * Current branch first, the rest alphabetical. */
+export function openableBranches(branches: GitBranchInfo[]): GitBranchInfo[] {
+  const locals = new Set(
+    branches.filter((b) => !b.isRemote).map((b) => b.name),
+  );
+  const offered = branches.filter(
+    (b) => !b.isRemote || !locals.has(localBranchName(b)),
+  );
+  return offered.sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+    return localBranchName(a).localeCompare(localBranchName(b), undefined, {
+      sensitivity: "base",
+    });
+  });
+}
+
 export function hasTrackedGitChanges(status: GitStatusSnapshot): boolean {
   return (
     status.staged.length > 0 ||
