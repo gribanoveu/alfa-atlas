@@ -1599,3 +1599,50 @@ describe("useLlmChat — a loaded skill survives the turn that loaded it", () =>
     });
   });
 });
+
+describe("useLlmChat — a bare «да» keeps pointing at the right question", () => {
+  const OFFER = "Хочешь — проверю остальные методы репозитория на те же проблемы?";
+
+  function turnEndingInAnOffer(): ChatMessage {
+    return {
+      id: "a1",
+      role: "assistant",
+      streaming: false,
+      blocks: [
+        { type: "text", id: "t1", content: "Готово. Все 8 фолдеров прошли проверку." },
+        { type: "text", id: "t2", content: OFFER },
+      ],
+    };
+  }
+
+  // The observed failure: «да» to that offer started a different, earlier
+  // one — three files re-read before the turn corrected itself.
+  test("puts the pending question last, immediately above the user message", async () => {
+    outcomes = [done("Проверяю")];
+    const { result } = render({
+      initialMessages: [{ id: "u1", role: "user", content: "приведи в порядок" }, turnEndingInAnOffer()],
+    });
+
+    await act(async () => {
+      await result.current.sendMessage("да");
+    });
+
+    const wire = streamCalls[0]![2] as Array<{ role: string; content: string }>;
+    const last = wire[wire.length - 1]!;
+    const beforeLast = wire[wire.length - 2]!;
+    expect(last).toMatchObject({ role: "user", content: "да" });
+    expect(beforeLast.role).toBe("system");
+    expect(beforeLast.content).toContain("[Reply]");
+    expect(beforeLast.content).toContain(OFFER);
+  });
+
+  test("a message with content of its own gets no reminder", async () => {
+    outcomes = [done("Ок")];
+    const { result } = render({ initialMessages: [turnEndingInAnOffer()] });
+    await act(async () => {
+      await result.current.sendMessage("да, но сначала addEmployee");
+    });
+    const wire = streamCalls[0]![2] as Array<{ role: string; content: string }>;
+    expect(wire.some((m) => m.content.includes("[Reply]"))).toBe(false);
+  });
+});

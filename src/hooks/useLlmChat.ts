@@ -17,6 +17,7 @@ import {
   buildArtifactsContextBlock,
   buildLoadedSkillsContextBlock,
   buildUserAnswersContextBlock,
+  buildPendingQuestionContextBlock,
   buildRepositoryLinkContextBlock,
   buildCompactionSummaryBlock,
   buildHistoryCompactionPrompt,
@@ -1218,6 +1219,11 @@ export function useLlmChat(
         lastSentConversationModeRef.current !== conversationMode;
       lastSentConversationModeRef.current = conversationMode;
 
+      // Computed here rather than beside `loadedSkillsBlock` above because
+      // it needs `userText`; it stays out of the compaction sum for the
+      // same reason the other short blocks do — it is one line.
+      const pendingQuestionBlock = buildPendingQuestionContextBlock(real, userText);
+
       const todoBlock = buildTodoContextBlock(todoListRef.current);
       // Editor tabs store docs-relative paths; the model sees access-mode
       // paths (repo-relative in Full-repo). Backend `activeFilePath` stays
@@ -1341,6 +1347,12 @@ export function useLlmChat(
         ...(activePlanBlock ? [{ role: "system" as const, content: activePlanBlock, toolCallId: null }] : []),
         ...(artifactsBlock ? [{ role: "system" as const, content: artifactsBlock, toolCallId: null }] : []),
         ...(repoLinkBlock ? [{ role: "system" as const, content: repoLinkBlock, toolCallId: null }] : []),
+        // Last of every system block, immediately above the message it is
+        // about: adjacency to the user's own «да» is the entire point of
+        // this one — see `buildPendingQuestionContextBlock`.
+        ...(pendingQuestionBlock
+          ? [{ role: "system" as const, content: pendingQuestionBlock, toolCallId: null }]
+          : []),
         { role: "user", content: userText, toolCallId: null },
       ];
 
