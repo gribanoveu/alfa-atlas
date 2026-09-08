@@ -7,6 +7,7 @@ import {
   jiraHasToken,
   type JiraUser,
 } from "../lib/jira";
+import { useRefreshOnMasterKeyUnlock } from "./useMasterKeyAccess";
 
 export type JiraConnection =
   | { kind: "idle" }
@@ -60,6 +61,10 @@ export function useJiraConnection() {
   useEffect(() => {
     void check();
   }, [check]);
+
+  // A panel open while the keychain was still locked read "no token"; it has
+  // no other way to learn that granting access changed the answer.
+  useRefreshOnMasterKeyUnlock(check);
 
   return { state, refresh: check };
 }

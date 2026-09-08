@@ -29,6 +29,7 @@ pub mod llm_chat;
 pub mod llm_config;
 pub mod llm_rate_limit;
 pub mod llm_session;
+pub mod master_key_access;
 pub mod memory_log;
 pub mod memory_pipeline;
 pub mod metrics;

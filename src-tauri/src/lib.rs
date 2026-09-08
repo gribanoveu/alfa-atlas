@@ -419,6 +419,8 @@ pub fn run() {
             commands::prefs::get_general_prefs,
             commands::prefs::set_general_prefs,
             commands::prefs::get_settings_paths,
+            commands::prefs::master_key_get_access_status,
+            commands::prefs::master_key_retry_access,
             commands::reveal::reveal_path,
             commands::metrics::metrics_status,
             commands::metrics::metrics_set_enabled,

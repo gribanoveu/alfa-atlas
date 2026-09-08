@@ -1,0 +1,76 @@
+/* Keychain warning strip. Sits above the workspace in the app shell and
+ * above the body in the Settings dialog, so it must not depend on either
+ * one's layout — `flex: none` is all it asks of its parent.
+ *
+ * Severity is carried by the left bar and the icon, not by a saturated
+ * fill: this warning has no timeout and no dismiss, so it may sit on screen
+ * for a whole working session. A yellow wash that reads as "urgent" for the
+ * first ten seconds reads as glare for the next hour, and the surrounding
+ * chrome is deliberately low-contrast. */
+
+.master-key-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--yellow);
+  background: color-mix(in srgb, var(--yellow) 8%, var(--bg-1));
+  font-size: var(--font-ui-sm);
+  line-height: 1.45;
+}
+
+/* Sits beside the title rather than beside the block's centre, which drifts
+ * away from it as the detail line wraps. */
+.master-key-banner-icon {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+  color: var(--yellow);
+}
+
+.master-key-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.master-key-banner-title {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.master-key-banner-detail {
+  color: var(--text-1);
+}
+
+.master-key-banner-btn {
+  flex: none;
+  font-size: var(--font-ui-sm);
+  padding: 3px 10px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
+  white-space: nowrap;
+  /* Holds the width of the idle label so the button does not shrink when it
+   * swaps to the shorter busy one. In `ch`, because the app's font size is a
+   * token and the face is monospace. */
+  min-width: 20ch;
+}
+
+.master-key-banner-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.master-key-banner-btn:focus-visible {
+  outline: 1px solid var(--text-0);
+  outline-offset: 1px;
+}
+
+.master-key-banner-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

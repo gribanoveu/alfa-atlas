@@ -22,6 +22,7 @@ import {
 import type { GeneralPrefs } from "../../lib/prefs";
 import type { SpellcheckConfig } from "../../lib/spellcheck";
 import { useGeneralPrefsEditor } from "../../hooks/useGeneralPrefsEditor";
+import { MasterKeyBanner } from "../MasterKeyBanner/MasterKeyBanner";
 import "../Welcome/CloneRepoModal.css";
 import "./SettingsDialog.css";
 import { AppearanceTab } from "./AppearanceTab";
@@ -357,6 +358,8 @@ export function SettingsDialog({
             <X size={15} aria-hidden />
           </button>
         </header>
+
+        <MasterKeyBanner />
 
         <div className="settings-body">
           <nav className="settings-nav" aria-label="Разделы настроек">

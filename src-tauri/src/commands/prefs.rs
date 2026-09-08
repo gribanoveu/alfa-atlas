@@ -1,6 +1,6 @@
 use crate::domain::settings::GeneralPrefs;
 use crate::infra::settings_store;
-use crate::services::general_prefs;
+use crate::services::{general_prefs, master_key_access};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -21,6 +21,16 @@ pub fn get_general_prefs() -> Result<GeneralPrefs, String> {
 #[tauri::command]
 pub fn set_general_prefs(prefs: GeneralPrefs) -> Result<(), String> {
     general_prefs::save_general_prefs(prefs).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn master_key_get_access_status() -> master_key_access::MasterKeyAccessStatus {
+    master_key_access::status()
+}
+
+#[tauri::command]
+pub fn master_key_retry_access() -> master_key_access::MasterKeyAccessStatus {
+    master_key_access::retry()
 }
 
 #[tauri::command]

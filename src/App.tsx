@@ -23,6 +23,7 @@ import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
 import { DeleteConfirmModal } from "./components/Sidebar/DeleteConfirmModal";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
+import { MasterKeyBanner } from "./components/MasterKeyBanner/MasterKeyBanner";
 import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
@@ -870,6 +871,7 @@ function App() {
         openCalendarSettingsSignal={calendarSettingsSignal}
       />
       <div className="workspace">
+        <MasterKeyBanner />
         <div className={mainClassName}>
           <Sidebar
             open={layout.sidebarOpen}

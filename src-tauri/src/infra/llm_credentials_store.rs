@@ -22,6 +22,7 @@ use std::time::SystemTime;
 use secrecy::SecretString;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::infra::master_key;
 use crate::infra::secret_store::{self, SecretPurpose};
 use crate::infra::settings_store;
 
@@ -169,7 +170,15 @@ pub fn has_api_key(provider_id: &str) -> bool {
 
     let ids: HashSet<String> = load_all().keys().cloned().collect();
     let answer = ids.contains(provider_id);
-    *cache = Some((current, ids));
+    // Only an answer the decryption actually produced may be cached. With
+    // the master key unreachable `load_all` degrades to an empty map, and
+    // the file that map was derived from does not change when access is
+    // later granted — so the stamp would still match and every provider
+    // would stay keyless for the rest of the session, with the assistant
+    // stuck on "провайдер не настроен" until a restart.
+    if master_key::get_or_create().is_ok() {
+        *cache = Some((current, ids));
+    }
     answer
 }
 
@@ -205,6 +214,36 @@ mod tests {
                 assert!(!has_api_key("anthropic"));
             }
             assert_eq!(load_count() - before, 1);
+
+            master_key::forget_for_tests();
+        });
+    }
+
+    /// A window that starts while the keychain is locked answers "no key"
+    /// for every provider — and the file those answers came from does not
+    /// change when the user later grants access. Caching them would leave
+    /// the assistant on "провайдер не настроен" until a restart, which is
+    /// exactly what happened once the retry button began recovering the key
+    /// mid-session.
+    #[test]
+    fn an_unreachable_master_key_is_not_cached_as_no_key() {
+        settings_store::test_support::with_temp_home(|| {
+            master_key::forget_for_tests();
+            save_api_key("openai", "sk-one").unwrap();
+            assert!(has_api_key("openai"));
+
+            // Start from a cold cache, the way a fresh process would.
+            *configured_ids().lock().unwrap() = None;
+
+            assert!(
+                !master_key::with_unreachable_keychain(|| has_api_key("openai")),
+                "sealed key is unreadable while the keychain is locked"
+            );
+
+            assert!(
+                has_api_key("openai"),
+                "and must come back the moment access is granted, without a restart"
+            );
 
             master_key::forget_for_tests();
         });

@@ -257,7 +257,24 @@ mod backend {
         f(guard.get_or_insert_with(HashMap::new))
     }
 
+    /// Refuses reads of the *key* entry only, leaving the probe entry
+    /// readable — which is exactly the macOS shape: a rebuilt binary is not
+    /// on the existing item's ACL, but may freely create and read its own.
+    static DENY_KEY_READ: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    pub(super) fn with_denied_key_read<T>(f: impl FnOnce() -> T) -> T {
+        use std::sync::atomic::Ordering;
+        DENY_KEY_READ.store(true, Ordering::Relaxed);
+        let out = f();
+        DENY_KEY_READ.store(false, Ordering::Relaxed);
+        out
+    }
+
     pub(super) fn get(user: &str) -> Result<Option<Vec<u8>>, String> {
+        if user == super::KEYRING_USER && DENY_KEY_READ.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("User interaction is not allowed (-25308)".to_string());
+        }
         Ok(with(|items| items.get(&slot(user)).cloned()))
     }
 
@@ -298,33 +315,49 @@ fn probe_keychain() -> bool {
     usable
 }
 
-fn keychain_get() -> Option<MasterKey> {
+/// `Ok(None)` means the keychain genuinely holds no key. `Err` means the
+/// question could not be answered — and the two must never be conflated:
+/// only the first makes it safe to mint a replacement.
+///
+/// The distinction is what stands between a denied access prompt and a
+/// destroyed master key. On macOS a keychain item's ACL names the binary
+/// that created it, so every rebuilt dev binary is refused on `get` while
+/// still being free to create its own probe item — `keychain_is_usable` is
+/// therefore no evidence at all about *this* item.
+fn keychain_get() -> Result<Option<MasterKey>, String> {
+    // A machine with no keychain at all is not the same as one that
+    // answered with an error: it never held the key, so the decision falls
+    // to the marker/sealed-blob guard in `resolve` as before.
     if force_unreachable() {
-        return None;
+        return Ok(None);
     }
     // A marker saying the key went into the keychain is itself proof that a
     // real backend stored it, so the probe adds nothing but two more
     // keychain operations — and on a locked keychain, two more password
     // dialogs before the one that matters.
     if recorded_store() != Some(KeyStore::Keychain) && !keychain_is_usable() {
-        return None;
+        return Ok(None);
     }
     let secret = match backend::get(KEYRING_USER) {
         Ok(Some(secret)) => Zeroizing::new(secret),
-        Ok(None) => return None,
+        Ok(None) => return Ok(None),
         Err(e) => {
             eprintln!("[alfa-atlas] keychain read failed: {e}");
-            return None;
+            return Err(KEY_UNREACHABLE.to_string());
         }
     };
     match <[u8; KEY_LEN]>::try_from(secret.as_slice()) {
-        Ok(key) => Some(Zeroizing::new(key)),
+        Ok(key) => Ok(Some(Zeroizing::new(key))),
         Err(_) => {
+            // Something else owns this entry, or it is corrupt. Either way
+            // the blobs on disk were not sealed with it, and overwriting it
+            // would orphan them for good.
             eprintln!(
-                "[alfa-atlas] keychain holds a {}-byte key, expected {KEY_LEN} — ignoring it",
+                "[alfa-atlas] keychain holds a {}-byte key, expected {KEY_LEN} — refusing to \
+                 overwrite it",
                 secret.len()
             );
-            None
+            Err(KEY_UNREACHABLE.to_string())
         }
     }
 }
@@ -339,7 +372,7 @@ fn keychain_put(key: &[u8; KEY_LEN]) -> bool {
         eprintln!("[alfa-atlas] keychain write failed: {e}");
         return false;
     }
-    keychain_get().is_some_and(|stored| stored.as_slice() == key.as_slice())
+    matches!(keychain_get(), Ok(Some(stored)) if stored.as_slice() == key.as_slice())
 }
 
 fn legacy_file_read() -> Option<MasterKey> {
@@ -497,6 +530,12 @@ pub(crate) fn get_or_create() -> Result<MasterKey, String> {
         return Err(KEY_UNREACHABLE.to_string());
     }
 
+    resolve_into(&mut state)
+}
+
+/// Resolves and records the outcome. The caller holds the lock throughout,
+/// so a resolution cannot be overtaken by a concurrent one.
+fn resolve_into(state: &mut Resolution) -> Result<MasterKey, String> {
     match resolve() {
         Ok(key) => {
             state.key = Some(key.clone());
@@ -508,6 +547,43 @@ pub(crate) fn get_or_create() -> Result<MasterKey, String> {
             Err(e)
         }
     }
+}
+
+/// Re-opens the keychain after a denied or dismissed access prompt, at the
+/// user's explicit request.
+///
+/// Clearing the cooldown and resolving happen under one lock hold. Splitting
+/// them would let a background credential read — the per-provider
+/// `llm_has_api_key` checks fire on every LLM settings refresh — slot in
+/// between, fail, and re-arm the cooldown, so the retry the user just asked
+/// for would answer from that fresh failure without ever reaching the
+/// keychain: a button that visibly does nothing.
+pub(crate) fn retry_access() -> Result<(), String> {
+    let mut state = RESOLUTION.lock().unwrap_or_else(|e| e.into_inner());
+    state.key = None;
+    state.failed_at = None;
+    resolve_into(&mut state).map(|_| ())
+}
+
+/// Whether `err` is the stable "key exists but the keychain is unreachable"
+/// signal, rather than an unexpected I/O failure.
+fn is_unreachable_error(err: &str) -> bool {
+    err == KEY_UNREACHABLE
+}
+
+/// Whether a master key that already exists cannot be read right now — the
+/// question the UI's keychain banner asks.
+///
+/// Deliberately not a bare `get_or_create`: being *asked about* access must
+/// not create the thing being asked about. With nothing sealed and no store
+/// on record there is no access to report on, and resolving would mint a
+/// key — on macOS raising a keychain prompt — for someone who has not
+/// configured a single credential yet.
+pub(crate) fn existing_key_is_unreachable() -> bool {
+    if recorded_store().is_none() && !sealed_blobs_present() {
+        return false;
+    }
+    get_or_create().is_err_and(|e| is_unreachable_error(&e))
 }
 
 /// Counts actual resolutions, so tests can assert how often the keychain is
@@ -526,12 +602,22 @@ fn resolve() -> Result<MasterKey, String> {
     #[cfg(test)]
     RESOLVE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    if let Some(key) = keychain_get() {
-        // Authoritative store answered; retire any file left by an older
-        // build (or by a run where the keychain was temporarily missing).
-        shred_legacy_file();
-        record_store(KeyStore::Keychain);
-        return Ok(key);
+    match keychain_get() {
+        Ok(Some(key)) => {
+            // Authoritative store answered; retire any file left by an older
+            // build (or by a run where the keychain was temporarily missing).
+            shred_legacy_file();
+            record_store(KeyStore::Keychain);
+            return Ok(key);
+        }
+        // The entry is there but unreadable this run — a denied or dismissed
+        // access prompt, an ACL naming a previous build of the binary. Never
+        // a reason to mint: that would overwrite the very key being refused.
+        Err(e) => {
+            eprintln!("[alfa-atlas] refusing to mint a new master key: {KEY_UNREACHABLE}");
+            return Err(e);
+        }
+        Ok(None) => {}
     }
 
     if let Some(key) = legacy_file_read() {
@@ -707,7 +793,11 @@ mod tests {
                 !legacy_key_path().unwrap().exists(),
                 "plaintext key file must be shredded after migration"
             );
-            assert_eq!(keychain_get().as_deref(), Some(&existing), "keychain must hold the key");
+            assert_eq!(
+                keychain_get().unwrap().as_deref(),
+                Some(&existing),
+                "keychain must hold the key"
+            );
             assert_eq!(*get_or_create().unwrap(), existing, "and serve it next start");
 
             forget_for_tests();
@@ -846,6 +936,89 @@ mod tests {
                 }
                 assert_eq!(resolve_count() - before, 1);
             });
+        });
+    }
+
+    #[test]
+    fn retry_access_clears_a_failed_resolution_and_tries_again() {
+        settings_store::test_support::with_temp_home(|| {
+            forget_for_tests();
+            record_store(KeyStore::Keychain);
+
+            with_unreachable_keychain(|| {
+                assert_eq!(get_or_create().err().as_deref(), Some(KEY_UNREACHABLE));
+                assert_eq!(get_or_create().err().as_deref(), Some(KEY_UNREACHABLE));
+            });
+
+            retry_access().expect("keychain reachable again");
+            let key = get_or_create().expect("and the key is now cached");
+            assert_ne!(*key, [0u8; KEY_LEN]);
+
+            forget_for_tests();
+        });
+    }
+
+    /// The regression this whole distinction exists for: on 2026-09-08 a
+    /// rebuilt dev binary was refused access to the existing keychain item,
+    /// the refusal read as "no key here", and the freshly minted key
+    /// overwrote the real one — orphaning every blob sealed before it.
+    ///
+    /// Note what is *not* simulated: the probe still succeeds, because the
+    /// app creates its own probe item and is therefore always on its ACL.
+    /// That is precisely why `keychain_is_usable` cannot guard this.
+    #[test]
+    fn a_denied_read_never_overwrites_the_existing_key() {
+        settings_store::test_support::with_temp_home(|| {
+            forget_for_tests();
+            let original = *get_or_create().expect("key stored in the keychain");
+            forget_resolution_for_tests();
+
+            let outcome = backend::with_denied_key_read(get_or_create);
+            assert_eq!(outcome.err().as_deref(), Some(KEY_UNREACHABLE));
+            assert!(
+                !legacy_key_path().unwrap().exists(),
+                "must not have minted a fallback key either"
+            );
+
+            // What the "Request access again" button does: still inside the
+            // cooldown the first denial armed, and it must reach the keychain
+            // anyway rather than answering from that failure.
+            retry_access().expect("granting access on the second prompt recovers");
+            assert_eq!(
+                *get_or_create().unwrap(),
+                original,
+                "the key must still be the one every sealed blob was written with"
+            );
+
+            forget_for_tests();
+        });
+    }
+
+    /// The status the banner polls must not have side effects: a machine
+    /// with no credentials configured would otherwise get a master key — and
+    /// a macOS keychain prompt — merely for opening Settings.
+    #[test]
+    fn asking_about_access_never_creates_a_key() {
+        settings_store::test_support::with_temp_home(|| {
+            forget_for_tests();
+            settings_store::ensure_settings_dir().unwrap();
+
+            assert!(
+                !existing_key_is_unreachable(),
+                "nothing sealed yet — there is no access to be locked out of"
+            );
+            assert!(
+                keychain_get().unwrap().is_none(),
+                "asking must not have minted a key"
+            );
+            assert_eq!(recorded_store(), None);
+
+            // Once a key exists, a denied read is reported as unreachable.
+            get_or_create().unwrap();
+            forget_resolution_for_tests();
+            assert!(backend::with_denied_key_read(existing_key_is_unreachable));
+
+            forget_for_tests();
         });
     }
 

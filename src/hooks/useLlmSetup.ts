@@ -15,6 +15,7 @@ import {
   type ResolvedLlmProvider,
 } from "../lib/llm";
 import { toMessage } from "../lib/errors";
+import { useRefreshOnMasterKeyUnlock } from "./useMasterKeyAccess";
 
 const llmSetupChangeListeners = new Set<() => void>();
 
@@ -63,6 +64,10 @@ export function useLlmSetup() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // A window that started without keychain access has every provider marked
+  // keyless; granting it mid-session must bring the composer back.
+  useRefreshOnMasterKeyUnlock(refresh);
 
   useEffect(() => {
     const onChange = () => {
