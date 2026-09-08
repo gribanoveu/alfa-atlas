@@ -232,14 +232,72 @@ fn docs_boundary_note(
     if scope.mode != AiAccessMode::DocsOnly {
         return content;
     }
-    let came_back_empty = match outcome {
+    if search_came_back_empty(outcome) {
+        format!("{content}\n\n{DOCS_BOUNDARY_NOTE}")
+    } else {
+        content
+    }
+}
+
+/// Whether a settled result widened what the assistant may read, so the loop
+/// has to rebuild its `ToolScope` before the next call in the same turn.
+///
+/// Named rather than inlined because forgetting it is invisible in review and
+/// expensive in use: the grant persists and looks successful, the very next
+/// `listFiles`/`grep` comes back empty or not-found against the stale scope,
+/// and the model tells the user the feature is broken. A third read-widening
+/// tool belongs in this list on the day it is written.
+fn widens_read_scope(outcome: &Result<ToolResult, String>) -> bool {
+    matches!(
+        outcome,
+        Ok(ToolResult::AccessModeChanged { .. }) | Ok(ToolResult::DependencySourcesConnected { .. })
+    )
+}
+
+/// Whether a search tool found nothing — the one signal both boundary notes
+/// hang off, since an empty result is exactly when the model is about to
+/// tell the user that something does not exist.
+fn search_came_back_empty(outcome: &Result<ToolResult, String>) -> bool {
+    match outcome {
         Ok(ToolResult::GrepResults { matches, .. }) => matches.is_empty(),
         Ok(ToolResult::SemanticSearchResults(payload)) => payload.matches.is_empty(),
         Ok(ToolResult::FileList { entries, .. }) => entries.is_empty(),
         _ => false,
-    };
-    if came_back_empty {
-        format!("{content}\n\n{DOCS_BOUNDARY_NOTE}")
+    }
+}
+
+/// Appended to an empty search result when the project has dependency
+/// sources that could be connected but are not.
+///
+/// Same failure this file already documents for the docs-only boundary, one
+/// boundary further out: a question about a library's behaviour searches the
+/// repository, finds nothing, and the model reports that the code does not
+/// exist — when in fact it is one approval away. Naming the tool is the
+/// point; without it the model can only tell the user to go find a settings
+/// screen it cannot describe.
+const DEPENDENCY_SOURCES_NOTE: &str = "Примечание: у этого проекта есть исходники зависимостей, которые сейчас не подключены. Пустой результат означает «нет в самом репозитории», а не «нет вообще» — если ответ может быть в коде библиотеки, вызовите requestDependencySources, не утверждайте, что кода нет.";
+
+/// Adds `DEPENDENCY_SOURCES_NOTE` to an empty search when connecting would
+/// actually change the answer.
+///
+/// Only in Full-repo mode: in Docs-only the external roots are inert anyway
+/// and `DOCS_BOUNDARY_NOTE` is already saying the more relevant thing, so
+/// two notes would just compete. The probe runs only on an empty result, and
+/// only until the sources are connected — after that nothing is pending and
+/// the note stops appearing on its own.
+fn dependency_sources_note(
+    scope: &ToolScope,
+    outcome: &Result<ToolResult, String>,
+    content: String,
+) -> String {
+    if scope.mode != AiAccessMode::FullRepo || !search_came_back_empty(outcome) {
+        return content;
+    }
+    let pending = ai_tools::suggest_extra_roots()
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    if pending {
+        format!("{content}\n\n{DEPENDENCY_SOURCES_NOTE}")
     } else {
         content
     }
@@ -485,7 +543,8 @@ struct LoopCtx<'a> {
     cancel_flag: &'a ChatCancelFlag,
     steering: &'a SteeringQueue,
     /// Pinned for the whole call — unlike `scope`/`tools` (which
-    /// `RequestFullRepoAccess` widens mid-loop), a `RequestModeSwitch`
+    /// `RequestFullRepoAccess` and `RequestDependencySources` widen
+    /// mid-loop), a `RequestModeSwitch`
     /// deliberately does *not* take effect within the same turn (see
     /// `domain::conversation_mode`'s doc comment and `services::ai_tools::
     /// execute_tool`'s `RequestModeSwitch` arm) — so this never changes for
@@ -527,10 +586,11 @@ impl<'a> EventReporter<'a> {
 /// The shared tool-calling loop both `llm_chat_stream` (fresh start,
 /// `resume: None`) and `llm_chat_stream_resume` (continuing a paused round,
 /// `resume: Some((calls, decisions))`) run. `scope`/`tools` are `mut`
-/// because a successful `RequestFullRepoAccess` widens them mid-loop — the
-/// escalation must take effect within the same turn, not just the next one,
-/// or the assistant would report success while its very next tool call
-/// stays walled off at the old boundary.
+/// because a successful `RequestFullRepoAccess` or
+/// `RequestDependencySources` widens them mid-loop — the grant must take
+/// effect within the same turn, not just the next one, or the assistant
+/// would report success while its very next tool call stays walled off at
+/// the old boundary.
 ///
 /// Pauses (returns `ChatStreamOutcome::PendingApproval`) the instant a
 /// *fresh* round (never a resumed one — a resumed round's decisions are
@@ -1013,10 +1073,16 @@ fn run_tool_loop(
                 }),
             );
 
-            // A successful RequestFullRepoAccess must take effect for the
-            // rest of THIS turn, not just the next `llm_chat_stream` call —
-            // see this function's doc comment.
-            if let Ok(ToolResult::AccessModeChanged { .. }) = &outcome {
+            // Both consent tools that widen what may be *read* must take
+            // effect for the rest of THIS turn, not just the next
+            // `llm_chat_stream` call — see this function's doc comment. Their
+            // tool descriptions promise exactly that, and the model acts on
+            // it: it approves, then immediately lists or greps what it was
+            // just granted. Rebuilding the scope is what makes the newly
+            // widened root (or the freshly connected `@deps/…` ones) visible
+            // to those very next calls; without it they come back empty or
+            // not-found and the model reports the grant as broken.
+            if widens_read_scope(&outcome) {
                 if let Ok(new_scope) = ai_tools::current_scope() {
                     tools = ai_tools::llm_tool_definitions(&new_scope, ctx.conversation_mode);
                     scope = new_scope;
@@ -1077,6 +1143,7 @@ fn run_tool_loop(
             };
             let content = truncated_round_note(round_truncated, outcome.is_err(), content);
             let content = docs_boundary_note(&scope, &outcome, content);
+            let content = dependency_sources_note(&scope, &outcome, content);
             let content = dedupe_repeat_result(&mut results_this_turn, call, &outcome, content);
             // Before the diagnostics note, so a write reads as "here is what
             // actually landed" and only then "here is what is wrong with it".
@@ -1247,6 +1314,96 @@ mod tests {
     // Only the tests name this type: `closed_macros_note` reads the field
     // through a pattern match on `ToolResult`.
     use crate::domain::asciidoc_macro_brackets::ClosedMacro;
+
+    /// Both consent tools that widen reading must re-scope the loop. This
+    /// was missed for `requestDependencySources` once: the sources unpacked,
+    /// the grant persisted, and every following call in that turn answered
+    /// "not found" against the scope built before it.
+    #[test]
+    fn a_grant_that_widens_reading_forces_the_loop_to_re_scope() {
+        assert!(widens_read_scope(&Ok(ToolResult::AccessModeChanged {
+            mode: AiAccessMode::FullRepo
+        })));
+        assert!(widens_read_scope(&Ok(ToolResult::DependencySourcesConnected {
+            roots: vec!["java-sources".to_string()],
+            note: String::new(),
+        })));
+
+        // An ordinary result must not pay for a rescope on every call.
+        assert!(!widens_read_scope(&Ok(ToolResult::GrepResults {
+            matches: vec![],
+            truncated: false
+        })));
+        assert!(!widens_read_scope(&Err("denied by user".to_string())));
+    }
+
+    /// An empty grep result, the shape both boundary notes hang off.
+    fn empty_grep() -> Result<ToolResult, String> {
+        Ok(ToolResult::GrepResults { matches: vec![], truncated: false })
+    }
+
+    /// The point of the note: the model is one step from telling the user
+    /// that a library's code does not exist, and this is what stops it.
+    #[test]
+    fn an_empty_search_points_at_the_dependency_sources_tool() {
+        crate::infra::settings_store::test_support::with_temp_home(|| {
+            let repo = std::env::temp_dir().join(format!(
+                "alfa-atlas-dep-note-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(repo.join("node_modules/lodash")).unwrap();
+            std::fs::write(repo.join("package.json"), "{}\n").unwrap();
+            crate::services::project_open::open_project(
+                repo.to_str().unwrap(),
+                repo.to_str().unwrap(),
+            )
+            .unwrap();
+            // The note reads the *open project* (through `suggest_extra_roots`),
+            // not the scope's roots, so the scope only has to carry the mode.
+            let scope = ToolScope::new(
+                &repo,
+                &repo,
+                AiAccessMode::FullRepo,
+                crate::domain::ai_access::default_allowed_tools(AiAccessMode::FullRepo),
+            );
+
+            let noted = dependency_sources_note(&scope, &empty_grep(), "[]".to_string());
+            assert!(noted.contains("requestDependencySources"), "{noted}");
+
+            // A result that found something needs no note.
+            let found = Ok(ToolResult::GrepResults {
+                matches: vec![crate::domain::ai_tools::GrepMatch {
+                    path: "a.adoc".to_string(),
+                    line: 1,
+                    text: "hit".to_string(),
+                    before: vec![],
+                    after: vec![],
+                }],
+                truncated: false,
+            });
+            assert_eq!(dependency_sources_note(&scope, &found, "x".to_string()), "x");
+
+            std::fs::remove_dir_all(&repo).ok();
+        });
+    }
+
+    /// In Docs-only the external roots are inert and `DOCS_BOUNDARY_NOTE` is
+    /// already saying the more relevant thing — two notes would compete.
+    /// Checked before any project lookup, so this needs no fixture.
+    #[test]
+    fn the_dependency_note_stays_out_of_docs_only() {
+        let scope = ToolScope::new(
+            std::path::Path::new("/nowhere"),
+            std::path::Path::new("/nowhere"),
+            AiAccessMode::DocsOnly,
+            crate::domain::ai_access::default_allowed_tools(AiAccessMode::DocsOnly),
+        );
+
+        assert_eq!(dependency_sources_note(&scope, &empty_grep(), "x".to_string()), "x");
+    }
 
     fn call(name: &str) -> LlmToolCall {
         LlmToolCall { id: "1".to_string(), name: name.to_string(), arguments: "{}".to_string() }

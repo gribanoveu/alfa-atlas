@@ -48,6 +48,7 @@ pub fn base_tools() -> HashSet<ToolName> {
         // toolset, which is exactly backwards. Still user-approved per call
         // (`ToolName::requires_confirmation`), in every mode.
         ToolName::RequestFullRepoAccess,
+        ToolName::RequestDependencySources,
         // Read-only lookup over a fixed catalog — useful in every mode:
         // Agent to actually draft with it, Plan to reference the exact
         // shape while planning a future edit, Question to answer "how do we
@@ -130,7 +131,7 @@ mod tests {
 
     #[test]
     fn agent_mode_has_every_tool() {
-        assert_eq!(mode_tools(ConversationMode::Agent).len(), 24);
+        assert_eq!(mode_tools(ConversationMode::Agent).len(), 25);
     }
 
     #[test]

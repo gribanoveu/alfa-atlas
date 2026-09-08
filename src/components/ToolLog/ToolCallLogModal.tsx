@@ -33,6 +33,7 @@ const KNOWN_TOOLS = [
   "deleteDirectory",
   "move",
   "requestFullRepoAccess",
+  "requestDependencySources",
   "todo",
   "memory",
   "requestModeSwitch",

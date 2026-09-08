@@ -1275,6 +1275,8 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
         : "Перемещает…";
     case "requestFullRepoAccess":
       return "Запрашивает доступ к репозиторию…";
+    case "requestDependencySources":
+      return "Запрашивает доступ к исходникам зависимостей…";
     case "requestModeSwitch":
       return `Запрашивает смену режима${typeof args.mode === "string" ? `: ${conversationModeLabel(args.mode)}` : ""}…`;
     case "getAsciidocTemplates":
@@ -1492,6 +1494,12 @@ export function describeToolResult(
     }
     case "accessModeChanged":
       return block.result.result.mode === "fullRepo" ? "Доступ изменён: весь репозиторий" : "Доступ изменён: только документация";
+    case "dependencySourcesConnected": {
+      // The root names are what the model must use in later paths, so they
+      // are the summary — the unpack counts live in the model's own reply.
+      const { roots } = block.result.result;
+      return `Подключено: ${roots.map((r) => `@deps/${r}`).join(", ")}`;
+    }
     case "modeSwitchRequested":
       // "со следующего сообщения" is the whole contract of this tool: the
       // turn that asked keeps the old mode and toolset (`LoopCtx` pins it),
@@ -1712,13 +1720,17 @@ export const TOOL_APPROVAL_TIMEOUT_MS = 120_000;
 export const PAUSE_ONLY_TOOLS = new Set(["askUser", "requestArtifact"]);
 
 /** Tools whose approval card is a consent gate over what the assistant is
- * allowed to do *next* — the read boundary, and the mode that decides the
- * system prompt and toolset. Mirrors `ToolName::auto_approvable` on the Rust
+ * allowed to do *next* — the read boundary, the external sources attached to
+ * it, and the mode that decides the system prompt and toolset. Mirrors `ToolName::auto_approvable` on the Rust
  * side (which refuses to persist a grant for these regardless of what any UI
  * sends), and drives two things here: no "Разрешать всегда" checkbox on
  * their card, and no auto-deny countdown — remembering the answer, or
  * inventing one on a timer, defeats the only checkpoint these tools have. */
-export const CONSENT_TOOLS = new Set(["requestFullRepoAccess", "requestModeSwitch"]);
+export const CONSENT_TOOLS = new Set([
+  "requestFullRepoAccess",
+  "requestDependencySources",
+  "requestModeSwitch",
+]);
 
 /** Whether "Разрешать всегда" may be offered for a tool at all. */
 export function isAutoApprovable(toolName: string): boolean {
@@ -1756,5 +1768,6 @@ export const AUTO_APPROVABLE_TOOL_LABELS: Record<string, string> = {
  * as something that can be auto-approved. */
 export const CONSENT_TOOL_LABELS: Record<string, string> = {
   requestFullRepoAccess: "Запрос доступа к репозиторию (requestFullRepoAccess)",
+  requestDependencySources: "Подключение исходников зависимостей (requestDependencySources)",
   requestModeSwitch: "Смена режима ассистента (requestModeSwitch)",
 };

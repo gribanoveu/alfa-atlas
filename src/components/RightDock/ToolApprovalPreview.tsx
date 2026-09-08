@@ -156,16 +156,25 @@ export function ToolApprovalPreview({
           two do different things and neither is obvious from the request:
           access is persisted to the project until it is switched back by
           hand, while a mode switch only takes effect on the next message. */}
-      <div className="assistant-tool-approval-reason">
+      <div className="assistant-tool-approval-note">
         Доступ на чтение всего репозитория сохранится для проекта, пока вы не вернёте режим «только
         документация». Записывать ассистент по-прежнему сможет только в документацию.
+      </div>
+    </div>
+  ) : block.name === "requestDependencySources" && typeof args.reason === "string" ? (
+    <div className="assistant-tool-call-detail-section">
+      <div className="assistant-tool-call-detail-label">Причина</div>
+      <div className="assistant-tool-approval-reason">{args.reason}</div>
+      <div className="assistant-tool-approval-note">
+        Только чтение — записывать в исходники библиотек нельзя. Распаковываются вне репозитория;
+        убрать их можно в Настройках → Разрешения.
       </div>
     </div>
   ) : block.name === "requestModeSwitch" && typeof args.reason === "string" ? (
     <div className="assistant-tool-call-detail-section">
       <div className="assistant-tool-call-detail-label">Причина</div>
       <div className="assistant-tool-approval-reason">{args.reason}</div>
-      <div className="assistant-tool-approval-reason">
+      <div className="assistant-tool-approval-note">
         Новый режим включится со следующего вашего сообщения — текущий ответ ассистент дописывает в
         прежнем режиме.
       </div>

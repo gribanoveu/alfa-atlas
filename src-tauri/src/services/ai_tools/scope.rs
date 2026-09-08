@@ -283,6 +283,41 @@ pub fn accept_root_suggestion(kind: SuggestionKind) -> Result<String, ProjectErr
     Ok(note)
 }
 
+/// Connects every dependency source this project currently has to offer —
+/// what the `requestDependencySources` tool does once the user approves it.
+///
+/// Deliberately not parameterized by kind: the model is asking for "the code
+/// of this project's dependencies", not for one packaging ecosystem, and a
+/// polyglot repository should not need two approvals to answer one question.
+/// Returns the connected root names (the `@deps` segments the assistant may
+/// now use) and the unpack summary.
+///
+/// Errors when there is nothing to connect, rather than reporting a cheerful
+/// no-op: the model called this because it believed sources existed, and it
+/// needs to learn plainly that they do not so it can say so instead of
+/// looking for files that will never be there.
+pub fn connect_dependency_sources() -> Result<(Vec<String>, String), ProjectError> {
+    let pending = suggest_extra_roots()?;
+    if pending.is_empty() {
+        return Err(ProjectError::Message(
+            "нечего подключать: в проекте не найдено ни node_modules, ни исходников \
+             Java-зависимостей в локальных кэшах Gradle и Maven"
+                .to_string(),
+        ));
+    }
+
+    let mut roots = Vec::new();
+    let mut notes = Vec::new();
+    for suggestion in pending {
+        let note = accept_root_suggestion(suggestion.kind)?;
+        roots.push(suggestion.name);
+        if !note.is_empty() {
+            notes.push(note);
+        }
+    }
+    Ok((roots, notes.join(" ")))
+}
+
 /// Adds one external read-only root to the open project.
 ///
 /// Every failure here is a refusal with a reason rather than a silent drop:
@@ -352,6 +387,9 @@ const PLAN_TOOLS_MIGRATION: [ToolName; 4] = [
 /// Same backfill reason as `PLAN_TOOLS_MIGRATION` for the Agent Skills router.
 const SKILL_TOOL_MIGRATION: [ToolName; 1] = [ToolName::Skill];
 
+/// Same backfill reason again, for the dependency-sources consent tool.
+const DEPENDENCY_SOURCES_MIGRATION: [ToolName; 1] = [ToolName::RequestDependencySources];
+
 /// Backfills `config.ai_allowed_tools` with any `PLAN_TOOLS_MIGRATION` tool
 /// missing from an already-customized list, so a project saved before this
 /// feature shipped doesn't permanently lose access to it — `ToolName`
@@ -367,7 +405,11 @@ fn migrate_plan_tools_into_allowlist(config: &mut ProjectConfig) -> bool {
         return false;
     };
     let mut changed = false;
-    for tool in PLAN_TOOLS_MIGRATION.iter().chain(SKILL_TOOL_MIGRATION.iter()) {
+    for tool in PLAN_TOOLS_MIGRATION
+        .iter()
+        .chain(SKILL_TOOL_MIGRATION.iter())
+        .chain(DEPENDENCY_SOURCES_MIGRATION.iter())
+    {
         if !list.contains(tool) {
             list.push(*tool);
             changed = true;
@@ -645,6 +687,53 @@ mod tests {
             set_access_mode(AiAccessMode::FullRepo).unwrap();
             let scope = current_scope().unwrap();
             assert!(read(&scope, "@deps/java-sources/gadget-2.1.0/com/acme/gadget.java").is_ok());
+        });
+    }
+
+    /// What `requestDependencySources` does once the user approves it: every
+    /// pending source connected in one go, and the `@deps` names reported
+    /// back so the model reads them off the result instead of guessing.
+    #[test]
+    fn connecting_dependency_sources_takes_everything_pending_at_once() {
+        with_open_fixture_project(|repo| {
+            fs::write(repo.join("package.json"), "{}\n").unwrap();
+            fs::create_dir_all(repo.join("node_modules/lodash")).unwrap();
+            fs::write(
+                repo.join("build.gradle"),
+                "dependencies {\n  implementation 'com.acme.tools:widget:1.4.0'\n}\n",
+            )
+            .unwrap();
+            let dir = dirs::home_dir()
+                .unwrap()
+                .join(".gradle/caches/modules-2/files-2.1/com.acme.tools/widget/1.4.0/hash");
+            fs::create_dir_all(&dir).unwrap();
+            write_test_jar(
+                &dir.join("widget-1.4.0-sources.jar"),
+                "com/acme/Widget.java",
+                "class Widget {}\n",
+            );
+
+            let (roots, note) = connect_dependency_sources().unwrap();
+
+            assert_eq!(roots, vec!["node_modules", "java-sources"]);
+            assert!(note.contains("Распаковано зависимостей: 1"), "{note}");
+            assert!(suggest_extra_roots().unwrap().is_empty());
+
+            set_access_mode(AiAccessMode::FullRepo).unwrap();
+            let scope = current_scope().unwrap();
+            assert!(read(&scope, "@deps/java-sources/widget-1.4.0/com/acme/Widget.java").is_ok());
+        });
+    }
+
+    /// A project with nothing to connect must fail loudly. The model called
+    /// this believing sources existed; a cheerful no-op would leave it
+    /// hunting for files that will never be there.
+    #[test]
+    fn connecting_dependency_sources_errors_when_there_is_nothing_to_connect() {
+        with_open_fixture_project(|_repo| {
+            let err = connect_dependency_sources().unwrap_err();
+
+            assert!(format!("{err}").contains("нечего подключать"), "{err}");
         });
     }
 

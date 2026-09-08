@@ -12,7 +12,8 @@ use crate::domain::ai_tools::{
     CheckArgs, CreateDirectoryArgs,
     CreatePlanArgs, DeleteDirectoryArgs,
     DeleteFileArgs, EditFileArgs, GetAsciidocTemplatesArgs, GitBlameArgs, GitDiffArgs,
-    GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, ReadPlanArgs, RequestFullRepoAccessArgs,
+    GrepArgs, ListFilesArgs, MoveArgs, ReadFileArgs, ReadPlanArgs,
+    RequestDependencySourcesArgs, RequestFullRepoAccessArgs,
     RequestArtifactArgs, RequestModeSwitchArgs, SemanticSearchArgs, SkillArgs, TodoUpdateArgs,
     TodoUpdateStatus, TodoWriteArgs, ToolCall, ToolError, ToolScope, UpdatePlanArgs,
     UpdatePlanTodoArgs, VisualizeArgs, WriteFileArgs,
@@ -77,6 +78,11 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "requestFullRepoAccess" => lenient_json_object::<RequestFullRepoAccessArgs>(&call.arguments)
             .map(ToolCall::RequestFullRepoAccess)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        "requestDependencySources" => {
+            lenient_json_object::<RequestDependencySourcesArgs>(&call.arguments)
+                .map(ToolCall::RequestDependencySources)
+                .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason })
+        }
         "todo" => parse_todo_call(&call.arguments)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
         "requestModeSwitch" => lenient_json_object::<RequestModeSwitchArgs>(&call.arguments)

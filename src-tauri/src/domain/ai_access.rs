@@ -37,6 +37,7 @@ pub enum ToolName {
     DeleteDirectory,
     Move,
     RequestFullRepoAccess,
+    RequestDependencySources,
     Todo,
     Memory,
     RequestModeSwitch,
@@ -93,6 +94,7 @@ impl ToolName {
                 | ToolName::DeleteDirectory
                 | ToolName::Move
                 | ToolName::RequestFullRepoAccess
+                | ToolName::RequestDependencySources
                 | ToolName::RequestModeSwitch
                 | ToolName::AskUser
                 | ToolName::RequestArtifact
@@ -124,6 +126,7 @@ impl ToolName {
             && !matches!(
                 self,
                 ToolName::RequestFullRepoAccess
+                    | ToolName::RequestDependencySources
                     | ToolName::RequestModeSwitch
                     | ToolName::AskUser
                     | ToolName::RequestArtifact
@@ -138,6 +141,7 @@ impl ToolName {
     /// exact mapping must hold.
     pub fn from_wire_name(name: &str) -> Option<ToolName> {
         match name {
+            "requestDependencySources" => Some(ToolName::RequestDependencySources),
             "listFiles" => Some(ToolName::ListFiles),
             "readFile" => Some(ToolName::ReadFile),
             "semanticSearch" => Some(ToolName::SemanticSearch),
@@ -201,6 +205,10 @@ impl ToolName {
             ToolName::DeleteDirectory => 1,
             ToolName::Move => 2,
             ToolName::RequestFullRepoAccess => 1,
+            // The heaviest local call here: reads the build manifests, probes
+            // the artifact caches, and unpacks archives. Still no network,
+            // but nothing else in this list touches that many files.
+            ToolName::RequestDependencySources => 4,
             ToolName::Todo => 1,
             ToolName::Memory => 1,
             ToolName::RequestModeSwitch => 1,
@@ -286,6 +294,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::DeleteDirectory,
         ToolName::Move,
         ToolName::RequestFullRepoAccess,
+        ToolName::RequestDependencySources,
         ToolName::Todo,
         ToolName::RequestModeSwitch,
         ToolName::GetAsciidocTemplates,
@@ -487,9 +496,9 @@ mod tests {
     }
 
     #[test]
-    fn default_allowed_tools_includes_all_twenty_six() {
+    fn default_allowed_tools_includes_every_tool() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 26);
+        assert_eq!(allowed.len(), 27);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));

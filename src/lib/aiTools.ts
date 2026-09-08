@@ -375,6 +375,7 @@ export type ToolResult =
   | { tool: "directoryDeleted"; result: { path: string } }
   | { tool: "moved"; result: { from: string; to: string; updatedFiles: UpdatedReference[] } }
   | { tool: "accessModeChanged"; result: { mode: AiAccessMode } }
+  | { tool: "dependencySourcesConnected"; result: { roots: string[]; note: string } }
   | {
       tool: "modeSwitchRequested";
       /** `approved`/`appliesFrom` are optional only for chats persisted

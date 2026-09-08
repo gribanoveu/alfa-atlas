@@ -247,6 +247,18 @@ pub struct MoveArgs {
     pub new_path: String,
 }
 
+/// Args for `requestDependencySources` — the model asking to connect this
+/// project's dependency sources so it can read them.
+///
+/// `reason` is required for the same purpose as its sibling's: what the user
+/// is being asked to widen is read access, and the only thing that makes
+/// that decidable is why it is needed for the question at hand.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestDependencySourcesArgs {
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestFullRepoAccessArgs {
@@ -825,6 +837,7 @@ pub enum ToolCall {
     DeleteDirectory(DeleteDirectoryArgs),
     Move(MoveArgs),
     RequestFullRepoAccess(RequestFullRepoAccessArgs),
+    RequestDependencySources(RequestDependencySourcesArgs),
     TodoWrite(TodoWriteArgs),
     TodoUpdate(TodoUpdateArgs),
     Memory(MemoryArgs),
@@ -861,6 +874,7 @@ impl ToolCall {
             ToolCall::DeleteDirectory(_) => ToolName::DeleteDirectory,
             ToolCall::Move(_) => ToolName::Move,
             ToolCall::RequestFullRepoAccess(_) => ToolName::RequestFullRepoAccess,
+            ToolCall::RequestDependencySources(_) => ToolName::RequestDependencySources,
             ToolCall::TodoWrite(_) => ToolName::Todo,
             ToolCall::TodoUpdate(_) => ToolName::Todo,
             ToolCall::Memory(_) => ToolName::Memory,
@@ -1045,6 +1059,12 @@ pub enum ToolResult {
         updated_files: Vec<crate::domain::project_config::UpdatedReference>,
     },
     AccessModeChanged { mode: AiAccessMode },
+    /// Settled `requestDependencySources`: which `@deps` roots are now
+    /// connected, plus the unpack summary worth repeating to the user.
+    /// Reading these back is how the model learns the paths it may now use —
+    /// it must not assume a name.
+    #[serde(rename_all = "camelCase")]
+    DependencySourcesConnected { roots: Vec<String>, note: String },
     /// Full updated list after a `todo write` — both this call's own
     /// result (fed back to the model as a `Tool`-role message) and, via
     /// `services::llm_chat::run_tool_loop`, what becomes the turn's `todos`

@@ -36,7 +36,7 @@ pub use artifact::artifact_result;
 pub use check::{check_written_file, WriteCheck};
 pub use list_files::render_file_tree;
 
-use super::scope::set_access_mode;
+use super::scope::{connect_dependency_sources, set_access_mode};
 use super::EmbeddingDeps;
 
 /// One row of `DEFINITIONS`: a tool's name plus the function that builds
@@ -61,6 +61,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::DeleteDirectory, delete_directory::definition),
     (ToolName::Move, move_path::definition),
     (ToolName::RequestFullRepoAccess, conversation::full_repo_access_definition),
+    (ToolName::RequestDependencySources, conversation::dependency_sources_definition),
     (ToolName::Todo, todo::definition),
     (ToolName::RequestModeSwitch, conversation::mode_switch_definition),
     (ToolName::GetAsciidocTemplates, asciidoc_templates::definition),
@@ -159,6 +160,12 @@ pub fn execute_tool(
         ),
         ToolCall::RequestFullRepoAccess(_args) => set_access_mode(AiAccessMode::FullRepo)
             .map(|()| ToolResult::AccessModeChanged { mode: AiAccessMode::FullRepo })
+            .map_err(ToolError::from),
+        // Like its sibling above, this takes effect for the rest of the same
+        // turn: `run_tool_loop` re-scopes after a settled consent call, so
+        // the `@deps` roots it just connected are readable immediately.
+        ToolCall::RequestDependencySources(_args) => connect_dependency_sources()
+            .map(|(roots, note)| ToolResult::DependencySourcesConnected { roots, note })
             .map_err(ToolError::from),
         ToolCall::TodoWrite(args) => todo::todo_write(todos, args).map(ToolResult::TodoWritten),
         ToolCall::TodoUpdate(args) => todo::todo_update(todos, args).map(ToolResult::TodoUpdated),
@@ -382,7 +389,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_tool_definitions_includes_all_twenty_four_in_agent_mode_by_default() {
+    fn llm_tool_definitions_includes_every_agent_mode_tool_by_default() {
         let (repo, docs) = fixture_repo();
         let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
 
@@ -405,6 +412,7 @@ mod tests {
                 "deleteDirectory",
                 "move",
                 "requestFullRepoAccess",
+                "requestDependencySources",
                 "todo",
                 "requestModeSwitch",
                 "getAsciidocTemplates",

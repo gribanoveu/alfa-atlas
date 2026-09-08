@@ -38,6 +38,26 @@ pub(super) fn full_repo_access_definition() -> LlmToolDefinition {
         }
 }
 
+/// The `requestDependencySources` schema the model sees.
+pub(super) fn dependency_sources_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "requestDependencySources".to_string(),
+        description:
+            "Ask the user to connect this project's dependency sources — the code of the libraries it depends on — so you can read it. Call this when answering needs the implementation of a class, function or module that is NOT in this repository: an imported library type, a framework behaviour the user is asking about, a stack frame from a dependency. Do NOT call it for code that lives in the repository, and do not call it speculatively or a second time once the sources are connected. Requires a stated reason and always requires explicit user approval. Read the outcome off the tool result, never guess it: approval returns the connected root names plus a summary and takes effect immediately, for the rest of this same turn — search under those roots with grep (path \"@deps/<name>\") and read files with readFile. Denial returns the text \"Отклонено пользователем\"; an error means the project has no connectable sources, in which case say so plainly instead of looking for files that are not there. Note that only what a build actually downloaded can be connected, so some dependencies may still be unavailable afterwards."
+                .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Which dependency's code is needed, and what for."
+                }
+            },
+            "required": ["reason"]
+        }),
+        }
+}
+
 /// The `requestModeSwitch` schema the model sees.
 pub(super) fn mode_switch_definition() -> LlmToolDefinition {
     LlmToolDefinition {

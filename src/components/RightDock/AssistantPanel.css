@@ -2203,7 +2203,7 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
 }
 
 .assistant-tool-approval-group-item-preview {
-  padding-left: 20px;
+  padding-top: 6px;
 }
 
 .assistant-tool-approval-group-item-preview:empty {
@@ -2297,6 +2297,19 @@ button.assistant-tool-approval-group-item-title-toggle:hover {
   color: var(--text-1);
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+/* What approving actually does, written by the app rather than the model.
+   Under «Причина» it used to be styled identically to the model's own text,
+   so the two ran together and the label appeared to cover both. Dimmer, and
+   set off by a rule, so the card reads as: what was asked, then what it
+   means. */
+.assistant-tool-approval-note {
+  font-size: var(--font-ui-sm);
+  color: var(--text-2);
+  line-height: 1.45;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
 }
 
 .assistant-tool-approval-timer {
