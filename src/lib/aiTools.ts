@@ -92,6 +92,28 @@ export const TOOL_DENIED_BY_USER = "denied by user";
  * reporting an unread card as a refusal is simply false. */
 export const APPROVAL_TIMED_OUT_ERROR = "approval timed out";
 
+/** Mirrors `domain::ai_tools::ToolResult::FileList`. `truncated` marks a
+ * listing that stopped at the entry cap — the same "there is more here than
+ * you are seeing" contract `grepResults` already carries. */
+export type FileListPayload = {
+  entries: ToolFileEntry[];
+  truncated: boolean;
+};
+
+/**
+ * Normalize a `fileList` payload — chats stored before `FileList` grew its
+ * `truncated` flag hold a bare `ToolFileEntry[]`; current wire shape is
+ * `{ entries, truncated }`. Same replay seam as
+ * `normalizeSemanticSearchResult`, and the reason it exists: the renderers
+ * read this shape straight out of persisted history, where both spellings
+ * live side by side.
+ */
+export function normalizeFileListResult(
+  result: ToolFileEntry[] | FileListPayload,
+): FileListPayload {
+  return Array.isArray(result) ? { entries: result, truncated: false } : result;
+}
+
 /** Mirrors `domain::ai_tools::SemanticSearchPayload`. */
 export type SemanticSearchPayload = {
   matches: ToolMatch[];
@@ -339,7 +361,7 @@ export type AsciidocTemplateEntry = {
 export type ToolResult =
   | { tool: "file"; result: { content: string; startLine: number; endLine: number; totalLines: number } }
   | { tool: "fileOutline"; result: { path: string; entries: OutlineEntry[]; totalLines: number } }
-  | { tool: "fileList"; result: ToolFileEntry[] }
+  | { tool: "fileList"; result: ToolFileEntry[] | FileListPayload }
   | { tool: "semanticSearchResults"; result: ToolMatch[] | SemanticSearchPayload }
   | { tool: "grepResults"; result: { matches: GrepMatch[]; truncated: boolean } }
   | { tool: "gitDiff"; result: { path: string; label: string; diff: FileDiffStats; isBinary: boolean } }

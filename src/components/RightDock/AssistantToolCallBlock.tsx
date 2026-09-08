@@ -2,7 +2,7 @@ import { AlertCircle, Bot, Check, ChevronDown, ChevronRight, Clock, File, Folder
 import { useState } from "react";
 import { describeMatchSource, describeToolActivity, describeToolResult, formatToolArguments } from "../../lib/assistantConfig";
 import type { FileDiffStats, Task, ToolResult, TodoStatus } from "../../lib/aiTools";
-import { normalizeSemanticSearchResult } from "../../lib/aiTools";
+import { normalizeFileListResult, normalizeSemanticSearchResult } from "../../lib/aiTools";
 import type { ToolCallBlock } from "../../lib/chatBlocks";
 import { AssistantLoadingBars } from "./AssistantLoadingBars";
 
@@ -200,15 +200,16 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
         </div>
       );
     }
-    case "fileList":
+    case "fileList": {
+      const { entries, truncated } = normalizeFileListResult(result.result);
       return (
         <div className="assistant-tool-call-detail-section">
           <div className="assistant-tool-call-detail-label">Файлы</div>
-          {result.result.length === 0 ? (
+          {entries.length === 0 ? (
             <p className="assistant-tool-call-detail-empty">Пусто</p>
           ) : (
             <ul className="assistant-tool-call-detail-list">
-              {result.result.map((entry) => (
+              {entries.map((entry) => (
                 <li key={entry.path}>
                   {entry.isDir ? (
                     <Folder className="assistant-tool-call-detail-icon" size={12} aria-hidden />
@@ -220,8 +221,12 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
               ))}
             </ul>
           )}
+          {truncated ? (
+            <p className="assistant-tool-call-detail-empty">… список обрезан</p>
+          ) : null}
         </div>
       );
+    }
     case "fileWritten":
       return (
         <>

@@ -6,7 +6,12 @@ import type {
   SemanticSearchMeta,
   Task,
 } from "./aiTools";
-import { APPROVAL_TIMED_OUT_ERROR, normalizeSemanticSearchResult, TOOL_DENIED_BY_USER } from "./aiTools";
+import {
+  APPROVAL_TIMED_OUT_ERROR,
+  normalizeFileListResult,
+  normalizeSemanticSearchResult,
+  TOOL_DENIED_BY_USER,
+} from "./aiTools";
 import type { ChatMessage, ToolCallBlock } from "./chatBlocks";
 import { flattenBlocksToText } from "./chatBlocks";
 import type { SpecsRepoInfo } from "./openapi";
@@ -1400,11 +1405,12 @@ export function describeToolResult(
       return `Структура: ${entries.length} · строк: ${totalLines}`;
     }
     case "fileList": {
-      const entries = block.result.result;
+      const { entries, truncated } = normalizeFileListResult(block.result.result);
       const files = entries.filter((e) => !e.isDir).length;
       const dirs = entries.filter((e) => e.isDir).length;
       const parts = [...(files > 0 ? [`файлов: ${files}`] : []), ...(dirs > 0 ? [`папок: ${dirs}`] : [])];
-      return parts.length > 0 ? parts.join(", ") : "Пусто";
+      if (parts.length === 0) return "Пусто";
+      return `${parts.join(", ")}${truncated ? ", обрезано" : ""}`;
     }
     case "semanticSearchResults": {
       const { matches, meta } = normalizeSemanticSearchResult(block.result.result);
