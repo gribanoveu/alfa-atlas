@@ -1,26 +1,39 @@
 //! `listFiles` — the directory listing, rendered as an indented ASCII tree
 //! rather than a flat list so the model can see nesting at a glance.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::domain::ai_access::AiAccessMode;
-use crate::domain::ai_tools::{ListFilesArgs, ToolError, ToolFileEntry, ToolScope};
+use crate::domain::ai_tools::{DEPS_PREFIX, ListFilesArgs, ToolError, ToolFileEntry, ToolScope};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::paths;
 use crate::domain::project_config::TreeNode;
 use crate::infra::workspace_scanner;
 use crate::services::docs_fs;
 
-use super::super::resolve::{basename, resolve_subdir};
+use super::super::resolve::{basename, resolve_subdir, split_dep_path};
 
 pub(super) fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<ToolFileEntry>, ToolError> {
-    let subdir = resolve_subdir(scope, args.path.as_deref())?;
+    let requested = args.path.as_deref().filter(|p| !p.is_empty() && *p != ".");
 
-    let mut entries = match scope.mode {
-        AiAccessMode::DocsOnly => list_docs_only(scope, subdir.as_ref(), args.depth)?,
-        AiAccessMode::FullRepo => {
-            list_full_repo(scope, subdir.map(|(_, abs)| abs), args.depth)?
+    let mut entries = if requested.is_some_and(is_deps_dir) {
+        // The virtual directory: its children are the configured roots and
+        // nothing else, so there is no filesystem walk to do here.
+        dep_root_entries(scope)
+    } else if let Some((name, root, sub)) = requested.and_then(|p| split_dep_path(scope, p)) {
+        list_dep_root(name, root, &sub, args.depth)?
+    } else {
+        let subdir = resolve_subdir(scope, requested)?;
+        let mut entries = match scope.mode {
+            AiAccessMode::DocsOnly => list_docs_only(scope, subdir.as_ref(), args.depth)?,
+            AiAccessMode::FullRepo => {
+                list_full_repo(scope, subdir.map(|(_, abs)| abs), args.depth)?
+            }
+        };
+        if requested.is_none() {
+            entries.extend(virtual_deps_entries(scope, args.depth));
         }
+        entries
     };
 
     if let Some(pattern) = args.pattern.as_deref() {
@@ -34,6 +47,73 @@ pub(super) fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<T
     }
 
     Ok(entries)
+}
+
+/// Whether `path` names the virtual `@deps` directory itself rather than a
+/// root under it.
+fn is_deps_dir(path: &str) -> bool {
+    path.trim_start_matches("./").trim_end_matches('/') == DEPS_PREFIX
+}
+
+/// One directory entry per configured external root, as the virtual
+/// directory's children.
+fn dep_root_entries(scope: &ToolScope) -> Vec<ToolFileEntry> {
+    scope
+        .extra_roots()
+        .iter()
+        .map(|(name, _)| ToolFileEntry {
+            path: format!("{DEPS_PREFIX}/{name}"),
+            is_dir: true,
+        })
+        .collect()
+}
+
+/// What a root listing appends so the external roots are discoverable at
+/// all: the model has no other way to learn the prefix exists or which
+/// names it accepts. Empty when the project has no roots — a `@deps/`
+/// directory with nothing under it would just be a dead end to explore.
+///
+/// Depth is honored as if these were real directories: `@deps` sits one
+/// level below the root, each named root two.
+fn virtual_deps_entries(scope: &ToolScope, max_depth: Option<u32>) -> Vec<ToolFileEntry> {
+    if scope.extra_roots().is_empty() || max_depth == Some(0) {
+        return Vec::new();
+    }
+    let mut entries = vec![ToolFileEntry {
+        path: DEPS_PREFIX.to_string(),
+        is_dir: true,
+    }];
+    if max_depth.is_none_or(|d| d >= 2) {
+        entries.extend(dep_root_entries(scope));
+    }
+    entries
+}
+
+/// Lists inside one external root. Mirrors `list_full_repo` — the same
+/// gitignore-aware walk, entries relativized against the root being listed —
+/// and then re-prefixes each path with `@deps/{name}/` so what comes back is
+/// what `readFile` accepts.
+fn list_dep_root(
+    name: &str,
+    root: &Path,
+    sub: &str,
+    max_depth: Option<u32>,
+) -> Result<Vec<ToolFileEntry>, ToolError> {
+    let scan_root = paths::join_relative(root, sub)?;
+    let scan_root = paths::ensure_under(root, &scan_root)?;
+    if !scan_root.is_dir() {
+        return Err(ToolError::NotFound(format!("{DEPS_PREFIX}/{name}/{sub}")));
+    }
+    workspace_scanner::scan_all_entries_with_depth(&scan_root, max_depth.map(|d| d as usize))?
+        .into_iter()
+        .map(|e| {
+            let rel = paths::relative_to(root, &e.path)?;
+            Ok(ToolFileEntry {
+                path: format!("{DEPS_PREFIX}/{name}/{rel}"),
+                is_dir: e.is_dir,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn compile_glob(pattern: &str) -> Result<globset::GlobMatcher, ToolError> {
@@ -147,7 +227,7 @@ pub(super) fn list_full_repo(
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "listFiles".to_string(),
-        description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use when directory structure is unknown — scaffold checks, \"what files exist here\", filename patterns. Do NOT use after `semanticSearch` already returned concrete file paths — read those with `readFile` instead. Do NOT use to explore code logic when search can locate the entry point directly. Returns an indented ASCII tree (directories end with `/`), not a flat list. The tree's first line is a display-only label for the current root (in Full-repo mode it may be the repository folder name); it is not part of any path argument. Child entries are relative to the current access-mode root. Do not manually prepend a documentation-root or repository-root segment to `path` — it is already relative to the current root. In Docs-only mode the listing includes only text documentation types (AsciiDoc, Markdown, JSON/YAML, PlantUML, Mermaid, plain text) — image binaries (.png/.svg/…) under the docs tree are intentionally omitted even when they exist on disk and are valid `image::` targets; do not treat their absence from this listing as a missing or dangling link (use check kind \"problems\" for missingImage). In Full-repo mode image files may appear; they are assets, not text to readFile."
+        description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use when directory structure is unknown — scaffold checks, \"what files exist here\", filename patterns. Do NOT use after `semanticSearch` already returned concrete file paths — read those with `readFile` instead. Do NOT use to explore code logic when search can locate the entry point directly. Returns an indented ASCII tree (directories end with `/`), not a flat list. The tree's first line is a display-only label for the current root (in Full-repo mode it may be the repository folder name); it is not part of any path argument. Child entries are relative to the current access-mode root. Do not manually prepend a documentation-root or repository-root segment to `path` — it is already relative to the current root. In Docs-only mode the listing includes only text documentation types (AsciiDoc, Markdown, JSON/YAML, PlantUML, Mermaid, plain text) — image binaries (.png/.svg/…) under the docs tree are intentionally omitted even when they exist on disk and are valid `image::` targets; do not treat their absence from this listing as a missing or dangling link (use check kind \"problems\" for missingImage). In Full-repo mode image files may appear; they are assets, not text to readFile. When the project has read-only external source roots configured (an unpacked dependency's sources, a vendored node_modules), the root listing also shows a virtual `@deps/` directory holding one entry per root; pass `@deps/<name>` as `path` to browse inside one. Most projects have none configured and will show no such directory — that is normal, not a missing dependency. Everything under `@deps/` is readable but never writable."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -173,6 +253,57 @@ pub(super) fn definition() -> LlmToolDefinition {
 
 #[cfg(test)]
 mod tests {
+    /// The root listing is the only place the model can learn that external
+    /// roots exist at all, so it has to carry them.
+    #[test]
+    fn the_root_listing_advertises_the_virtual_deps_directory() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+
+        let paths: Vec<String> = list(&scope, None).unwrap().into_iter().map(|e| e.path).collect();
+
+        assert!(paths.contains(&"@deps".to_string()), "{paths:#?}");
+        assert!(paths.contains(&"@deps/acme".to_string()), "{paths:#?}");
+        // Still an ordinary repository listing otherwise.
+        assert!(paths.iter().any(|p| p == "src/main.rs"), "{paths:#?}");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
+    /// A project with no external roots must not grow an empty `@deps/`
+    /// directory to explore.
+    #[test]
+    fn the_root_listing_is_unchanged_without_external_roots() {
+        let (repo, docs) = fixture_repo();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let paths: Vec<String> = list(&scope, None).unwrap().into_iter().map(|e| e.path).collect();
+
+        assert!(!paths.iter().any(|p| p.starts_with("@deps")), "{paths:#?}");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn listing_an_external_root_returns_paths_that_read_back() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+
+        let paths: Vec<String> = list(&scope, Some("@deps/acme"))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+
+        assert!(paths.contains(&"@deps/acme/lib".to_string()), "{paths:#?}");
+        let file = "@deps/acme/lib/Client.java".to_string();
+        assert!(paths.contains(&file), "{paths:#?}");
+        // The listing's paths are in readFile's namespace, unmodified.
+        assert!(read(&scope, &file).unwrap().contains("void send()"));
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
     use std::fs;
 
     use crate::domain::ai_access::AiAccessMode;

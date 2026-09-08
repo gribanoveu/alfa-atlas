@@ -3,6 +3,23 @@ use thiserror::Error;
 
 use super::ai_access::{AiAccessMode, ToolName};
 
+/// One read-only source root outside the repository, addressed by the model
+/// as `@deps/{name}/…`.
+///
+/// `name` is a path segment the model types, not a display label: it is
+/// rejected at `ToolScope` construction if it is empty, `.`/`..`, or carries
+/// a separator, since any of those would make `@deps/{name}/rest` ambiguous
+/// to split back apart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtraRoot {
+    pub name: String,
+    /// Absolute path on disk. A root that no longer exists is dropped when
+    /// the scope is built, so a stale entry costs one unresolvable name
+    /// rather than breaking the whole project's tooling.
+    pub path: String,
+}
+
 /// Stable per-repo config stored at `{repoRoot}/.atlas/project.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +49,20 @@ pub struct ProjectConfig {
     /// and every future chat.
     #[serde(default)]
     pub ai_auto_approved_tools: Option<Vec<ToolName>>,
+    /// Read-only source roots outside the repository the assistant may read
+    /// through the `@deps/{name}/…` prefix — a dependency's unpacked
+    /// sources, a vendored `node_modules`. `None`/missing (every
+    /// `project.json` written before this existed) means an empty list:
+    /// nothing outside the repository is readable until a root is added.
+    ///
+    /// These widen *reading* only, and structurally so: the read side
+    /// resolves them through `services::ai_tools::resolve::
+    /// resolve_readable_path`, an entry point no mutate tool calls — every
+    /// mutate tool goes through `resolve_mutable_docs_path` instead, which
+    /// additionally requires containment under `docs_root`, something no
+    /// extra root can satisfy.
+    #[serde(default)]
+    pub ai_extra_roots: Option<Vec<ExtraRoot>>,
     /// Stable fallback identity for the global embeddings cache
     /// (`~/.atlas/embeddings/{repository_id}`, see `services::embedding_state::
     /// resolve_index_paths`), used only when the repo has no resolvable
@@ -50,6 +81,7 @@ impl ProjectConfig {
             ai_allowed_tools: None,
             ai_auto_approved_tools: None,
             local_repository_id: None,
+            ai_extra_roots: None,
         }
     }
 }

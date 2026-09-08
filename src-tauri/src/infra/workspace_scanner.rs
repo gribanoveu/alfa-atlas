@@ -439,6 +439,37 @@ mod tests {
         fs::remove_dir_all(&root).ok();
     }
 
+    /// The two halves of "why dependencies are invisible, and what it takes
+    /// to see them", pinned together because the plan for dependency access
+    /// rests on both.
+    ///
+    /// A scan of the repository skips `node_modules` — that is the barrier.
+    /// But a scan rooted *at* `node_modules` lists it normally:
+    /// `ignore::WalkBuilder` never treats the root it was asked to walk as
+    /// excluded, and that exemption covers what is under it. So a dependency
+    /// root needs no gitignore-free walk of its own — `scan_all` already
+    /// works there. (`is_new_file_indexable` walks from the real repo root
+    /// precisely to avoid relying on this exemption; see its doc comment.)
+    #[test]
+    fn a_scan_rooted_at_an_ignored_directory_lists_what_the_repo_scan_skips() {
+        let root = temp_git_repo();
+        fs::write(root.join(".gitignore"), "node_modules\n").unwrap();
+        fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        fs::write(root.join("node_modules/pkg/index.js"), "export const x = 1;\n").unwrap();
+
+        let from_repo = scan_all(&root).unwrap();
+        assert!(
+            !from_repo.iter().any(|f| f.path.ends_with("index.js")),
+            "the repo scan must not descend into node_modules: {from_repo:#?}"
+        );
+
+        let from_dep_root = scan_all(&root.join("node_modules")).unwrap();
+        assert_eq!(from_dep_root.len(), 1, "{from_dep_root:#?}");
+        assert!(from_dep_root[0].path.ends_with("pkg/index.js"));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn is_new_file_indexable_false_for_a_hidden_file() {
         let root = temp_git_repo();

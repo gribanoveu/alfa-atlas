@@ -13,7 +13,8 @@ use crate::domain::ai_tools::{
     CreateDirectoryArgs, DeleteDirectoryArgs, DeleteFileArgs, EditFileArgs, FileEdit, ListFilesArgs,
     MoveArgs, ReadFileArgs, ToolCall, ToolError, ToolFileEntry, ToolResult, ToolScope, WriteFileArgs,
 };
-use crate::domain::project_config::UpdatedReference;
+use crate::domain::ai_access::AiAccessMode;
+use crate::domain::project_config::{ExtraRoot, UpdatedReference};
 use crate::services::workspace_index::WorkspaceIndex;
 
 use super::{execute_tool, EmbeddingDeps};
@@ -47,6 +48,33 @@ pub(crate) fn fixture_repo() -> (PathBuf, PathBuf) {
     let repo = repo.canonicalize().unwrap();
     let docs = docs.canonicalize().unwrap();
     (repo, docs)
+}
+
+/// A directory outside any repository, standing in for one unpacked
+/// dependency: `{root}/lib/Client.java`. Attached to a scope via
+/// `ToolScope::with_extra_roots`, it is what an `@deps/{name}/…` path
+/// resolves against.
+pub(crate) fn fixture_dep_root() -> PathBuf {
+    let root = fixture_dir("dep-");
+    fs::create_dir_all(root.join("lib")).unwrap();
+    fs::write(
+        root.join("lib/Client.java"),
+        "class Client {\n    void send() {}\n}\n",
+    )
+    .unwrap();
+    root.canonicalize().unwrap()
+}
+
+/// `fixture_repo` plus one external root attached under the name `acme`.
+/// Returns the scope and both on-disk roots, so a test can clean up each.
+pub(crate) fn scope_with_dep_root(mode: AiAccessMode) -> (ToolScope, PathBuf, PathBuf) {
+    let (repo, docs) = fixture_repo();
+    let dep = fixture_dep_root();
+    let scope = ToolScope::for_project(&repo, &docs, mode).with_extra_roots(vec![ExtraRoot {
+        name: "acme".to_string(),
+        path: dep.to_string_lossy().into_owned(),
+    }]);
+    (scope, repo, dep)
 }
 
 /// Calls `execute_tool` for `ReadFile` and unwraps the expected

@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::domain::ai_access::AiAccessMode;
-use crate::domain::ai_tools::{ToolError, ToolScope};
+use crate::domain::ai_tools::{DEPS_PREFIX, ToolError, ToolScope};
 use crate::domain::paths;
 use crate::domain::project_config::ProjectError;
 use crate::services::agent_memory;
@@ -131,6 +131,69 @@ pub(super) fn access_and_docs_rel(
         docs_rel
     };
     Ok((access_rel, docs_rel))
+}
+
+/// Splits an `@deps/{name}/{rest}` argument into the root it names and the
+/// path under it. `None` for anything that is not such an argument — an
+/// ordinary repository path, `@deps` on its own (the virtual directory, which
+/// names no root), or a name this project has not configured.
+///
+/// The returned name and root borrow from `scope`, not from `path`, so a
+/// caller can build a result prefix from them without re-parsing.
+pub(super) fn split_dep_path<'s>(
+    scope: &'s ToolScope,
+    path: &str,
+) -> Option<(&'s str, &'s Path, String)> {
+    let after = match path.trim_start_matches("./").strip_prefix(DEPS_PREFIX)? {
+        rest if rest.starts_with('/') => rest[1..].to_string(),
+        // Either `@deps` alone or something like `@depsfoo` — neither names
+        // a root.
+        _ => return None,
+    };
+    let (name, sub) = after.split_once('/').unwrap_or((after.as_str(), ""));
+    let entry = scope.extra_roots().iter().find(|(n, _)| n == name)?;
+    Some((entry.0.as_str(), entry.1.as_path(), sub.to_string()))
+}
+
+/// On-disk path for a model argument on a **read** tool: whatever
+/// `resolve_existing_path` already resolved it to, and only when that finds
+/// nothing, an `@deps/{name}/…` path resolved against its external root.
+///
+/// The repository is tried first so a real file can never be shadowed by
+/// the virtual prefix — a repo that happens to contain a folder called
+/// `@deps` keeps working exactly as before.
+///
+/// This being a separate entry point is the whole containment story for
+/// external roots. Mutate tools call `resolve_mutable_docs_path`, which
+/// reaches `resolve_existing_path` directly and never this — so no write can
+/// name an external root at all, quite apart from the `docs_root`
+/// containment those tools also enforce. Widening reads therefore cannot
+/// widen writes by accident, including in a mutate tool written later.
+///
+/// Containment under the external root is enforced the same way it is
+/// everywhere else: `join_relative` rejects `..` outright, `ensure_under`
+/// canonicalizes and rejects anything that lands outside (a symlink out of
+/// the dependency tree included).
+pub(super) fn resolve_readable_path(scope: &ToolScope, path: &str) -> Result<PathBuf, ToolError> {
+    match resolve_existing_path(scope, path) {
+        Ok(found) => Ok(found),
+        // `..` is refused outright, never reinterpreted as an external
+        // path — same rule the alias fallback in `resolve_mutable_docs_path`
+        // follows, and the reason this match exists rather than a plain
+        // `or_else`.
+        Err(e @ ToolError::PathEscape(_)) => Err(e),
+        Err(e) => {
+            let Some((_, root, sub)) = split_dep_path(scope, path) else {
+                return Err(e);
+            };
+            let joined = paths::join_relative(root, &sub)?;
+            let canonical = paths::ensure_under(root, &joined)?;
+            if !canonical.exists() {
+                return Err(ToolError::NotFound(path.to_string()));
+            }
+            Ok(canonical)
+        }
+    }
 }
 
 /// On-disk path for a model argument: as-is under `scope.root` first, then
@@ -316,6 +379,96 @@ mod tests {
     use crate::domain::ai_access::AiAccessMode;
     use crate::domain::ai_tools::{ToolError, ToolScope};
     use crate::services::ai_tools::testing::*;
+
+    #[test]
+    fn an_external_root_is_readable_through_the_deps_prefix() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+
+        let content = read(&scope, "@deps/acme/lib/Client.java").unwrap();
+
+        assert!(content.contains("void send()"), "{content}");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
+    /// The containment gate is the same one the repository gets: `..` is
+    /// refused where it is written, not resolved and then judged.
+    #[test]
+    fn an_external_root_cannot_be_traversed_out_of() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+
+        let err = read(&scope, "@deps/acme/../../../etc/passwd").unwrap_err();
+
+        assert!(matches!(err, ToolError::PathEscape(_)), "{err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
+    /// Reading an external root never implies writing to one. This holds
+    /// without any rule of its own: mutate tools resolve through
+    /// `resolve_mutable_docs_path`, which additionally requires containment
+    /// under `docs_root`, and never call `resolve_readable_path` at all.
+    #[test]
+    fn an_external_root_is_not_writable() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+
+        let err = write(&scope, "@deps/acme/lib/Client.java", "pwned").unwrap_err();
+
+        assert!(matches!(err, ToolError::OutsideDocumentation(_)), "{err:?}");
+        let untouched = fs::read_to_string(dep.join("lib/Client.java")).unwrap();
+        assert!(untouched.contains("void send()"), "{untouched}");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
+    /// Docs-only is the documentation subtree and nothing else — a project
+    /// that has external roots configured still gets none of them while that
+    /// mode is active.
+    #[test]
+    fn external_roots_are_absent_in_docs_only() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::DocsOnly);
+
+        assert!(scope.extra_roots().is_empty());
+        let err = read(&scope, "@deps/acme/lib/Client.java").unwrap_err();
+        assert!(matches!(err, ToolError::NotFound(_)), "{err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
+    /// The prefix is virtual, so it must not shadow a real path: a
+    /// repository that actually contains `@deps/acme/...` keeps resolving to
+    /// its own file.
+    #[test]
+    fn a_real_repository_path_wins_over_the_virtual_prefix() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+        fs::create_dir_all(repo.join("@deps/acme/lib")).unwrap();
+        fs::write(repo.join("@deps/acme/lib/Client.java"), "the repo's own\n").unwrap();
+
+        let content = read(&scope, "@deps/acme/lib/Client.java").unwrap();
+
+        assert_eq!(content, "the repo's own\n");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
+    /// A name no root is configured under is a miss, not a way to reach the
+    /// filesystem.
+    #[test]
+    fn an_unconfigured_dep_name_resolves_to_nothing() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+
+        let err = read(&scope, "@deps/never-configured/lib/Client.java").unwrap_err();
+
+        assert!(matches!(err, ToolError::NotFound(_)), "{err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
 
     #[test]
     fn path_alias_does_not_invent_missing_files() {

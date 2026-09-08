@@ -187,6 +187,7 @@ pub fn scope_for_config(repo_root: &Path, docs_root: &Path, config: &ProjectConf
         .map(|v| v.into_iter().collect())
         .unwrap_or_else(|| default_allowed_tools(config.ai_access_mode));
     ToolScope::new(repo_root, docs_root, config.ai_access_mode, allowed)
+        .with_extra_roots(config.ai_extra_roots.clone().unwrap_or_default())
 }
 
 /// Resolves a `ToolScope` for whichever project is currently open, without
@@ -238,6 +239,7 @@ mod tests {
     use std::fs;
 
     use crate::domain::ai_tools::ToolError;
+    use crate::domain::project_config::ExtraRoot;
 
     use super::super::testing::*;
     use super::*;
@@ -266,6 +268,39 @@ mod tests {
             assert!(advertised.contains(&"visualize".to_string()));
             assert!(!advertised.iter().any(|n| n == "readFile" || n == "writeFile"));
         });
+    }
+
+    /// The production path a real project takes: `project.json` carries the
+    /// external roots, and the scope the executor runs with has them
+    /// attached. Every other test builds a scope directly, so without this
+    /// the config could stop being read and nothing would notice.
+    #[test]
+    fn scope_for_config_attaches_the_configured_external_roots() {
+        let (repo, docs) = fixture_repo();
+        let dep = fixture_dep_root();
+        let mut config = ProjectConfig::new(".");
+        config.ai_access_mode = AiAccessMode::FullRepo;
+        config.ai_extra_roots = Some(vec![
+            ExtraRoot {
+                name: "acme".to_string(),
+                path: dep.to_string_lossy().into_owned(),
+            },
+            // Dropped: the path does not exist. A stale entry costs one
+            // unresolvable name, not the scope.
+            ExtraRoot {
+                name: "gone".to_string(),
+                path: dep.join("removed-long-ago").to_string_lossy().into_owned(),
+            },
+        ]);
+
+        let scope = scope_for_config(&repo, &docs, &config);
+
+        let names: Vec<&str> = scope.extra_roots().iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["acme"]);
+        assert!(read(&scope, "@deps/acme/lib/Client.java").is_ok());
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
     }
 
     #[test]

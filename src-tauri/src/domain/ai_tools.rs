@@ -12,6 +12,7 @@ use super::conversation_mode::ConversationMode;
 use super::embeddings::EmbeddingError;
 use super::flexible_args;
 use super::paths;
+use super::project_config::ExtraRoot;
 use super::project_config::ProjectError;
 use super::repo_index::FileId;
 use super::workspace_index::WorkspaceIndexError;
@@ -1423,6 +1424,30 @@ pub struct ToolScope {
     /// rather than silently widening access.
     docs_filter_prefix: Option<String>,
     allowed_tools: HashSet<ToolName>,
+    /// Read-only roots outside the repository, canonicalized, keyed by the
+    /// `@deps/{name}` segment that addresses them. Always empty in
+    /// `DocsOnly` mode — see `with_extra_roots`, the only thing that fills
+    /// this — so every read path resolves exactly as it did before whenever
+    /// the project has none.
+    extra_roots: Vec<(String, PathBuf)>,
+}
+
+/// The virtual first segment under which external read-only roots are
+/// addressed (`@deps/{name}/…`). Not a real directory: a repository that
+/// happens to contain a folder by this name still wins, because every read
+/// resolves the path as-given against the access-mode root first.
+pub const DEPS_PREFIX: &str = "@deps";
+
+/// Whether `name` can serve as the single `@deps` path segment naming a
+/// root. Anything with a separator, or a relative-path special, would make
+/// `@deps/{name}/rest` ambiguous to split back apart.
+fn is_valid_dep_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.starts_with('.')
 }
 
 impl ToolScope {
@@ -1458,6 +1483,7 @@ impl ToolScope {
             docs_root: docs_root.to_path_buf(),
             docs_filter_prefix,
             allowed_tools,
+            extra_roots: Vec::new(),
         }
     }
 
@@ -1471,6 +1497,49 @@ impl ToolScope {
     #[cfg(test)]
     pub fn for_project(repo_root: &Path, docs_root: &Path, mode: AiAccessMode) -> Self {
         Self::new(repo_root, docs_root, mode, default_allowed_tools(mode))
+    }
+
+    /// Attaches the project's configured read-only external roots
+    /// (`ProjectConfig::ai_extra_roots`). Separate from `new` rather than a
+    /// sixth parameter: `new` and `for_project` are called from well over a
+    /// hundred places, virtually all of which have no extra roots and should
+    /// not have to say so.
+    ///
+    /// Drops, rather than rejects, anything unusable: a name that cannot be
+    /// a single `@deps` segment, a duplicate name (first wins, so the
+    /// mapping stays single-valued), a path that no longer resolves to a
+    /// directory. A stale entry in `project.json` should cost one
+    /// unresolvable name, not the project's whole tool surface.
+    ///
+    /// In `DocsOnly` mode this is a no-op: that mode's contract is the
+    /// documentation subtree, and its search-result filter
+    /// (`allows_search_result`) is a prefix check in repo-relative space
+    /// that an external path cannot be expressed in at all.
+    pub fn with_extra_roots(mut self, roots: Vec<ExtraRoot>) -> Self {
+        if self.mode == AiAccessMode::DocsOnly {
+            return self;
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        for root in roots {
+            if !is_valid_dep_name(&root.name) || !seen.insert(root.name.clone()) {
+                continue;
+            }
+            let path = Path::new(&root.path);
+            if !path.is_dir() {
+                continue;
+            }
+            let Ok(canonical) = paths::canonicalize_plain(path) else {
+                continue;
+            };
+            self.extra_roots.push((root.name, canonical));
+        }
+        self
+    }
+
+    /// `(name, root)` for every attached external root, in configured order
+    /// — what `listFiles` renders under the virtual `@deps/` directory.
+    pub fn extra_roots(&self) -> &[(String, PathBuf)] {
+        &self.extra_roots
     }
 
     pub fn allows(&self, tool: ToolName) -> bool {

@@ -1,23 +1,51 @@
 //! `grep` — exhaustive literal/regex line matching, for when the model
 //! needs every occurrence rather than the best few `semanticSearch` ranks.
 
-use crate::domain::ai_tools::{GrepArgs, ToolError, ToolResult, ToolScope};
+use crate::domain::ai_tools::{DEPS_PREFIX, GrepArgs, ToolError, ToolResult, ToolScope};
 use crate::domain::llm::LlmToolDefinition;
 use crate::services::docs_search;
 
-use super::super::resolve::{relative_under_maybe_missing, resolve_existing_path};
+use super::super::resolve::{relative_under_maybe_missing, resolve_readable_path, split_dep_path};
 
-/// Exact regex content search under `scope.root` — delegates to
+/// Exact regex content search under `scope.root`, or under one external
+/// root when `path` names it — either way delegating to
 /// `services::docs_search::search_under_root` (shared with the user-facing
-/// `docs_search` IPC). Paths in results are scope-root-relative so they
-/// round-trip into `readFile`.
+/// `docs_search` IPC). Paths in results are in the same namespace
+/// `readFile` takes, so they round-trip unmodified.
 pub(super) fn grep(scope: &ToolScope, mut args: GrepArgs) -> Result<ToolResult, ToolError> {
-    if let Some(path) = args.path.as_deref().filter(|p| !p.is_empty() && *p != ".") {
-        let canonical = resolve_existing_path(scope, path)?;
-        let rel = relative_under_maybe_missing(&scope.root, &canonical)?;
+    let requested = args
+        .path
+        .as_deref()
+        .filter(|p| !p.is_empty() && *p != ".")
+        .map(str::to_string);
+
+    // An `@deps/{name}/…` argument moves the whole search to that root, and
+    // its hits come back needing the same prefix so they round-trip into
+    // `readFile`. Without such an argument the search stays inside the
+    // repository: an implicit sweep of every dependency would be both
+    // surprising and, on a real dependency tree, enormously slower than what
+    // the caller asked for.
+    let (search_root, prefix) = match requested
+        .as_deref()
+        .and_then(|p| split_dep_path(scope, p))
+    {
+        Some((name, root, _)) => (root.to_path_buf(), format!("{DEPS_PREFIX}/{name}/")),
+        None => (scope.root.clone(), String::new()),
+    };
+
+    if let Some(path) = requested.as_deref() {
+        let canonical = resolve_readable_path(scope, path)?;
+        let rel = relative_under_maybe_missing(&search_root, &canonical)?;
         args.path = Some(if rel == "." { String::new() } else { rel });
     }
-    let payload = docs_search::search_under_root(&scope.root, &args)?;
+
+    let mut payload = docs_search::search_under_root(&search_root, &args)?;
+    if !prefix.is_empty() {
+        for hit in &mut payload.matches {
+            hit.path = format!("{prefix}{}", hit.path);
+        }
+    }
+
     Ok(ToolResult::GrepResults {
         matches: payload.matches,
         truncated: payload.truncated,
@@ -29,7 +57,7 @@ pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "grep".to_string(),
         description:
-            "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Secondary tool — do not use as the first search step; call semanticSearch first for discovery. Use grep only when semanticSearch is insufficient: you need every call site of a symbol, every occurrence of a literal string, or a regex pattern across files, and you already know what to match. Not for conceptual or exploratory search. Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Set `contextLines` (1-5) when you need to see what a hit sits inside — a signature, the surrounding branch — instead of spending a `readFile` round trip per hit. Honors .gitignore; skips binary and oversized files. `path` may be a file (a semanticSearch hit is valid) or a subdirectory; omit it to search the whole root. Returned paths are already relative to the same root readFile uses — pass them to readFile unchanged."
+            "Exact regex search over file contents under the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Secondary tool — do not use as the first search step; call semanticSearch first for discovery. Use grep only when semanticSearch is insufficient: you need every call site of a symbol, every occurrence of a literal string, or a regex pattern across files, and you already know what to match. Not for conceptual or exploratory search. Returns line-oriented hits (path, 1-indexed line, line text), capped and truncated when the limit is hit. Set `contextLines` (1-5) when you need to see what a hit sits inside — a signature, the surrounding branch — instead of spending a `readFile` round trip per hit. Honors .gitignore; skips binary and oversized files. `path` may be a file (a semanticSearch hit is valid) or a subdirectory; omit it to search the whole root. Returned paths are already relative to the same root readFile uses — pass them to readFile unchanged. To search a configured external source root instead of the repository, pass its `@deps/<name>` path (or a path under it) as `path`; external roots are never searched implicitly, so a search with no `path` always stays inside the repository."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -68,6 +96,50 @@ pub(super) fn definition() -> LlmToolDefinition {
 
 #[cfg(test)]
 mod tests {
+    /// The round trip the whole `@deps` prefix exists for: a hit's path goes
+    /// straight back into `readFile`. And without a `path` argument the very
+    /// same pattern finds nothing — external roots are opt-in per search.
+    #[test]
+    fn grep_searches_an_external_root_only_when_asked_to() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+
+        let hits = grep_matches(&scope, "void send", Some("@deps/acme"));
+
+        assert_eq!(hits.len(), 1, "{hits:#?}");
+        assert_eq!(hits[0].path, "@deps/acme/lib/Client.java");
+        assert!(read(&scope, &hits[0].path).unwrap().contains("void send()"));
+
+        assert!(grep_matches(&scope, "void send", None).is_empty());
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
+    fn grep_matches(
+        scope: &ToolScope,
+        pattern: &str,
+        path: Option<&str>,
+    ) -> Vec<crate::domain::ai_tools::GrepMatch> {
+        match execute_tool(
+            scope,
+            ToolCall::Grep(GrepArgs {
+                pattern: pattern.to_string(),
+                path: path.map(str::to_string),
+                glob: None,
+                case_insensitive: None,
+                max_results: None,
+                context_lines: None,
+            }),
+            &EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap()
+        {
+            ToolResult::GrepResults { matches, .. } => matches,
+            other => panic!("expected GrepResults, got {other:?}"),
+        }
+    }
+
     use std::fs;
 
     use crate::domain::ai_access::AiAccessMode;

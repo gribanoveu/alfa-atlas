@@ -11,7 +11,7 @@ use crate::domain::llm::LlmToolDefinition;
 use crate::domain::repo_index::{detect_language, SymbolKind};
 use crate::infra::language_indexers::default_indexers;
 
-use super::super::resolve::resolve_existing_path;
+use super::super::resolve::resolve_readable_path;
 
 /// One `readFile` result: a possibly-partial slice of a file's lines,
 /// along with enough range/total metadata for the model to know it's
@@ -43,7 +43,7 @@ fn kind_name(kind: SymbolKind) -> &'static str {
 /// rather than an error — `totalLines` alone already tells the caller what
 /// a plain read would cost.
 pub(super) fn outline(scope: &ToolScope, args: &ReadFileArgs) -> Result<ToolResult, ToolError> {
-    let canonical = resolve_existing_path(scope, &args.path)?;
+    let canonical = resolve_readable_path(scope, &args.path)?;
     if !canonical.is_file() {
         return Err(ToolError::NotAFile(args.path.clone()));
     }
@@ -75,7 +75,7 @@ pub(super) fn read_file(scope: &ToolScope, args: ReadFileArgs) -> Result<FileSli
     // the tool boundary is containment under `scope.root` alone. In
     // `FullRepo` mode the harness must be able to read source files, which
     // aren't in `is_supported_file`'s doc-format list.
-    let canonical = resolve_existing_path(scope, &args.path)?;
+    let canonical = resolve_readable_path(scope, &args.path)?;
     if !canonical.is_file() {
         return Err(ToolError::NotAFile(args.path));
     }
@@ -114,7 +114,7 @@ pub(super) fn slice_lines(content: String, start_line: Option<u32>, end_line: Op
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "readFile".to_string(),
-        description: "Read one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known — especially paths from semanticSearch/grep results. For \"how does X work\" questions: after search, read at most 2–3 files first — the matching .adoc (if any) and the owning implementation (*Service / handler named by the doc or operation), not mappers, DTOs, or sibling services until the algorithm is incomplete. Prefer a line range for a large file when only part of it is relevant. Paths returned by grep/semanticSearch, and paths constructed from listFiles entries (excluding the tree's display-only root label), are already correctly rooted — pass them here as-is, with no manual prefix added or stripped."
+        description: "Read one file by its path relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode), optionally restricted to a line range. Use when the relevant file is already known — especially paths from semanticSearch/grep results. For \"how does X work\" questions: after search, read at most 2–3 files first — the matching .adoc (if any) and the owning implementation (*Service / handler named by the doc or operation), not mappers, DTOs, or sibling services until the algorithm is incomplete. Prefer a line range for a large file when only part of it is relevant. Paths returned by grep/semanticSearch, and paths constructed from listFiles entries (excluding the tree's display-only root label), are already correctly rooted — pass them here as-is, with no manual prefix added or stripped. A path under `@deps/<name>/` reads from a configured read-only external source root (dependency sources); those files can be read but never written, moved, or deleted."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
