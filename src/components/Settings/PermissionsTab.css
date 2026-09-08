@@ -56,3 +56,34 @@
   color: var(--text-2);
   margin-bottom: 6px;
 }
+
+.extra-root-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.extra-root-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.extra-root-path {
+  font-size: var(--font-ui-xs);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* The path is the long part; let it truncate rather than push the
+     remove button off the row. */
+  direction: rtl;
+  text-align: left;
+}
+
+.extra-root-add {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  align-self: flex-start;
+}

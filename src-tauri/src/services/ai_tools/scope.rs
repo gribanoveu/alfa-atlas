@@ -8,8 +8,9 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::domain::ai_access::{AiAccessMode, ToolName, default_allowed_tools, no_project_tools};
-use crate::domain::ai_tools::ToolScope;
-use crate::domain::project_config::{ProjectConfig, ProjectError};
+use crate::domain::ai_tools::{ToolScope, is_valid_dep_name};
+use crate::domain::paths;
+use crate::domain::project_config::{ExtraRoot, ProjectConfig, ProjectError};
 use crate::infra::project_store;
 use crate::services::project_open;
 
@@ -119,6 +120,78 @@ pub fn set_tool_allowed(tool: ToolName, allowed: bool) -> Result<(), ProjectErro
         set.remove(&tool);
     }
     config.ai_allowed_tools = Some(set.into_iter().collect());
+    project_store::save(&opened.root, &config)
+}
+
+/// The project's configured external read-only roots, in the order they
+/// were added. Empty (not an error) for a project that has never added one.
+///
+/// Reports what is *persisted*, which is deliberately not the same as what
+/// the assistant currently sees: `ToolScope::with_extra_roots` additionally
+/// drops roots whose directory has since disappeared, and every root while
+/// the project is in Docs-only mode. The Settings list has to show a stale
+/// row so it can be removed — hiding it would leave the user unable to clean
+/// up the entry that is confusing them.
+pub fn extra_roots() -> Result<Vec<ExtraRoot>, ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let config = project_store::load(&opened.root)?
+        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    Ok(config.ai_extra_roots.unwrap_or_default())
+}
+
+/// Adds one external read-only root to the open project.
+///
+/// Every failure here is a refusal with a reason rather than a silent drop:
+/// the user is adding this root right now, and a row that quietly fails to
+/// appear reads as a broken feature. `name` must be usable as the single
+/// `@deps` path segment that addresses the root, `path` must be a directory
+/// that exists, and the name must be free — an add that replaced an existing
+/// root would silently redirect every `@deps/{name}/…` path the assistant
+/// has already been told about.
+pub fn add_extra_root(name: String, path: String) -> Result<(), ProjectError> {
+    if !is_valid_dep_name(&name) {
+        return Err(ProjectError::Message(format!(
+            "недопустимое имя источника «{name}»: нужно одно имя без «/», не начинающееся с точки"
+        )));
+    }
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err(ProjectError::Message(format!(
+            "не найдена папка: {path}"
+        )));
+    }
+    let canonical = paths::canonicalize_plain(dir)
+        .map_err(|e| ProjectError::Message(format!("не удалось открыть {path}: {e}")))?;
+
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let mut config = project_store::load(&opened.root)?
+        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    let mut roots = config.ai_extra_roots.unwrap_or_default();
+    if roots.iter().any(|r| r.name == name) {
+        return Err(ProjectError::Message(format!(
+            "источник с именем «{name}» уже добавлен"
+        )));
+    }
+    roots.push(ExtraRoot {
+        name,
+        path: canonical.to_string_lossy().into_owned(),
+    });
+    config.ai_extra_roots = Some(roots);
+    project_store::save(&opened.root, &config)
+}
+
+/// Removes one external root by name. Removing what is not there succeeds:
+/// the caller wanted it gone, and it is.
+pub fn remove_extra_root(name: &str) -> Result<(), ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let mut config = project_store::load(&opened.root)?
+        .unwrap_or_else(|| ProjectConfig::new(opened.docs_root.clone()));
+    let mut roots = config.ai_extra_roots.unwrap_or_default();
+    roots.retain(|r| r.name != name);
+    config.ai_extra_roots = Some(roots);
     project_store::save(&opened.root, &config)
 }
 
@@ -274,6 +347,108 @@ mod tests {
     /// external roots, and the scope the executor runs with has them
     /// attached. Every other test builds a scope directly, so without this
     /// the config could stop being read and nothing would notice.
+    /// Opens a real project under a temp home so the config-writing paths
+    /// (`add_extra_root`/`remove_extra_root`, which all start by resolving
+    /// the open project) can be exercised end to end.
+    fn with_open_fixture_project<T>(f: impl FnOnce(std::path::PathBuf) -> T) -> T {
+        crate::infra::settings_store::test_support::with_temp_home(|| {
+            let (repo, docs) = fixture_repo();
+            crate::services::project_open::open_project(
+                repo.to_str().unwrap(),
+                docs.to_str().unwrap(),
+            )
+            .unwrap();
+            let out = f(repo.clone());
+            fs::remove_dir_all(&repo).ok();
+            out
+        })
+    }
+
+    #[test]
+    fn an_added_root_persists_and_reaches_the_scope_the_executor_runs_with() {
+        with_open_fixture_project(|_repo| {
+            let dep = fixture_dep_root();
+            add_extra_root("acme".to_string(), dep.to_string_lossy().into_owned()).unwrap();
+            set_access_mode(AiAccessMode::FullRepo).unwrap();
+
+            let persisted = extra_roots().unwrap();
+            assert_eq!(persisted.len(), 1);
+            assert_eq!(persisted[0].name, "acme");
+
+            let scope = current_scope().unwrap();
+            assert!(read(&scope, "@deps/acme/lib/Client.java").is_ok());
+
+            fs::remove_dir_all(&dep).ok();
+        });
+    }
+
+    /// The name becomes a path segment, so it is validated where it enters —
+    /// and refused out loud, not dropped.
+    #[test]
+    fn add_extra_root_refuses_a_name_that_is_not_a_single_segment() {
+        with_open_fixture_project(|_repo| {
+            let dep = fixture_dep_root();
+            for bad in ["a/b", "..", "", ".hidden"] {
+                let err = add_extra_root(bad.to_string(), dep.to_string_lossy().into_owned())
+                    .unwrap_err();
+                assert!(format!("{err}").contains("имя источника"), "{bad}: {err}");
+            }
+            assert!(extra_roots().unwrap().is_empty());
+
+            fs::remove_dir_all(&dep).ok();
+        });
+    }
+
+    #[test]
+    fn add_extra_root_refuses_a_path_that_is_not_a_directory() {
+        with_open_fixture_project(|repo| {
+            let err = add_extra_root(
+                "acme".to_string(),
+                repo.join("nothing-here").to_string_lossy().into_owned(),
+            )
+            .unwrap_err();
+
+            assert!(format!("{err}").contains("не найдена папка"), "{err}");
+        });
+    }
+
+    /// Re-adding a name would silently redirect every `@deps/{name}/…` path
+    /// the assistant has already been given.
+    #[test]
+    fn add_extra_root_refuses_a_name_already_in_use() {
+        with_open_fixture_project(|_repo| {
+            let first = fixture_dep_root();
+            let second = fixture_dep_root();
+            add_extra_root("acme".to_string(), first.to_string_lossy().into_owned()).unwrap();
+
+            let err = add_extra_root("acme".to_string(), second.to_string_lossy().into_owned())
+                .unwrap_err();
+
+            assert!(format!("{err}").contains("уже добавлен"), "{err}");
+            let roots = extra_roots().unwrap();
+            assert_eq!(roots.len(), 1);
+            assert_eq!(roots[0].path, first.to_string_lossy());
+
+            fs::remove_dir_all(&first).ok();
+            fs::remove_dir_all(&second).ok();
+        });
+    }
+
+    #[test]
+    fn removing_a_root_that_is_not_there_still_succeeds() {
+        with_open_fixture_project(|_repo| {
+            let dep = fixture_dep_root();
+            add_extra_root("acme".to_string(), dep.to_string_lossy().into_owned()).unwrap();
+
+            remove_extra_root("acme").unwrap();
+            remove_extra_root("acme").unwrap();
+
+            assert!(extra_roots().unwrap().is_empty());
+
+            fs::remove_dir_all(&dep).ok();
+        });
+    }
+
     #[test]
     fn scope_for_config_attaches_the_configured_external_roots() {
         let (repo, docs) = fixture_repo();

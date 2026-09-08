@@ -1,4 +1,6 @@
-import { ShieldOff } from "lucide-react";
+import { FolderPlus, ShieldOff, Trash2 } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { useExtraRoots } from "../../hooks/useExtraRoots";
 import { useToolPermissions } from "../../hooks/useToolPermissions";
 import { AUTO_APPROVABLE_TOOL_LABELS, CONSENT_TOOL_LABELS } from "../../lib/assistantConfig";
 import "./PermissionsTab.css";
@@ -168,6 +170,88 @@ export function PermissionsTab() {
 
         {error ? <div className="settings-error">{error}</div> : null}
       </div>
+
+      <ExternalSourcesCard />
+    </div>
+  );
+}
+
+/** Read-only source roots outside the repository (`ProjectConfig.
+ * ai_extra_roots`) — dependency sources the assistant may read but never
+ * write, addressed in chat as `@deps/{имя}/…`. */
+function ExternalSourcesCard() {
+  const { roots, loading, noProject, error, pending, add, remove } = useExtraRoots();
+
+  const pickFolder = async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Папка с исходниками библиотеки",
+    });
+    if (selected === null || Array.isArray(selected)) return;
+    await add(selected);
+  };
+
+  return (
+    <div className="settings-card">
+      <div className="settings-section-title">Внешние источники кода</div>
+      <p className="settings-hint settings-hint-compact">
+        Папки вне репозитория, которые ассистент может читать: исходники подключённых
+        библиотек, распакованный sources-jar. В чате они видны как{" "}
+        <code>@deps/имя/…</code>. Только чтение — записать, переместить или удалить в них
+        ничего нельзя. Доступны в режиме полного доступа к репозиторию.
+      </p>
+
+      {loading ? (
+        <p className="settings-hint settings-hint-compact">Загрузка…</p>
+      ) : noProject ? (
+        <p className="settings-hint settings-hint-compact">
+          Список источников хранится в проекте — откройте проект, чтобы его изменить.
+        </p>
+      ) : (
+        <>
+          {roots.length === 0 ? (
+            <p className="settings-hint settings-hint-compact">
+              Пока не добавлено ни одного источника — ассистент видит только файлы
+              репозитория.
+            </p>
+          ) : (
+            <ul className="permissions-list">
+              {roots.map(({ name, path }) => (
+                <li key={name} className="permissions-item">
+                  <span className="permissions-item-label extra-root-label">
+                    <span className="extra-root-name">@deps/{name}</span>
+                    <span className="extra-root-path" title={path}>
+                      {path}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="settings-link-btn danger permissions-item-revoke"
+                    disabled={pending === name}
+                    onClick={() => void remove(name)}
+                  >
+                    <Trash2 size={14} aria-hidden />
+                    {pending === name ? "Удаляется…" : "Удалить"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <button
+            type="button"
+            className="settings-link-btn extra-root-add"
+            disabled={pending !== null}
+            onClick={() => void pickFolder()}
+          >
+            <FolderPlus size={14} aria-hidden />
+            {pending === "+" ? "Добавляется…" : "Добавить папку…"}
+          </button>
+        </>
+      )}
+
+      {error ? <div className="settings-error">{error}</div> : null}
     </div>
   );
 }

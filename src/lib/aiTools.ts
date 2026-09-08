@@ -523,6 +523,33 @@ export function setToolAllowed(tool: string, allowed: boolean): Promise<void> {
   return invoke("ai_set_tool_allowed", { tool, allowed });
 }
 
+/** One read-only source root outside the repository — mirrors
+ * `domain::project_config::ExtraRoot`. The assistant addresses it as
+ * `@deps/{name}/…`; `name` is that path segment, not a display label. */
+export type ExtraRoot = {
+  name: string;
+  path: string;
+};
+
+/** The open project's external read-only source roots. Includes a root whose
+ * folder has since disappeared — the assistant skips those, but the list has
+ * to show one so it can be removed. */
+export function getExtraRoots(): Promise<ExtraRoot[]> {
+  return invoke<ExtraRoot[]>("ai_get_extra_roots");
+}
+
+/** Adds one external read-only source root. Rejects an unusable name, a path
+ * that is not a directory, and a name already in use — each with a message
+ * meant to be shown to the user as-is. */
+export function addExtraRoot(name: string, path: string): Promise<void> {
+  return invoke("ai_add_extra_root", { name, path });
+}
+
+/** Removes one external read-only source root by name. */
+export function removeExtraRoot(name: string): Promise<void> {
+  return invoke("ai_remove_extra_root", { name });
+}
+
 /** Combined OptMem wake for project + global stores (injected at chat start). */
 export function getMemoryWake(): Promise<string> {
   return invoke<string>("ai_get_memory_wake");

@@ -9,7 +9,7 @@ use crate::domain::ai_access::{no_project_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{Task, ToolCall, ToolResult};
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::LlmToolDefinition;
-use crate::domain::project_config::ProjectConfig;
+use crate::domain::project_config::{ExtraRoot, ProjectConfig};
 use crate::infra::project_store;
 use crate::services::ai_tools;
 use crate::services::ai_tools::{EmbeddingDeps, ToolCallLogContext};
@@ -186,6 +186,27 @@ pub fn ai_list_permission_tools() -> Vec<PermissionTool> {
 #[tauri::command]
 pub fn ai_set_tool_allowed(tool: ToolName, allowed: bool) -> Result<(), String> {
     ai_tools::set_tool_allowed(tool, allowed).map_err(|e| e.to_string())
+}
+
+/// The open project's external read-only source roots — backs the Settings
+/// "Внешние источники кода" list. Reports what is persisted, including a
+/// root whose folder has since gone missing, so the user can remove it.
+#[tauri::command]
+pub fn ai_get_extra_roots() -> Result<Vec<ExtraRoot>, String> {
+    ai_tools::extra_roots().map_err(|e| e.to_string())
+}
+
+/// Adds one external read-only source root, addressed by the assistant as
+/// `@deps/{name}/…`. Errors carry a reason meant to be shown as-is.
+#[tauri::command]
+pub fn ai_add_extra_root(name: String, path: String) -> Result<(), String> {
+    ai_tools::add_extra_root(name, path).map_err(|e| e.to_string())
+}
+
+/// Removes one external read-only source root by name.
+#[tauri::command]
+pub fn ai_remove_extra_root(name: String) -> Result<(), String> {
+    ai_tools::remove_extra_root(&name).map_err(|e| e.to_string())
 }
 
 /// Combined OptMem wake for project + global stores — injected into the

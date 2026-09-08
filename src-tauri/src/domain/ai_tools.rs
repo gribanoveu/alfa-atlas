@@ -1441,7 +1441,13 @@ pub const DEPS_PREFIX: &str = "@deps";
 /// Whether `name` can serve as the single `@deps` path segment naming a
 /// root. Anything with a separator, or a relative-path special, would make
 /// `@deps/{name}/rest` ambiguous to split back apart.
-fn is_valid_dep_name(name: &str) -> bool {
+///
+/// Public because both ends need the same rule for opposite reasons:
+/// `with_extra_roots` drops what fails it (a config file can be edited by
+/// hand, and one bad row must not cost the rest), while
+/// `services::ai_tools::add_extra_root` refuses it with an error (the user is
+/// adding it right now and needs to hear why it did not stick).
+pub fn is_valid_dep_name(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."
