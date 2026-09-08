@@ -141,7 +141,7 @@ export function AssistantPanel({
     busy: accessModeBusy,
     setMode: setAccessMode,
     refresh: refreshAccessMode,
-  } = useAiAccessMode();
+  } = useAiAccessMode(repoRoot);
   const { settings, providers, hasApiKeyMap, updateProviderConfig, refresh: refreshLlmSetup } =
     useLlmSetup();
 
@@ -156,7 +156,11 @@ export function AssistantPanel({
   // call both flow through this one setter, see `AssistantConversation`'s
   // `onConversationModeChange` doc comment.
   const [conversationMode, setConversationMode] = useState<ConversationMode>("agent");
-  const { definitions: toolDefinitions } = useToolDefinitions(accessMode ?? "docsOnly", conversationMode);
+  const { definitions: toolDefinitions } = useToolDefinitions(
+    accessMode ?? "docsOnly",
+    conversationMode,
+    repoRoot,
+  );
 
   const activeProviderId = settings?.activeProviderId ?? providers[0]?.id ?? null;
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;

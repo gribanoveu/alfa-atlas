@@ -27,11 +27,20 @@
   font-size: var(--font-ui);
 }
 
-.permissions-item-revoke {
+/* `.settings-link-btn` is a plain inline button — every icon+label button in
+   this tab has to lay the icon out itself, or the glyph sits on the label's
+   baseline with nothing between them. Grouped so the next one added here
+   cannot miss it. */
+.permissions-item-revoke,
+.extra-root-add,
+.extra-root-suggestion .settings-link-btn {
   display: flex;
   align-items: center;
   gap: 4px;
+  /* These sit in a flex row beside text that can be long; without this the
+     button is squeezed until its own icon and label overlap. */
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .permissions-divider {
@@ -81,9 +90,6 @@
 }
 
 .extra-root-add {
-  display: flex;
-  align-items: center;
-  gap: 4px;
   margin-top: 8px;
   align-self: flex-start;
 }
