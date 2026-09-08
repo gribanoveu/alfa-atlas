@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  acceptRootSuggestion,
   addExtraRoot,
   getExtraRoots,
   removeExtraRoot,
   suggestExtraRoots,
   type ExtraRoot,
+  type RootSuggestion,
 } from "../lib/aiTools";
 import { toMessage } from "../lib/errors";
 
@@ -40,7 +42,9 @@ export function deriveRootName(path: string, taken: string[]): string {
  * load, degrade on "no project", write one row at a time. */
 export function useExtraRoots() {
   const [roots, setRoots] = useState<ExtraRoot[]>([]);
-  const [suggestions, setSuggestions] = useState<ExtraRoot[]>([]);
+  const [suggestions, setSuggestions] = useState<RootSuggestion[]>([]);
+  /** What the last accepted suggestion did, when it is worth reporting. */
+  const [note, setNote] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [noProject, setNoProject] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,11 +135,25 @@ export function useExtraRoots() {
     [addRoot],
   );
 
-  /** A detected root: it already carries the name it should be known by. */
-  const addSuggested = useCallback(
-    (root: ExtraRoot) => addRoot(root.name, root.path),
-    [addRoot],
-  );
+  /** A detected root. The backend owns what accepting means — for Java it
+   * unpacks the sources first — so the resulting list is re-read rather than
+   * guessed at here. */
+  const addSuggested = useCallback(async (suggestion: RootSuggestion) => {
+    setPending("+");
+    setError(null);
+    setNote(null);
+    try {
+      const what = await acceptRootSuggestion(suggestion.kind);
+      if (!mounted.current) return;
+      setNote(what.length > 0 ? what : null);
+      setRoots(await getExtraRoots());
+      refreshSuggestions();
+    } catch (e) {
+      if (mounted.current) setError(toMessage(e));
+    } finally {
+      if (mounted.current) setPending(null);
+    }
+  }, [refreshSuggestions]);
 
   const remove = useCallback(async (name: string) => {
     setPending(name);
@@ -152,5 +170,16 @@ export function useExtraRoots() {
     }
   }, [refreshSuggestions]);
 
-  return { roots, suggestions, loading, noProject, error, pending, add, addSuggested, remove };
+  return {
+    roots,
+    suggestions,
+    loading,
+    noProject,
+    error,
+    note,
+    pending,
+    add,
+    addSuggested,
+    remove,
+  };
 }

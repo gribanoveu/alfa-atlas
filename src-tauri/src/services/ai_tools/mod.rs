@@ -41,7 +41,7 @@ pub use parse::{parse_tool_call, preflight_tool_call};
 pub use scope::{
     add_extra_root, allowed_tools, auto_approved_tools, current_scope, current_scope_or_empty,
     extra_roots, remove_extra_root, set_access_mode, set_tool_allowed, set_tool_auto_approved,
-    suggest_extra_roots,
+    accept_root_suggestion, suggest_extra_roots,
 };
 pub use tools::{
     artifact_result, check_written_file, execute_tool, llm_tool_definitions,

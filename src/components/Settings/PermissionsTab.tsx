@@ -180,7 +180,7 @@ export function PermissionsTab() {
  * ai_extra_roots`) — dependency sources the assistant may read but never
  * write, addressed in chat as `@deps/{имя}/…`. */
 function ExternalSourcesCard() {
-  const { roots, suggestions, loading, noProject, error, pending, add, addSuggested, remove } =
+  const { roots, suggestions, loading, noProject, error, note, pending, add, addSuggested, remove } =
     useExtraRoots();
 
   const pickFolder = async () => {
@@ -240,22 +240,32 @@ function ExternalSourcesCard() {
             </ul>
           )}
 
-          {suggestions.map((root) => (
-            <div key={root.name} className="extra-root-suggestion">
+          {suggestions.map((suggestion) => (
+            <div key={suggestion.name} className="extra-root-suggestion">
               <span className="extra-root-suggestion-text">
-                В проекте найден <code>{root.name}</code> — добавить его исходники?
+                {suggestion.kind === "javaSources"
+                  ? "Исходники Java-зависимостей"
+                  : "Зависимости npm"}{" "}
+                — <code>@deps/{suggestion.name}</code>
+                <span className="extra-root-suggestion-detail">{suggestion.detail}</span>
               </span>
               <button
                 type="button"
                 className="settings-link-btn"
                 disabled={pending !== null}
-                onClick={() => void addSuggested(root)}
+                onClick={() => void addSuggested(suggestion)}
               >
                 <FolderPlus size={14} aria-hidden />
-                Добавить
+                {pending === "+"
+                  ? "Добавляется…"
+                  : suggestion.kind === "javaSources"
+                    ? "Распаковать и добавить"
+                    : "Добавить"}
               </button>
             </div>
           ))}
+
+          {note ? <p className="settings-hint settings-hint-compact">{note}</p> : null}
 
           <button
             type="button"

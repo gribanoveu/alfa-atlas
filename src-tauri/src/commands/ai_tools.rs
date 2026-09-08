@@ -9,7 +9,7 @@ use crate::domain::ai_access::{no_project_tools, AiAccessMode, ToolName};
 use crate::domain::ai_tools::{Task, ToolCall, ToolResult};
 use crate::domain::conversation_mode::ConversationMode;
 use crate::domain::llm::LlmToolDefinition;
-use crate::domain::project_config::{ExtraRoot, ProjectConfig};
+use crate::domain::project_config::{ExtraRoot, ProjectConfig, RootSuggestion, SuggestionKind};
 use crate::infra::project_store;
 use crate::services::ai_tools;
 use crate::services::ai_tools::{EmbeddingDeps, ToolCallLogContext};
@@ -197,10 +197,18 @@ pub fn ai_get_extra_roots() -> Result<Vec<ExtraRoot>, String> {
 }
 
 /// External roots the open project has but has not added — backs the
-/// "обнаружено" row in the Settings list. Empty is the normal answer.
+/// "обнаружено" rows in the Settings list. Empty is the normal answer.
 #[tauri::command]
-pub fn ai_suggest_extra_roots() -> Result<Vec<ExtraRoot>, String> {
+pub fn ai_suggest_extra_roots() -> Result<Vec<RootSuggestion>, String> {
     ai_tools::suggest_extra_roots().map_err(|e| e.to_string())
+}
+
+/// Acts on one suggestion: adds the folder, or — for Java — unpacks the
+/// declared artifacts' sources out of the local caches first. Returns a line
+/// about what happened, empty when there is nothing worth saying.
+#[tauri::command]
+pub fn ai_accept_root_suggestion(kind: SuggestionKind) -> Result<String, String> {
+    ai_tools::accept_root_suggestion(kind).map_err(|e| e.to_string())
 }
 
 /// Adds one external read-only source root, addressed by the assistant as

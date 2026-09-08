@@ -22,6 +22,7 @@ pub mod gitignore;
 pub mod git_ops;
 pub mod index_store_ensure;
 pub mod index_watcher;
+pub mod java_sources;
 pub mod jira_config;
 pub mod jira_publish;
 pub mod llm_chat;

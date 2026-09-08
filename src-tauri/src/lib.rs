@@ -473,6 +473,7 @@ pub fn run() {
             commands::ai_tools::ai_set_tool_allowed,
             commands::ai_tools::ai_get_extra_roots,
             commands::ai_tools::ai_suggest_extra_roots,
+            commands::ai_tools::ai_accept_root_suggestion,
             commands::ai_tools::ai_add_extra_root,
             commands::ai_tools::ai_remove_extra_root,
             commands::ai_tools::ai_get_memory_wake,

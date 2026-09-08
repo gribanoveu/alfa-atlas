@@ -20,6 +20,32 @@ pub struct ExtraRoot {
     pub path: String,
 }
 
+/// What kind of external root a suggestion offers, which is also what
+/// accepting it has to *do* — one is a folder already on disk, the other has
+/// to be unpacked out of the local artifact cache first. The UI stays dumb
+/// about that difference: it shows the row and sends the kind back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SuggestionKind {
+    /// `node_modules` beside a `package.json`.
+    NodeModules,
+    /// Sources of the Java artifacts the build manifests declare, unpacked
+    /// from the local Gradle/Maven caches.
+    JavaSources,
+}
+
+/// One offer in the Settings list: what it is, the `@deps` name it would take,
+/// and a line of detail worth showing before the user decides.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootSuggestion {
+    pub kind: SuggestionKind,
+    pub name: String,
+    /// Human-readable: a path for a folder that exists, a count of artifacts
+    /// for something that has to be prepared.
+    pub detail: String,
+}
+
 /// Stable per-repo config stored at `{repoRoot}/.atlas/project.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

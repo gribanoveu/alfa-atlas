@@ -99,6 +99,7 @@ gouqi = "0.20.0"
 # a client with a custom trust store. Feature set mirrors gouqi's own so the
 # same `reqwest` build is reused rather than compiled twice.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json", "multipart"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2.4.3"

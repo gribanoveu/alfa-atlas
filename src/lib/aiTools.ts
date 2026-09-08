@@ -545,11 +545,30 @@ export function addExtraRoot(name: string, path: string): Promise<void> {
   return invoke("ai_add_extra_root", { name, path });
 }
 
-/** External roots the open project has but has not added — a `node_modules`
- * beside a `package.json`, today. Empty is the normal answer; suggestions
- * are offered, never added on their own. */
-export function suggestExtraRoots(): Promise<ExtraRoot[]> {
-  return invoke<ExtraRoot[]>("ai_suggest_extra_roots");
+/** What an offer would add, and what accepting it has to do — mirrors
+ * `domain::project_config::SuggestionKind`. `javaSources` is not a folder
+ * that already exists: accepting it unpacks sources out of the local
+ * Gradle/Maven caches first. */
+export type SuggestionKind = "nodeModules" | "javaSources";
+
+/** One offer in the external-sources list. `detail` is already
+ * human-readable — a path for a folder, a count for something to prepare. */
+export type RootSuggestion = {
+  kind: SuggestionKind;
+  name: string;
+  detail: string;
+};
+
+/** External roots the open project has but has not added. Empty is the
+ * normal answer; suggestions are offered, never added on their own. */
+export function suggestExtraRoots(): Promise<RootSuggestion[]> {
+  return invoke<RootSuggestion[]>("ai_suggest_extra_roots");
+}
+
+/** Acts on one suggestion. Returns a line about what happened — empty when
+ * there is nothing worth saying, a count of unpacked artifacts for Java. */
+export function acceptRootSuggestion(kind: SuggestionKind): Promise<string> {
+  return invoke<string>("ai_accept_root_suggestion", { kind });
 }
 
 /** Removes one external read-only source root by name. */

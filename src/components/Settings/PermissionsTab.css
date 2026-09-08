@@ -100,5 +100,17 @@
 }
 
 .extra-root-suggestion-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   font-size: var(--font-ui);
+  min-width: 0;
+}
+
+.extra-root-suggestion-detail {
+  font-size: var(--font-ui-xs);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

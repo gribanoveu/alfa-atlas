@@ -3,9 +3,12 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import * as actualAiTools from "../lib/aiTools";
 
 type Root = { name: string; path: string };
+type Suggestion = { kind: "nodeModules" | "javaSources"; name: string; detail: string };
 
 let listResult: Root[] | Error | string = [];
-let suggestResult: Root[] = [];
+let suggestResult: Suggestion[] = [];
+let acceptCalls: string[] = [];
+let acceptNote = "";
 let suggestCalls = 0;
 let addCalls: Array<[string, string]> = [];
 let removeCalls: string[] = [];
@@ -23,6 +26,11 @@ mock.module("../lib/aiTools", () => ({
     suggestCalls += 1;
     return suggestResult;
   },
+  acceptRootSuggestion: async (kind: string) => {
+    acceptCalls.push(kind);
+    if (failNextWrite) throw failNextWrite;
+    return acceptNote;
+  },
   addExtraRoot: async (name: string, path: string) => {
     addCalls.push([name, path]);
     if (failNextWrite) throw failNextWrite;
@@ -39,6 +47,8 @@ beforeEach(() => {
   listResult = [];
   suggestResult = [];
   suggestCalls = 0;
+  acceptCalls = [];
+  acceptNote = "";
   addCalls = [];
   removeCalls = [];
   failNextWrite = null;
@@ -111,15 +121,22 @@ describe("useExtraRoots", () => {
   });
 
   test("offers what the project has but has not added", async () => {
-    suggestResult = [{ name: "node_modules", path: "/repo/node_modules" }];
+    suggestResult = [
+      { kind: "nodeModules", name: "node_modules", detail: "/repo/node_modules" },
+      { kind: "javaSources", name: "java-sources", detail: "исходники найдены для 12 зависимостей" },
+    ];
     const { result } = renderHook(() => useExtraRoots());
 
-    await waitFor(() => expect(result.current.suggestions).toHaveLength(1));
-    expect(result.current.suggestions[0].name).toBe("node_modules");
+    await waitFor(() => expect(result.current.suggestions).toHaveLength(2));
+    expect(result.current.suggestions.map((s) => s.kind)).toEqual(["nodeModules", "javaSources"]);
   });
 
-  test("adds a suggestion under its own name, then re-reads the offers", async () => {
-    suggestResult = [{ name: "node_modules", path: "/repo/node_modules" }];
+  test("accepting a suggestion sends its kind and re-reads both lists", async () => {
+    suggestResult = [
+      { kind: "javaSources", name: "java-sources", detail: "исходники найдены для 2 зависимостей" },
+    ];
+    acceptNote = "Распаковано зависимостей: 2";
+    listResult = [{ name: "java-sources", path: "/home/u/.atlas/deps/x/java-sources" }];
     const { result } = renderHook(() => useExtraRoots());
     await waitFor(() => expect(result.current.suggestions).toHaveLength(1));
     const before = suggestCalls;
@@ -128,8 +145,12 @@ describe("useExtraRoots", () => {
       await result.current.addSuggested(result.current.suggestions[0]);
     });
 
-    // Not `deriveRootName` — a detected root already carries its name.
-    expect(addCalls).toEqual([["node_modules", "/repo/node_modules"]]);
+    // The backend owns what accepting means — no name derived here, and no
+    // guess at the resulting path.
+    expect(acceptCalls).toEqual(["javaSources"]);
+    expect(addCalls).toEqual([]);
+    expect(result.current.roots.map((r) => r.name)).toEqual(["java-sources"]);
+    expect(result.current.note).toBe("Распаковано зависимостей: 2");
     expect(suggestCalls).toBeGreaterThan(before);
   });
 

@@ -5,14 +5,16 @@
 //! the only one that builds a `ToolScope` out of them.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::domain::ai_access::{AiAccessMode, ToolName, default_allowed_tools, no_project_tools};
 use crate::domain::ai_tools::{ToolScope, is_valid_dep_name};
 use crate::domain::paths;
-use crate::domain::project_config::{ExtraRoot, ProjectConfig, ProjectError};
+use crate::domain::project_config::{
+    ExtraRoot, ProjectConfig, ProjectError, RootSuggestion, SuggestionKind,
+};
 use crate::infra::project_store;
-use crate::services::project_open;
+use crate::services::{java_sources, project_open, repository_scope};
 
 /// Persists a new `AiAccessMode` for the currently open project — shared by
 /// the manual `commands::ai_tools::ai_set_access_mode` toggle and the
@@ -140,37 +142,127 @@ pub fn extra_roots() -> Result<Vec<ExtraRoot>, ProjectError> {
     Ok(config.ai_extra_roots.unwrap_or_default())
 }
 
-/// External roots this project plainly has but has not added — today, a
-/// `node_modules` sitting beside a `package.json` at the repository root.
+/// External roots this project plainly has but has not added: a
+/// `node_modules` beside a `package.json`, and the sources of the Java
+/// artifacts its build manifests declare.
 ///
 /// Suggested, never added on its own: widening what the assistant may read
 /// is the user's decision, and a root that appeared without being asked for
 /// is exactly the kind of surprise that makes people distrust the whole
-/// feature. Already-configured roots drop out, by name or by path, so a
-/// suggestion the user has acted on stops being offered.
-pub fn suggest_extra_roots() -> Result<Vec<ExtraRoot>, ProjectError> {
+/// feature. A suggestion whose name is already configured drops out, so one
+/// the user has acted on stops being offered.
+///
+/// The Java offer is made only when something would actually come of it —
+/// the cache is probed for each declared coordinate first. A project whose
+/// build never downloaded sources gets no row, rather than a button that
+/// unpacks nothing.
+pub fn suggest_extra_roots() -> Result<Vec<RootSuggestion>, ProjectError> {
     let opened = project_open::get_project()?
         .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
     let repo = Path::new(&opened.root);
 
     let mut found = Vec::new();
+
     let node_modules = repo.join("node_modules");
     if repo.join("package.json").is_file() && node_modules.is_dir() {
         if let Ok(canonical) = paths::canonicalize_plain(&node_modules) {
-            found.push(ExtraRoot {
-                name: "node_modules".to_string(),
-                path: canonical.to_string_lossy().into_owned(),
+            found.push(RootSuggestion {
+                kind: SuggestionKind::NodeModules,
+                name: NODE_MODULES_ROOT.to_string(),
+                detail: canonical.to_string_lossy().into_owned(),
             });
         }
     }
 
+    let with_sources = java_sources_available(repo);
+    if with_sources > 0 {
+        found.push(RootSuggestion {
+            kind: SuggestionKind::JavaSources,
+            name: JAVA_SOURCES_ROOT.to_string(),
+            detail: format!("исходники найдены для {with_sources} зависимостей"),
+        });
+    }
+
     let configured = extra_roots()?;
-    found.retain(|s| {
-        !configured
-            .iter()
-            .any(|c| c.name == s.name || c.path == s.path)
-    });
+    found.retain(|s| !configured.iter().any(|c| c.name == s.name));
     Ok(found)
+}
+
+/// How many declared coordinates have a `-sources.jar` sitting in a local
+/// cache. Probing costs a couple of `read_dir` calls per dependency, which
+/// is cheap enough to do before offering — and the only way to tell the
+/// difference between "no Java here" and "Java, but the build never fetched
+/// sources", which are opposite answers for the user.
+fn java_sources_available(repo: &Path) -> usize {
+    let Some(home) = dirs::home_dir() else {
+        return 0;
+    };
+    java_sources::declared_coordinates(repo)
+        .iter()
+        .filter(|coord| java_sources::find_sources_jar(&home, coord).is_some())
+        .count()
+}
+
+/// The `@deps` names the two suggestions take. Fixed rather than derived:
+/// the same project should keep addressing its dependencies by the same path
+/// across sessions and machines.
+const NODE_MODULES_ROOT: &str = "node_modules";
+const JAVA_SOURCES_ROOT: &str = "java-sources";
+
+/// Acts on one suggestion and returns a line about what happened, or an
+/// empty string when there is nothing worth saying.
+///
+/// For Java this is where the work is: coordinates out of the manifests,
+/// `-sources.jar` out of the local caches, unpacked under
+/// `~/.atlas/deps/{repository_id}/java-sources` — outside the repository, so
+/// nothing lands in the user's working tree or git status. The unpack is
+/// idempotent per artifact, so accepting again after adding a dependency
+/// only does the new one.
+pub fn accept_root_suggestion(kind: SuggestionKind) -> Result<String, ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let repo = PathBuf::from(&opened.root);
+
+    match kind {
+        SuggestionKind::NodeModules => {
+            let path = repo.join("node_modules");
+            add_extra_root(
+                NODE_MODULES_ROOT.to_string(),
+                path.to_string_lossy().into_owned(),
+            )?;
+            Ok(String::new())
+        }
+        SuggestionKind::JavaSources => {
+            let repository_id = repository_scope::resolve_repository_id(&repo)?;
+            let dest = dirs::home_dir()
+                .ok_or_else(|| ProjectError::Message("не найден домашний каталог".to_string()))?
+                .join(".atlas")
+                .join("deps")
+                .join(repository_id)
+                .join(JAVA_SOURCES_ROOT);
+            std::fs::create_dir_all(&dest)
+                .map_err(|e| ProjectError::Message(format!("не удалось создать {}: {e}", dest.display())))?;
+
+            let summary = java_sources::prepare(&repo, &dest)
+                .map_err(|e| ProjectError::Message(e.to_string()))?;
+            if summary.available() == 0 {
+                std::fs::remove_dir_all(&dest).ok();
+                return Err(ProjectError::Message(
+                    "ни для одной зависимости не нашлось исходников в кэшах Gradle и Maven"
+                        .to_string(),
+                ));
+            }
+
+            add_extra_root(
+                JAVA_SOURCES_ROOT.to_string(),
+                dest.to_string_lossy().into_owned(),
+            )?;
+            Ok(format!(
+                "Распаковано зависимостей: {} (уже было: {}, без исходников: {})",
+                summary.unpacked, summary.reused, summary.without_sources
+            ))
+        }
+    }
 }
 
 /// Adds one external read-only root to the open project.
@@ -427,11 +519,12 @@ mod tests {
 
             let suggested = suggest_extra_roots().unwrap();
             assert_eq!(suggested.len(), 1);
-            assert_eq!(suggested[0].name, "node_modules");
+            assert_eq!(suggested[0].kind, SuggestionKind::NodeModules);
 
             // Once acted on, it stops being offered.
-            add_extra_root(suggested[0].name.clone(), suggested[0].path.clone()).unwrap();
+            accept_root_suggestion(SuggestionKind::NodeModules).unwrap();
             assert!(suggest_extra_roots().unwrap().is_empty());
+            assert_eq!(extra_roots().unwrap()[0].name, "node_modules");
         });
     }
 
@@ -444,6 +537,68 @@ mod tests {
 
             assert!(suggest_extra_roots().unwrap().is_empty());
         });
+    }
+
+    /// The Java flow end to end: a manifest naming an artifact whose sources
+    /// sit in the local Gradle cache becomes an offer, and accepting it
+    /// unpacks them into a root the assistant can read.
+    #[test]
+    fn declared_java_sources_are_offered_and_unpacked_on_accept() {
+        with_open_fixture_project(|repo| {
+            fs::write(
+                repo.join("build.gradle"),
+                "dependencies {\n  implementation 'com.acme.tools:widget:1.4.0'\n}\n",
+            )
+            .unwrap();
+            let home = dirs::home_dir().unwrap();
+            let cached = home
+                .join(".gradle/caches/modules-2/files-2.1/com.acme.tools/widget/1.4.0/abc123");
+            fs::create_dir_all(&cached).unwrap();
+            write_test_jar(
+                &cached.join("widget-1.4.0-sources.jar"),
+                "com/acme/Widget.java",
+                "class Widget { void go() {} }\n",
+            );
+
+            let suggested = suggest_extra_roots().unwrap();
+            assert_eq!(suggested.len(), 1, "{suggested:#?}");
+            assert_eq!(suggested[0].kind, SuggestionKind::JavaSources);
+
+            let note = accept_root_suggestion(SuggestionKind::JavaSources).unwrap();
+            assert!(note.contains("Распаковано зависимостей: 1"), "{note}");
+
+            set_access_mode(AiAccessMode::FullRepo).unwrap();
+            let scope = current_scope().unwrap();
+            let content =
+                read(&scope, "@deps/java-sources/widget-1.4.0/com/acme/Widget.java").unwrap();
+            assert!(content.contains("void go()"), "{content}");
+
+            // Offered once: the root now exists.
+            assert!(suggest_extra_roots().unwrap().is_empty());
+        });
+    }
+
+    /// A Java project whose build never downloaded sources gets no offer —
+    /// a button that unpacks nothing is worse than no button.
+    #[test]
+    fn java_without_cached_sources_is_not_offered() {
+        with_open_fixture_project(|repo| {
+            fs::write(
+                repo.join("build.gradle"),
+                "dependencies {\n  implementation 'com.acme.tools:widget:1.4.0'\n}\n",
+            )
+            .unwrap();
+
+            assert!(suggest_extra_roots().unwrap().is_empty());
+        });
+    }
+
+    fn write_test_jar(path: &std::path::Path, entry: &str, contents: &str) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        zip.start_file(entry, zip::write::SimpleFileOptions::default()).unwrap();
+        std::io::Write::write_all(&mut zip, contents.as_bytes()).unwrap();
+        zip.finish().unwrap();
     }
 
     #[test]
