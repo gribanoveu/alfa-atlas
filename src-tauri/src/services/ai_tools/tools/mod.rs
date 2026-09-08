@@ -129,7 +129,8 @@ pub fn execute_tool(
             })
         }
         ToolCall::ListFiles(args) => {
-            list_files::list_files(scope, args).map(ToolResult::FileList)
+            list_files::list_files(scope, args)
+                .map(|(entries, truncated)| ToolResult::FileList { entries, truncated })
         }
         ToolCall::SemanticSearch(args) => semantic_search::semantic_search(scope, args, deps)
             .map(ToolResult::SemanticSearchResults),

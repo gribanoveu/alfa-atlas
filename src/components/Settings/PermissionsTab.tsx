@@ -180,7 +180,8 @@ export function PermissionsTab() {
  * ai_extra_roots`) — dependency sources the assistant may read but never
  * write, addressed in chat as `@deps/{имя}/…`. */
 function ExternalSourcesCard() {
-  const { roots, loading, noProject, error, pending, add, remove } = useExtraRoots();
+  const { roots, suggestions, loading, noProject, error, pending, add, addSuggested, remove } =
+    useExtraRoots();
 
   const pickFolder = async () => {
     const selected = await open({
@@ -238,6 +239,23 @@ function ExternalSourcesCard() {
               ))}
             </ul>
           )}
+
+          {suggestions.map((root) => (
+            <div key={root.name} className="extra-root-suggestion">
+              <span className="extra-root-suggestion-text">
+                В проекте найден <code>{root.name}</code> — добавить его исходники?
+              </span>
+              <button
+                type="button"
+                className="settings-link-btn"
+                disabled={pending !== null}
+                onClick={() => void addSuggested(root)}
+              >
+                <FolderPlus size={14} aria-hidden />
+                Добавить
+              </button>
+            </div>
+          ))}
 
           <button
             type="button"

@@ -938,7 +938,16 @@ pub enum ToolResult {
         entries: Vec<OutlineEntry>,
         total_lines: u32,
     },
-    FileList(Vec<ToolFileEntry>),
+    /// `truncated` is true when the entry cap was hit — the same "there is
+    /// more here than you are seeing" contract `GrepResults` already has.
+    /// It matters most for an external root: a real `node_modules` holds
+    /// tens of thousands of files, and a listing that quietly stopped at a
+    /// cap reads to the model as a complete answer.
+    #[serde(rename_all = "camelCase")]
+    FileList {
+        entries: Vec<ToolFileEntry>,
+        truncated: bool,
+    },
     /// Settled `semanticSearch` — matches plus weak-search `meta`.
     SemanticSearchResults(SemanticSearchPayload),
     /// Settled `grep` — line-oriented regex hits under `scope.root`.

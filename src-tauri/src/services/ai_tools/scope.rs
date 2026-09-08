@@ -140,6 +140,39 @@ pub fn extra_roots() -> Result<Vec<ExtraRoot>, ProjectError> {
     Ok(config.ai_extra_roots.unwrap_or_default())
 }
 
+/// External roots this project plainly has but has not added — today, a
+/// `node_modules` sitting beside a `package.json` at the repository root.
+///
+/// Suggested, never added on its own: widening what the assistant may read
+/// is the user's decision, and a root that appeared without being asked for
+/// is exactly the kind of surprise that makes people distrust the whole
+/// feature. Already-configured roots drop out, by name or by path, so a
+/// suggestion the user has acted on stops being offered.
+pub fn suggest_extra_roots() -> Result<Vec<ExtraRoot>, ProjectError> {
+    let opened = project_open::get_project()?
+        .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
+    let repo = Path::new(&opened.root);
+
+    let mut found = Vec::new();
+    let node_modules = repo.join("node_modules");
+    if repo.join("package.json").is_file() && node_modules.is_dir() {
+        if let Ok(canonical) = paths::canonicalize_plain(&node_modules) {
+            found.push(ExtraRoot {
+                name: "node_modules".to_string(),
+                path: canonical.to_string_lossy().into_owned(),
+            });
+        }
+    }
+
+    let configured = extra_roots()?;
+    found.retain(|s| {
+        !configured
+            .iter()
+            .any(|c| c.name == s.name || c.path == s.path)
+    });
+    Ok(found)
+}
+
 /// Adds one external read-only root to the open project.
 ///
 /// Every failure here is a refusal with a reason rather than a silent drop:
@@ -384,6 +417,35 @@ mod tests {
 
     /// The name becomes a path segment, so it is validated where it enters —
     /// and refused out loud, not dropped.
+    #[test]
+    fn node_modules_beside_a_package_json_is_suggested_once() {
+        with_open_fixture_project(|repo| {
+            assert!(suggest_extra_roots().unwrap().is_empty(), "nothing to suggest yet");
+
+            fs::write(repo.join("package.json"), "{}\n").unwrap();
+            fs::create_dir_all(repo.join("node_modules/lodash")).unwrap();
+
+            let suggested = suggest_extra_roots().unwrap();
+            assert_eq!(suggested.len(), 1);
+            assert_eq!(suggested[0].name, "node_modules");
+
+            // Once acted on, it stops being offered.
+            add_extra_root(suggested[0].name.clone(), suggested[0].path.clone()).unwrap();
+            assert!(suggest_extra_roots().unwrap().is_empty());
+        });
+    }
+
+    /// A `node_modules` with no manifest beside it is some other project's
+    /// leftovers, not this one's dependencies.
+    #[test]
+    fn node_modules_without_a_package_json_is_not_suggested() {
+        with_open_fixture_project(|repo| {
+            fs::create_dir_all(repo.join("node_modules/lodash")).unwrap();
+
+            assert!(suggest_extra_roots().unwrap().is_empty());
+        });
+    }
+
     #[test]
     fn add_extra_root_refuses_a_name_that_is_not_a_single_segment() {
         with_open_fixture_project(|_repo| {

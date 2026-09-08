@@ -5,6 +5,8 @@ import * as actualAiTools from "../lib/aiTools";
 type Root = { name: string; path: string };
 
 let listResult: Root[] | Error | string = [];
+let suggestResult: Root[] = [];
+let suggestCalls = 0;
 let addCalls: Array<[string, string]> = [];
 let removeCalls: string[] = [];
 let failNextWrite: string | null = null;
@@ -17,6 +19,10 @@ async function resolveOrThrow(value: Root[] | Error | string) {
 mock.module("../lib/aiTools", () => ({
   ...actualAiTools,
   getExtraRoots: () => resolveOrThrow(listResult),
+  suggestExtraRoots: async () => {
+    suggestCalls += 1;
+    return suggestResult;
+  },
   addExtraRoot: async (name: string, path: string) => {
     addCalls.push([name, path]);
     if (failNextWrite) throw failNextWrite;
@@ -31,6 +37,8 @@ const { useExtraRoots, deriveRootName } = await import("../hooks/useExtraRoots")
 
 beforeEach(() => {
   listResult = [];
+  suggestResult = [];
+  suggestCalls = 0;
   addCalls = [];
   removeCalls = [];
   failNextWrite = null;
@@ -100,6 +108,29 @@ describe("useExtraRoots", () => {
     expect(result.current.error).toBe("источник с именем «client» уже добавлен");
     expect(result.current.roots).toEqual([]);
     expect(result.current.pending).toBeNull();
+  });
+
+  test("offers what the project has but has not added", async () => {
+    suggestResult = [{ name: "node_modules", path: "/repo/node_modules" }];
+    const { result } = renderHook(() => useExtraRoots());
+
+    await waitFor(() => expect(result.current.suggestions).toHaveLength(1));
+    expect(result.current.suggestions[0].name).toBe("node_modules");
+  });
+
+  test("adds a suggestion under its own name, then re-reads the offers", async () => {
+    suggestResult = [{ name: "node_modules", path: "/repo/node_modules" }];
+    const { result } = renderHook(() => useExtraRoots());
+    await waitFor(() => expect(result.current.suggestions).toHaveLength(1));
+    const before = suggestCalls;
+
+    await act(async () => {
+      await result.current.addSuggested(result.current.suggestions[0]);
+    });
+
+    // Not `deriveRootName` — a detected root already carries its name.
+    expect(addCalls).toEqual([["node_modules", "/repo/node_modules"]]);
+    expect(suggestCalls).toBeGreaterThan(before);
   });
 
   test("removes a root", async () => {

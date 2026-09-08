@@ -13,7 +13,10 @@ use crate::services::docs_fs;
 
 use super::super::resolve::{basename, resolve_subdir, split_dep_path};
 
-pub(super) fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<ToolFileEntry>, ToolError> {
+pub(super) fn list_files(
+    scope: &ToolScope,
+    args: ListFilesArgs,
+) -> Result<(Vec<ToolFileEntry>, bool), ToolError> {
     let requested = args.path.as_deref().filter(|p| !p.is_empty() && *p != ".");
 
     let mut entries = if requested.is_some_and(is_deps_dir) {
@@ -46,7 +49,40 @@ pub(super) fn list_files(scope: &ToolScope, args: ListFilesArgs) -> Result<Vec<T
         entries.retain(|e| e.is_dir || matcher.is_match(basename(&e.path)));
     }
 
-    Ok(entries)
+    // Applied after `pattern`, so narrowing the search is a way past the cap
+    // rather than a filter over an already-truncated list.
+    let truncated = entries.len() > MAX_LIST_ENTRIES;
+    entries.truncate(MAX_LIST_ENTRIES);
+
+    Ok((entries, truncated))
+}
+
+/// How many entries one `listFiles` call may return.
+///
+/// Every listing routes through `list_files`, so the cap lives here rather
+/// than in the external-root branch that made it urgent: a vendored tree
+/// inside a repository is the same hazard, just less certain to be hit. The
+/// number is far above any listing a person would read and far below what
+/// costs real context — a real `node_modules` is tens of thousands of
+/// entries, and serializing that tree would spend more of the model's window
+/// than the whole conversation around it.
+const MAX_LIST_ENTRIES: usize = 1000;
+
+/// Files inside an external root that are never what someone is reading a
+/// dependency for: build output, sourcemaps, bundled or minified copies of
+/// code that also exists unbundled, and the package's own test suite.
+///
+/// Applied only to external roots. The same names inside the repository are
+/// the user's own files and stay listed — a repo's `test/` directory is
+/// exactly what someone may be asking about.
+fn is_dependency_noise(relative: &str) -> bool {
+    let name = basename(relative);
+    if name.ends_with(".map") || name.ends_with(".min.js") || name.ends_with(".min.css") {
+        return true;
+    }
+    relative
+        .split('/')
+        .any(|segment| matches!(segment, ".bin" | "test" | "tests" | "__tests__" | "coverage"))
 }
 
 /// Whether `path` names the virtual `@deps` directory itself rather than a
@@ -104,16 +140,20 @@ fn list_dep_root(
     if !scan_root.is_dir() {
         return Err(ToolError::NotFound(format!("{DEPS_PREFIX}/{name}/{sub}")));
     }
-    workspace_scanner::scan_all_entries_with_depth(&scan_root, max_depth.map(|d| d as usize))?
-        .into_iter()
-        .map(|e| {
-            let rel = paths::relative_to(root, &e.path)?;
-            Ok(ToolFileEntry {
-                path: format!("{DEPS_PREFIX}/{name}/{rel}"),
-                is_dir: e.is_dir,
-            })
-        })
-        .collect()
+    let scanned =
+        workspace_scanner::scan_all_entries_with_depth(&scan_root, max_depth.map(|d| d as usize))?;
+    let mut entries = Vec::with_capacity(scanned.len());
+    for entry in scanned {
+        let rel = paths::relative_to(root, &entry.path)?;
+        if is_dependency_noise(&rel) {
+            continue;
+        }
+        entries.push(ToolFileEntry {
+            path: format!("{DEPS_PREFIX}/{name}/{rel}"),
+            is_dir: entry.is_dir,
+        });
+    }
+    Ok(entries)
 }
 
 pub(super) fn compile_glob(pattern: &str) -> Result<globset::GlobMatcher, ToolError> {
@@ -140,7 +180,7 @@ pub(super) struct TreeBuildNode {
 /// it from N separate `path` strings. The first line is always `./` (the
 /// access-mode root), never the on-disk folder name, so a docs-root folder
 /// such as `asciidoc` is not mistaken for a child to prepend onto paths.
-pub fn render_file_tree(entries: &[ToolFileEntry]) -> String {
+pub fn render_file_tree(entries: &[ToolFileEntry], truncated: bool) -> String {
     let mut root = TreeBuildNode::default();
     for entry in entries {
         let mut node = &mut root;
@@ -157,6 +197,12 @@ pub fn render_file_tree(entries: &[ToolFileEntry]) -> String {
 
     let mut out = String::from("./\n");
     render_tree_children(&root, "", &mut out);
+    if truncated {
+        out.push_str(&format!(
+            "\n[показаны первые {} записей — список длиннее. Сузьте его: path (подкаталог), pattern (например \"*.java\") или depth.]\n",
+            entries.len()
+        ));
+    }
     out
 }
 
@@ -227,7 +273,7 @@ pub(super) fn list_full_repo(
 pub(super) fn definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "listFiles".to_string(),
-        description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use when directory structure is unknown — scaffold checks, \"what files exist here\", filename patterns. Do NOT use after `semanticSearch` already returned concrete file paths — read those with `readFile` instead. Do NOT use to explore code logic when search can locate the entry point directly. Returns an indented ASCII tree (directories end with `/`), not a flat list. The tree's first line is a display-only label for the current root (in Full-repo mode it may be the repository folder name); it is not part of any path argument. Child entries are relative to the current access-mode root. Do not manually prepend a documentation-root or repository-root segment to `path` — it is already relative to the current root. In Docs-only mode the listing includes only text documentation types (AsciiDoc, Markdown, JSON/YAML, PlantUML, Mermaid, plain text) — image binaries (.png/.svg/…) under the docs tree are intentionally omitted even when they exist on disk and are valid `image::` targets; do not treat their absence from this listing as a missing or dangling link (use check kind \"problems\" for missingImage). In Full-repo mode image files may appear; they are assets, not text to readFile. When the project has read-only external source roots configured (an unpacked dependency's sources, a vendored node_modules), the root listing also shows a virtual `@deps/` directory holding one entry per root; pass `@deps/<name>` as `path` to browse inside one. Most projects have none configured and will show no such directory — that is normal, not a missing dependency. Everything under `@deps/` is readable but never writable."
+        description: "List files and directories under a path. `path` is relative to the current access-mode root: the documentation root in Docs-only mode, the repository root in Full-repo mode. Omit `path` or pass null to list that root. Use when directory structure is unknown — scaffold checks, \"what files exist here\", filename patterns. Do NOT use after `semanticSearch` already returned concrete file paths — read those with `readFile` instead. Do NOT use to explore code logic when search can locate the entry point directly. Returns an indented ASCII tree (directories end with `/`), not a flat list. The tree's first line is a display-only label for the current root (in Full-repo mode it may be the repository folder name); it is not part of any path argument. Child entries are relative to the current access-mode root. Do not manually prepend a documentation-root or repository-root segment to `path` — it is already relative to the current root. In Docs-only mode the listing includes only text documentation types (AsciiDoc, Markdown, JSON/YAML, PlantUML, Mermaid, plain text) — image binaries (.png/.svg/…) under the docs tree are intentionally omitted even when they exist on disk and are valid `image::` targets; do not treat their absence from this listing as a missing or dangling link (use check kind \"problems\" for missingImage). In Full-repo mode image files may appear; they are assets, not text to readFile. When the project has read-only external source roots configured (an unpacked dependency's sources, a vendored node_modules), the root listing also shows a virtual `@deps/` directory holding one entry per root; pass `@deps/<name>` as `path` to browse inside one. Most projects have none configured and will show no such directory — that is normal, not a missing dependency. Everything under `@deps/` is readable but never writable, and such a listing omits build output, sourcemaps, minified bundles and the package's own tests — if you need one of those, name it with `path`."
             .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -253,6 +299,95 @@ pub(super) fn definition() -> LlmToolDefinition {
 
 #[cfg(test)]
 mod tests {
+    /// `listFiles` on a real `node_modules` would otherwise serialize tens of
+    /// thousands of entries into the model's context. The cap holds, and the
+    /// rendered tree says it was hit — a silently short list reads as a
+    /// complete answer.
+    #[test]
+    fn a_listing_longer_than_the_cap_is_cut_and_says_so() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+        for i in 0..MAX_LIST_ENTRIES + 10 {
+            fs::write(dep.join(format!("file-{i:05}.js")), "x\n").unwrap();
+        }
+
+        let (entries, truncated) = list_raw(&scope, Some("@deps/acme"));
+
+        assert_eq!(entries.len(), MAX_LIST_ENTRIES);
+        assert!(truncated);
+        assert!(
+            render_file_tree(&entries, truncated).contains("список длиннее"),
+            "the model must be told the listing was cut"
+        );
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
+    /// Build output and a package's own tests crowd out the code someone
+    /// opened the dependency for — and they are the bulk of a real
+    /// `node_modules`.
+    #[test]
+    fn dependency_build_output_and_tests_are_not_listed() {
+        let (scope, repo, dep) = scope_with_dep_root(AiAccessMode::FullRepo);
+        fs::create_dir_all(dep.join("dist")).unwrap();
+        fs::create_dir_all(dep.join("test")).unwrap();
+        fs::write(dep.join("dist/app.js"), "export {}\n").unwrap();
+        fs::write(dep.join("dist/app.min.js"), "!function(){}()\n").unwrap();
+        fs::write(dep.join("dist/app.js.map"), "{}\n").unwrap();
+        fs::write(dep.join("test/client.spec.js"), "it()\n").unwrap();
+
+        let paths: Vec<String> = list(&scope, Some("@deps/acme"))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+
+        assert!(paths.contains(&"@deps/acme/dist/app.js".to_string()), "{paths:#?}");
+        assert!(paths.contains(&"@deps/acme/lib/Client.java".to_string()), "{paths:#?}");
+        assert!(!paths.iter().any(|p| p.ends_with(".min.js")), "{paths:#?}");
+        assert!(!paths.iter().any(|p| p.ends_with(".map")), "{paths:#?}");
+        assert!(!paths.iter().any(|p| p.contains("/test")), "{paths:#?}");
+
+        fs::remove_dir_all(&repo).ok();
+        fs::remove_dir_all(&dep).ok();
+    }
+
+    /// The same names inside the repository are the user's own files, and
+    /// asking about them is ordinary work.
+    #[test]
+    fn the_noise_filter_does_not_touch_the_repository_itself() {
+        let (repo, docs) = fixture_repo();
+        fs::create_dir_all(repo.join("test")).unwrap();
+        fs::write(repo.join("test/main_test.rs"), "fn t() {}\n").unwrap();
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+
+        let paths: Vec<String> = list(&scope, None).unwrap().into_iter().map(|e| e.path).collect();
+
+        assert!(paths.contains(&"test/main_test.rs".to_string()), "{paths:#?}");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    /// `list` in the shared fixtures drops the truncation flag; these tests
+    /// need both halves.
+    fn list_raw(scope: &ToolScope, path: Option<&str>) -> (Vec<ToolFileEntry>, bool) {
+        match crate::services::ai_tools::execute_tool(
+            scope,
+            crate::domain::ai_tools::ToolCall::ListFiles(ListFilesArgs {
+                path: path.map(str::to_string),
+                depth: None,
+                pattern: None,
+            }),
+            &crate::services::ai_tools::EmbeddingDeps::empty(),
+            &[],
+        )
+        .unwrap()
+        {
+            crate::domain::ai_tools::ToolResult::FileList { entries, truncated } => (entries, truncated),
+            other => panic!("expected FileList, got {other:?}"),
+        }
+    }
+
     /// The root listing is the only place the model can learn that external
     /// roots exist at all, so it has to carry them.
     #[test]
@@ -322,7 +457,7 @@ mod tests {
             ToolFileEntry { path: "src/test/java/com/example/UserServiceTest.java".to_string(), is_dir: false },
         ];
 
-        let tree = render_file_tree(&entries);
+        let tree = render_file_tree(&entries, false);
 
         assert_eq!(
             tree,
@@ -348,7 +483,7 @@ mod tests {
     #[test]
     fn render_file_tree_marks_explicit_empty_directory() {
         let entries = vec![ToolFileEntry { path: "empty".to_string(), is_dir: true }];
-        assert_eq!(render_file_tree(&entries), "./\n└── empty/\n");
+        assert_eq!(render_file_tree(&entries, false), "./\n└── empty/\n");
     }
 
     #[test]

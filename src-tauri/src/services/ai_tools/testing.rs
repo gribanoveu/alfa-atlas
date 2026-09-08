@@ -139,7 +139,7 @@ pub(crate) fn list_scoped(
         &EmbeddingDeps::empty(),
         &[],
     )? {
-        ToolResult::FileList(entries) => Ok(entries),
+        ToolResult::FileList { entries, .. } => Ok(entries),
         other => panic!("expected ToolResult::FileList, got {other:?}"),
     }
 }

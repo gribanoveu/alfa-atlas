@@ -545,6 +545,13 @@ export function addExtraRoot(name: string, path: string): Promise<void> {
   return invoke("ai_add_extra_root", { name, path });
 }
 
+/** External roots the open project has but has not added — a `node_modules`
+ * beside a `package.json`, today. Empty is the normal answer; suggestions
+ * are offered, never added on their own. */
+export function suggestExtraRoots(): Promise<ExtraRoot[]> {
+  return invoke<ExtraRoot[]>("ai_suggest_extra_roots");
+}
+
 /** Removes one external read-only source root by name. */
 export function removeExtraRoot(name: string): Promise<void> {
   return invoke("ai_remove_extra_root", { name });

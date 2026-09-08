@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { addExtraRoot, getExtraRoots, removeExtraRoot, type ExtraRoot } from "../lib/aiTools";
+import {
+  addExtraRoot,
+  getExtraRoots,
+  removeExtraRoot,
+  suggestExtraRoots,
+  type ExtraRoot,
+} from "../lib/aiTools";
 import { toMessage } from "../lib/errors";
 
 /** "No project is open" comes back as an ordinary command error string —
@@ -34,6 +40,7 @@ export function deriveRootName(path: string, taken: string[]): string {
  * load, degrade on "no project", write one row at a time. */
 export function useExtraRoots() {
   const [roots, setRoots] = useState<ExtraRoot[]>([]);
+  const [suggestions, setSuggestions] = useState<ExtraRoot[]>([]);
   const [loading, setLoading] = useState(true);
   const [noProject, setNoProject] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +55,25 @@ export function useExtraRoots() {
       mounted.current = false;
     };
   }, []);
+
+  /** Suggestions depend on what is already configured, so they are re-read
+   * after every write rather than adjusted in place here — one cheap call
+   * that cannot drift from the rule the Rust side actually applies. */
+  const refreshSuggestions = useCallback(() => {
+    void suggestExtraRoots()
+      .then((next) => {
+        if (mounted.current) setSuggestions(next);
+      })
+      .catch(() => {
+        // A project that cannot be probed simply offers nothing; the roots
+        // list above already reports anything worth reporting.
+        if (mounted.current) setSuggestions([]);
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshSuggestions();
+  }, [refreshSuggestions]);
 
   useEffect(() => {
     void getExtraRoots()
@@ -74,23 +100,42 @@ export function useExtraRoots() {
   const rootsRef = useRef<ExtraRoot[]>([]);
   rootsRef.current = roots;
 
-  const add = useCallback(async (path: string) => {
-    setPending("+");
-    setError(null);
-    try {
-      const name = deriveRootName(
+  const addRoot = useCallback(
+    async (name: string, path: string) => {
+      setPending("+");
+      setError(null);
+      try {
+        await addExtraRoot(name, path);
+        if (!mounted.current) return;
+        setRoots((prev) => [...prev, { name, path }]);
+        refreshSuggestions();
+      } catch (e) {
+        if (mounted.current) setError(toMessage(e));
+      } finally {
+        if (mounted.current) setPending(null);
+      }
+    },
+    [refreshSuggestions],
+  );
+
+  /** A folder the user picked: the name is derived from it. */
+  const add = useCallback(
+    (path: string) =>
+      addRoot(
+        deriveRootName(
+          path,
+          rootsRef.current.map((r) => r.name),
+        ),
         path,
-        rootsRef.current.map((r) => r.name),
-      );
-      await addExtraRoot(name, path);
-      if (!mounted.current) return;
-      setRoots((prev) => [...prev, { name, path }]);
-    } catch (e) {
-      if (mounted.current) setError(toMessage(e));
-    } finally {
-      if (mounted.current) setPending(null);
-    }
-  }, []);
+      ),
+    [addRoot],
+  );
+
+  /** A detected root: it already carries the name it should be known by. */
+  const addSuggested = useCallback(
+    (root: ExtraRoot) => addRoot(root.name, root.path),
+    [addRoot],
+  );
 
   const remove = useCallback(async (name: string) => {
     setPending(name);
@@ -99,12 +144,13 @@ export function useExtraRoots() {
       await removeExtraRoot(name);
       if (!mounted.current) return;
       setRoots((prev) => prev.filter((r) => r.name !== name));
+      refreshSuggestions();
     } catch (e) {
       if (mounted.current) setError(toMessage(e));
     } finally {
       if (mounted.current) setPending(null);
     }
-  }, []);
+  }, [refreshSuggestions]);
 
-  return { roots, loading, noProject, error, pending, add, remove };
+  return { roots, suggestions, loading, noProject, error, pending, add, addSuggested, remove };
 }

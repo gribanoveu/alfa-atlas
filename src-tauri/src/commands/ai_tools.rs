@@ -196,6 +196,13 @@ pub fn ai_get_extra_roots() -> Result<Vec<ExtraRoot>, String> {
     ai_tools::extra_roots().map_err(|e| e.to_string())
 }
 
+/// External roots the open project has but has not added — backs the
+/// "обнаружено" row in the Settings list. Empty is the normal answer.
+#[tauri::command]
+pub fn ai_suggest_extra_roots() -> Result<Vec<ExtraRoot>, String> {
+    ai_tools::suggest_extra_roots().map_err(|e| e.to_string())
+}
+
 /// Adds one external read-only source root, addressed by the assistant as
 /// `@deps/{name}/…`. Errors carry a reason meant to be shown as-is.
 #[tauri::command]

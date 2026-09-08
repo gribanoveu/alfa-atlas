@@ -235,7 +235,7 @@ fn docs_boundary_note(
     let came_back_empty = match outcome {
         Ok(ToolResult::GrepResults { matches, .. }) => matches.is_empty(),
         Ok(ToolResult::SemanticSearchResults(payload)) => payload.matches.is_empty(),
-        Ok(ToolResult::FileList(entries)) => entries.is_empty(),
+        Ok(ToolResult::FileList { entries, .. }) => entries.is_empty(),
         _ => false,
     };
     if came_back_empty {
@@ -1056,8 +1056,8 @@ fn run_tool_loop(
                 // the directory structure itself from N separate paths; a
                 // tree hands it the whole shape (and where each entry sits)
                 // at a glance, same as a human skimming `tree(1)` output.
-                Ok(ToolResult::FileList(entries)) => {
-                    ai_tools::render_file_tree(entries)
+                Ok(ToolResult::FileList { entries, truncated }) => {
+                    ai_tools::render_file_tree(entries, *truncated)
                 }
                 // Skip path for the two pause-only tools — Russian, matching
                 // the deny message for mutating tools so the model continues
@@ -1322,7 +1322,7 @@ mod tests {
 
     #[test]
     fn a_result_that_is_not_a_write_is_left_alone() {
-        let outcome = Ok(ToolResult::FileList(vec![]));
+        let outcome = Ok(ToolResult::FileList { entries: vec![], truncated: false });
         assert_eq!(closed_macros_note(&outcome, "{}".to_string()), "{}");
     }
 
