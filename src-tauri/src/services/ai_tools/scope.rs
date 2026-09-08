@@ -142,29 +142,33 @@ pub fn extra_roots() -> Result<Vec<ExtraRoot>, ProjectError> {
     Ok(config.ai_extra_roots.unwrap_or_default())
 }
 
-/// External roots this project plainly has but has not added: a
-/// `node_modules` beside a `package.json`, and the sources of the Java
-/// artifacts its build manifests declare.
+/// What the Settings list offers: a `node_modules` beside a `package.json`,
+/// and the sources of Java artifacts whose jars are cached locally but are
+/// not unpacked yet.
 ///
 /// Suggested, never added on its own: widening what the assistant may read
 /// is the user's decision, and a root that appeared without being asked for
 /// is exactly the kind of surprise that makes people distrust the whole
-/// feature. A suggestion whose name is already configured drops out, so one
-/// the user has acted on stops being offered.
+/// feature.
 ///
-/// The Java offer is made only when something would actually come of it —
-/// the cache is probed for each declared coordinate first. A project whose
-/// build never downloaded sources gets no row, rather than a button that
-/// unpacks nothing.
+/// The two offers stop being made for different reasons, because they mean
+/// different things. `node_modules` is one folder — once added, there is
+/// nothing left to offer. Java sources are a set that grows with the
+/// manifest, so that offer is made whenever some declared artifact is still
+/// missing, including long after the root itself exists. Without that, a
+/// dependency added later could only be picked up by removing the whole root
+/// and adding it again.
 pub fn suggest_extra_roots() -> Result<Vec<RootSuggestion>, ProjectError> {
     let opened = project_open::get_project()?
         .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
     let repo = Path::new(&opened.root);
+    let configured = extra_roots()?;
 
     let mut found = Vec::new();
 
     let node_modules = repo.join("node_modules");
-    if repo.join("package.json").is_file() && node_modules.is_dir() {
+    let has_node_root = configured.iter().any(|c| c.name == NODE_MODULES_ROOT);
+    if !has_node_root && repo.join("package.json").is_file() && node_modules.is_dir() {
         if let Ok(canonical) = paths::canonicalize_plain(&node_modules) {
             found.push(RootSuggestion {
                 kind: SuggestionKind::NodeModules,
@@ -174,33 +178,26 @@ pub fn suggest_extra_roots() -> Result<Vec<RootSuggestion>, ProjectError> {
         }
     }
 
-    let with_sources = java_sources_available(repo);
-    if with_sources > 0 {
+    // The already-configured root's own path, so this probe never has to
+    // resolve (and therefore mint) a repository id — `suggest` runs whenever
+    // the Settings tab opens, and a passive probe must not write anything.
+    let unpacked_into = configured
+        .iter()
+        .find(|c| c.name == JAVA_SOURCES_ROOT)
+        .map(|c| PathBuf::from(&c.path));
+    let pending = java_sources::pending_count(repo, unpacked_into.as_deref());
+    if pending > 0 {
         found.push(RootSuggestion {
             kind: SuggestionKind::JavaSources,
             name: JAVA_SOURCES_ROOT.to_string(),
-            detail: format!("исходники найдены для {with_sources} зависимостей"),
+            detail: match unpacked_into {
+                Some(_) => format!("новых зависимостей с исходниками: {pending}"),
+                None => format!("исходники найдены для {pending} зависимостей"),
+            },
         });
     }
 
-    let configured = extra_roots()?;
-    found.retain(|s| !configured.iter().any(|c| c.name == s.name));
     Ok(found)
-}
-
-/// How many declared coordinates have a `-sources.jar` sitting in a local
-/// cache. Probing costs a couple of `read_dir` calls per dependency, which
-/// is cheap enough to do before offering — and the only way to tell the
-/// difference between "no Java here" and "Java, but the build never fetched
-/// sources", which are opposite answers for the user.
-fn java_sources_available(repo: &Path) -> usize {
-    let Some(home) = dirs::home_dir() else {
-        return 0;
-    };
-    java_sources::declared_coordinates(repo)
-        .iter()
-        .filter(|coord| java_sources::find_sources_jar(&home, coord).is_some())
-        .count()
 }
 
 /// The `@deps` names the two suggestions take. Fixed rather than derived:
@@ -209,39 +206,52 @@ fn java_sources_available(repo: &Path) -> usize {
 const NODE_MODULES_ROOT: &str = "node_modules";
 const JAVA_SOURCES_ROOT: &str = "java-sources";
 
+/// Where this project's Java sources are unpacked: the configured root's own
+/// path once it exists, so a refresh always lands where the first run put it
+/// (a hand-placed root included), and otherwise a fresh folder under
+/// `~/.atlas/deps/{repository_id}` — outside the repository, so nothing lands
+/// in the working tree or git status.
+fn java_sources_dest(repo: &Path) -> Result<PathBuf, ProjectError> {
+    if let Some(existing) = extra_roots()?
+        .into_iter()
+        .find(|r| r.name == JAVA_SOURCES_ROOT)
+    {
+        return Ok(PathBuf::from(existing.path));
+    }
+    let repository_id = repository_scope::resolve_repository_id(repo)?;
+    Ok(dirs::home_dir()
+        .ok_or_else(|| ProjectError::Message("не найден домашний каталог".to_string()))?
+        .join(".atlas")
+        .join("deps")
+        .join(repository_id)
+        .join(JAVA_SOURCES_ROOT))
+}
+
 /// Acts on one suggestion and returns a line about what happened, or an
 /// empty string when there is nothing worth saying.
 ///
-/// For Java this is where the work is: coordinates out of the manifests,
-/// `-sources.jar` out of the local caches, unpacked under
-/// `~/.atlas/deps/{repository_id}/java-sources` — outside the repository, so
-/// nothing lands in the user's working tree or git status. The unpack is
-/// idempotent per artifact, so accepting again after adding a dependency
-/// only does the new one.
+/// Safe to run again on a root that already exists — that is what makes the
+/// Java offer usable as a refresh. The unpack skips artifacts already there,
+/// and registering the root is skipped when the same name already points at
+/// the same place. A name pointing somewhere *else* still conflicts, since
+/// silently repointing it would redirect every `@deps/{name}/…` path the
+/// assistant has already been given.
 pub fn accept_root_suggestion(kind: SuggestionKind) -> Result<String, ProjectError> {
     let opened = project_open::get_project()?
         .ok_or_else(|| ProjectError::Message("no project is open".to_string()))?;
     let repo = PathBuf::from(&opened.root);
 
-    match kind {
-        SuggestionKind::NodeModules => {
-            let path = repo.join("node_modules");
-            add_extra_root(
-                NODE_MODULES_ROOT.to_string(),
-                path.to_string_lossy().into_owned(),
-            )?;
-            Ok(String::new())
-        }
+    let (name, path, note) = match kind {
+        SuggestionKind::NodeModules => (
+            NODE_MODULES_ROOT.to_string(),
+            repo.join("node_modules"),
+            String::new(),
+        ),
         SuggestionKind::JavaSources => {
-            let repository_id = repository_scope::resolve_repository_id(&repo)?;
-            let dest = dirs::home_dir()
-                .ok_or_else(|| ProjectError::Message("не найден домашний каталог".to_string()))?
-                .join(".atlas")
-                .join("deps")
-                .join(repository_id)
-                .join(JAVA_SOURCES_ROOT);
-            std::fs::create_dir_all(&dest)
-                .map_err(|e| ProjectError::Message(format!("не удалось создать {}: {e}", dest.display())))?;
+            let dest = java_sources_dest(&repo)?;
+            std::fs::create_dir_all(&dest).map_err(|e| {
+                ProjectError::Message(format!("не удалось создать {}: {e}", dest.display()))
+            })?;
 
             let summary = java_sources::prepare(&repo, &dest)
                 .map_err(|e| ProjectError::Message(e.to_string()))?;
@@ -252,17 +262,25 @@ pub fn accept_root_suggestion(kind: SuggestionKind) -> Result<String, ProjectErr
                         .to_string(),
                 ));
             }
-
-            add_extra_root(
+            (
                 JAVA_SOURCES_ROOT.to_string(),
-                dest.to_string_lossy().into_owned(),
-            )?;
-            Ok(format!(
-                "Распаковано зависимостей: {} (уже было: {}, без исходников: {})",
-                summary.unpacked, summary.reused, summary.without_sources
-            ))
+                dest,
+                format!(
+                    "Распаковано зависимостей: {} (уже было: {}, без исходников: {})",
+                    summary.unpacked, summary.reused, summary.without_sources
+                ),
+            )
         }
+    };
+
+    let path = path.to_string_lossy().into_owned();
+    let already_registered = extra_roots()?
+        .iter()
+        .any(|r| r.name == name && r.path == path);
+    if !already_registered {
+        add_extra_root(name, path)?;
     }
+    Ok(note)
 }
 
 /// Adds one external read-only root to the open project.
@@ -575,6 +593,58 @@ mod tests {
 
             // Offered once: the root now exists.
             assert!(suggest_extra_roots().unwrap().is_empty());
+        });
+    }
+
+    /// The reason the Java offer is not filtered out once the root exists:
+    /// a dependency added to the manifest later is still missing, and the
+    /// same button fetches just it.
+    #[test]
+    fn a_dependency_added_later_is_offered_again_and_unpacked_alone() {
+        with_open_fixture_project(|repo| {
+            let home = dirs::home_dir().unwrap();
+            let cache = home.join(".gradle/caches/modules-2/files-2.1/com.acme.tools");
+            for (artifact, version) in [("widget", "1.4.0"), ("gadget", "2.1.0")] {
+                let dir = cache.join(artifact).join(version).join("hash");
+                fs::create_dir_all(&dir).unwrap();
+                write_test_jar(
+                    &dir.join(format!("{artifact}-{version}-sources.jar")),
+                    &format!("com/acme/{artifact}.java"),
+                    "class X {}\n",
+                );
+            }
+            let manifest = repo.join("build.gradle");
+            fs::write(
+                &manifest,
+                "dependencies {\n  implementation 'com.acme.tools:widget:1.4.0'\n}\n",
+            )
+            .unwrap();
+
+            let note = accept_root_suggestion(SuggestionKind::JavaSources).unwrap();
+            assert!(note.contains("Распаковано зависимостей: 1"), "{note}");
+            assert!(suggest_extra_roots().unwrap().is_empty(), "nothing pending yet");
+
+            // The project takes on another dependency.
+            fs::write(
+                &manifest,
+                "dependencies {\n  implementation 'com.acme.tools:widget:1.4.0'\n  implementation 'com.acme.tools:gadget:2.1.0'\n}\n",
+            )
+            .unwrap();
+
+            let offered = suggest_extra_roots().unwrap();
+            assert_eq!(offered.len(), 1, "{offered:#?}");
+            assert!(offered[0].detail.contains("новых зависимостей"), "{:?}", offered[0].detail);
+
+            // Accepting again fetches only what is missing, and does not
+            // trip the duplicate-name guard on the root itself.
+            let again = accept_root_suggestion(SuggestionKind::JavaSources).unwrap();
+            assert!(again.contains("Распаковано зависимостей: 1"), "{again}");
+            assert!(again.contains("уже было: 1"), "{again}");
+            assert_eq!(extra_roots().unwrap().len(), 1, "still one root");
+
+            set_access_mode(AiAccessMode::FullRepo).unwrap();
+            let scope = current_scope().unwrap();
+            assert!(read(&scope, "@deps/java-sources/gadget-2.1.0/com/acme/gadget.java").is_ok());
         });
     }
 

@@ -257,9 +257,9 @@ function ExternalSourcesCard() {
               >
                 <FolderPlus size={14} aria-hidden />
                 {pending === "+"
-                  ? "Добавляется…"
+                  ? "Выполняется…"
                   : suggestion.kind === "javaSources"
-                    ? "Распаковать и добавить"
+                    ? "Распаковать исходники"
                     : "Добавить"}
               </button>
             </div>

@@ -259,6 +259,39 @@ pub fn unpack_sources(jar: &Path, dest: &Path) -> Result<usize, JavaSourcesError
     Ok(written)
 }
 
+/// The directory one artifact unpacks into. Named here rather than at the
+/// call sites so "is this already unpacked?" and "where do I put it?" cannot
+/// answer differently.
+fn artifact_dir(artifact: &str, version: &str) -> String {
+    format!("{artifact}-{version}")
+}
+
+/// Declared artifacts whose sources are cached locally but are not yet
+/// unpacked into `dest` — all of the cached ones when nothing has been
+/// unpacked yet.
+///
+/// This is what makes the offer self-renewing: a dependency added to the
+/// manifest after the root already exists shows up here, so the Settings
+/// list can offer to fetch it instead of the user having to know to remove
+/// and re-add the whole root.
+pub fn pending_count(repo_root: &Path, dest: Option<&Path>) -> usize {
+    let Some(home) = dirs::home_dir() else {
+        return 0;
+    };
+    declared_coordinates(repo_root)
+        .iter()
+        .filter(|coord| {
+            let Some((_, version)) = find_sources_jar(&home, coord) else {
+                return false;
+            };
+            match dest {
+                None => true,
+                Some(dest) => !dest.join(artifact_dir(&coord.artifact, &version)).is_dir(),
+            }
+        })
+        .count()
+}
+
 /// Unpacks the sources of everything `repo_root`'s manifests declare into
 /// `dest_root`, one directory per artifact.
 ///
@@ -275,7 +308,7 @@ pub fn prepare(repo_root: &Path, dest_root: &Path) -> Result<PrepareSummary, Jav
             summary.without_sources += 1;
             continue;
         };
-        let dest = dest_root.join(format!("{}-{}", coord.artifact, version));
+        let dest = dest_root.join(artifact_dir(&coord.artifact, &version));
         if dest.is_dir() {
             summary.reused += 1;
             continue;
@@ -283,7 +316,7 @@ pub fn prepare(repo_root: &Path, dest_root: &Path) -> Result<PrepareSummary, Jav
         // Unpack beside the final name and rename into place, so a run
         // interrupted halfway cannot leave a partial directory that the next
         // run would mistake for a finished one.
-        let staging = dest_root.join(format!(".{}-{}.partial", coord.artifact, version));
+        let staging = dest_root.join(format!(".{}.partial", artifact_dir(&coord.artifact, &version)));
         fs::remove_dir_all(&staging).ok();
         fs::create_dir_all(&staging)?;
         match unpack_sources(&jar, &staging) {
