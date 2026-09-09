@@ -1244,6 +1244,8 @@ export function describeToolActivity(name: string, argumentsJson: string): strin
       return typeof args.path === "string" ? `Смотрит diff: ${basename(args.path)}…` : "Смотрит git diff…";
     case "gitBlame":
       return typeof args.path === "string" ? `Смотрит blame: ${basename(args.path)}…` : "Смотрит git blame…";
+    case "gitStatus":
+      return "Смотрит незакоммиченные изменения…";
     case "check":
       if (args.kind === "problems") {
         return typeof args.path === "string"
@@ -1464,6 +1466,18 @@ export function describeToolResult(
       const { path, hunks, truncated } = block.result.result;
       const suffix = truncated ? ", обрезано" : "";
       return `Blame: ${basename(path)} (участков: ${hunks.length}${suffix})`;
+    }
+    case "gitStatus": {
+      const { branch, staged, unstaged, conflicted, truncated } = block.result.result;
+      const total = staged.length + unstaged.length + conflicted.length;
+      if (total === 0) return branch ? `Статус: ${branch} (чисто)` : "Статус: изменений нет";
+      const parts = [
+        ...(staged.length > 0 ? [`в индексе: ${staged.length}`] : []),
+        ...(unstaged.length > 0 ? [`изменено: ${unstaged.length}`] : []),
+        ...(conflicted.length > 0 ? [`конфликтов: ${conflicted.length}`] : []),
+      ];
+      const suffix = truncated ? ", обрезано" : "";
+      return `Статус${branch ? ` ${branch}` : ""}: ${parts.join(", ")}${suffix}`;
     }
     case "checkResults": {
       const { diagnostics, truncated } = block.result.result;

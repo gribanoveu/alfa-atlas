@@ -25,6 +25,7 @@ const KNOWN_TOOLS = [
   "grep",
   "gitDiff",
   "gitBlame",
+  "gitStatus",
   "check",
   "writeFile",
   "editFile",

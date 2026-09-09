@@ -29,6 +29,7 @@ pub enum ToolName {
     Grep,
     GitDiff,
     GitBlame,
+    GitStatus,
     Check,
     WriteFile,
     EditFile,
@@ -148,6 +149,7 @@ impl ToolName {
             "grep" => Some(ToolName::Grep),
             "gitDiff" => Some(ToolName::GitDiff),
             "gitBlame" => Some(ToolName::GitBlame),
+            "gitStatus" => Some(ToolName::GitStatus),
             "writeFile" => Some(ToolName::WriteFile),
             "editFile" => Some(ToolName::EditFile),
             "deleteFile" => Some(ToolName::DeleteFile),
@@ -195,6 +197,9 @@ impl ToolName {
             // than a bare file read, less than a network embedding search.
             ToolName::GitDiff => 2,
             ToolName::GitBlame => 2,
+            // One `git status` walk over the working tree — no per-file
+            // blob reads, so cheaper than a diff.
+            ToolName::GitStatus => 1,
             // In-memory diagnostics recompute over the workspace index —
             // more than a bare list/read, still local (no network).
             ToolName::Check => 2,
@@ -286,6 +291,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
         ToolName::Grep,
         ToolName::GitDiff,
         ToolName::GitBlame,
+        ToolName::GitStatus,
         ToolName::Check,
         ToolName::WriteFile,
         ToolName::EditFile,
@@ -498,10 +504,11 @@ mod tests {
     #[test]
     fn default_allowed_tools_includes_every_tool() {
         let allowed = default_allowed_tools(AiAccessMode::DocsOnly);
-        assert_eq!(allowed.len(), 27);
+        assert_eq!(allowed.len(), 28);
         assert!(allowed.contains(&ToolName::Grep));
         assert!(allowed.contains(&ToolName::GitDiff));
         assert!(allowed.contains(&ToolName::GitBlame));
+        assert!(allowed.contains(&ToolName::GitStatus));
         assert!(allowed.contains(&ToolName::Check));
         assert!(allowed.contains(&ToolName::WriteFile));
         assert!(allowed.contains(&ToolName::EditFile));

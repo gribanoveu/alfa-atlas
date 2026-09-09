@@ -497,6 +497,37 @@ function ToolResultDetail({ result }: { result: ToolResult }) {
           {!result.result.isBinary ? <DiffLines diff={result.result.diff} /> : null}
         </>
       );
+    case "gitStatus": {
+      const { branch, staged, unstaged, conflicted, truncated } = result.result;
+      // One flat list with a group letter in front — three separate <ul>s
+      // would be mostly headings for a working tree with two changed files.
+      const rows = [
+        ...conflicted.map((f) => ({ ...f, group: "конфликт" })),
+        ...staged.map((f) => ({ ...f, group: "индекс" })),
+        ...unstaged.map((f) => ({ ...f, group: "рабочая копия" })),
+      ];
+      return (
+        <div className="assistant-tool-call-detail-section">
+          <div className="assistant-tool-call-detail-label">
+            Git status{branch ? ` · ${branch}` : ""}
+          </div>
+          {rows.length === 0 ? (
+            <p className="assistant-tool-call-detail-empty">Незакоммиченных изменений нет</p>
+          ) : (
+            <ul className="assistant-tool-call-detail-list">
+              {rows.map((row, i) => (
+                <li key={`${row.group}:${row.path}:${i}`}>
+                  <span>
+                    [{row.status}] {row.path} · {row.group}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {truncated ? <p className="assistant-tool-call-detail-empty">… список обрезан</p> : null}
+        </div>
+      );
+    }
     case "gitBlame":
       return (
         <div className="assistant-tool-call-detail-section">

@@ -57,6 +57,10 @@ pub fn parse_tool_call(call: &LlmToolCall) -> Result<ToolCall, ToolError> {
         "check" => lenient_json_object::<CheckArgs>(&call.arguments)
             .map(ToolCall::Check)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),
+        // No arguments at all, so nothing to deserialize — and nothing to
+        // reject either: providers disagree on whether an empty argument
+        // list is `{}`, `""` or absent, and none of those is a mistake here.
+        "gitStatus" => Ok(ToolCall::GitStatus),
         "writeFile" => lenient_json_object::<WriteFileArgs>(&call.arguments)
             .map(ToolCall::WriteFile)
             .map_err(|reason| ToolError::InvalidArguments { tool: call.name.clone(), reason }),

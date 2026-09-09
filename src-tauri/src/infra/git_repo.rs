@@ -90,6 +90,9 @@ fn open_repo(repo_root: &Path) -> Result<Repository, GitError> {
 /// - empty paths
 /// - paths rooted with `/` or `\`
 /// - `..` components (parent-dir traversal)
+/// - `.` components — git2's `Index::get_path` *panics* (`path_to_repo_path`
+///   unwraps) on a repo path starting with `.`, so `gitDiff{path: "."}` used
+///   to take down the whole tokio worker instead of returning an error
 /// - Windows drive-letter / UNC prefixes (e.g. `C:\foo`) and any other root component
 fn validate_relative_path(path: &str) -> Result<&Path, GitError> {
     let trimmed = path.trim();
@@ -109,6 +112,7 @@ fn validate_relative_path(path: &str) -> Result<&Path, GitError> {
         matches!(
             c,
             std::path::Component::ParentDir
+                | std::path::Component::CurDir
                 | std::path::Component::Prefix(_)
                 | std::path::Component::RootDir
         )
@@ -2796,6 +2800,20 @@ mod tests {
     #[test]
     fn validate_relative_path_accepts_normal_relative_path() {
         assert!(validate_relative_path("src/main.rs").is_ok());
+    }
+
+    #[test]
+    fn validate_relative_path_rejects_dot_components() {
+        // git2's Index::get_path unwraps path_to_repo_path, which rejects a
+        // repo path starting with `.` — reaching it panicked the worker.
+        // Only a *leading* `.` survives `Path::components` (and only a leading
+        // one is what git2 chokes on) — `src/./main.rs` normalizes away.
+        for path in [".", "./src/main.rs"] {
+            assert!(
+                matches!(validate_relative_path(path), Err(GitError::InvalidPath(_))),
+                "should reject {path}"
+            );
+        }
     }
 
     #[test]

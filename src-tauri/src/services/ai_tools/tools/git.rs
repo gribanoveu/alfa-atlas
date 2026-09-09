@@ -4,9 +4,9 @@
 use std::fs;
 
 use crate::domain::ai_tools::{
-    FileDiffStats, GitBlameArgs, GitDiffArgs, ToolError, ToolResult, ToolScope,
+    FileDiffStats, GitBlameArgs, GitDiffArgs, MAX_STATUS_ENTRIES, ToolError, ToolResult, ToolScope,
 };
-use crate::domain::git::GitDiffScope;
+use crate::domain::git::{GitDiffScope, GitFileStatus};
 use crate::domain::llm::LlmToolDefinition;
 use crate::domain::paths;
 use crate::services::{git_ops, text_diff};
@@ -20,6 +20,18 @@ pub(super) const MAX_BLAME_LINES: u32 = 400;
 
 pub(super) fn git_diff(scope: &ToolScope, args: GitDiffArgs) -> Result<ToolResult, ToolError> {
     let repo_rel = resolve_repo_relative_path(scope, &args.path)?;
+    // A directory reads as "no blob anywhere" and would come back as a valid
+    // empty diff — which the model reads as "nothing changed here" and stops
+    // looking. Say what actually happened instead.
+    if scope.repo_root.join(&repo_rel).is_dir() {
+        return Err(ToolError::InvalidArguments {
+            tool: "gitDiff".into(),
+            reason: format!(
+                "«{}» — это каталог; gitDiff работает с одним файлом. Найди изменившиеся файлы через listFiles/grep и запроси diff по каждому.",
+                args.path
+            ),
+        });
+    }
     let repo_root = scope.repo_root.to_string_lossy();
 
     let file_diff = if let Some(commit) = args.commit.as_deref().filter(|c| !c.is_empty()) {
@@ -57,6 +69,53 @@ pub(super) fn git_diff(scope: &ToolScope, args: GitDiffArgs) -> Result<ToolResul
         label,
         diff,
         is_binary: file_diff.is_binary,
+    })
+}
+
+/// `gitStatus` — the working tree's changed paths, scoped and capped.
+///
+/// The one thing `gitDiff` cannot answer: it takes a single file, so
+/// without this the model has no way to find out *which* files changed and
+/// falls back to probing directory paths (which used to come back as a
+/// perfectly valid empty diff — see `git_diff`).
+///
+/// Paths are re-based onto the access-mode root like every other tool's,
+/// and anything outside it is dropped rather than renamed: in DocsOnly a
+/// change under `src/` is not something this mode is allowed to report.
+pub(super) fn git_status(scope: &ToolScope) -> Result<ToolResult, ToolError> {
+    let snapshot = git_ops::status(&scope.repo_root.to_string_lossy())?;
+
+    // `relative_to` answers "." when the two are the same directory, which
+    // is the FullRepo case — there every repo path is already in scope.
+    let root_rel = paths::relative_to(&scope.repo_root, &scope.root)?;
+    let prefix = if root_rel == "." { String::new() } else { format!("{root_rel}/") };
+    let rebase = |files: Vec<GitFileStatus>| -> Vec<GitFileStatus> {
+        files
+            .into_iter()
+            .filter_map(|f| {
+                let path = f.path.strip_prefix(&prefix)?;
+                Some(GitFileStatus { path: path.to_string(), status: f.status })
+            })
+            .collect()
+    };
+
+    let conflicted = rebase(snapshot.conflicted);
+    let staged = rebase(snapshot.staged);
+    let mut unstaged = rebase(snapshot.unstaged);
+
+    // Conflicts and staged work are the smaller, more decision-relevant
+    // lists, so the cap eats into `unstaged` (which is what a repo full of
+    // untracked files inflates) rather than trimming all three evenly.
+    let kept = conflicted.len() + staged.len();
+    let truncated = kept + unstaged.len() > MAX_STATUS_ENTRIES;
+    unstaged.truncate(MAX_STATUS_ENTRIES.saturating_sub(kept));
+
+    Ok(ToolResult::GitStatus {
+        branch: snapshot.branch,
+        staged,
+        unstaged,
+        conflicted,
+        truncated,
     })
 }
 
@@ -124,7 +183,7 @@ pub(super) fn diff_definition() -> LlmToolDefinition {
     LlmToolDefinition {
         name: "gitDiff".to_string(),
         description:
-            "Show the git diff for one file — recent local changes (unstaged working-tree vs index/HEAD, or staged index vs HEAD) or the change introduced by a specific commit. Path is relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Use this to reason about what changed recently, not just the current file content. Combine with readFile to understand both current state and history. Returns a unified diff (truncated for large changes) plus +/- line counts."
+            "Show the git diff for one file — recent local changes (unstaged working-tree vs index/HEAD, or staged index vs HEAD) or the change introduced by a specific commit. Takes exactly one file: a directory path is an error, call gitStatus first to find out which files changed. Path is relative to the current access-mode root (documentation root in Docs-only mode, repository root in Full-repo mode). Use this to reason about what changed recently, not just the current file content. Combine with readFile to understand both current state and history. Returns a unified diff (truncated for large changes) plus +/- line counts."
                 .to_string(),
         parameters: serde_json::json!({
             "type": "object",
@@ -144,6 +203,21 @@ pub(super) fn diff_definition() -> LlmToolDefinition {
                 }
             },
             "required": ["path"]
+        }),
+        }
+}
+
+/// The `gitStatus` schema the model sees.
+pub(super) fn status_definition() -> LlmToolDefinition {
+    LlmToolDefinition {
+        name: "gitStatus".to_string(),
+        description:
+            "List every file with uncommitted changes right now — staged, unstaged/untracked, and conflicted — plus the current branch. Takes no arguments. Paths come back relative to the current access-mode root, and only cover it (in Docs-only mode, changes outside the documentation root are not listed). This is the entry point for any question about \"what changed\" / \"what is uncommitted\": call it first, then gitDiff on the individual files it names — gitDiff itself only takes one file and cannot tell you which ones to ask about. Large working trees are capped and flagged `truncated`."
+                .to_string(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "required": []
         }),
         }
 }
@@ -256,6 +330,85 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, ToolError::PathEscape(_)), "got {err:?}");
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn git_status_lists_changed_files_and_hides_those_outside_the_docs_root() {
+        let (repo, docs) = fixture_repo();
+        {
+            let git_repo = git2::Repository::init(&repo).unwrap();
+            let mut config = git_repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        // Untracked in both subtrees; only the docs one is in scope.
+        fs::write(docs.join("new.adoc"), "= New\n").unwrap();
+        fs::write(repo.join("src").join("main.rs"), "fn main() {}\n").unwrap();
+
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::DocsOnly);
+        let result = execute_tool(&scope, ToolCall::GitStatus, &EmbeddingDeps::empty(), &[]).unwrap();
+        match result {
+            ToolResult::GitStatus { staged, unstaged, conflicted, truncated, .. } => {
+                let paths: Vec<&str> = unstaged.iter().map(|f| f.path.as_str()).collect();
+                assert!(paths.contains(&"new.adoc"), "docs change, rebased: {paths:?}");
+                assert!(
+                    !paths.iter().any(|p| p.contains("main.rs")),
+                    "src/ is outside Docs-only scope: {paths:?}"
+                );
+                assert!(staged.is_empty() && conflicted.is_empty());
+                assert!(!truncated);
+            }
+            other => panic!("expected GitStatus, got {other:?}"),
+        }
+
+        // Full-repo sees both, with repo-relative paths.
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+        let result = execute_tool(&scope, ToolCall::GitStatus, &EmbeddingDeps::empty(), &[]).unwrap();
+        match result {
+            ToolResult::GitStatus { unstaged, .. } => {
+                let paths: Vec<&str> = unstaged.iter().map(|f| f.path.as_str()).collect();
+                assert!(paths.contains(&"docs/new.adoc"), "{paths:?}");
+                assert!(paths.contains(&"src/main.rs"), "{paths:?}");
+            }
+            other => panic!("expected GitStatus, got {other:?}"),
+        }
+
+        fs::remove_dir_all(&repo).ok();
+    }
+
+    #[test]
+    fn git_diff_on_a_directory_errors_instead_of_reporting_an_empty_diff() {
+        let (repo, docs) = fixture_repo();
+        {
+            let git_repo = git2::Repository::init(&repo).unwrap();
+            let mut config = git_repo.config().unwrap();
+            config.set_str("user.name", "Test").unwrap();
+            config.set_str("user.email", "test@test.com").unwrap();
+        }
+        // Full-repo mode: `.` resolves to the repo root itself, which used to
+        // reach git2's Index::get_path and panic the whole worker.
+        let scope = ToolScope::for_project(&repo, &docs, AiAccessMode::FullRepo);
+        let deps = EmbeddingDeps::empty();
+
+        for path in [".", "docs"] {
+            let err = execute_tool(
+                &scope,
+                ToolCall::GitDiff(GitDiffArgs {
+                    path: path.to_string(),
+                    scope: None,
+                    commit: None,
+                }),
+                &deps,
+                &[],
+            )
+            .unwrap_err();
+            assert!(
+                matches!(err, ToolError::InvalidArguments { .. }),
+                "{path}: got {err:?}"
+            );
+        }
 
         fs::remove_dir_all(&repo).ok();
     }

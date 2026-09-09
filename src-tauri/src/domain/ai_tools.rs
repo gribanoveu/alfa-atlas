@@ -407,6 +407,13 @@ pub struct GitBlameArgs {
     pub end_line: Option<u32>,
 }
 
+/// Cap on how many changed paths one `gitStatus` result may carry, across
+/// all three lists — a repo with thousands of untracked files would
+/// otherwise bury the turn in a single tool message. Staged and conflicted
+/// entries are kept before unstaged ones (see
+/// `services::ai_tools::tools::git::git_status`).
+pub const MAX_STATUS_ENTRIES: usize = 200;
+
 /// Fetches full template markup by id from the fixed
 /// `domain::asciidoc_element_templates::ASCIIDOC_ELEMENT_TEMPLATES` catalog
 /// — read-only, no path/scope containment needed (it isn't filesystem I/O).
@@ -829,6 +836,9 @@ pub enum ToolCall {
     Grep(GrepArgs),
     GitDiff(GitDiffArgs),
     GitBlame(GitBlameArgs),
+    /// No arguments — the whole working tree, filtered to the access-mode
+    /// root by the executor.
+    GitStatus,
     Check(CheckArgs),
     WriteFile(WriteFileArgs),
     EditFile(EditFileArgs),
@@ -866,6 +876,7 @@ impl ToolCall {
             ToolCall::Grep(_) => ToolName::Grep,
             ToolCall::GitDiff(_) => ToolName::GitDiff,
             ToolCall::GitBlame(_) => ToolName::GitBlame,
+            ToolCall::GitStatus => ToolName::GitStatus,
             ToolCall::Check(_) => ToolName::Check,
             ToolCall::WriteFile(_) => ToolName::WriteFile,
             ToolCall::EditFile(_) => ToolName::EditFile,
@@ -990,6 +1001,20 @@ pub enum ToolResult {
     GitBlame {
         path: String,
         hunks: Vec<crate::domain::git::GitBlameHunk>,
+        truncated: bool,
+    },
+    /// Settled `gitStatus` — which files are changed right now, the answer
+    /// to "what should I diff", which `gitDiff` (one file at a time) cannot
+    /// give. Paths are relative to the access-mode root and only cover it:
+    /// in DocsOnly a change under `src/` is not the model's business.
+    /// `truncated` when the working tree held more than
+    /// `MAX_STATUS_ENTRIES` changed paths.
+    #[serde(rename_all = "camelCase")]
+    GitStatus {
+        branch: Option<String>,
+        staged: Vec<crate::domain::git::GitFileStatus>,
+        unstaged: Vec<crate::domain::git::GitFileStatus>,
+        conflicted: Vec<crate::domain::git::GitFileStatus>,
         truncated: bool,
     },
     /// Settled `check` — `diagnostics` reuse the Problems panel

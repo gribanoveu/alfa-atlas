@@ -14,6 +14,7 @@ const PERMISSION_TOOL_LABELS: Record<string, string> = {
   grep: "Точный поиск по содержимому (grep)",
   gitDiff: "Разница между состояниями файлов (gitDiff)",
   gitBlame: "Отслеживание изменений в файлах (gitBlame)",
+  gitStatus: "Список незакоммиченных изменений (gitStatus)",
   check: "Проверка документации (check)",
   getAsciidocTemplates: "Шаблоны элементов AsciiDoc (getAsciidocTemplates)",
   skill: "Скилы ассистента (skill)",

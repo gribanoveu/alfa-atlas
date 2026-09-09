@@ -53,6 +53,7 @@ const DEFINITIONS: &[ToolDefinitionRow] = &[
     (ToolName::Grep, grep::definition),
     (ToolName::GitDiff, git::diff_definition),
     (ToolName::GitBlame, git::blame_definition),
+    (ToolName::GitStatus, git::status_definition),
     (ToolName::Check, check::definition),
     (ToolName::WriteFile, write_file::definition),
     (ToolName::EditFile, edit_file::definition),
@@ -138,6 +139,7 @@ pub fn execute_tool(
         ToolCall::Grep(args) => grep::grep(scope, args),
         ToolCall::GitDiff(args) => git::git_diff(scope, args),
         ToolCall::GitBlame(args) => git::git_blame(scope, args),
+        ToolCall::GitStatus => git::git_status(scope),
         ToolCall::Check(args) => check::check(scope, args, deps),
         ToolCall::WriteFile(args) => write_file::write_file(scope, args, deps)
             .map(|(path, diff, closed_macros)| ToolResult::FileWritten { path, diff, closed_macros }),
@@ -404,6 +406,7 @@ mod tests {
                 "grep",
                 "gitDiff",
                 "gitBlame",
+                "gitStatus",
                 "check",
                 "writeFile",
                 "editFile",

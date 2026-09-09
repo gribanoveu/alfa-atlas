@@ -197,6 +197,7 @@ export type ToolCall =
     }
   | { tool: "gitDiff"; args: { path: string; scope: string | null; commit: string | null } }
   | { tool: "gitBlame"; args: { path: string; startLine: number | null; endLine: number | null } }
+  | { tool: "gitStatus"; args: Record<string, never> }
   | { tool: "check"; args: { kind: CheckKind; path: string | null } }
   | { tool: "writeFile"; args: { path: string; content: string } }
   | { tool: "editFile"; args: { path: string; edits: FileEdit[] } }
@@ -315,6 +316,13 @@ export type ClosedMacro = {
   text: string;
 };
 
+/** One changed path from `gitStatus` — mirrors `domain::git::GitFileStatus`.
+ * `status` is a single letter (M, A, D, R, ?, U). */
+export type GitFileStatus = {
+  path: string;
+  status: string;
+};
+
 /** Contiguous authorship run from `gitBlame` — mirrors
  * `domain::git::GitBlameHunk`. */
 export type GitBlameHunk = {
@@ -366,6 +374,16 @@ export type ToolResult =
   | { tool: "grepResults"; result: { matches: GrepMatch[]; truncated: boolean } }
   | { tool: "gitDiff"; result: { path: string; label: string; diff: FileDiffStats; isBinary: boolean } }
   | { tool: "gitBlame"; result: { path: string; hunks: GitBlameHunk[]; truncated: boolean } }
+  | {
+      tool: "gitStatus";
+      result: {
+        branch: string | null;
+        staged: GitFileStatus[];
+        unstaged: GitFileStatus[];
+        conflicted: GitFileStatus[];
+        truncated: boolean;
+      };
+    }
   | { tool: "checkResults"; result: { kind: CheckKind; diagnostics: Diagnostic[]; truncated: boolean } }
   | { tool: "standardsChecked"; result: { report: StandardsReport; truncated: boolean } }
   | { tool: "fileWritten"; result: { path: string; diff: FileDiffStats; closedMacros?: ClosedMacro[] } }

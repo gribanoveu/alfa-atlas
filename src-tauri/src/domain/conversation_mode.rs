@@ -39,6 +39,10 @@ pub fn base_tools() -> HashSet<ToolName> {
         ToolName::Grep,
         ToolName::GitDiff,
         ToolName::GitBlame,
+        // Read-only, and the entry point to the git tools: without it the
+        // model has no way to learn *which* files changed, and probes
+        // `gitDiff` directory by directory instead.
+        ToolName::GitStatus,
         ToolName::Check,
         ToolName::RequestModeSwitch,
         // Widening the *read* boundary is not a mode concern: a question
@@ -131,7 +135,7 @@ mod tests {
 
     #[test]
     fn agent_mode_has_every_tool() {
-        assert_eq!(mode_tools(ConversationMode::Agent).len(), 25);
+        assert_eq!(mode_tools(ConversationMode::Agent).len(), 26);
     }
 
     #[test]
