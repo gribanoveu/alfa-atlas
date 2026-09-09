@@ -304,3 +304,79 @@ describe("useEditorTabs — flushing the autosave debounce", () => {
     expect(writes).toEqual([]);
   });
 });
+
+describe("useEditorTabs — confirming the close of a dirty tab", () => {
+  // Autosave and save-on-switch both off, so `prepareClose` actually has a
+  // question to ask instead of silently saving.
+  const noAutosave = {
+    autosaveEnabled: false,
+    saveOnTabSwitch: false,
+    autosaveDelayMs: 1000,
+  };
+  const renderNoAutosave = () =>
+    renderHook(() => useEditorTabs("/repo/docs", { prefs: noAutosave }));
+
+  async function openDirtyTab(result: { current: ReturnType<typeof useEditorTabs> }) {
+    await act(async () => {
+      await result.current.openFile("a.adoc");
+    });
+    act(() => result.current.updateActiveContent("= A unsaved"));
+  }
+
+  test("closing a dirty tab asks first and keeps the tab while it asks", async () => {
+    const { result } = renderNoAutosave();
+    await openDirtyTab(result);
+
+    let closed: Promise<void>;
+    await act(async () => {
+      closed = result.current.closeTab("a.adoc");
+      await Promise.resolve();
+    });
+
+    expect(result.current.closeConfirmMessage).toContain("a.adoc");
+    expect(result.current.tabs).toHaveLength(1);
+
+    await act(async () => {
+      result.current.resolveCloseConfirm(true);
+      await closed;
+    });
+
+    expect(result.current.closeConfirmMessage).toBeNull();
+    expect(result.current.tabs).toHaveLength(0);
+    // "Close without saving" means exactly that — nothing was written.
+    expect(writes).toEqual([]);
+  });
+
+  test("declining keeps the tab and its unsaved content", async () => {
+    const { result } = renderNoAutosave();
+    await openDirtyTab(result);
+
+    let closed: Promise<void>;
+    await act(async () => {
+      closed = result.current.closeTab("a.adoc");
+      await Promise.resolve();
+    });
+    await act(async () => {
+      result.current.resolveCloseConfirm(false);
+      await closed;
+    });
+
+    expect(result.current.tabs).toHaveLength(1);
+    expect(result.current.tabs[0]?.content).toBe("= A unsaved");
+    expect(result.current.closeConfirmMessage).toBeNull();
+  });
+
+  test("a clean tab closes without asking", async () => {
+    const { result } = renderNoAutosave();
+    await act(async () => {
+      await result.current.openFile("a.adoc");
+    });
+
+    await act(async () => {
+      await result.current.closeTab("a.adoc");
+    });
+
+    expect(result.current.closeConfirmMessage).toBeNull();
+    expect(result.current.tabs).toHaveLength(0);
+  });
+});

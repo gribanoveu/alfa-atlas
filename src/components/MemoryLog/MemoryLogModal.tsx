@@ -4,6 +4,7 @@ import type { MemoryLogRow } from "../../lib/memoryLog";
 import "../Welcome/CloneRepoModal.css";
 import "../ToolLog/ToolCallLogModal.css";
 import "./MemoryLogModal.css";
+import { ConfirmModal } from "../Modals/ConfirmModal";
 
 type LogSelectOption = { value: string; label: string };
 
@@ -135,19 +136,19 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
-  const handleDelete = useCallback(
-    async (row: MemoryLogRow) => {
-      const label = previewText(row.text, 80);
-      const ok = window.confirm(
-        `Удалить запись #${row.id} (${scopeLabel(row.scope)})?\n\n${label}`,
-      );
-      if (!ok) return;
-      if (await deleteEntry(row)) {
-        if (expandedKey === memoryRowKey(row)) setExpandedKey(null);
-      }
-    },
-    [deleteEntry, expandedKey],
-  );
+  // The app draws its own dialogs (AGENTS.md, "UI"). Holding the whole row
+  // rather than its id: the confirmation names the entry, and the delete
+  // needs the row itself.
+  const [deleteTarget, setDeleteTarget] = useState<MemoryLogRow | null>(null);
+
+  const handleDeleteConfirmed = useCallback(async () => {
+    const row = deleteTarget;
+    setDeleteTarget(null);
+    if (!row) return;
+    if (await deleteEntry(row)) {
+      if (expandedKey === memoryRowKey(row)) setExpandedKey(null);
+    }
+  }, [deleteEntry, expandedKey, deleteTarget]);
 
 
   return (
@@ -239,7 +240,7 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
                                 disabled={deletingKey === rowKey}
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  void handleDelete(row);
+                                  setDeleteTarget(row);
                                 }}
                               >
                                 {deletingKey === rowKey ? "Удаление…" : "Удалить запись"}
@@ -287,6 +288,16 @@ export function MemoryLogModal({ projectRoot, onClose }: MemoryLogModalProps) {
           </div>
         </footer>
       </div>
+      {deleteTarget ? (
+        <ConfirmModal
+          title={`Удалить запись #${deleteTarget.id}?`}
+          message={`${scopeLabel(deleteTarget.scope)}\n\n${previewText(deleteTarget.text, 200)}`}
+          confirmLabel="Удалить"
+          danger
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => void handleDeleteConfirmed()}
+        />
+      ) : null}
     </div>
   );
 }

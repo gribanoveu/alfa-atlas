@@ -111,16 +111,13 @@ function makeExternalTextTab(absolutePath: string, content: string): EditorTab {
   };
 }
 
-function confirmCloseDirty(closing: EditorTab[]): boolean {
-  if (!closing.some((tab) => tab.dirty)) return true;
-  if (closing.length === 1) {
-    return window.confirm(
-      `Файл «${closing[0].title}» изменён. Закрыть без сохранения?`,
-    );
-  }
-  return window.confirm(
-    "Есть несохранённые изменения. Закрыть без сохранения?",
-  );
+/** Wording for the "you have unsaved changes" question. Separate from the
+ * asking so the message is a pure function of what is closing. */
+function closeDirtyMessage(closing: EditorTab[]): string | null {
+  if (!closing.some((tab) => tab.dirty)) return null;
+  return closing.length === 1
+    ? `Файл «${closing[0].title}» изменён. Закрыть без сохранения?`
+    : "Есть несохранённые изменения. Закрыть без сохранения?";
 }
 
 type UseEditorTabsOptions = {
@@ -258,6 +255,32 @@ export function useEditorTabs(
     [flushDebounce, saveTab],
   );
 
+  // The question is asked with the app's own dialog rather than
+  // `window.confirm` (AGENTS.md, "UI"), which means it can no longer be
+  // answered synchronously: the resolver is parked here while the modal is on
+  // screen and `prepareClose` awaits it. State drives the render, the ref
+  // holds the resolver — putting the resolver in state would mean calling it
+  // from inside an updater, which React may run twice.
+  const [closeConfirmMessage, setCloseConfirmMessage] = useState<string | null>(null);
+  const closeConfirmResolveRef = useRef<((ok: boolean) => void) | null>(null);
+
+  const askCloseDirty = useCallback((closing: EditorTab[]): Promise<boolean> => {
+    const message = closeDirtyMessage(closing);
+    if (message === null) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      closeConfirmResolveRef.current = resolve;
+      setCloseConfirmMessage(message);
+    });
+  }, []);
+
+  /** Answers the dialog. Safe to call with nothing pending. */
+  const resolveCloseConfirm = useCallback((ok: boolean) => {
+    const resolve = closeConfirmResolveRef.current;
+    closeConfirmResolveRef.current = null;
+    setCloseConfirmMessage(null);
+    resolve?.(ok);
+  }, []);
+
   const prepareClose = useCallback(
     async (closing: EditorTab[]): Promise<boolean> => {
       if (closing.length === 0) return true;
@@ -275,9 +298,9 @@ export function useEditorTabs(
       const latestClosing = closing
         .map((tab) => tabsRef.current.find((t) => t.id === tab.id))
         .filter((t): t is EditorTab => Boolean(t));
-      return confirmCloseDirty(latestClosing);
+      return askCloseDirty(latestClosing);
     },
-    [flushDebounce, saveTab],
+    [flushDebounce, saveTab, askCloseDirty],
   );
 
   useEffect(() => {
@@ -288,6 +311,11 @@ export function useEditorTabs(
     setError(null);
     setHydrated(false);
     restoredForRoot.current = null;
+    // Nothing is being closed any more; a caller still awaiting the dialog
+    // would otherwise hang forever.
+    closeConfirmResolveRef.current?.(false);
+    closeConfirmResolveRef.current = null;
+    setCloseConfirmMessage(null);
 
     return () => {
       const hadPending = debounceTimerRef.current !== null;
@@ -884,6 +912,8 @@ export function useEditorTabs(
     reloadTabFromDisk,
     saveAllDirtyTabs,
     reloadAllOpenTabs,
+    closeConfirmMessage,
+    resolveCloseConfirm,
     goBack,
     goForward,
     canGoBack,

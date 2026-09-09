@@ -111,6 +111,7 @@ import {
   toRepoRelativePath,
 } from "./lib/paths";
 import { RenameModal } from "./components/Sidebar/RenameModal";
+import { ConfirmModal } from "./components/Modals/ConfirmModal";
 import { useOsFileDrop } from "./hooks/useOsFileDrop";
 
 function joinParent(parentPath: string, name: string): string {
@@ -424,7 +425,10 @@ function App() {
     loadStashFiles,
     moveUnpushedCommits,
     moveUnpushedOpen,
+    abortMergeConfirm,
+    setAbortMergeConfirm,
     onAbortMerge,
+    onAbortMergeConfirm,
     onConfirmDiscardShelfEntry,
     onDeleteBranchConfirm,
     onDiscardShelfEntry,
@@ -1113,7 +1117,7 @@ function App() {
                     onRefresh: () => void git.refresh(),
                     onOpenFileDiff: openGitFileDiff,
                     onOpenConflict: openConflict,
-                    onAbortMerge: () => void onAbortMerge(),
+                    onAbortMerge,
                     onFinishMerge: () => void onFinishMergeRetry(),
                     selectedDiff: gitDiffTarget
                       ? {
@@ -1371,6 +1375,18 @@ function App() {
         />
       ) : null}
 
+      {editor.closeConfirmMessage !== null ? (
+        <ConfirmModal
+          title="Несохранённые изменения"
+          message={editor.closeConfirmMessage}
+          confirmLabel="Закрыть без сохранения"
+          cancelLabel="Отмена"
+          danger
+          onCancel={() => editor.resolveCloseConfirm(false)}
+          onConfirm={() => editor.resolveCloseConfirm(true)}
+        />
+      ) : null}
+
       {pullModalOpen ? (
         <PullUpdateModal
           behind={currentBranchBehind}
@@ -1513,6 +1529,26 @@ function App() {
           busy={stash.busy}
           onCancel={() => setStashDiscardTarget(null)}
           onConfirm={() => void onConfirmDiscardShelfEntry()}
+        />
+      ) : null}
+
+      {abortMergeConfirm ? (
+        <ConfirmModal
+          title={
+            abortMergeConfirm.isStashAbort
+              ? "Отменить восстановление?"
+              : "Отменить слияние?"
+          }
+          message={
+            abortMergeConfirm.isStashAbort
+              ? "Рабочая копия вернётся к состоянию до восстановления — сами изменения останутся в разделе «Отложенные изменения»."
+              : "Файлы вернутся к состоянию до обновления, изменения с сервера будут отброшены."
+          }
+          confirmLabel="Отменить"
+          cancelLabel="Не отменять"
+          danger
+          onCancel={() => setAbortMergeConfirm(null)}
+          onConfirm={() => void onAbortMergeConfirm()}
         />
       ) : null}
 

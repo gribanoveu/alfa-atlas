@@ -42,6 +42,7 @@ import { PanelResizeHandle } from "../PanelResizeHandle/PanelResizeHandle";
 import { EditorTabs, type DisplayTab } from "./EditorTabs";
 import { EditorContextActionsBar } from "./EditorContextActionsBar";
 import { AsciidocTableEditorModal } from "./AsciidocTableEditorModal";
+import { AlertOkModal } from "../Git/AlertOkModal";
 import { SelectionAiPreview } from "./SelectionAiPreview";
 import { SelectionAiToolbar } from "./SelectionAiToolbar";
 import "./Editor.css";
@@ -378,13 +379,17 @@ export function EditorPane({
     onOpenDocumentReference,
   );
 
+  // The app draws its own dialogs (AGENTS.md, "UI") — `window.alert` renders
+  // as a native OS box that ignores the theme and blocks the webview.
+  const [tableParseError, setTableParseError] = useState<string | null>(null);
+
   const handleEditTable = useCallback(
     async (range: TableBlockRange) => {
       if (!projectTextTab) return;
       const source = sliceTableSource(projectTextTab.content, range);
       const result = await parseAsciidocTable(source);
       if (!result.ok) {
-        window.alert(result.reason);
+        setTableParseError(result.reason);
         return;
       }
       setTableEditorState({ range, table: result.table });
@@ -731,6 +736,13 @@ export function EditorPane({
           initialTable={tableEditorState.table}
           onSave={handleTableEditorSave}
           onCancel={() => setTableEditorState(null)}
+        />
+      ) : null}
+      {tableParseError !== null ? (
+        <AlertOkModal
+          title="Не удалось разобрать таблицу"
+          message={tableParseError}
+          onClose={() => setTableParseError(null)}
         />
       ) : null}
     </section>

@@ -1,0 +1,91 @@
+/* Own styles rather than borrowing `CloneRepoModal.css` the way
+   `AlertOkModal` does: CSS is bundled globally, so borrowing works right up
+   until the neighbour is deleted — and this shell is used from three
+   unrelated places (AGENTS.md, "UI"). */
+
+.confirm-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.confirm-modal {
+  width: min(520px, 100%);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 14px;
+}
+
+.confirm-modal-title {
+  font-size: calc(var(--font-ui) * 1.12);
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.confirm-modal-message {
+  font-size: var(--font-ui);
+  color: var(--text-1);
+  line-height: 1.4;
+  background: var(--ai-glow-soft);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 10px;
+  /* A parse error or a memory excerpt arrives with its own line breaks and
+     can be long; it must not stretch the dialog or run off it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.confirm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.confirm-modal-btn {
+  font-size: var(--font-ui);
+  padding: 6px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  color: var(--text-1);
+}
+
+.confirm-modal-btn:hover {
+  color: var(--text-0);
+  background: var(--bg-2);
+}
+
+.confirm-modal-btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--text-0);
+}
+
+.confirm-modal-btn.primary:hover {
+  filter: brightness(1.08);
+  background: var(--accent);
+}
+
+.confirm-modal-btn.danger {
+  background: var(--severity-error);
+  border-color: transparent;
+  color: var(--text-0);
+}
+
+.confirm-modal-btn.danger:hover {
+  filter: brightness(1.08);
+  background: var(--severity-error);
+}

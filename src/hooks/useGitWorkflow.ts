@@ -687,18 +687,21 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     },
     [git, showSuccess],
   );
-  const onAbortMerge = useCallback(async () => {
-    // A stash-restore conflict looks identical to a merge conflict from
-    // git's perspective (conflicted index entries, no MERGE_HEAD) — same
-    // abort machinery, different messaging so the user knows their shelved
-    // changes aren't gone, just still sitting in the shelf unapplied.
+  // A stash-restore conflict looks identical to a merge conflict from git's
+  // perspective (conflicted index entries, no MERGE_HEAD) — same abort
+  // machinery, different messaging so the user knows their shelved changes
+  // aren't gone, just still sitting in the shelf unapplied. Captured when the
+  // dialog opens rather than re-read on confirm, so the text the user agreed
+  // to is the action that runs.
+  const [abortMergeConfirm, setAbortMergeConfirm] = useState<
+    { isStashAbort: boolean } | null
+  >(null);
+  const onAbortMerge = useCallback(() => {
+    setAbortMergeConfirm({ isStashAbort: pendingStashConflict !== null });
+  }, [pendingStashConflict]);
+  const onAbortMergeConfirm = useCallback(async () => {
+    setAbortMergeConfirm(null);
     const isStashAbort = pendingStashConflict !== null;
-    const confirmed = window.confirm(
-      isStashAbort
-        ? "Отменить восстановление отложенных изменений? Рабочая копия вернётся к состоянию до восстановления — сами изменения останутся в разделе «Отложенные изменения»."
-        : "Отменить слияние? Файлы вернутся к состоянию до обновления, изменения с сервера будут отброшены.",
-    );
-    if (!confirmed) return;
     // Clear before the conflict count can reach zero so the auto-drop
     // effect doesn't mistake this abort for a resolved conflict and drop
     // the shelf entry the user chose to keep.
@@ -857,6 +860,9 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     dropAllUnpushedOpen,
     dropUnpushedTarget,
     gitAlert,
+    abortMergeConfirm,
+    setAbortMergeConfirm,
+    onAbortMergeConfirm,
     gitDiffTarget,
     handleCheckoutBranch,
     handleCommit,
