@@ -11,7 +11,9 @@ Context for AI coding agents (Claude Code and others) working in this repository
 - Package manager: **bun** — always use `bun`/`bunx`, never `npm`/`pnpm`/`yarn`
 
 Tech stack
-Frontend: React 19 + TypeScript, Vite build, plain CSS files per component (no CSS-in-JS/Tailwind), lucide-react for icons. No global state library (Redux/Zustand/Context store) — state lives in custom hooks (src/hooks/*) composed directly into components (e.g. useLlmChat, useLlmSetup).
+Frontend: React 19 + TypeScript, Vite build, plain CSS files per component (no CSS-in-JS/Tailwind), lucide-react for icons. No global state library (Redux/Zustand/Context store) — state lives in custom hooks (`src/hooks/*`, ~80 of them) composed directly into components (e.g. `useLlmChat`, `useLlmSetup`).
+
+`App.tsx` is the composition root: it calls ~55 of those hooks and passes their results down as props. That is where cross-cutting state actually lives, and it is why the file is ~1300 lines — adding a hook that more than one panel needs usually means editing it. Before adding state there, check whether the hook can own it privately, or whether an existing hook already exposes it. React Context is used in exactly one place (`AsciiDocPreview/AscPreviewContext.tsx`, scoped to that subtree) — it is a deliberate local exception for preview rendering, not a pattern to spread.
 
 Backend: Tauri v2 (Rust), ureq (blocking HTTP client, not reqwest) for LLM provider calls, tauri::async_runtime::spawn_blocking to run them off the async runtime. Streaming deltas and other progress reach the frontend as tauri::Emitter events, emitted in commands/ only — services report through sinks (see Architecture).
 
