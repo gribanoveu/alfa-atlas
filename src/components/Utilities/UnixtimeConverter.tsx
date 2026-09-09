@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy } from "lucide-react";
+import { CopyTextButton } from "../Common/CopyTextButton";
 import {
   decodeUnix,
   formatIsoLocal,
@@ -96,39 +95,21 @@ function fieldsAreEmpty(fields: FieldsState): boolean {
   return Object.values(fields).every((value) => value.trim().length === 0);
 }
 
-function ResultRow({
-  id,
-  label,
-  value,
-  copiedId,
-  onCopy,
-}: {
-  /** Уникален в пределах вкладки: подписи в двух секциях совпадают, и по ним
-   *  «Скопировано» подсветилось бы сразу в обеих. */
-  id: string;
-  label: string;
-  value: string;
-  copiedId: string | null;
-  onCopy: (id: string, value: string) => void;
-}) {
-  const copied = copiedId === id;
+// Rows used to carry an `id` purely to disambiguate which one was ticked —
+// two sections share labels, so a shared `copiedId` lit both. `CopyTextButton`
+// keeps that state per button, so the id is gone with it.
+function ResultRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="unix-row">
       <span className="unix-row-label">{label}</span>
       <code className="unix-row-value">{value}</code>
-      <button
-        type="button"
-        className={`unix-row-copy${copied ? " is-copied" : ""}`}
-        onClick={() => onCopy(id, value)}
-        aria-label={`Скопировать: ${label}`}
-        title={copied ? "Скопировано" : "Копировать"}
-      >
-        {copied ? (
-          <Check size={13} strokeWidth={2} aria-hidden />
-        ) : (
-          <Copy size={13} strokeWidth={1.75} aria-hidden />
-        )}
-      </button>
+      <CopyTextButton
+        text={value}
+        className="unix-row-copy"
+        label="Копировать"
+        ariaLabel={`Скопировать: ${label}`}
+        size={13}
+      />
     </div>
   );
 }
@@ -187,7 +168,6 @@ function FieldInput({
 export function UnixtimeConverter() {
   const [now] = useState(() => new Date());
   const timeZone = useMemo(() => localTimeZoneName(), []);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [tab, setTab] = useState<ConverterTab>("decode");
 
   const [raw, setRaw] = useState(() => String(Math.floor(now.getTime() / 1000)));
@@ -207,16 +187,6 @@ export function UnixtimeConverter() {
   }, [fields, zone]);
 
   const activeTab = TABS.find((item) => item.id === tab) ?? TABS[0];
-
-  const handleCopy = async (id: string, value: string) => {
-    try {
-      await writeText(value);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500);
-    } catch {
-      // Буфер недоступен — значение всё равно видно на экране и выделяется мышью.
-    }
-  };
 
   // Смена зоны не должна менять момент времени: пересобираем поля из текущей
   // даты, иначе «14:00 локально» молча стало бы «14:00 UTC».
@@ -319,46 +289,28 @@ export function UnixtimeConverter() {
 
                 <div className="unix-rows">
                   <ResultRow
-                    id="decode-iso-utc"
                     label="ISO 8601 (UTC)"
                     value={formatIsoUtc(decoded.value.date)}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
                   />
                   <ResultRow
-                    id="decode-iso-local"
                     label={`ISO 8601 (${timeZone})`}
                     value={formatIsoLocal(decoded.value.date)}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
                   />
                   <ResultRow
-                    id="decode-locale"
                     label="Locale (локальная)"
                     value={formatLocale(decoded.value.date)}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
                   />
                   <ResultRow
-                    id="decode-locale-utc"
                     label="Locale (UTC)"
                     value={formatLocaleUtc(decoded.value.date)}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
                   />
                   <ResultRow
-                    id="decode-seconds"
                     label="Unix (сек)"
                     value={formatSeconds(decoded.value.seconds)}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
                   />
                   <ResultRow
-                    id="decode-millis"
                     label="Timestamp (мс)"
                     value={String(decoded.value.milliseconds)}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
                   />
                 </div>
               </div>
@@ -437,25 +389,16 @@ export function UnixtimeConverter() {
               <div className="unix-output">
                 <div className="unix-rows">
                   <ResultRow
-                    id="encode-seconds"
                     label="Unix (сек)"
                     value={formatSeconds(encoded.value.seconds)}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
                   />
                   <ResultRow
-                    id="encode-millis"
                     label="Timestamp (мс)"
                     value={String(encoded.value.milliseconds)}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
                   />
                   <ResultRow
-                    id="encode-iso-utc"
                     label="ISO 8601 (UTC)"
                     value={formatIsoUtc(encoded.value.date)}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
                   />
                 </div>
               </div>

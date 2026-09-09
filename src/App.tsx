@@ -3,24 +3,8 @@ import type * as Monaco from "monaco-editor";
 import { toMessage } from "./lib/errors";
 import { BottomDock } from "./components/BottomDock/BottomDock";
 import { EditorPane } from "./components/Editor/Editor";
-import { AlertOkModal } from "./components/Git/AlertOkModal";
-import { GitConflictModal } from "./components/Git/GitConflictModal";
-import { GitFileDiffModal } from "./components/Git/GitFileDiffModal";
-import { GitCommitFileDiffModal } from "./components/Git/GitCommitFileDiffModal";
-import { DropUnpushedConfirmModal } from "./components/Git/DropUnpushedConfirmModal";
-import { MoveUnpushedModal } from "./components/Git/MoveUnpushedModal";
-import { GitCommitPreviewModal } from "./components/Git/GitCommitPreviewModal";
-import { PullUpdateModal } from "./components/Git/PullUpdateModal";
-import { PushConfirmModal } from "./components/Git/PushConfirmModal";
-import { ResetRemoteConfirmModal } from "./components/Git/ResetRemoteConfirmModal";
-import { DeleteBranchConfirmModal } from "./components/Git/DeleteBranchConfirmModal";
-import { DiscardStashConfirmModal } from "./components/Git/DiscardStashConfirmModal";
-import { GitStashPreviewModal } from "./components/Git/GitStashPreviewModal";
 import { RightDock } from "./components/RightDock/RightDock";
 import { DocsSearchOverlay } from "./components/Search/DocsSearchOverlay";
-import { NewFileModal } from "./components/Sidebar/NewFileModal";
-import { NewFolderModal } from "./components/Sidebar/NewFolderModal";
-import { DeleteConfirmModal } from "./components/Sidebar/DeleteConfirmModal";
 import { Sidebar } from "./components/Sidebar/Sidebar";
 import { StatusBar } from "./components/StatusBar/StatusBar";
 import { MasterKeyBanner } from "./components/MasterKeyBanner/MasterKeyBanner";
@@ -28,7 +12,6 @@ import { TopBar } from "./components/TopBar/TopBar";
 import { ConfirmOpenProjectModal } from "./components/Welcome/ConfirmOpenProjectModal";
 import { Welcome } from "./components/Welcome/Welcome";
 import { hasTrackedGitChanges } from "./lib/git";
-import { friendlyGitError } from "./lib/gitErrors";
 import { useBranches } from "./hooks/useBranches";
 import { useGitStash } from "./hooks/useGitStash";
 import { useGitActionLog } from "./hooks/useGitActionLog";
@@ -89,11 +72,6 @@ import {
 import {
   copyProjectDir,
   copyProjectFile,
-  createProjectDir,
-  createProjectFileFromTemplate,
-  createRestEndpointFolder,
-  deleteProjectDir,
-  deleteProjectFile,
   readProjectFile,
   renameProjectDir,
   renameProjectFile,
@@ -107,17 +85,14 @@ import {
 import { isJsonPath, isYamlPath } from "./lib/fileExtensions";
 import {
   isUnderDocsRoot,
+  joinParent,
   toDocsRelativePath,
   toRepoRelativePath,
 } from "./lib/paths";
-import { RenameModal } from "./components/Sidebar/RenameModal";
+import { GitModals } from "./components/Git/GitModals";
+import { FileTreeModals } from "./components/Sidebar/FileTreeModals";
 import { ConfirmModal } from "./components/Modals/ConfirmModal";
 import { useOsFileDrop } from "./hooks/useOsFileDrop";
-
-function joinParent(parentPath: string, name: string): string {
-  if (!parentPath || parentPath === ".") return name;
-  return `${parentPath.replace(/[/\\]+$/, "")}/${name}`;
-}
 
 
 /** Append " copy" to a name. For files it goes before the extension
@@ -136,12 +111,6 @@ function withCopySuffix(name: string, isDir: boolean): string {
 /** Local branch name a remote branch checkout would create/switch to
  * (`origin/feature-x` → `feature-x`), mirroring the Rust-side logic in
  * `checkout_remote_branch`. */
-
-function parentOfPath(path: string): string {
-  const parts = path.split(/[/\\]/).filter(Boolean);
-  if (parts.length <= 1) return ".";
-  return parts.slice(0, -1).join("/");
-}
 
 
 function App() {
@@ -343,16 +312,13 @@ function App() {
     showSuccess,
     setError: setFolderError,
   });
+  // The create/rename/delete dialogs read the rest of `fileTree` themselves.
   const {
-    newFileParent,
     setNewFileParent,
-    newFolderParent,
     setNewFolderParent,
-    deleteTarget,
     setDeleteTarget,
     copiedItem,
     setCopiedItem,
-    renameTarget,
     setRenameTarget,
     applyRenameReport,
   } = fileTree;
@@ -399,83 +365,9 @@ function App() {
   });
 
 
-  const {
-    commitFileDiffTarget,
-    commitPreviewTarget,
-    conflictTarget,
-    deleteBranchTarget,
-    dropAllUnpushedOpen,
-    dropUnpushedTarget,
-    gitAlert,
-    gitDiffTarget,
-    handleCheckoutBranch,
-    handleCommit,
-    handleCreateBranch,
-    handleDropAllUnpushedConfirm,
-    handleDropUnpushedConfirm,
-    handleGitDiscard,
-    handleGitSaveContent,
-    handleMoveUnpushedConfirm,
-    handleStage,
-    handleSyncPillClick,
-    handleUndoAction,
-    handleUnstage,
-    loadCommitFileDiff,
-    loadCommitFiles,
-    loadStashFiles,
-    moveUnpushedCommits,
-    moveUnpushedOpen,
-    abortMergeConfirm,
-    setAbortMergeConfirm,
-    onAbortMerge,
-    onAbortMergeConfirm,
-    onConfirmDiscardShelfEntry,
-    onDeleteBranchConfirm,
-    onDiscardShelfEntry,
-    onFinishMergeRetry,
-    onPreviewShelfEntry,
-    onPullConfirm,
-    onPushConfirm,
-    onResetToRemoteConfirm,
-    onResolveConflict,
-    onRestoreShelfEntry,
-    openCommitFileDiff,
-    openCommitPreview,
-    openConflict,
-    openGitFileDiff,
-    openMoveUnpushedModal,
-    openPullModal,
-    openPushModal,
-    pendingStashConflict,
-    pullCommits,
-    pullCommitsLoading,
-    pullModalOpen,
-    pushCommits,
-    pushCommitsLoading,
-    pushConfirmOpen,
-    currentBranchBehind,
-    requestDropUnpushed,
-    resetRemoteConfirmOpen,
-    setCommitFileDiffTarget,
-    setCommitPreviewTarget,
-    setConflictTarget,
-    setDeleteBranchTarget,
-    setDropAllUnpushedOpen,
-    setDropUnpushedTarget,
-    setGitAlert,
-    setGitDiffTarget,
-    setMoveUnpushedOpen,
-    setPullModalOpen,
-    setPushConfirmOpen,
-    setResetRemoteConfirmOpen,
-    setStashDiscardTarget,
-    setStashPreviewTarget,
-    stashDiscardTarget,
-    stashPreviewTarget,
-    syncPillState,
-    unpushedBusy,
-    unpushedHashSet,
-  } = useGitWorkflow({
+  // Only what App's own markup reads; the other 48 returns drive the dialogs
+  // and go to `<GitModals>` as one object.
+  const gitWorkflow = useGitWorkflow({
     hasProject,
     project,
     git,
@@ -487,6 +379,36 @@ function App() {
     layout,
     showSuccess,
   });
+
+  const {
+    gitDiffTarget,
+    handleCheckoutBranch,
+    handleCommit,
+    handleCreateBranch,
+    handleStage,
+    handleSyncPillClick,
+    handleUndoAction,
+    handleUnstage,
+    loadCommitFiles,
+    onAbortMerge,
+    onDiscardShelfEntry,
+    onFinishMergeRetry,
+    onPreviewShelfEntry,
+    onRestoreShelfEntry,
+    openCommitFileDiff,
+    openConflict,
+    openGitFileDiff,
+    openMoveUnpushedModal,
+    openPullModal,
+    openPushModal,
+    pendingStashConflict,
+    requestDropUnpushed,
+    setDeleteBranchTarget,
+    setDropAllUnpushedOpen,
+    syncPillState,
+    unpushedBusy,
+    unpushedHashSet,
+  } = gitWorkflow;
 
 
   const { osDropTargetPath } = useOsFileDrop(hasProject, {
@@ -1292,88 +1214,14 @@ function App() {
         />
       ) : null}
 
-      {newFileParent !== null && project.docsRoot ? (
-        <NewFileModal
-          parentPath={newFileParent}
-          onCancel={() => setNewFileParent(null)}
-          onConfirm={async (fileName, template) => {
-            const relativePath = joinParent(newFileParent, fileName);
-            await createProjectFileFromTemplate(
-              project.docsRoot!,
-              relativePath,
-              template,
-            );
-            session.ensureExpanded(newFileParent);
-            setNewFileParent(null);
-            await tree.refresh();
-            await editor.openFile(relativePath);
-          }}
-        />
-      ) : null}
-
-      {newFolderParent !== null && project.docsRoot ? (
-        <NewFolderModal
-          parentPath={newFolderParent}
-          onCancel={() => setNewFolderParent(null)}
-          onConfirm={async (folderName, useRestEndpointTemplate) => {
-            const relativePath = joinParent(newFolderParent, folderName);
-            if (useRestEndpointTemplate) {
-              await createRestEndpointFolder(
-                project.docsRoot!,
-                relativePath,
-                folderName,
-              );
-            } else {
-              await createProjectDir(project.docsRoot!, relativePath);
-            }
-            session.ensureExpanded(relativePath);
-            setNewFolderParent(null);
-            await tree.refresh();
-            if (useRestEndpointTemplate) {
-              await editor.openFile(joinParent(relativePath, `${folderName}.adoc`));
-            }
-          }}
-        />
-      ) : null}
-
-      {deleteTarget !== null && project.docsRoot ? (
-        <DeleteConfirmModal
-          target={deleteTarget}
-          onCancel={() => setDeleteTarget(null)}
-          onConfirm={async (target) => {
-            if (target.isDir) {
-              await deleteProjectDir(project.docsRoot!, target.path);
-            } else {
-              await deleteProjectFile(project.docsRoot!, target.path);
-            }
-            editor.discardTabsUnder(target.path);
-            setDeleteTarget(null);
-            await tree.refresh();
-            git.scheduleRefresh();
-          }}
-        />
-      ) : null}
-
-      {renameTarget !== null && project.docsRoot ? (
-        <RenameModal
-          target={renameTarget}
-          onCancel={() => setRenameTarget(null)}
-          onConfirm={async (newName) => {
-            const oldPath = renameTarget.path;
-            const newPath = joinParent(parentOfPath(oldPath), newName);
-            const report = renameTarget.isDir
-              ? await renameProjectDir(project.docsRoot!, oldPath, newPath)
-              : await renameProjectFile(project.docsRoot!, oldPath, newPath);
-            editor.remapTabsUnder(oldPath, newPath);
-            session.remapExpandedUnder(oldPath, newPath);
-            session.ensureExpanded(parentOfPath(newPath));
-            setRenameTarget(null);
-            await tree.refresh();
-            git.scheduleRefresh();
-            void applyRenameReport(report);
-          }}
-        />
-      ) : null}
+      <FileTreeModals
+        docsRoot={project.docsRoot}
+        fileTree={fileTree}
+        tree={tree}
+        session={session}
+        editor={editor}
+        onGitRefresh={git.scheduleRefresh}
+      />
 
       {editor.closeConfirmMessage !== null ? (
         <ConfirmModal
@@ -1387,179 +1235,14 @@ function App() {
         />
       ) : null}
 
-      {pullModalOpen ? (
-        <PullUpdateModal
-          behind={currentBranchBehind}
-          commits={pullCommits}
-          commitsLoading={pullCommitsLoading}
-          busy={git.busy}
-          onCancel={() => setPullModalOpen(false)}
-          onConfirm={(mode) => void onPullConfirm(mode)}
-          onRequestResetToRemote={() => setResetRemoteConfirmOpen(true)}
-          onOpenCommit={(hash) => openCommitPreview(hash, pullCommits)}
-        />
-      ) : null}
-
-      {resetRemoteConfirmOpen ? (
-        <ResetRemoteConfirmModal
-          busy={git.busy}
-          onCancel={() => setResetRemoteConfirmOpen(false)}
-          onConfirm={() => void onResetToRemoteConfirm()}
-        />
-      ) : null}
-
-      {deleteBranchTarget ? (
-        <DeleteBranchConfirmModal
-          branch={deleteBranchTarget}
-          busy={branches.busy}
-          onCancel={() => setDeleteBranchTarget(null)}
-          onConfirm={() => void onDeleteBranchConfirm()}
-        />
-      ) : null}
-
-      {pushConfirmOpen ? (
-        <PushConfirmModal
-          branchName={project.branchName}
-          hasUpstream={git.status.hasUpstream}
-          ahead={git.status.ahead}
-          commits={pushCommits}
-          commitsLoading={pushCommitsLoading}
-          unpushedHashes={unpushedHashSet}
-          busy={git.busy || unpushedBusy}
-          onCancel={() => setPushConfirmOpen(false)}
-          onConfirm={() => void onPushConfirm()}
-          onDropCommit={(hash) => requestDropUnpushed(hash, pushCommits)}
-          onMoveToBranch={() => openMoveUnpushedModal(pushCommits)}
-          onDropAllUnpushed={() => setDropAllUnpushedOpen(true)}
-          onOpenCommit={(hash) => openCommitPreview(hash, pushCommits)}
-        />
-      ) : null}
-
-      {dropUnpushedTarget ? (
-        <DropUnpushedConfirmModal
-          commit={dropUnpushedTarget.commit}
-          newerCount={dropUnpushedTarget.newerCount}
-          unpushedCount={git.unpushedCommits.length}
-          busy={unpushedBusy}
-          onCancel={() => setDropUnpushedTarget(null)}
-          onConfirm={(mode) => void handleDropUnpushedConfirm(mode)}
-        />
-      ) : null}
-
-      {dropAllUnpushedOpen ? (
-        <DropUnpushedConfirmModal
-          commit={null}
-          newerCount={0}
-          unpushedCount={git.unpushedCommits.length || git.status.ahead}
-          busy={unpushedBusy}
-          onCancel={() => setDropAllUnpushedOpen(false)}
-          onConfirm={(mode) => void handleDropAllUnpushedConfirm(mode)}
-        />
-      ) : null}
-
-      {moveUnpushedOpen ? (
-        <MoveUnpushedModal
-          currentBranch={project.branchName}
-          branches={branches.branches}
-          commits={moveUnpushedCommits}
-          busy={unpushedBusy}
-          onCancel={() => setMoveUnpushedOpen(false)}
-          onConfirm={(target) => void handleMoveUnpushedConfirm(target)}
-        />
-      ) : null}
-
-      {gitDiffTarget ? (
-        <GitFileDiffModal
-          target={gitDiffTarget}
-          busy={git.busy}
-          editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
-          onClose={() => setGitDiffTarget(null)}
-          onLoadDiff={git.loadFileDiff}
-          onDiscard={handleGitDiscard}
-          onSaveContent={handleGitSaveContent}
-        />
-      ) : null}
-
-      {conflictTarget ? (
-        <GitConflictModal
-          path={conflictTarget}
-          busy={git.busy}
-          editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
-          onClose={() => setConflictTarget(null)}
-          onLoadContent={git.loadConflictFile}
-          onResolve={onResolveConflict}
-        />
-      ) : null}
-
-      {commitPreviewTarget ? (
-        <GitCommitPreviewModal
-          commit={commitPreviewTarget}
-          onClose={() => setCommitPreviewTarget(null)}
-          onLoadFiles={loadCommitFiles}
-          onOpenFile={openCommitFileDiff}
-        />
-      ) : null}
-
-      {commitFileDiffTarget ? (
-        <GitCommitFileDiffModal
-          commitHash={commitFileDiffTarget.commitHash}
-          file={commitFileDiffTarget.file}
-          editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
-          onClose={() => setCommitFileDiffTarget(null)}
-          onLoadDiff={loadCommitFileDiff}
-        />
-      ) : null}
-
-      {stashPreviewTarget ? (
-        <GitStashPreviewModal
-          entry={stashPreviewTarget}
-          onClose={() => setStashPreviewTarget(null)}
-          onLoadFiles={loadStashFiles}
-          onOpenFile={(file) => {
-            const commitHash = stashPreviewTarget.id;
-            setStashPreviewTarget(null);
-            openCommitFileDiff(commitHash, file);
-          }}
-        />
-      ) : null}
-
-      {stashDiscardTarget ? (
-        <DiscardStashConfirmModal
-          branchName={stashDiscardTarget.branch}
-          busy={stash.busy}
-          onCancel={() => setStashDiscardTarget(null)}
-          onConfirm={() => void onConfirmDiscardShelfEntry()}
-        />
-      ) : null}
-
-      {abortMergeConfirm ? (
-        <ConfirmModal
-          title={
-            abortMergeConfirm.isStashAbort
-              ? "Отменить восстановление?"
-              : "Отменить слияние?"
-          }
-          message={
-            abortMergeConfirm.isStashAbort
-              ? "Рабочая копия вернётся к состоянию до восстановления — сами изменения останутся в разделе «Отложенные изменения»."
-              : "Файлы вернутся к состоянию до обновления, изменения с сервера будут отброшены."
-          }
-          confirmLabel="Отменить"
-          cancelLabel="Не отменять"
-          danger
-          onCancel={() => setAbortMergeConfirm(null)}
-          onConfirm={() => void onAbortMergeConfirm()}
-        />
-      ) : null}
-
-      {gitAlert ? (
-        <AlertOkModal
-          title={gitAlert.title}
-          message={friendlyGitError(gitAlert.message)}
-          variant={gitAlert.variant}
-          onClose={() => setGitAlert(null)}
-        />
-      ) : null}
+      <GitModals
+        workflow={gitWorkflow}
+        git={git}
+        branches={branches}
+        stash={stash}
+        branchName={project.branchName}
+        editorFontSizePx={generalPrefs.prefs.editorFontSizePx}
+      />
 
       <DocsSearchOverlay
         open={docsSearchOpen}

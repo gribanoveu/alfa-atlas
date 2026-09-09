@@ -1,4 +1,4 @@
-import { CopyTextButton } from "./CopyTextButton";
+import { CopyTextButton } from "../Common/CopyTextButton";
 
 /** The text of a sent user message plus a hover-revealed copy button — the
  * message is the exact prompt that was sent, so copying it is how someone

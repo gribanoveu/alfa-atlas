@@ -220,3 +220,17 @@ export function parentPath(p: string): string {
   if (segments.length === 0) return root || body;
   return `${root}${segments.join(sep)}`;
 }
+
+/** A child path under `parentPath` — `"."` and `""` both mean the root, where
+ * the child is just its own name. */
+export function joinParent(parentPath: string, name: string): string {
+  if (!parentPath || parentPath === ".") return name;
+  return `${parentPath.replace(/[/\\]+$/, "")}/${name}`;
+}
+
+/** The directory holding `path`, as `"."` for a top-level entry. */
+export function parentOfPath(path: string): string {
+  const parts = path.split(/[/\\]/).filter(Boolean);
+  if (parts.length <= 1) return ".";
+  return parts.slice(0, -1).join("/");
+}

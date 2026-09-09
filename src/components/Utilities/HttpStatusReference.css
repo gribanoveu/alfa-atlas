@@ -186,8 +186,8 @@
   background: var(--bg-2);
 }
 
-.http-status-copy.is-copied,
-.http-status-copy.is-copied:hover {
+.http-status-copy.copied,
+.http-status-copy.copied:hover {
   color: var(--green);
   border-color: transparent;
   background: transparent;

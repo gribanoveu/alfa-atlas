@@ -28,7 +28,7 @@ import { AssistantToolApprovalGroup } from "../AssistantToolApprovalGroup";
 import { AssistantToolCallBlock } from "../AssistantToolCallBlock";
 import { AssistantUserMessage } from "../AssistantUserMessage";
 import { AssistantVisualCard } from "../AssistantVisualCard";
-import { CopyTextButton } from "../CopyTextButton";
+import { CopyTextButton } from "../../Common/CopyTextButton";
 
 const EMPTY_LIVE_BLOCK_IDS: ReadonlySet<string> = new Set<string>();
 

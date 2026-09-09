@@ -137,8 +137,8 @@
   background: var(--bg-2);
 }
 
-.json-diff-copy-btn.is-copied,
-.json-diff-copy-btn.is-copied:hover {
+.json-diff-copy-btn.copied,
+.json-diff-copy-btn.copied:hover {
   color: var(--green);
   border-color: color-mix(in srgb, var(--green) 35%, var(--border));
   background: transparent;

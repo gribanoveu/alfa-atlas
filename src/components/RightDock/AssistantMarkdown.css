@@ -179,8 +179,8 @@
   background: var(--bg-2);
 }
 
-.markdown-code-copy-btn-copied,
-.markdown-code-copy-btn-copied:hover {
+.markdown-code-copy-btn.copied,
+.markdown-code-copy-btn.copied:hover {
   color: var(--green);
 }
 

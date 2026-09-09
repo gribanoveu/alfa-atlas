@@ -343,8 +343,8 @@
   background: var(--bg-2);
 }
 
-.unix-row-copy.is-copied,
-.unix-row-copy.is-copied:hover {
+.unix-row-copy.copied,
+.unix-row-copy.copied:hover {
   color: var(--green);
   border-color: transparent;
   background: transparent;

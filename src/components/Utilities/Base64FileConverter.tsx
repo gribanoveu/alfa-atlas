@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy } from "lucide-react";
 import {
   createObjectUrl,
   decodeBase64FileInput,
@@ -12,7 +11,7 @@ import {
   encodeBytesToBase64,
   type Base64Alphabet,
 } from "../../lib/base64Codec";
-import { copyToClipboard } from "../../lib/clipboard";
+import { CopyTextButton } from "../Common/CopyTextButton";
 import { toMessage } from "../../lib/errors";
 import { saveDecodedBinaryFile } from "../../lib/fileSave";
 import { UtilityClearButton, UtilityLabeledField } from "./UtilityClearButton";
@@ -53,7 +52,6 @@ export function Base64FileConverter() {
   const [alphabet, setAlphabet] = useState<Base64Alphabet>("standard");
   const [padding, setPadding] = useState(true);
   const [dataUri, setDataUri] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [selectedFile, setSelectedFile] = useState<{ name: string; bytes: Uint8Array } | null>(
     null,
   );
@@ -106,16 +104,6 @@ export function Base64FileConverter() {
       URL.revokeObjectURL(url);
     };
   }, [decoded]);
-
-  const handleCopy = async (value: string) => {
-    try {
-      await copyToClipboard(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Буфер недоступен — результат остаётся на экране.
-    }
-  };
 
   const handlePickFile = () => {
     fileInputRef.current?.click();
@@ -375,19 +363,12 @@ export function Base64FileConverter() {
             <div className="b64file-output-block">
               <div className="b64file-output-head">
                 <h3 className="b64file-section-title">Base64</h3>
-                <button
-                  type="button"
-                  className={`b64file-copy-btn${copied ? " is-copied" : ""}`}
-                  onClick={() => void handleCopy(encodeOutput)}
-                  aria-label="Скопировать Base64"
-                  title={copied ? "Скопировано" : "Скопировать Base64"}
-                >
-                  {copied ? (
-                    <Check size={13} strokeWidth={2} aria-hidden />
-                  ) : (
-                    <Copy size={13} strokeWidth={1.75} aria-hidden />
-                  )}
-                </button>
+                <CopyTextButton
+                  text={encodeOutput}
+                  className="b64file-copy-btn"
+                  label="Скопировать Base64"
+                  size={13}
+                />
               </div>
               <pre className="b64file-output" aria-label="Результат Base64">
                 {encodeOutput}

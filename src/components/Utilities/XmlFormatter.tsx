@@ -1,12 +1,11 @@
 import { useMemo, useState } from "react";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy } from "lucide-react";
 import {
   formatXmlInput,
   type XmlFormatMode,
   type XmlIndent,
 } from "../../lib/xmlFormat";
 import { UtilityLabeledField } from "./UtilityClearButton";
+import { CopyTextButton } from "../Common/CopyTextButton";
 import "./XmlFormatter.css";
 
 const SAMPLE = `<root><item id="1"><name>Alpha</name><tags><tag>docs</tag><tag>api</tag></tags></item></root>`;
@@ -29,26 +28,11 @@ export function XmlFormatter() {
   const [raw, setRaw] = useState("");
   const [mode, setMode] = useState<XmlFormatMode>("prettify");
   const [indent, setIndent] = useState<XmlIndent>(2);
-  const [copied, setCopied] = useState(false);
 
   const formatted = useMemo(
     () => formatXmlInput(raw, { mode, indent }),
     [raw, mode, indent],
   );
-
-  const handleCopy = async () => {
-    if (!formatted.ok) {
-      return;
-    }
-
-    try {
-      await writeText(formatted.output);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Буфер недоступен — результат остаётся на экране.
-    }
-  };
 
   const handleApply = () => {
     if (!formatted.ok) {
@@ -147,19 +131,12 @@ export function XmlFormatter() {
           <div className="xmfmt-output-block">
             <div className="xmfmt-output-head">
               <h3 className="xmfmt-section-title">Результат</h3>
-              <button
-                type="button"
-                className={`xmfmt-copy-btn${copied ? " is-copied" : ""}`}
-                onClick={() => void handleCopy()}
-                aria-label="Скопировать результат"
-                title={copied ? "Скопировано" : "Скопировать результат"}
-              >
-                {copied ? (
-                  <Check size={13} strokeWidth={2} aria-hidden />
-                ) : (
-                  <Copy size={13} strokeWidth={1.75} aria-hidden />
-                )}
-              </button>
+              <CopyTextButton
+                text={formatted.output}
+                className="xmfmt-copy-btn"
+                label="Скопировать результат"
+                size={13}
+              />
             </div>
             <pre className="xmfmt-output" aria-label="Результат форматирования">
               {formatted.output}

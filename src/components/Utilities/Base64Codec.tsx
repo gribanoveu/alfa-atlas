@@ -1,6 +1,4 @@
 import { useMemo, useState } from "react";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy } from "lucide-react";
 import {
   decodeBase64String,
   encodeBase64String,
@@ -8,6 +6,7 @@ import {
 } from "../../lib/base64Codec";
 import { TEXT_ENCODING_OPTIONS, type TextEncodingId } from "../../lib/textEncoding";
 import { UtilityLabeledField } from "./UtilityClearButton";
+import { CopyTextButton } from "../Common/CopyTextButton";
 import "./Base64Codec.css";
 
 type CodecTab = "encode" | "decode";
@@ -41,7 +40,6 @@ export function Base64Codec() {
   const [alphabet, setAlphabet] = useState<Base64Alphabet>("standard");
   const [padding, setPadding] = useState(true);
   const [encoding, setEncoding] = useState<TextEncodingId>("auto");
-  const [copied, setCopied] = useState(false);
 
   const activeTab = TABS.find((item) => item.id === tab) ?? TABS[0];
 
@@ -51,20 +49,6 @@ export function Base64Codec() {
     }
     return decodeBase64String(raw, { alphabet, encoding });
   }, [raw, tab, alphabet, padding, encoding]);
-
-  const handleCopy = async () => {
-    if (!result.ok) {
-      return;
-    }
-
-    try {
-      await writeText(result.output);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Буфер недоступен — результат остаётся на экране.
-    }
-  };
 
   const showError = raw.length > 0 && !result.ok;
   const inputLabel = tab === "encode" ? "Текст" : "Base64";
@@ -201,19 +185,12 @@ export function Base64Codec() {
             <div className="b64-output-block">
               <div className="b64-output-head">
                 <h3 className="b64-section-title">{outputLabel}</h3>
-                <button
-                  type="button"
-                  className={`b64-copy-btn${copied ? " is-copied" : ""}`}
-                  onClick={() => void handleCopy()}
-                  aria-label="Скопировать результат"
-                  title={copied ? "Скопировано" : "Скопировать результат"}
-                >
-                  {copied ? (
-                    <Check size={13} strokeWidth={2} aria-hidden />
-                  ) : (
-                    <Copy size={13} strokeWidth={1.75} aria-hidden />
-                  )}
-                </button>
+                <CopyTextButton
+                  text={result.output}
+                  className="b64-copy-btn"
+                  label="Скопировать результат"
+                  size={13}
+                />
               </div>
               <pre className="b64-output" aria-label="Результат">
                 {result.output}

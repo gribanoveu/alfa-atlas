@@ -1,6 +1,4 @@
 import { useMemo, useState } from "react";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy } from "lucide-react";
 import {
   buildJsonLineDiff,
   diffJson,
@@ -11,6 +9,7 @@ import {
   type JsonDiffChange,
 } from "../../lib/jsonDiff";
 import { UtilityLabeledField } from "./UtilityClearButton";
+import { CopyTextButton } from "../Common/CopyTextButton";
 import "./JsonDiff.css";
 
 const SAMPLE_LEFT = `{
@@ -62,7 +61,6 @@ function ChangeRow({ change }: { change: JsonDiffChange }) {
 export function JsonDiff() {
   const [leftRaw, setLeftRaw] = useState("");
   const [rightRaw, setRightRaw] = useState("");
-  const [copied, setCopied] = useState(false);
 
   const leftParsed = useMemo(() => parseJsonInput(leftRaw), [leftRaw]);
   const rightParsed = useMemo(() => parseJsonInput(rightRaw), [rightRaw]);
@@ -84,20 +82,6 @@ export function JsonDiff() {
       equal: changes.length === 0,
     };
   }, [leftParsed, rightParsed]);
-
-  const handleCopyDiff = async () => {
-    if (!result) {
-      return;
-    }
-
-    try {
-      await writeText(result.unified);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Буфер недоступен — diff остаётся на экране.
-    }
-  };
 
   const leftError = leftRaw.trim() && !leftParsed.ok ? leftParsed.reason : null;
   const rightError = rightRaw.trim() && !rightParsed.ok ? rightParsed.reason : null;
@@ -190,19 +174,12 @@ export function JsonDiff() {
           <div className="json-diff-section">
             <div className="json-diff-section-head">
               <h3 className="json-diff-section-title">Построчный diff</h3>
-              <button
-                type="button"
-                className={`json-diff-copy-btn${copied ? " is-copied" : ""}`}
-                onClick={() => void handleCopyDiff()}
-                aria-label="Скопировать diff"
-                title={copied ? "Скопировано" : "Скопировать diff"}
-              >
-                {copied ? (
-                  <Check size={13} strokeWidth={2} aria-hidden />
-                ) : (
-                  <Copy size={13} strokeWidth={1.75} aria-hidden />
-                )}
-              </button>
+              <CopyTextButton
+                text={result.unified}
+                className="json-diff-copy-btn"
+                label="Скопировать diff"
+                size={13}
+              />
             </div>
             <pre className="json-diff-lines" aria-label="Построчный diff">
               {result.lineDiff.map((row, index) => (

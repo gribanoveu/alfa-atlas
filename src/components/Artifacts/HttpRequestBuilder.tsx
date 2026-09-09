@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Building2, Check, ClipboardPaste, Copy, Plus, Trash2, Wand2 } from "lucide-react";
+import { Building2, ClipboardPaste, Plus, Trash2, Wand2 } from "lucide-react";
+import { CopyTextButton } from "../Common/CopyTextButton";
 import {
   artifactRender,
   type ArtifactContent,
@@ -76,7 +76,6 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
   const [previewTab, setPreviewTab] = useState<PreviewTabId>("inputParams");
   const [rendered, setRendered] = useState<RenderedHttpRequest | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   // The preview is produced by the same renderer the assistant's tool
   // result goes through, so what the user approves here is exactly what
@@ -145,17 +144,6 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
 
   const body = spec.body;
   const previewText = rendered ? rendered[previewTab] : "";
-
-  const handleCopy = async () => {
-    if (!previewText) return;
-    try {
-      await writeText(previewText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Буфер недоступен — результат остаётся на экране.
-    }
-  };
 
   return (
     <div className="http-builder">
@@ -355,10 +343,7 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
                 role="tab"
                 aria-selected={previewTab === t.id}
                 className={`http-builder-tab${previewTab === t.id ? " is-active" : ""}`}
-                onClick={() => {
-                  setPreviewTab(t.id);
-                  setCopied(false);
-                }}
+                onClick={() => setPreviewTab(t.id)}
               >
                 {t.label}
               </button>
@@ -366,20 +351,17 @@ export function HttpRequestBuilder({ spec, onChange }: HttpRequestBuilderProps) 
           </nav>
           <div className="http-builder-preview-note">
             <p>Ровно то, что получит ассистент — можно скопировать прямо в документ.</p>
-            <button
-              type="button"
-              className={`http-builder-copy-btn${copied ? " is-copied" : ""}`}
-              onClick={() => void handleCopy()}
+            <CopyTextButton
+              // Remounts on a tab switch so the tick does not linger over
+              // content the user has not copied — what `setCopied(false)` in
+              // the tab handler used to do.
+              key={previewTab}
+              text={previewText}
+              className="http-builder-copy-btn"
+              label="Скопировать результат"
+              size={13}
               disabled={!previewText}
-              aria-label="Скопировать результат"
-              title={copied ? "Скопировано" : "Скопировать результат"}
-            >
-              {copied ? (
-                <Check size={13} strokeWidth={2} aria-hidden />
-              ) : (
-                <Copy size={13} strokeWidth={1.75} aria-hidden />
-              )}
-            </button>
+            />
           </div>
           {previewError ? (
             <p className="artifact-view-error">{previewError}</p>

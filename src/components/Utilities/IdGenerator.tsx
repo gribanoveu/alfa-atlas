@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy } from "lucide-react";
+import { CopyTextButton } from "../Common/CopyTextButton";
 import { decodeUlidTimestamp, generateUlidBatch } from "../../lib/ulid";
 import { generateUuidV4Batch } from "../../lib/uuid";
 import "./IdGenerator.css";
@@ -22,37 +22,18 @@ const TABS: { id: GeneratorTab; label: string; desc: string }[] = [
 
 const COUNT_OPTIONS = [1, 5, 10] as const;
 
-function ResultRow({
-  id,
-  label,
-  value,
-  copiedId,
-  onCopy,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  copiedId: string | null;
-  onCopy: (id: string, value: string) => void;
-}) {
-  const copied = copiedId === id;
+function ResultRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="idgen-row">
       <span className="idgen-row-label">{label}</span>
       <code className="idgen-row-value">{value}</code>
-      <button
-        type="button"
-        className={`idgen-row-copy${copied ? " is-copied" : ""}`}
-        onClick={() => onCopy(id, value)}
-        aria-label={`Скопировать: ${label}`}
-        title={copied ? "Скопировано" : "Копировать"}
-      >
-        {copied ? (
-          <Check size={13} strokeWidth={2} aria-hidden />
-        ) : (
-          <Copy size={13} strokeWidth={1.75} aria-hidden />
-        )}
-      </button>
+      <CopyTextButton
+        text={value}
+        className="idgen-row-copy"
+        label="Копировать"
+        ariaLabel={`Скопировать: ${label}`}
+        size={13}
+      />
     </div>
   );
 }
@@ -60,7 +41,9 @@ function ResultRow({
 export function IdGenerator() {
   const [tab, setTab] = useState<GeneratorTab>("uuid");
   const [count, setCount] = useState<(typeof COUNT_OPTIONS)[number]>(1);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  // Only the "Копировать все" button still needs a flag of its own: it shows
+  // a word rather than an icon, so `CopyTextButton` (icon-only) is not it.
+  const [copiedAll, setCopiedAll] = useState(false);
   const [uuids, setUuids] = useState(() => generateUuidV4Batch(1));
   const [ulids, setUlids] = useState(() => generateUlidBatch(1));
 
@@ -95,23 +78,13 @@ export function IdGenerator() {
     setTab(next);
   };
 
-  const handleCopy = async (id: string, value: string) => {
-    try {
-      await writeText(value);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500);
-    } catch {
-      // Буфер недоступен — значение всё равно видно на экране и выделяется мышью.
-    }
-  };
-
   const handleCopyAll = async () => {
     try {
       await writeText(values.join("\n"));
-      setCopiedId("all");
-      setTimeout(() => setCopiedId((current) => (current === "all" ? null : current)), 1500);
+      setCopiedAll(true);
+      setTimeout(() => setCopiedAll(false), 1500);
     } catch {
-      // см. handleCopy
+      // Буфер недоступен — значения всё равно видны на экране.
     }
   };
 
@@ -168,10 +141,10 @@ export function IdGenerator() {
             {values.length > 1 ? (
               <button
                 type="button"
-                className={`idgen-btn${copiedId === "all" ? " is-copied" : ""}`}
+                className={`idgen-btn${copiedAll ? " copied" : ""}`}
                 onClick={() => void handleCopyAll()}
               >
-                {copiedId === "all" ? "Скопировано" : "Копировать все"}
+                {copiedAll ? "Скопировано" : "Копировать все"}
               </button>
             ) : null}
           </div>
@@ -199,11 +172,8 @@ export function IdGenerator() {
           {values.map((value, index) => (
             <ResultRow
               key={`${tab}-${index}-${value}`}
-              id={`${tab}-${index}`}
               label={values.length === 1 ? "Значение" : `#${index + 1}`}
               value={value}
-              copiedId={copiedId}
-              onCopy={handleCopy}
             />
           ))}
         </div>

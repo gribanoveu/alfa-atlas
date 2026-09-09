@@ -1,6 +1,4 @@
 import { useMemo, useState } from "react";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy } from "lucide-react";
 import type { HttpStatusCode } from "../../data/httpStatusCodes";
 import {
   countHttpStatusMatches,
@@ -9,20 +7,10 @@ import {
   type HttpStatusFilter,
 } from "../../lib/httpStatusCodes";
 import { UtilityFieldShell } from "./UtilityClearButton";
+import { CopyTextButton } from "../Common/CopyTextButton";
 import "./HttpStatusReference.css";
 
-function StatusItem({
-  entry,
-  copiedId,
-  onCopy,
-}: {
-  entry: HttpStatusCode;
-  copiedId: string | null;
-  onCopy: (id: string, value: string) => void;
-}) {
-  const copyId = String(entry.code);
-  const copied = copiedId === copyId;
-
+function StatusItem({ entry }: { entry: HttpStatusCode }) {
   return (
     <article className="http-status-item">
       <span className={`http-status-code cat-${entry.category}`}>{entry.code}</span>
@@ -31,19 +19,13 @@ function StatusItem({
         <p className="http-status-desc">{entry.description}</p>
         <p className="http-status-usage">{entry.usage}</p>
       </div>
-      <button
-        type="button"
-        className={`http-status-copy${copied ? " is-copied" : ""}`}
-        onClick={() => onCopy(copyId, String(entry.code))}
-        aria-label={`Скопировать код ${entry.code}`}
-        title={copied ? "Скопировано" : "Копировать код"}
-      >
-        {copied ? (
-          <Check size={13} strokeWidth={2} aria-hidden />
-        ) : (
-          <Copy size={13} strokeWidth={1.75} aria-hidden />
-        )}
-      </button>
+      <CopyTextButton
+        text={String(entry.code)}
+        className="http-status-copy"
+        label="Копировать код"
+        ariaLabel={`Скопировать код ${entry.code}`}
+        size={13}
+      />
     </article>
   );
 }
@@ -51,7 +33,6 @@ function StatusItem({
 export function HttpStatusReference() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<HttpStatusFilter>("all");
-  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const groups = useMemo(
     () => filterHttpStatusGroups(query, category),
@@ -61,16 +42,6 @@ export function HttpStatusReference() {
     () => countHttpStatusMatches(query, category),
     [query, category],
   );
-
-  const handleCopy = async (id: string, value: string) => {
-    try {
-      await writeText(value);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500);
-    } catch {
-      // Буфер недоступен — код всё равно виден на экране.
-    }
-  };
 
   return (
     <div className="http-status">
@@ -117,12 +88,7 @@ export function HttpStatusReference() {
               <h2 className="http-status-group-title">{group.title}</h2>
               <div className="http-status-list">
                 {group.codes.map((entry) => (
-                  <StatusItem
-                    key={entry.code}
-                    entry={entry}
-                    copiedId={copiedId}
-                    onCopy={handleCopy}
-                  />
+                  <StatusItem key={entry.code} entry={entry} />
                 ))}
               </div>
             </section>

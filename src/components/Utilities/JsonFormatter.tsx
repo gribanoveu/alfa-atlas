@@ -1,12 +1,11 @@
 import { useMemo, useState } from "react";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy } from "lucide-react";
 import {
   formatJsonInput,
   type JsonFormatMode,
   type JsonIndent,
 } from "../../lib/jsonFormat";
 import { UtilityLabeledField } from "./UtilityClearButton";
+import { CopyTextButton } from "../Common/CopyTextButton";
 import "./JsonFormatter.css";
 
 const SAMPLE = '{"id":1,"name":"Alpha","tags":["docs","api"],"meta":{"version":2}}';
@@ -30,26 +29,11 @@ export function JsonFormatter() {
   const [mode, setMode] = useState<JsonFormatMode>("prettify");
   const [indent, setIndent] = useState<JsonIndent>(2);
   const [sortKeys, setSortKeys] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const formatted = useMemo(
     () => formatJsonInput(raw, { mode, indent, sortKeys }),
     [raw, mode, indent, sortKeys],
   );
-
-  const handleCopy = async () => {
-    if (!formatted.ok) {
-      return;
-    }
-
-    try {
-      await writeText(formatted.output);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Буфер недоступен — результат остаётся на экране.
-    }
-  };
 
   const handleApply = () => {
     if (!formatted.ok) {
@@ -172,19 +156,12 @@ export function JsonFormatter() {
           <div className="jsonfmt-output-block">
             <div className="jsonfmt-output-head">
               <h3 className="jsonfmt-section-title">Результат</h3>
-              <button
-                type="button"
-                className={`jsonfmt-copy-btn${copied ? " is-copied" : ""}`}
-                onClick={() => void handleCopy()}
-                aria-label="Скопировать результат"
-                title={copied ? "Скопировано" : "Скопировать результат"}
-              >
-                {copied ? (
-                  <Check size={13} strokeWidth={2} aria-hidden />
-                ) : (
-                  <Copy size={13} strokeWidth={1.75} aria-hidden />
-                )}
-              </button>
+              <CopyTextButton
+                text={formatted.output}
+                className="jsonfmt-copy-btn"
+                label="Скопировать результат"
+                size={13}
+              />
             </div>
             <pre className="jsonfmt-output" aria-label="Результат форматирования">
               {formatted.output}

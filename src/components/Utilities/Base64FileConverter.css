@@ -226,8 +226,8 @@
   background: var(--bg-2);
 }
 
-.b64file-copy-btn.is-copied,
-.b64file-copy-btn.is-copied:hover {
+.b64file-copy-btn.copied,
+.b64file-copy-btn.copied:hover {
   color: var(--green);
   border-color: color-mix(in srgb, var(--green) 35%, var(--border));
   background: transparent;

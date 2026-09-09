@@ -1,5 +1,3 @@
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { Check, Copy } from "lucide-react";
 import { isValidElement, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ThemedToken } from "shiki";
@@ -10,6 +8,7 @@ import {
   themedTokenStyle,
 } from "../../lib/shikiHighlight";
 import { AssistantMermaidBlock } from "./AssistantMermaidBlock";
+import { CopyTextButton } from "../Common/CopyTextButton";
 
 function fencedLang(className: string | undefined): string | null {
   const match = /language-(\S+)/.exec(className ?? "");
@@ -23,31 +22,6 @@ function childrenToText(node: ReactNode): string {
   if (Array.isArray(node)) return node.map(childrenToText).join("");
   if (isValidElement<{ children?: ReactNode }>(node)) return childrenToText(node.props.children);
   return "";
-}
-
-function CodeCopyButton({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = async () => {
-    try {
-      await writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard unavailable — code remains visible and selectable.
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      className={`markdown-code-copy-btn${copied ? " markdown-code-copy-btn-copied" : ""}`}
-      title={copied ? "Скопировано" : "Копировать код"}
-      onClick={() => void handleCopy()}
-    >
-      {copied ? <Check size={13} aria-hidden /> : <Copy size={13} aria-hidden />}
-    </button>
-  );
 }
 
 function PlainCodeLine({ line }: { line: string }) {
@@ -112,7 +86,12 @@ export function AssistantCodeBlock({ className, children }: AssistantCodeBlockPr
 
   return (
     <div className="markdown-code-block" data-lang={rawLang}>
-      <CodeCopyButton code={source} />
+      <CopyTextButton
+        text={source}
+        className="markdown-code-copy-btn"
+        label="Копировать код"
+        size={13}
+      />
       <div className="markdown-code-scroll">
         <div className="markdown-code-body">
           {lines.map((line, index) => (

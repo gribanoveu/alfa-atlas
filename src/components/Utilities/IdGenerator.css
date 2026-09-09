@@ -182,8 +182,8 @@
   background: var(--bg-2);
 }
 
-.idgen-row-copy.is-copied,
-.idgen-row-copy.is-copied:hover {
+.idgen-row-copy.copied,
+.idgen-row-copy.copied:hover {
   color: var(--green);
   border-color: transparent;
   background: transparent;
