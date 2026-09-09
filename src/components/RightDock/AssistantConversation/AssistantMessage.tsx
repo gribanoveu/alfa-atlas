@@ -15,6 +15,7 @@ import type { AskUserAnswerPayload } from "../../../lib/llm";
 import type { Visual } from "../../../lib/visuals";
 import { AssistantActivityGroup } from "../AssistantActivityGroup";
 import { AssistantArtifactCard } from "../AssistantArtifactCard";
+import { AssistantElapsedTimer } from "../AssistantElapsedTimer";
 import { AssistantAskUserCard } from "../AssistantAskUserCard";
 import { AssistantMarkdown } from "../AssistantMarkdown";
 import { AssistantPlanCard } from "../AssistantPlanCard";
@@ -281,6 +282,16 @@ export const AssistantMessage = memo(function AssistantMessage({
           ) : null}
         </div>
       )}
+      {/* Whole-turn timer. Sits outside the ternary above so it keeps its
+          mount instant (and its count) when the bubble switches from the
+          empty-thinking branch to the blocks branch; unmounts — and so
+          disappears — the moment streaming ends, leaving the settled
+          "Готово за …" line as the only duration. */}
+      {message.streaming ? (
+        <div className="assistant-chat-answer-footer">
+          <AssistantElapsedTimer running className="assistant-chat-duration" />
+        </div>
+      ) : null}
     </div>
   );
 });
