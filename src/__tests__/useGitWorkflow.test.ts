@@ -60,7 +60,7 @@ function makeDeps() {
     branches: { branches: [], refresh: mock(async () => {}), deleteBranch: mock(async () => true), error: null },
     stash: { refresh: mock(async () => {}), discard: mock(async () => {}), error: null },
     actionLog: { record: mock((entry: unknown) => recorded.push(entry)) },
-    editor: { reloadAllOpenTabs: mock(async () => {}), saveAllDirtyTabs: mock(async () => true) },
+    editor: { reloadAllOpenTabs: mock(async (): Promise<string[]> => []), saveAllDirtyTabs: mock(async () => true) },
     tree: { refresh: mock(async () => {}) },
     layout: { activeTool: null, setRightTool: mock(() => {}), setBottomToolId: mock(() => {}) },
     showSuccess: mock((m: string) => successes.push(m)),

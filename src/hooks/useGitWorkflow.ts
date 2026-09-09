@@ -364,13 +364,24 @@ export function useGitWorkflow(deps: GitWorkflowDeps) {
     await runPush();
   }, [runPush]);
   const refreshAfterBranchChange = useCallback(async () => {
-    await Promise.all([
+    const [, , keptDirty] = await Promise.all([
       git.refresh(),
       tree.refresh(),
       editor.reloadAllOpenTabs(),
       project.refreshBranch(),
     ]);
-  }, [editor.reloadAllOpenTabs, git, project.refreshBranch, tree]);
+    // `reloadAllOpenTabs` refuses to overwrite a buffer with unsaved edits
+    // (a `--hard` reset reaches it through several of the callers below).
+    // Say so: a tab still showing its old text after a reset otherwise
+    // reads as the reset having failed.
+    if (keptDirty.length > 0) {
+      showSuccess(
+        keptDirty.length === 1
+          ? `Файл «${keptDirty[0]}» оставлен с несохранёнными правками`
+          : `${keptDirty.length} файлов оставлены с несохранёнными правками`,
+      );
+    }
+  }, [editor.reloadAllOpenTabs, git, project.refreshBranch, tree, showSuccess]);
   const handleDropUnpushedConfirm = useCallback(
     async (mode: GitResetMode) => {
       if (!dropUnpushedTarget || !project.repoRoot) return;

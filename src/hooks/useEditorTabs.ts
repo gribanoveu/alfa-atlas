@@ -782,22 +782,49 @@ export function useEditorTabs(
     return true;
   }, [flushDebounce, saveTab]);
 
-  const reloadAllOpenTabs = useCallback(async (): Promise<void> => {
+  /** Refreshes every open project tab from disk after the working tree moved
+   * underneath the editor — a branch switch, a reset, a stash restore.
+   *
+   * A tab with unsaved edits keeps its buffer. Only two of the callers that
+   * reach here save first (`handleCheckoutBranch`/`handleCreateBranch`); the
+   * rest arrive via `refreshAfterBranchChange` after a `GitResetMode` that
+   * can be `--hard`, and replacing what the user typed with whatever landed
+   * on disk is data loss with no trace. Guarding here rather than at each
+   * call site is deliberate: the next path added would otherwise have to
+   * remember the same thing again.
+   *
+   * `savedContent` is refreshed either way — it is the baseline `dirty` is
+   * measured against, so a buffer that now happens to match the file settles
+   * to clean on its own instead of staying falsely modified.
+   *
+   * Returns the paths whose buffer was kept, so the caller can say so: a tab
+   * still showing its old text after a reset is otherwise indistinguishable
+   * from the reset not having worked. */
+  const reloadAllOpenTabs = useCallback(async (): Promise<string[]> => {
     const root = docsRootRef.current;
-    if (!root) return;
+    if (!root) return [];
     const open = [...tabsRef.current];
+    const keptDirty: string[] = [];
     for (const tab of open) {
       if (tab.origin !== "project" || tab.kind === "image") continue;
       try {
         const content = await readProjectFile(root, tab.path);
+        // Re-read the tab rather than trusting the pre-`await` snapshot: the
+        // user can type while the file is being read. Decided out here and
+        // not inside the updater because a state updater may run twice under
+        // StrictMode, and `keptDirty` must count each tab exactly once.
+        const live = tabsRef.current.find((t) => t.id === tab.id);
+        if (!live) continue;
+        const keepBuffer = live.dirty && live.content !== content;
+        if (keepBuffer) keptDirty.push(live.path);
         setTabs((prev) => {
           const next = prev.map((t) =>
             t.id === tab.id
               ? {
                   ...t,
-                  content,
+                  content: keepBuffer ? t.content : content,
                   savedContent: content,
-                  dirty: false,
+                  dirty: keepBuffer,
                 }
               : t,
           );
@@ -808,6 +835,7 @@ export function useEditorTabs(
         // File may not exist on this branch; leave tab content as-is.
       }
     }
+    return keptDirty;
   }, []);
 
   return {

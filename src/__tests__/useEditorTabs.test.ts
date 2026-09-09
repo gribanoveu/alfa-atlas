@@ -214,3 +214,57 @@ describe("useEditorTabs — paths moving underneath", () => {
     expect(result.current.tabs.map((t) => t.path)).toEqual(["a.adoc"]);
   });
 });
+
+describe("useEditorTabs — reloading from disk after the tree moved", () => {
+  test("a clean tab picks up the new content", async () => {
+    const { result } = render();
+    await act(async () => {
+      await result.current.openFile("a.adoc");
+    });
+
+    files["a.adoc"] = "= A on the other branch";
+    await act(async () => {
+      await result.current.reloadAllOpenTabs();
+    });
+
+    expect(result.current.tabs[0]?.content).toBe("= A on the other branch");
+    expect(result.current.tabs[0]?.dirty).toBe(false);
+  });
+
+  test("a dirty tab keeps its buffer and is reported back", async () => {
+    const { result } = render();
+    await act(async () => {
+      await result.current.openFile("a.adoc");
+    });
+    act(() => result.current.updateActiveContent("= A, still being written"));
+
+    files["a.adoc"] = "= A after a hard reset";
+    let kept: string[] = [];
+    await act(async () => {
+      kept = await result.current.reloadAllOpenTabs();
+    });
+
+    expect(result.current.tabs[0]?.content).toBe("= A, still being written");
+    expect(result.current.tabs[0]?.dirty).toBe(true);
+    expect(kept).toEqual(["a.adoc"]);
+  });
+
+  test("the new disk content becomes the baseline a dirty tab is measured against", async () => {
+    const { result } = render();
+    await act(async () => {
+      await result.current.openFile("a.adoc");
+    });
+    act(() => result.current.updateActiveContent("= A converged"));
+
+    // The reset happens to land on exactly what the user had typed — the
+    // tab has nothing left to save and must not stay falsely modified.
+    files["a.adoc"] = "= A converged";
+    let kept: string[] = [];
+    await act(async () => {
+      kept = await result.current.reloadAllOpenTabs();
+    });
+
+    expect(result.current.tabs[0]?.dirty).toBe(false);
+    expect(kept).toEqual([]);
+  });
+});
