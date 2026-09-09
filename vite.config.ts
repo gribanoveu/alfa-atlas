@@ -10,14 +10,24 @@ export default defineConfig(async () => ({
   optimizeDeps: {
     include: ["monaco-editor"],
   },
-  build: process.env.CI
-    ? {
-        // macOS CI runners have ~7 GiB RAM; heavy deps (monaco, shiki, mermaid) need a lower peak.
-        rollupOptions: {
-          maxParallelFileOps: 2,
+  build: {
+    rollupOptions: {
+      // macOS CI runners have ~7 GiB RAM; heavy deps (monaco, shiki, mermaid)
+      // need a lower peak. Only there — locally it just makes builds slower.
+      ...(process.env.CI ? { maxParallelFileOps: 2 } : {}),
+      output: {
+        // Mermaid and PlantUML are already split out by their own dynamic
+        // `import()`s. Monaco and asciidoctor are not: both are imported
+        // statically, so all of Monaco landed in the entry chunk and had to
+        // be parsed before the Welcome screen could paint — on a project the
+        // user may not even open a file in.
+        manualChunks: {
+          monaco: ["monaco-editor", "@monaco-editor/react"],
+          asciidoctor: ["asciidoctor"],
         },
-      }
-    : undefined,
+      },
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
