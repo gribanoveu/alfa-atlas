@@ -218,6 +218,29 @@ export function useEditorTabs(
     return saveTab(id);
   }, [clearDebounce, saveTab]);
 
+  // Autosave is debounced, so between the last keystroke and
+  // `autosaveDelayMs` there is a window where the edit exists only in this
+  // hook's state. Nothing closes that window on the way out: the Rust side
+  // persists window geometry on `CloseRequested` and exits
+  // (`src-tauri/src/lib.rs`), the component never unmounts, and the pending
+  // timer dies with the process.
+  //
+  // Flushing on `blur` rather than hooking the close event is deliberate.
+  // Closing the window, `Cmd+Q` and switching to another app all blur first,
+  // whereas `onCloseRequested` never fires for `Cmd+Q` on macOS (that is
+  // `RunEvent::ExitRequested`) — so the close hook would need a second
+  // mechanism to cover the most common way people quit. It also needs a new
+  // `core:window:allow-destroy` capability entry and puts a `preventDefault`
+  // in front of every close, where a failed flush hangs the window.
+  //
+  // `flushDebounce` is already a no-op with no pending timer, autosave off,
+  // or a clean tab — this only adds a trigger.
+  useEffect(() => {
+    const onBlur = () => void flushDebounce();
+    window.addEventListener("blur", onBlur);
+    return () => window.removeEventListener("blur", onBlur);
+  }, [flushDebounce]);
+
   const switchToTab = useCallback(
     async (id: string) => {
       if (id === activeTabIdRef.current) return;

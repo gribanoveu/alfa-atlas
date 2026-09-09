@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import * as actualProject from "../lib/project";
 
 let files: Record<string, string> = {};
@@ -31,6 +31,12 @@ beforeEach(() => {
   readThrows = null;
   writes = [];
 });
+
+// Same convention the component test files follow. Load-bearing here rather
+// than tidiness: without it every `renderHook` above stays mounted for the
+// rest of the file, and the hook now listens for `window` blur — one
+// dispatched event would flush every leftover instance too.
+afterEach(cleanup);
 
 describe("useEditorTabs — opening and closing", () => {
   test("opening a file adds a tab and makes it active", async () => {
@@ -266,5 +272,41 @@ describe("useEditorTabs — reloading from disk after the tree moved", () => {
 
     expect(result.current.tabs[0]?.dirty).toBe(false);
     expect(kept).toEqual([]);
+  });
+});
+
+describe("useEditorTabs — flushing the autosave debounce", () => {
+  test("losing window focus writes the pending edit instead of waiting out the delay", async () => {
+    const { result } = render();
+    await act(async () => {
+      await result.current.openFile("a.adoc");
+    });
+    // Schedules the debounce (default `autosaveDelayMs` is 1000) — nothing
+    // is on disk yet at this point.
+    act(() => result.current.updateActiveContent("= A typed and abandoned"));
+    expect(writes).toEqual([]);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"));
+      // The listener kicks off an async save it does not await.
+      await Promise.resolve();
+    });
+
+    expect(writes).toEqual([["a.adoc", "= A typed and abandoned"]]);
+    expect(result.current.tabs[0]?.dirty).toBe(false);
+  });
+
+  test("losing focus with nothing pending writes nothing", async () => {
+    const { result } = render();
+    await act(async () => {
+      await result.current.openFile("a.adoc");
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"));
+      await Promise.resolve();
+    });
+
+    expect(writes).toEqual([]);
   });
 });
