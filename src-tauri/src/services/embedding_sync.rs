@@ -178,10 +178,13 @@ fn backfill_derived(
 /// actually hidden/gitignored, given `IndexWatcher`'s own `is_relevant`
 /// filter is extension-only and doesn't know about `.gitignore`) far more
 /// cheaply than re-walking the whole tree. A genuinely gitignored file
-/// still never reaches `update_file` below. This also means nothing
-/// happens here until `RepositoryIndex` has a baseline for this
-/// `index_root` (at least one `embedding_sync` this session) — expected,
-/// not a bug: `RepositoryIndex` has no persistence of its own.
+/// still never reaches `update_file` below.
+///
+/// An upsert is skipped outright until `RepositoryIndex` has a baseline
+/// for this `index_root` (at least one `embedding_sync` this session) —
+/// expected, not a bug: `RepositoryIndex` has no persistence of its own,
+/// so there is nothing to update a file into yet. Deletions are still
+/// applied: they only touch the persistent `IndexStore`.
 ///
 /// `on_embedding_progress` is injected (mirrors `EmbeddingIndex::sync`'s own
 /// callback-based design) rather than reporting progress directly — this
@@ -218,6 +221,20 @@ fn run_incremental_sync(
     } else {
         kind
     };
+
+    // Nothing to update a file *into* until a full walk has seeded
+    // `RepositoryIndex` this session — it has no persistence of its own, so
+    // between project open (`ensure_incremental_watcher` starts eagerly,
+    // see its docs) and the first `sync`, every save fires an event this
+    // can only decline. Without this the tick fell through to
+    // `update_file`, which failed on the missing `repo_root` and logged
+    // `[embedding-watch] incremental sync tick failed` on every keystroke-
+    // triggered save. The removal branch below needs no baseline: dropping
+    // a deleted file's rows from the persistent `IndexStore` is correct
+    // work whether or not the resident index was ever built.
+    if effective_kind == FileChangeKind::Upserted && !repo_index.has_baseline() {
+        return Ok(());
+    }
 
     if effective_kind == FileChangeKind::Upserted
         && repo_index.get(&file_id).is_none()
@@ -1281,6 +1298,48 @@ mod tests {
 
             assert!(repo_index.get(&FileId("new.json".to_string())).is_some());
             assert!(chunk_index.file_ids().contains(&FileId("new.json".to_string())));
+
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&store_dir).ok();
+        });
+    }
+
+    #[test]
+    fn run_incremental_sync_is_a_no_op_before_the_first_full_walk() {
+        // The watcher starts at project open, before any `sync` has seeded
+        // `RepositoryIndex` — every save until then used to fall through to
+        // `update_file` and fail on the unset `repo_root`, logging
+        // `[embedding-watch] incremental sync tick failed` each time.
+        with_temp_home(|| {
+            let root = fixture_dir("repo");
+            let file_path = root.join("a.json");
+            fs::write(&file_path, "1").unwrap();
+
+            // Never built: exactly the state a freshly opened project is in.
+            let repo_index = RepositoryIndex::new();
+            assert!(!repo_index.has_baseline());
+            let chunk_index = ChunkIndex::new();
+            let embedding_index = EmbeddingIndexSlot::new(None);
+            let embedding_provider = mock_provider_slot();
+            let sync_guard = EmbeddingSyncGuard::new(());
+            let store_dir = fixture_dir("store");
+            let store = IndexStore::open(&store_dir).unwrap();
+
+            run_incremental_sync(
+                &repo_index,
+                &chunk_index,
+                &embedding_index,
+                &embedding_provider,
+                &sync_guard,
+                &root,
+                &store,
+                file_path,
+                FileChangeKind::Upserted,
+                &|_, _| {},
+            )
+            .expect("a pre-baseline save is a no-op, not an error");
+
+            assert!(chunk_index.file_ids().is_empty());
 
             fs::remove_dir_all(&root).ok();
             fs::remove_dir_all(&store_dir).ok();

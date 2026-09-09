@@ -349,6 +349,19 @@ impl RepositoryIndex {
         self.files.iter().map(|entry| entry.key().clone()).collect()
     }
 
+    /// Whether `build()` has run in this process — i.e. whether `read()`
+    /// and `update_file()` can resolve a `FileId` to a path at all. This
+    /// index has no persistence of its own (see the module docs), so it
+    /// starts empty on every launch and only a full walk seeds it.
+    ///
+    /// Exists for the incremental watcher: a file event that arrives
+    /// before the first walk is a no-op, not an error, and the caller has
+    /// no other way to tell that state apart from "this file is genuinely
+    /// unknown to a built index".
+    pub fn has_baseline(&self) -> bool {
+        self.repo_root.read().unwrap().is_some()
+    }
+
     /// Reads `file_id`'s current content from disk, resolved against the
     /// `repo_root` passed to the last `build()` call. `RepositoryIndex`
     /// deliberately never stores file content (see `IndexedFile`'s doc
