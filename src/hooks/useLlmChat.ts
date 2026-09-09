@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   getAutoApprovedTools,
   getMemoryWake,
@@ -196,6 +196,13 @@ export function useLlmChat(
     liveUsage: null,
   });
   const { messages, retryState, liveUsage } = turnView;
+  // Read by `sendMessage`/`retryWithCompaction` instead of closing over
+  // `messages` directly. A dependency that changes once per streamed token
+  // makes both a brand-new function on every delta, and those functions are
+  // handed down into the transcript — so every `memo` below them would
+  // compare unequal props on every token and re-render anyway.
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const setMessages = useCallback(
     (update: ChatMessage[] | ((previous: ChatMessage[]) => ChatMessage[])) => {
       setTurnView((previous) => ({
@@ -773,9 +780,13 @@ export function useLlmChat(
    * progress indicator (see `estimateMessageContextTokens`'s own note on
    * its imprecision), and filtering `m.streaming` out here costs more than
    * the inaccuracy is worth. */
-  const contextBreakdown = useMemo((): ContextBreakdown => {
-    const real = realMessages(messages);
-    const systemPrompt = estimateTokenCount(
+  /** Built once per input change rather than on every render. The five
+   * inputs move at human speed (a mode toggle, a project switch); `messages`
+   * moves once per streamed token, and this used to be rebuilt — as a whole
+   * prompt string, tool listing included — for each one, both here and again
+   * in the returned object below. */
+  const systemPrompt = useMemo(
+    () =>
       buildSystemPromptForConversationMode(
         conversationMode,
         accessMode,
@@ -783,7 +794,21 @@ export function useLlmChat(
         toolDefinitions,
         docsRootRelativeToRepo,
       ),
-    );
+    [conversationMode, accessMode, specsRepoInfo, toolDefinitions, docsRootRelativeToRepo],
+  );
+
+  /** The ring is a progress indicator, and this recomputation walks the whole
+   * transcript (`estimateWireChatTokens` renders each message to plain text)
+   * plus a loaded skill of up to `LOADED_SKILL_CONTEXT_CHARS`. At one delta
+   * event per token that is O(history) of work per character typed by the
+   * model. Deferring lets React run it at low priority: the number lags the
+   * stream by a frame or two, which is invisible on a progress ring, and the
+   * delta itself renders without waiting for it. */
+  const deferredMessages = useDeferredValue(messages);
+
+  const contextBreakdown = useMemo((): ContextBreakdown => {
+    const real = realMessages(deferredMessages);
+    const systemPromptTokens = estimateTokenCount(systemPrompt);
     const toolSchemas = estimateToolSchemaTokens(toolDefinitions);
     const chat = estimateWireChatTokens(
       sliceMessagesForPlanExecution(real, false),
@@ -796,22 +821,21 @@ export function useLlmChat(
     );
     const memory = estimateTokenCount(buildMemoryContextBlock(memoryWake) ?? "");
     return {
-      systemPrompt,
+      systemPrompt: systemPromptTokens,
       toolSchemas,
       chat,
       skills,
       userAnswers,
       plan,
       memory,
-      total: systemPrompt + toolSchemas + chat + skills + userAnswers + plan + memory,
+      total:
+        systemPromptTokens + toolSchemas + chat + skills + userAnswers + plan + memory,
     };
   }, [
-    messages,
-    accessMode,
+    deferredMessages,
+    systemPrompt,
     conversationMode,
-    specsRepoInfo,
     toolDefinitions,
-    docsRootRelativeToRepo,
     activePlanId,
     planRecord,
     memoryWake,
@@ -1090,15 +1114,7 @@ export function useLlmChat(
       // — omitting them ran this ~36% under the provider's own count, which
       // is compaction firing that much later than the ratio intends.
       const scopedTokens =
-        estimateTokenCount(
-          buildSystemPromptForConversationMode(
-            conversationMode,
-            accessMode,
-            specsRepoInfo,
-            toolDefinitions,
-            docsRootRelativeToRepo,
-          ),
-        ) +
+        estimateTokenCount(systemPrompt) +
         estimateToolSchemaTokens(toolDefinitions) +
         // Same reasoning as the tool schemas above: a re-injected skill is
         // ~12k tokens the request really carries and this sum cannot see,
@@ -1298,17 +1314,7 @@ export function useLlmChat(
       }
 
       const wireMessages: LlmMessage[] = [
-        {
-          role: "system",
-          content: buildSystemPromptForConversationMode(
-            conversationMode,
-            accessMode,
-            specsRepoInfo,
-            toolDefinitions,
-            docsRootRelativeToRepo,
-          ),
-          toolCallId: null,
-        },
+        { role: "system", content: systemPrompt, toolCallId: null },
         ...(compactionCacheRef.current
           ? [
               {
@@ -1411,6 +1417,7 @@ export function useLlmChat(
       specsRepoInfo,
       toolDefinitions,
       docsRootRelativeToRepo,
+      systemPrompt,
       runPendingLoop,
       settleOutcome,
       settleError,
@@ -1484,13 +1491,16 @@ export function useLlmChat(
   const sendMessage = useCallback(
     async (text: string, opts?: { planExecutionStart?: boolean }) => {
       const trimmed = text.trim();
-      // `activeTurnIdRef` rather than `sending` alone: two sends dispatched
-      // in the same tick both read the same stale `sending`, and the second
-      // would append its own user message and assistant bubble on top of a
-      // turn already streaming into the first.
-      if (!providerId || sending || activeTurnIdRef.current !== null || !trimmed) return;
+      // `activeTurnIdRef` rather than `sending`: two sends dispatched in the
+      // same tick both read the same stale `sending`, and the second would
+      // append its own user message and assistant bubble on top of a turn
+      // already streaming into the first. The ref is claimed synchronously
+      // at the top of `runTurn` and released in its `finally`, so it covers
+      // strictly more than the state flag ever did — which is why this can
+      // stop depending on `sending` at all, and stay stable across a turn.
+      if (!providerId || activeTurnIdRef.current !== null || !trimmed) return;
 
-      const priorTurns = messages;
+      const priorTurns = messagesRef.current;
       const userMsg: ChatMessage = {
         id: crypto.randomUUID(),
         role: "user",
@@ -1509,7 +1519,7 @@ export function useLlmChat(
         userMessageId: userMsg.id,
       });
     },
-    [providerId, sending, messages, runTurn],
+    [providerId, runTurn],
   );
 
   /** The "Сжать историю и повторить" action on a failed message whose
@@ -1525,14 +1535,15 @@ export function useLlmChat(
    * smaller regardless of what caused the original failure. */
   const retryWithCompaction = useCallback(
     (assistantMessageId: string) => {
-      if (!providerId || sending || activeTurnIdRef.current !== null) return;
-      const failedIndex = messages.findIndex((m) => m.id === assistantMessageId);
-      const failedMsg = failedIndex === -1 ? undefined : messages[failedIndex];
+      if (!providerId || activeTurnIdRef.current !== null) return;
+      const current = messagesRef.current;
+      const failedIndex = current.findIndex((m) => m.id === assistantMessageId);
+      const failedMsg = failedIndex === -1 ? undefined : current[failedIndex];
       if (!failedMsg || failedMsg.role !== "assistant" || !failedMsg.failed) return;
-      const userMsgToRetry = messages[failedIndex - 1];
+      const userMsgToRetry = current[failedIndex - 1];
       if (!userMsgToRetry || userMsgToRetry.role !== "user") return;
 
-      const priorTurns = messages.slice(0, failedIndex - 1);
+      const priorTurns = current.slice(0, failedIndex - 1);
       const newAssistantId = crypto.randomUUID();
       setMessages((prev) => [
         ...prev.filter((m) => m.id !== assistantMessageId),
@@ -1544,7 +1555,7 @@ export function useLlmChat(
         userMessageId: userMsgToRetry.id,
       });
     },
-    [providerId, sending, messages, runTurn],
+    [providerId, runTurn],
   );
 
   /** Bulk version of what a model-driven `todo update` already does one
@@ -1558,8 +1569,8 @@ export function useLlmChat(
       t.status === "pending" || t.status === "inProgress" ? { ...t, status: "cancelled" as const } : t,
     );
     setTodos(next);
-    onTurnSettled(messages, next, activePlanIdRef.current);
-  }, [messages, onTurnSettled, setTodos]);
+    onTurnSettled(messagesRef.current, next, activePlanIdRef.current);
+  }, [onTurnSettled, setTodos]);
 
   return {
     messages,
@@ -1577,13 +1588,7 @@ export function useLlmChat(
     clearTodos,
     activePlanId,
     setActivePlanId,
-    systemPrompt: buildSystemPromptForConversationMode(
-      conversationMode,
-      accessMode,
-      specsRepoInfo,
-      toolDefinitions,
-      docsRootRelativeToRepo,
-    ),
+    systemPrompt,
     decideToolCall,
     answerAskUser,
     answerArtifact,

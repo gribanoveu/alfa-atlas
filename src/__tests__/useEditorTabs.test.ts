@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import * as actualProject from "../lib/project";
 
 let files: Record<string, string> = {};
@@ -31,12 +31,6 @@ beforeEach(() => {
   readThrows = null;
   writes = [];
 });
-
-// Same convention the component test files follow. Load-bearing here rather
-// than tidiness: without it every `renderHook` above stays mounted for the
-// rest of the file, and the hook now listens for `window` blur — one
-// dispatched event would flush every leftover instance too.
-afterEach(cleanup);
 
 describe("useEditorTabs — opening and closing", () => {
   test("opening a file adds a tab and makes it active", async () => {

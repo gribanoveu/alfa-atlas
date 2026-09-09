@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Components } from "streamdown";
 import { Streamdown } from "streamdown";
@@ -70,7 +71,15 @@ type AssistantMarkdownProps = {
  * link. Mid-stream that costs a frame; on a finished answer, where nothing
  * more is coming, it is permanent content loss — and brackets in prose
  * (`arr[0`, AsciiDoc macros) are ordinary here. */
-export function AssistantMarkdown({ content, streaming }: AssistantMarkdownProps) {
+/** `memo`, because this is the expensive half of a streaming turn. Every
+ * delta event re-renders the whole transcript, and without this each past
+ * message re-parses its Markdown (and re-runs Shiki inside
+ * `AssistantCodeBlock`) for a token that changed only the last one. Both
+ * props are primitives, so the default shallow comparison is enough. */
+export const AssistantMarkdown = memo(function AssistantMarkdown({
+  content,
+  streaming,
+}: AssistantMarkdownProps) {
   return (
     <Streamdown
       className="assistant-md"
@@ -82,4 +91,4 @@ export function AssistantMarkdown({ content, streaming }: AssistantMarkdownProps
       {wrapAsciiTrees(content)}
     </Streamdown>
   );
-}
+});

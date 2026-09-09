@@ -505,6 +505,27 @@ export function AssistantConversation({
     void sendMessage(combined);
   };
 
+  // Declared rather than written inline in the JSX below: they are handed to
+  // `AssistantMessage`, which is memoized, and an arrow recreated on every
+  // render would make its props compare unequal on every streamed token —
+  // defeating the memo entirely. `sending` changes twice a turn, not once a
+  // token, so keeping it as a dependency is fine.
+  const handleOpenPlan = useCallback((planId: string) => {
+    window.dispatchEvent(new CustomEvent("atlas-open-plan", { detail: { planId } }));
+  }, []);
+
+  const handleVisualRenderError = useCallback((note: string) => {
+    void noteLlmChat(note);
+  }, []);
+
+  const handleRedrawVisual = useCallback(
+    (request: string) => {
+      if (sending) void steerChat(request);
+      else void sendMessage(request);
+    },
+    [sending, steerChat, sendMessage],
+  );
+
   return (
     <>
       <TodoProgressWidget
@@ -541,20 +562,11 @@ export function AssistantConversation({
         onDecideToolCall={decideToolCall}
         onRetryWithCompaction={retryWithCompaction}
         onStartPlan={startPlan}
-        onOpenPlan={(planId) => {
-          window.dispatchEvent(
-            new CustomEvent("atlas-open-plan", {
-              detail: { planId },
-            }),
-          );
-        }}
+        onOpenPlan={handleOpenPlan}
         onOpenArtifact={openArtifactTab}
         onOpenVisual={openVisualTab}
-        onVisualRenderError={(note) => void noteLlmChat(note)}
-        onRedrawVisual={(request) => {
-          if (sending) void steerChat(request);
-          else void sendMessage(request);
-        }}
+        onVisualRenderError={handleVisualRenderError}
+        onRedrawVisual={handleRedrawVisual}
       />
       <AssistantModelControls
         providerId={providerId}
