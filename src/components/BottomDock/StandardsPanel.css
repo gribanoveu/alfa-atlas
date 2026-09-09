@@ -144,7 +144,7 @@
 .standards-error {
   padding: 6px 10px;
   font-size: var(--font-ui-sm);
-  color: #e5534b;
+  color: var(--severity-error);
 }
 
 .standards-scroll {
@@ -183,7 +183,7 @@
 }
 
 .standards-folder-status.fail {
-  color: #e5534b;
+  color: var(--severity-error);
 }
 
 .standards-folder-name {
@@ -209,7 +209,7 @@
 
 .standards-folder-score.fail {
   background: rgba(229, 83, 75, 0.18);
-  color: #e5534b;
+  color: var(--severity-error);
 }
 
 .standards-folder-empty {
@@ -250,7 +250,7 @@
 }
 
 .standards-finding-icon.fail {
-  color: #e5534b;
+  color: var(--severity-error);
 }
 
 .standards-finding-rule {

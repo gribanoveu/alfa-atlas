@@ -122,11 +122,11 @@
 }
 
 .problems-item.error .problems-item-icon {
-  color: #e5534b;
+  color: var(--severity-error);
 }
 
 .problems-item.warning .problems-item-icon {
-  color: #d9a441;
+  color: var(--severity-warning);
 }
 
 .problems-item-message {

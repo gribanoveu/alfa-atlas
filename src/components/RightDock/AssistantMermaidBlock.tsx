@@ -76,6 +76,13 @@ export function AssistantMermaidBlock({ source }: { source: string }) {
       .then(({ renderDiagram }) => renderDiagram("mermaid", source, theme))
       .then((result) => {
         if (alive) setState(result);
+      })
+      // `renderDiagram` reports failure as `{kind: "error"}` rather than
+      // rejecting, but the dynamic `import()` above can still fail on its own
+      // (a chunk that did not load). Without this the block keeps its
+      // spinner for the life of the chat and the rejection goes unhandled.
+      .catch(() => {
+        if (alive) setState({ kind: "error", message: "не удалось загрузить движок схем" });
       });
     return () => {
       alive = false;

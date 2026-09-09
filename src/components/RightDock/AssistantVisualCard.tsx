@@ -64,14 +64,27 @@ function VisualPreview({
   useEffect(() => {
     let alive = true;
     setState({ kind: "loading" });
-    void renderDiagram(format, source, theme).then((result) => {
+    const fail = (message: string) => {
       if (!alive) return;
-      setState(result);
-      if (result.kind === "error" && !reported.current) {
+      setState({ kind: "error", message });
+      if (!reported.current) {
         reported.current = true;
-        reportRef.current(result.message);
+        reportRef.current(message);
       }
-    });
+    };
+    void renderDiagram(format, source, theme)
+      .then((result) => {
+        if (!alive) return;
+        if (result.kind === "error") {
+          fail(result.message);
+          return;
+        }
+        setState(result);
+      })
+      // `renderDiagram` is not supposed to reject, but the engines it
+      // dispatches to load lazily — leaving this uncaught means a permanent
+      // spinner, and the assistant never hears that its diagram failed.
+      .catch(() => fail("не удалось отрисовать схему"));
     return () => {
       alive = false;
     };

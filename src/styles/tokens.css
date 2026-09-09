@@ -15,6 +15,16 @@
   --purple: #a982c9;
   --yellow: #d6b56d;
   --red-tag: #e0655f;
+  /* Diagnostic severity. Two intensities on purpose: panels and the status
+     bar sit on chrome, while the editor's gutter bars and overview-ruler
+     marks sit on the code background and were always brighter. They used to
+     be typed out as literals in nine CSS files and one hook, which is how
+     the two pairs drifted apart in the first place — collapse them here if
+     the difference turns out to be accidental. */
+  --severity-error: #e5534b;
+  --severity-warning: #d9a441;
+  --severity-error-strong: #ff5252;
+  --severity-warning-strong: #ffb300;
   --cyan: #4fb0c6;
   --diff-add: #3a4a35;
   --diff-add-bar: #4a8f3c;

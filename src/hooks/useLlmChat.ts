@@ -383,6 +383,9 @@ export function useLlmChat(
     answerAskUser: (id: string, answer: AskUserAnswerPayload) => void;
     answerArtifact: (id: string, artifactId: string) => void;
     denyAll: () => void;
+    /** Drops the countdown without deciding anything — see the unmount
+     * effect below. Not `denyAll`: that answers on the user's behalf. */
+    abandon: () => void;
   } | null>(null);
 
   // The turn currently in flight, `null` when idle. Two jobs, both of them
@@ -557,6 +560,10 @@ export function useLlmChat(
         answerAskUser: (id, answer) => decide(id, true, false, { answer }),
         answerArtifact: (id, artifactId) => decide(id, true, false, { artifactId }),
         denyAll: () => calls.forEach((c) => decide(c.id, false, false)),
+        abandon: () => {
+          for (const timer of timers.values()) clearTimeout(timer);
+          timers.clear();
+        },
       };
 
       // A pause-only call has no countdown: auto-denying a question the user
@@ -598,6 +605,21 @@ export function useLlmChat(
     },
     [reportModeRequests],
   );
+
+  // A pause is the one state that outlives the panel: `onTurnPaused` has
+  // already persisted it, and reopening the chat replays it through the
+  // cold-resume path. What must not outlive the panel is the countdown —
+  // unmounting mid-pause (a chat switch) otherwise leaves every approval
+  // timer armed, and `TOOL_APPROVAL_TIMEOUT_MS` later they decide on behalf
+  // of a card nobody is looking at and fire a `streamLlmChatResume` for a
+  // chat that is gone. Deliberately not `denyAll`: answering "no" here would
+  // destroy the resumable state this whole mechanism exists to keep.
+  useEffect(() => {
+    return () => {
+      activeApprovalRef.current?.abandon();
+      activeApprovalRef.current = null;
+    };
+  }, []);
 
   /** Passed down to `AssistantToolApprovalGroup`'s Approve/Deny buttons. */
   const decideToolCall = useCallback((id: string, approved: boolean, trust: boolean) => {

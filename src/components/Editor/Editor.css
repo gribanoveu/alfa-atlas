@@ -279,12 +279,12 @@
    API decorations), см. revealRequest-эффект в Editor.tsx. */
 .df-line-highlight-error {
   background: rgba(255, 82, 82, 0.14) !important;
-  box-shadow: inset 3px 0 0 #ff5252;
+  box-shadow: inset 3px 0 0 var(--severity-error-strong);
 }
 
 .df-line-highlight-warning {
   background: rgba(255, 179, 0, 0.14) !important;
-  box-shadow: inset 3px 0 0 #ffb300;
+  box-shadow: inset 3px 0 0 var(--severity-warning-strong);
 }
 
 /* ── Include/xref/image gutter navigation icon ───────────────────── */

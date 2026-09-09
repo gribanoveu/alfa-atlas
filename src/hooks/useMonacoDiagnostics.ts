@@ -4,6 +4,16 @@ import type { Diagnostic } from "../lib/workspaceIndex";
 
 const OWNER = "workspaceIndex";
 
+/** Resolves one of `tokens.css`'s severity colours. Falls back to the token's
+ * own literal when the property is missing — during tests, where nothing has
+ * loaded the stylesheet, and in the split second before it does. */
+function severityColor(token: string, fallback: string): string {
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(token)
+    .trim();
+  return value === "" ? fallback : value;
+}
+
 /**
  * Синхронизирует диагностики индекса с активной моделью Monaco.
  *
@@ -33,6 +43,13 @@ export function useMonacoDiagnostics(
 
     const forThisDoc = diagnostics.filter((d) => d.document === activePath);
 
+    // Monaco wants a literal colour for the overview ruler — it cannot
+    // resolve a CSS custom property — so the tokens are read out of the
+    // stylesheet here instead of being typed in twice. Same values the
+    // editor's own gutter bars use (`Editor.css`).
+    const errorColor = severityColor("--severity-error-strong", "#ff5252");
+    const warningColor = severityColor("--severity-warning-strong", "#ffb300");
+
     // 1. Markers — волнистая подсветка, ховер и вкладка Problems Monaco.
     const markers: Monaco.editor.IMarkerData[] = forThisDoc.map((d) => ({
       startLineNumber: d.line,
@@ -61,7 +78,7 @@ export function useMonacoDiagnostics(
               : "codicon codicon-warning",
             glyphMarginHoverMessage: { value: d.message },
             overviewRuler: {
-              color: isError ? "#ff5252" : "#ffb300",
+              color: isError ? errorColor : warningColor,
               position: isError
                 ? monaco.editor.OverviewRulerLane.Right
                 : monaco.editor.OverviewRulerLane.Center,

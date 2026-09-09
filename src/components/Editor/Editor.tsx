@@ -246,6 +246,10 @@ export function EditorPane({
 
   const effectiveViewMode = isPlanTab ? planViewMode : viewMode;
 
+  const onCursorChangeRef = useRef(onCursorChange);
+  onCursorChangeRef.current = onCursorChange;
+  const cursorListenerRef = useRef<Monaco.IDisposable | null>(null);
+
   const handleMount: OnMount = useCallback(
     (editorInstance, monacoInstance) => {
       setMonaco(monacoInstance);
@@ -254,14 +258,32 @@ export function EditorPane({
       const syncCursor = () => {
         const position = editorInstance.getPosition();
         if (!position) return;
-        onCursorChange({ line: position.lineNumber, column: position.column });
+        // Through a ref rather than the captured prop: `onMount` fires once
+        // per editor, so the closure would keep whichever callback was
+        // current at mount for the editor's whole life.
+        onCursorChangeRef.current({
+          line: position.lineNumber,
+          column: position.column,
+        });
       };
 
       syncCursor();
-      editorInstance.onDidChangeCursorPosition(syncCursor);
+      cursorListenerRef.current?.dispose();
+      cursorListenerRef.current = editorInstance.onDidChangeCursorPosition(syncCursor);
     },
-    [onCursorChange],
+    [],
   );
+
+  // Monaco hands back an `IDisposable` here; dropping it leaks the listener
+  // for every editor this pane mounts. Monaco disposes its own listeners when
+  // the editor goes, so this only matters for the remounts in between — but
+  // it is the same discipline every `useMonaco*` hook in `src/hooks` follows.
+  useEffect(() => {
+    return () => {
+      cursorListenerRef.current?.dispose();
+      cursorListenerRef.current = null;
+    };
+  }, []);
 
   // Уведомляем App о смене активного экземпляра редактора — так команды
   // Undo/Redo из меню «Правка» всегда бьют по текущей модели.

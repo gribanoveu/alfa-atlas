@@ -32,11 +32,11 @@
 }
 
 .statusbar .seg.ai.warning {
-  color: #d9a441;
+  color: var(--severity-warning);
 }
 
 .statusbar .seg.ai.error {
-  color: #e5534b;
+  color: var(--severity-error);
 }
 
 .statusbar .seg.ai.idle {
@@ -60,7 +60,7 @@
 }
 
 .statusbar .seg.embed.stale {
-  color: #d9a441;
+  color: var(--severity-warning);
 }
 
 .statusbar .seg.embed.unsynced {
