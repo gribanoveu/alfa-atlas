@@ -1,10 +1,11 @@
 //! Encrypted storage for the domain password, when the user opts to remember
-//! it. Same shape as `jira_credentials_store`, but a distinct
-//! `SecretPurpose::CalendarPassword` — the AAD binding means this blob can
-//! never be opened as a Jira token or vice versa.
+//! it. A single-value store: one password, not a map — there is one
+//! configured calendar instance. Sealed under its own
+//! `SecretPurpose::CalendarPassword`, so the AAD binding means this blob can
+//! never be opened as any other secret or vice versa.
 //!
-//! A domain password is heavier than a Jira token (see the plan's "Хранение
-//! доменного пароля"): remembering it is opt-in, and the panel says plainly
+//! A domain password is heavy — it is an account credential, not an API key
+//! (see the plan's "Хранение доменного пароля"): remembering it is opt-in, and the panel says plainly
 //! what on-disk encryption here does and does not protect against.
 
 use std::path::PathBuf;

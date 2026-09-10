@@ -9,7 +9,6 @@ pub mod git;
 pub mod git_action_log;
 pub mod calendar;
 pub mod calendar_events;
-pub mod jira;
 pub mod layout;
 pub mod llm;
 pub mod memory_log;

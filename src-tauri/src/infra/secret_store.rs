@@ -11,9 +11,9 @@
 //! Binding the header — and with it the `purpose` — as associated data is
 //! the point of the format. The previous layout was a bare `nonce ||
 //! ciphertext` under one app-wide key, so the four blobs were structurally
-//! interchangeable: dropping `jira_credentials.enc` over
+//! interchangeable: dropping `calendar_credentials.enc` over
 //! `llm_credentials.enc` produced a file that decrypted perfectly and fed a
-//! Jira token to an LLM provider as its API key. A purpose in the AAD makes
+//! domain password to an LLM provider as its API key. A purpose in the AAD makes
 //! that a decryption failure instead. The version byte is what lets a later
 //! format (an Argon2-wrapped DEK, say) land without guessing.
 //!
@@ -59,7 +59,6 @@ const NONCE_LEN: usize = 12;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SecretPurpose {
     LlmCredentials,
-    JiraToken,
     EmbeddingApiKey,
     SshPrivateKey,
     CalendarPassword,
@@ -70,7 +69,6 @@ impl SecretPurpose {
     fn tag(self) -> &'static [u8] {
         match self {
             Self::LlmCredentials => b"llm-credentials",
-            Self::JiraToken => b"jira-token",
             Self::EmbeddingApiKey => b"embedding-api-key",
             Self::SshPrivateKey => b"ssh-private-key",
             Self::CalendarPassword => b"calendar-password",
@@ -308,17 +306,17 @@ mod tests {
 
     #[test]
     fn seal_open_round_trip() {
-        let blob = seal(SecretPurpose::JiraToken, b"a-jira-token", &KEY).unwrap();
+        let blob = seal(SecretPurpose::CalendarPassword, b"a-calendar-password", &KEY).unwrap();
         assert!(blob.starts_with(MAGIC));
-        let plain = open(SecretPurpose::JiraToken, &blob, &KEY).unwrap();
-        assert_eq!(plain.as_slice(), b"a-jira-token");
+        let plain = open(SecretPurpose::CalendarPassword, &blob, &KEY).unwrap();
+        assert_eq!(plain.as_slice(), b"a-calendar-password");
     }
 
     #[test]
     fn a_blob_cannot_be_opened_as_another_purpose() {
-        // The whole point of the AAD: `jira_credentials.enc` copied over
+        // The whole point of the AAD: `calendar_credentials.enc` copied over
         // `llm_credentials.enc` must not decrypt.
-        let blob = seal(SecretPurpose::JiraToken, b"a-jira-token", &KEY).unwrap();
+        let blob = seal(SecretPurpose::CalendarPassword, b"a-calendar-password", &KEY).unwrap();
         assert!(open(SecretPurpose::LlmCredentials, &blob, &KEY).is_err());
         assert!(open(SecretPurpose::EmbeddingApiKey, &blob, &KEY).is_err());
         assert!(open(SecretPurpose::SshPrivateKey, &blob, &KEY).is_err());
@@ -339,9 +337,9 @@ mod tests {
 
     #[test]
     fn truncated_blobs_fail_cleanly() {
-        let blob = seal(SecretPurpose::JiraToken, b"token", &KEY).unwrap();
+        let blob = seal(SecretPurpose::CalendarPassword, b"token", &KEY).unwrap();
         for cut in [0, 1, 5, 6, 10, blob.len() - 1] {
-            assert!(open(SecretPurpose::JiraToken, &blob[..cut], &KEY).is_err());
+            assert!(open(SecretPurpose::CalendarPassword, &blob[..cut], &KEY).is_err());
         }
     }
 
@@ -362,7 +360,7 @@ mod tests {
         assert!(!legacy.starts_with(MAGIC));
         // Any purpose opens a legacy blob — it carries none, and refusing
         // would lock users out of tokens stored by an older build.
-        let plain = open(SecretPurpose::JiraToken, &legacy, &KEY).unwrap();
+        let plain = open(SecretPurpose::CalendarPassword, &legacy, &KEY).unwrap();
         assert_eq!(plain.as_slice(), b"old-token");
     }
 
@@ -378,7 +376,7 @@ mod tests {
         legacy.extend_from_slice(&cipher.encrypt(nonce, b"old-token".as_ref()).unwrap());
 
         assert_eq!(
-            open(SecretPurpose::JiraToken, &legacy, &KEY).unwrap().as_slice(),
+            open(SecretPurpose::CalendarPassword, &legacy, &KEY).unwrap().as_slice(),
             b"old-token"
         );
     }
@@ -426,13 +424,13 @@ mod tests {
             let path = dir.join("legacy.enc");
             fs::write(&path, seal_legacy(b"old-token", &key)).unwrap();
 
-            let plain = read_secret_file(&path, SecretPurpose::JiraToken).unwrap();
+            let plain = read_secret_file(&path, SecretPurpose::CalendarPassword).unwrap();
             assert_eq!(plain.as_slice(), b"old-token");
 
             let on_disk = fs::read(&path).unwrap();
             assert!(on_disk.starts_with(MAGIC), "should have been re-sealed");
             assert_eq!(
-                read_secret_file(&path, SecretPurpose::JiraToken).unwrap().as_slice(),
+                read_secret_file(&path, SecretPurpose::CalendarPassword).unwrap().as_slice(),
                 b"old-token"
             );
 
@@ -444,7 +442,7 @@ mod tests {
     fn missing_file_reads_as_none() {
         settings_store::test_support::with_temp_home(|| {
             let dir = settings_store::ensure_settings_dir().unwrap();
-            assert!(read_secret_file(&dir.join("nope.enc"), SecretPurpose::JiraToken).is_none());
+            assert!(read_secret_file(&dir.join("nope.enc"), SecretPurpose::CalendarPassword).is_none());
         });
     }
 }

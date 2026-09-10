@@ -1,6 +1,6 @@
 //! Calendar settings: the two-layer merge (build manifest under the user's
 //! own settings) and building a connected `OwaSession` from settings + a
-//! password. Mirrors `services::jira_config`. The password passes through
+//! password. The password passes through
 //! only at the moment a session is built — from the store when remembered,
 //! or supplied by the user for this run only.
 

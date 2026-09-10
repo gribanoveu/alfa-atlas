@@ -7,7 +7,7 @@
 //! never touches timezones — the user's display zone is a frontend `Intl`
 //! concern (`CalendarSettings::display_time_zone`).
 //!
-//! Two layers like Jira: a build-time `CalendarPreset` from the `calendar`
+//! Two layers: a build-time `CalendarPreset` from the `calendar`
 //! section of `assets/llm/system_providers.yaml` (ships the instance URL and
 //! the corporate CA), and the user's `CalendarSettings` on top. The domain
 //! password is never in `CalendarSettings` — it lives encrypted in
@@ -44,7 +44,7 @@ pub struct CalendarSettings {
     /// viewer's OS zone. The backend stays UTC regardless of this.
     pub display_time_zone: String,
     /// Keep the domain password on disk (encrypted) between launches.
-    /// Default `false`: a domain password is not a Jira token, so
+    /// Default `false`: the password is an account credential, so
     /// remembering it is an explicit opt-in, not the default.
     pub remember_password: bool,
     /// PEM bundle replacing the public trust roots. `None` falls back to the
@@ -79,7 +79,7 @@ impl CalendarSettings {
 }
 
 /// What the settings tab reads: the user's own values plus what the build
-/// would fall back to for each field left empty. Mirrors `JiraSettingsView`.
+/// would fall back to for each field left empty.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarSettingsView {

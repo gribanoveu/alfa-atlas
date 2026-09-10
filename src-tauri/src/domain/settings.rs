@@ -319,11 +319,6 @@ pub struct AppSettings {
     /// skill is on.
     #[serde(default)]
     pub skills: crate::domain::agent_skills::SkillsSettings,
-    /// Global — Jira instance address and auth mode. The API token is never
-    /// part of this (or any) `settings.json` — see
-    /// `infra::jira_credentials_store`.
-    #[serde(default)]
-    pub jira: crate::domain::jira::JiraSettings,
     /// Global — OWA/Exchange calendar instance + login. The domain password
     /// is never in this (or any) `settings.json` — see
     /// `infra::owa_credentials_store`.
@@ -491,9 +486,29 @@ mod tests {
         assert_eq!(prefs.error_language, ErrorLanguage::Ru);
     }
 
+    /// A settings file written by a build that had the Jira integration must
+    /// keep loading: the section is simply ignored now. What this pins is
+    /// that it stays that way — `deny_unknown_fields` arriving later would
+    /// lock every existing user out of their own settings.
     #[test]
-    fn clamps_autosave_delay() {
-        let prefs = GeneralPrefs {
+    fn deserializes_a_settings_file_that_still_carries_the_jira_section() {
+        // A file as an older build wrote it, plus the section that build
+        // knew about and this one does not.
+        let mut stored = serde_json::to_value(AppSettings::default()).unwrap();
+        stored["jira"] = serde_json::json!({
+            "baseUrl": "https://jira.example.com",
+            "projectKey": "WOWTAX",
+            "issueTypeName": "Задача",
+        });
+
+        let settings: AppSettings = serde_json::from_value(stored).unwrap();
+
+        assert_eq!(settings.general.autosave_delay_ms, DEFAULT_AUTOSAVE_DELAY_MS);
+        assert!(settings.calendar.base_url.is_empty());
+    }
+
+    #[test]
+    fn clamps_autosave_delay() {        let prefs = GeneralPrefs {
             autosave_delay_ms: 10,
             ..GeneralPrefs::default()
         }

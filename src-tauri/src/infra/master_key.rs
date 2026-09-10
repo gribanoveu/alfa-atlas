@@ -832,7 +832,7 @@ mod tests {
         settings_store::test_support::with_temp_home(|| {
             forget_for_tests();
             let dir = settings_store::ensure_settings_dir().unwrap();
-            fs::write(dir.join("jira_credentials.enc"), b"sealed").unwrap();
+            fs::write(dir.join("calendar_credentials.enc"), b"sealed").unwrap();
             assert_eq!(recorded_store(), None);
 
             let outcome = with_unreachable_keychain(get_or_create);

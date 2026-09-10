@@ -330,7 +330,7 @@ pub fn default_allowed_tools(_mode: AiAccessMode) -> HashSet<ToolName> {
 /// `Artifact` is here too: listing, reading and updating were always
 /// project-blind, and a new one now goes to a reserved bucket
 /// (`services::artifacts::NO_PROJECT_REPO_ID`) — which is what lets the
-/// model draft a Jira ticket with no project open and the user publish it.
+/// model draft a Jira ticket with no project open.
 ///
 /// Everything else is left out on purpose, and not for symmetry:
 /// file/git/search/check tools resolve paths against a root that does not
