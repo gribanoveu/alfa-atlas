@@ -212,6 +212,24 @@ pub fn run() {
                 .await;
             });
 
+            // One-time cleanup of what the removed Jira integration left on
+            // disk (see `infra::legacy_state`). Fire-and-forget for the same
+            // reason as metrics, and nothing waits on it: the fields it
+            // strips are no longer read by anything, so a UI opened first
+            // simply sees the ticket without them.
+            tauri::async_runtime::spawn(async {
+                let _ = tauri::async_runtime::spawn_blocking(|| {
+                    match infra::legacy_state::clean_up() {
+                        Ok(report) if report.tickets_rewritten > 0 || report.token_removed => {
+                            eprintln!("legacy state cleaned up: {report:?}");
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("legacy state cleanup failed: {e}"),
+                    }
+                })
+                .await;
+            });
+
             // Checkpoints this run's active time to disk — a local write,
             // never a send. Usage time is still reported once, at the end;
             // this only ensures "the end" exists even when the process is

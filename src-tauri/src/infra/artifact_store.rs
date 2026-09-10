@@ -21,7 +21,11 @@ fn now_millis() -> i64 {
 }
 
 /// `~/.atlas/artifacts/`
-fn artifacts_root() -> Result<PathBuf, ArtifactError> {
+///
+/// `pub(crate)` rather than private for one caller: `infra::legacy_state`
+/// walks this tree once at startup to strip state a removed feature left in
+/// the ticket files.
+pub(crate) fn artifacts_root() -> Result<PathBuf, ArtifactError> {
     Ok(settings_store::settings_dir()?.join(ARTIFACTS_DIR_NAME))
 }
 
