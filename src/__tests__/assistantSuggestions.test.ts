@@ -152,6 +152,7 @@ describe("visibleSuggestions", () => {
     expect(ids).toEqual([
       "new-method-doc",
       "format-to-standard",
+      "draft-jira-ticket",
       "plan-feature-docs",
       "plan-api-change",
       "plan-cleanup",
@@ -170,6 +171,7 @@ describe("suggestionsForMode", () => {
       "describe-algorithm",
       "describe-errors",
       "format-open-file",
+      "draft-jira-ticket",
     ]);
     expect(
       suggestionsForMode(ASSISTANT_SUGGESTIONS, { ...EVERYTHING, conversationMode: "plan" }).map(
@@ -200,7 +202,7 @@ describe("suggestionsForMode", () => {
         ...NO_CONTEXT,
         conversationMode: "agent",
       }).map((s) => s.id),
-    ).toEqual(["new-method-doc", "format-to-standard"]);
+    ).toEqual(["new-method-doc", "format-to-standard", "draft-jira-ticket"]);
 
     expect(
       suggestionsForMode(ASSISTANT_SUGGESTIONS, {
@@ -208,7 +210,7 @@ describe("suggestionsForMode", () => {
         conversationMode: "agent",
         activeFilePath: "operations/createSignOperation/request.adoc",
       }).map((s) => s.id),
-    ).toEqual(["new-method-doc", "update-section", "format-open-file"]);
+    ).toEqual(["new-method-doc", "update-section", "format-open-file", "draft-jira-ticket"]);
   });
 
   test("the method-only suggestions need a method description open", () => {
