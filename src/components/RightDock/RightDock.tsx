@@ -5,7 +5,6 @@ import {
   GitFork,
   Lightbulb,
   Sparkles,
-  Ticket,
   CalendarDays,
   Wrench,
   type LucideIcon,
@@ -29,7 +28,6 @@ import { AssistantPanel } from "./AssistantPanel";
 import { BranchesPanel } from "./BranchesPanel";
 import { GitPanel } from "./GitPanel";
 import { AsciiDocPanel } from "./AsciiDocPanel";
-import { JiraPanel } from "./JiraPanel";
 import { CalendarPanel } from "./CalendarPanel";
 import { UtilitiesPanel } from "./UtilitiesPanel";
 import { NotificationsPanel } from "./NotificationsPanel";
@@ -69,11 +67,6 @@ const TOOL_DEFS: Record<
     empty: "Нет открытого репозитория",
     Icon: Wrench,
   },
-  jira: {
-    label: "Jira",
-    empty: "Интеграция с Jira недоступна",
-    Icon: Ticket,
-  },
   calendar: {
     label: "Календарь",
     empty: "Календарь не настроен",
@@ -87,7 +80,7 @@ const TOOL_STRIPE_GROUPS: RightTool[][] = [
   ["suggestions", "assistant"],
   ["branches", "git"],
   ["asciidoc", "utilities"],
-  ["jira", "calendar"],
+  ["calendar"],
 ];
 
 export type GitPanelViewProps = {
@@ -151,12 +144,6 @@ type RightDockProps = {
     activeId: UtilityId | null;
     onNewArtifact: (kind: ArtifactKind) => void;
     onOpenArtifacts: () => void;
-  } | null;
-  /** Not gated on an open project — the Jira connection is global, and
-   * checking it is exactly what someone does before opening anything. */
-  jira?: {
-    onOpenSettings: () => void;
-    onAskAssistant?: () => void;
   } | null;
   calendar?: {
     onOpenSettings: () => void;
@@ -229,7 +216,6 @@ export function RightDock({
   branches,
   asciidoc,
   utilities,
-  jira,
   calendar,
   assistant,
   gitActionLog,
@@ -332,11 +318,6 @@ export function RightDock({
                 onRefresh={branches.onRefresh}
                 onFetch={branches.onFetch}
                 onDelete={branches.onDelete}
-              />
-            ) : activeTool === "jira" && jira ? (
-              <JiraPanel
-                onOpenSettings={jira.onOpenSettings}
-                onAskAssistant={jira.onAskAssistant}
               />
             ) : activeTool === "calendar" && calendar ? (
               <CalendarPanel onOpenSettings={calendar.onOpenSettings} />

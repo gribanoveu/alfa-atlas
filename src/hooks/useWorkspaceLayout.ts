@@ -7,7 +7,6 @@ export type RightTool =
   | "git"
   | "suggestions"
   | "branches"
-  | "jira"
   | "calendar";
 export type BottomTool = "gitHistory" | "formatting" | "problems";
 
@@ -26,7 +25,6 @@ const RIGHT_TOOLS: readonly RightTool[] = [
   "suggestions",
   "asciidoc",
   "utilities",
-  "jira",
   "calendar",
 ];
 const BOTTOM_TOOLS: readonly BottomTool[] = [

@@ -21,7 +21,6 @@ type Ticket = Extract<ArtifactContent, { kind: "jiraTicket" }>;
 function ticket(fields: Partial<Ticket> = {}): Ticket {
   return {
     kind: "jiraTicket",
-    issueKey: "",
     why: "",
     outcome: "",
     inScope: [],

@@ -15,7 +15,6 @@ import {
   ShieldCheck,
   Sparkles,
   SpellCheck,
-  Ticket,
   CalendarDays,
   X,
 } from "lucide-react";
@@ -31,7 +30,6 @@ import { CredentialsTab } from "./CredentialsTab";
 import { EditorTab } from "./EditorTab";
 import { EmbeddingsTab } from "./EmbeddingsTab";
 import { GeneralTab } from "./GeneralTab";
-import { JiraTab } from "./JiraTab";
 import { CalendarTab } from "./CalendarTab";
 import { LlmTab } from "./LlmTab";
 import { LoggingTab } from "./LoggingTab";
@@ -54,7 +52,6 @@ export type SectionId =
   | "skills"
   | "permissions"
   | "notifications"
-  | "jira"
   | "calendar"
   | "credentials"
   | "embeddings"
@@ -198,15 +195,6 @@ const GROUPS: SectionGroup[] = [
   {
     label: "Интеграции",
     sections: [
-      {
-        id: "jira",
-        label: "Jira",
-        title: "Jira",
-        description:
-          "Адрес экземпляра Jira и токен, которым приложение к нему подключается",
-        icon: Ticket,
-        keywords: "jira задачи тикеты токен pat personal access token сертификат инстанс",
-      },
       {
         id: "calendar",
         label: "Календарь",
@@ -453,7 +441,6 @@ export function SettingsDialog({
                   {section === "skills" ? <SkillsTab /> : null}
                   {section === "permissions" ? <PermissionsTab /> : null}
                   {section === "notifications" ? <NotificationsTab /> : null}
-                  {section === "jira" ? <JiraTab /> : null}
                   {section === "calendar" ? <CalendarTab /> : null}
                   {section === "credentials" ? <CredentialsTab /> : null}
                   {section === "embeddings" ? <EmbeddingsTab repoRoot={projectRoot} /> : null}

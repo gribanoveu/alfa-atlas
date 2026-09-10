@@ -65,8 +65,6 @@ type TopBarProps = {
   openLlmSettingsSignal?: number;
   /** Bump this (e.g. `n => n + 1`) to open Settings on the "credentials" tab. */
   openCredentialsSettingsSignal?: number;
-  /** Bump this (e.g. `n => n + 1`) to open Settings on the "jira" tab. */
-  openJiraSettingsSignal?: number;
   openCalendarSettingsSignal?: number;
 };
 
@@ -110,7 +108,6 @@ export function TopBar({
   openStandardsSettingsSignal,
   openLlmSettingsSignal,
   openCredentialsSettingsSignal,
-  openJiraSettingsSignal,
   openCalendarSettingsSignal,
 }: TopBarProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -136,7 +133,6 @@ export function TopBar({
   const standardsSignalRef = useRef(openStandardsSettingsSignal);
   const llmSignalRef = useRef(openLlmSettingsSignal);
   const credentialsSignalRef = useRef(openCredentialsSettingsSignal);
-  const jiraSignalRef = useRef(openJiraSettingsSignal);
   const calendarSignalRef = useRef(openCalendarSettingsSignal);
 
   useEffect(() => {
@@ -171,15 +167,6 @@ export function TopBar({
     setSettingsInitialSection("credentials");
     setSettingsOpen(true);
   }, [openCredentialsSettingsSignal]);
-
-  useEffect(() => {
-    if (openJiraSettingsSignal === undefined || openJiraSettingsSignal === jiraSignalRef.current) {
-      return;
-    }
-    jiraSignalRef.current = openJiraSettingsSignal;
-    setSettingsInitialSection("jira");
-    setSettingsOpen(true);
-  }, [openJiraSettingsSignal]);
 
   useEffect(() => {
     if (

@@ -19,7 +19,6 @@ function record(overrides: Partial<ArtifactRecord> = {}): ArtifactRecord {
       definitionOfDone: [],
       risks: [],
       links: [],
-      issueKey: "",
     } as ArtifactRecord["content"],
     createdAtMs: 1000,
     updatedAtMs: 2000,

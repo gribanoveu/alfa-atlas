@@ -1,6 +1,5 @@
 /* Calendar settings tab. Layout only — colors, buttons and hints come from the
-   shared `settings-*` classes, inputs from `clone-modal-input`. Spacing mirrors
-   the Jira tab so the two read as one settings surface. */
+   shared `settings-*` classes, inputs from `clone-modal-input`. */
 
 .calendar-tab .settings-card {
   display: flex;
@@ -25,7 +24,8 @@
   margin: 0;
 }
 
-/* Collapsible «Дополнительно» — same shape as the Jira tab's advanced block. */
+/* Collapsible «Дополнительно» — the same shape the LLM tab's advanced block
+   uses, repeated here because every tab carries its own CSS file. */
 .calendar-tab .settings-card.cal-advanced {
   gap: 0;
   padding: 0;

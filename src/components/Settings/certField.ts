@@ -1,4 +1,4 @@
-/** Format hint shown in every «Доверенный сертификат» box — Jira, LLM
+/** Format hint shown in every «Доверенный сертификат» box — LLM
  * providers and embeddings all take the same PEM bundle.
  *
  * It is a placeholder rather than a prefilled value on purpose: none of

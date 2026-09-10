@@ -112,7 +112,7 @@ function resolveAccessLevel(
  * conversation modes: what differs between them is what to do next, not
  * what is reachable. */
 const NO_PROJECT_ACCESS_DESCRIPTION =
-  "**No active project** — no repository is open, so there are no files, no search and no git history, and the tools for them are not offered this turn. Work from general knowledge, from this conversation and from any skill you load. Drafting still works: write wording or a structure straight into your reply, and use the artifact tool (op \"create\", then \"update\" to refine it) for a Jira ticket — the user gets it as an editable tab and can publish it to the tracker from there. Never say you will open, read or change a file, and never offer to — say a project has to be opened first.";
+  "**No active project** — no repository is open, so there are no files, no search and no git history, and the tools for them are not offered this turn. Work from general knowledge, from this conversation and from any skill you load. Drafting still works: write wording or a structure straight into your reply, and use the artifact tool (op \"create\", then \"update\" to refine it) for a Jira ticket — the user gets it as an editable tab and the ready-to-paste description. Never say you will open, read or change a file, and never offer to — say a project has to be opened first.";
 
 /** Sections about working with files. At `noProject` there is nothing for
  * them to describe: the file tools are not offered this turn, and "paths

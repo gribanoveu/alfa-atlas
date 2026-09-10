@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, ExternalLink, Loader2, Save, Send, Upload } from "lucide-react";
+import { Check, Loader2, Save, Send } from "lucide-react";
 import type { ArtifactReadyDetail } from "../RightDock/AssistantArtifactCard";
 import {
   ARTIFACT_KIND_LABELS,
@@ -11,13 +11,6 @@ import {
   type ArtifactRecord,
   type ArtifactUpdatedDetail,
 } from "../../lib/artifacts";
-import {
-  getJiraSettings,
-  jiraIssueUrl,
-  jiraPublishTicket,
-  type JiraPublishOutcome,
-} from "../../lib/jira";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { toMessage } from "../../lib/errors";
 import { HttpRequestBuilder } from "./HttpRequestBuilder";
 import { JiraTicketBuilder } from "./JiraTicketBuilder";
@@ -50,15 +43,6 @@ export function ArtifactView({
   const [dirty, setDirty] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [sent, setSent] = useState(false);
-  const [publishing, setPublishing] = useState(false);
-  const [published, setPublished] = useState<JiraPublishOutcome | null>(null);
-  const [publishError, setPublishError] = useState<string | null>(null);
-  // Publishing creates something in a tracker the whole team reads and there
-  // is no undo, so the button opens a confirmation naming exactly what will
-  // appear rather than firing straight away.
-  const [confirming, setConfirming] = useState(false);
-  const [target, setTarget] = useState<{ projectKey: string; issueTypeName: string } | null>(null);
-  const [issueUrl, setIssueUrl] = useState<string | null>(null);
   // Версия ассистента, придержанная из-за несохранённых правок пользователя.
   const [agentUpdate, setAgentUpdate] = useState<ArtifactRecord | null>(null);
 
@@ -178,45 +162,6 @@ export function ArtifactView({
     [record],
   );
 
-  const isTicket = record?.content.kind === "jiraTicket";
-  const issueKey = record?.content.kind === "jiraTicket" ? record.content.issueKey : "";
-
-  // Where the ticket would go, for the confirmation. Read once per tab: a
-  // published ticket needs no target, and every other kind needs none at all.
-  useEffect(() => {
-    if (!isTicket || issueKey) return;
-    let cancelled = false;
-    void getJiraSettings()
-      .then((view) => {
-        if (cancelled) return;
-        setTarget({
-          projectKey: view.settings.projectKey,
-          issueTypeName: view.settings.issueTypeName,
-        });
-      })
-      .catch(() => {
-        // The publish call reports a missing project or type properly; the
-        // confirmation just shows less.
-        if (!cancelled) setTarget(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isTicket, issueKey]);
-
-  // A ticket opened again later still needs its link, and rebuilding it here
-  // would duplicate a rule that lives in Rust.
-  useEffect(() => {
-    if (!issueKey) return;
-    let cancelled = false;
-    void jiraIssueUrl(issueKey).then((url) => {
-      if (!cancelled) setIssueUrl(url);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [issueKey]);
-
   const handleSave = async () => {
     // Saving must not silently promote a draft to ready — that is what the
     // send button is for.
@@ -225,27 +170,6 @@ export function ArtifactView({
     setJustSaved(true);
     if (savedTimerRef.current !== null) clearTimeout(savedTimerRef.current);
     savedTimerRef.current = setTimeout(() => setJustSaved(false), 2000);
-  };
-
-  /** Saves any pending edits first — an issue must not be created from a
-   *  draft the user is still typing. */
-  const handlePublish = async () => {
-    setConfirming(false);
-    const saved = await persist(record?.status ?? "draft");
-    if (!saved) return;
-    setPublishing(true);
-    setPublishError(null);
-    try {
-      const outcome = await jiraPublishTicket(artifactId);
-      setPublished(outcome);
-      // The backend wrote the issue key into the artifact; re-read so the
-      // draft stops offering to publish an issue that now exists.
-      setRecord(await artifactGet(artifactId));
-    } catch (e) {
-      setPublishError(toMessage(e));
-    } finally {
-      setPublishing(false);
-    }
   };
 
   const handleSend = async () => {
@@ -270,23 +194,17 @@ export function ArtifactView({
     );
   }
 
-  const failedLinks = published?.links.filter((l) => l.error) ?? [];
-
   return (
     <div className="artifact-view">
       <header className="artifact-view-head">
         <div className="artifact-view-heading">
           <span className="artifact-view-eyebrow">
             Артефакт · {ARTIFACT_KIND_LABELS[record.kind]}
-            {isTicket
-              ? issueKey
-                ? ` · ${issueKey}`
-                : " · черновик"
-              : sent && !dirty
-                ? " · отправлен ассистенту"
-                : record.status === "draft"
-                  ? " · черновик"
-                  : ""}
+            {sent && !dirty
+              ? " · отправлен ассистенту"
+              : record.status === "draft"
+                ? " · черновик"
+                : ""}
           </span>
           <input
             className="artifact-view-title"
@@ -301,39 +219,14 @@ export function ArtifactView({
             {justSaved ? "Сохранено" : "Сохранить"}
           </button>
 
-          {/* A ticket is written *by* the assistant, so there is nothing to
-              send back to it; what it needs instead is a way out into Jira.
-              Every other kind is the opposite — the user fills it in and the
-              assistant is waiting. */}
-          {isTicket ? (
-            issueKey ? (
-              <button
-                type="button"
-                className="artifact-btn primary"
-                onClick={() => issueUrl && void openUrl(issueUrl)}
-                disabled={!issueUrl}
-                title={issueUrl ?? "Адрес Jira не настроен"}
-              >
-                <ExternalLink size={13} aria-hidden />
-                {issueKey}
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="artifact-btn primary"
-                disabled={busy || publishing}
-                onClick={() => setConfirming(true)}
-              >
-                <Upload size={13} aria-hidden />
-                {publishing ? "Публикуем…" : "Опубликовать в Jira"}
-              </button>
-            )
-          ) : (
-            <button type="button" className="artifact-btn primary" disabled={busy} onClick={() => void handleSend()}>
-              <Send size={13} aria-hidden />
-              Отправить ассистенту
-            </button>
-          )}
+          {/* Every kind now goes back to the assistant. A ticket used to be
+              the exception — it was written *by* the model and its way out
+              was into the tracker — but with publishing gone the send button
+              is again how the user asks for a refinement. */}
+          <button type="button" className="artifact-btn primary" disabled={busy} onClick={() => void handleSend()}>
+            <Send size={13} aria-hidden />
+            Отправить ассистенту
+          </button>
         </div>
       </header>
 
@@ -341,41 +234,6 @@ export function ArtifactView({
         <p className="artifact-view-purpose">
           <span className="artifact-view-purpose-label">Зачем это нужно ассистенту:</span> {record.purpose}
         </p>
-      ) : null}
-
-      {confirming ? (
-        <div className="artifact-publish-confirm">
-          <p className="artifact-publish-line">
-            Будет создана задача{" "}
-            {target?.projectKey ? (
-              <>
-                в проекте <b>{target.projectKey}</b>
-                {target.issueTypeName ? (
-                  <>
-                    {" "}
-                    типа <b>{target.issueTypeName}</b>
-                  </>
-                ) : null}
-              </>
-            ) : (
-              "в проекте, выбранном в настройках"
-            )}{" "}
-            с заголовком «{record.title.trim() || "без заголовка"}». Отменить создание
-            задачи в Jira нельзя.
-          </p>
-          <div className="artifact-publish-actions">
-            <button type="button" className="artifact-btn" onClick={() => setConfirming(false)}>
-              Отмена
-            </button>
-            <button
-              type="button"
-              className="artifact-btn primary"
-              onClick={() => void handlePublish()}
-            >
-              Создать задачу
-            </button>
-          </div>
-        </div>
       ) : null}
 
       {agentUpdate ? (
@@ -404,12 +262,6 @@ export function ArtifactView({
       ) : null}
 
       {saveError ? <p className="artifact-view-error">{saveError}</p> : null}
-      {publishError ? <p className="artifact-view-error">{publishError}</p> : null}
-      {failedLinks.length > 0 ? (
-        <p className="artifact-view-error">
-          Задача создана, но не прикрепились ссылки: {failedLinks.map((l) => l.url).join(", ")}
-        </p>
-      ) : null}
 
       {record.content.kind === "httpRequest" ? (
         <HttpRequestBuilder spec={record.content} onChange={updateContent} />

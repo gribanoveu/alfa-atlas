@@ -85,7 +85,7 @@ See [`AI_HARNESS.md`](AI_HARNESS.md) for the AI-agent tool-access infrastructure
 
 **Don't use a browser control where the app already draws its own.** The app renders its interactive widgets itself, so a native one arrives with the platform's look — a macOS `<select>` among hand-styled panels reads as something pasted in from another program, and it ignores the theme tokens everything else is built from.
 
-The pattern for a dropdown is a `<button>` trigger plus a menu of `role="option"` buttons, dismissed by an outside `pointerdown` or `Escape`. Existing implementations to copy: `.method-select*` (`HttpRequestBuilder`), `.oas-select*` (`OpenApiExplorer`), `.assistant-mode-*` (`AssistantConversation`), `.jira-select*` (`JiraIssueTypePicker`). The same applies to anything else the platform would draw its own way — `<input type="checkbox">` is styled through `.settings-check`, dialogs are the app's own modal shell rather than `alert`/`confirm`.
+The pattern for a dropdown is a `<button>` trigger plus a menu of `role="option"` buttons, dismissed by an outside `pointerdown` or `Escape`. Existing implementations to copy: `.method-select*` (`HttpRequestBuilder`), `.oas-select*` (`OpenApiExplorer`), `.assistant-mode-*` (`AssistantConversation`). The same applies to anything else the platform would draw its own way — `<input type="checkbox">` is styled through `.settings-check`, dialogs are the app's own modal shell rather than `alert`/`confirm`.
 
 Colours, spacing and fonts come from the tokens in `src/styles/tokens.css` (`--bg-*`, `--text-*`, `--border`, `--accent`, `--font-ui*`). A literal hex or pixel font size in a component is a bug: it will not follow the user's theme or font-size preference.
 

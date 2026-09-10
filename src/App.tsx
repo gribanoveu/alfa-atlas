@@ -555,7 +555,6 @@ function App() {
   const [standardsSettingsSignal, setStandardsSettingsSignal] = useState(0);
   const [llmSettingsSignal, setLlmSettingsSignal] = useState(0);
   const [credentialsSettingsSignal, setCredentialsSettingsSignal] = useState(0);
-  const [jiraSettingsSignal, setJiraSettingsSignal] = useState(0);
   const [calendarSettingsSignal, setCalendarSettingsSignal] = useState(0);
   // Here rather than in the calendar panel: the panel unmounts when hidden.
   useCalendarReminders();
@@ -793,7 +792,6 @@ function App() {
         openStandardsSettingsSignal={standardsSettingsSignal}
         openLlmSettingsSignal={llmSettingsSignal}
         openCredentialsSettingsSignal={credentialsSettingsSignal}
-        openJiraSettingsSignal={jiraSettingsSignal}
         openCalendarSettingsSignal={calendarSettingsSignal}
       />
       <div className="workspace">
@@ -1100,18 +1098,6 @@ function App() {
                   }
                 : null
             }
-            jira={{
-              onOpenSettings: () => setJiraSettingsSignal((n) => n + 1),
-              // Only with a repo open: the composer this fills belongs to a
-              // chat that is stored per repository, so without one the
-              // button would switch to a panel that cannot answer.
-              onAskAssistant: hasProject
-                ? () =>
-                    assistant.insertAssistantDraft(
-                      "Составь задачу для Jira. Вот что нужно сделать: ",
-                    )
-                : undefined,
-            }}
             calendar={{
               onOpenSettings: () => setCalendarSettingsSignal((n) => n + 1),
             }}

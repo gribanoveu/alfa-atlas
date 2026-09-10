@@ -12,8 +12,8 @@ import { CERT_PLACEHOLDER } from "./certField";
 import "./CalendarTab.css";
 
 /** Settings form. Text fields commit on blur (whole-file `settings.json`
- * rewrite, and a URL mid-typing is momentarily invalid) — same pattern as the
- * Jira tab, so there is no separate Save button. The domain password is not
+ * rewrite, and a URL mid-typing is momentarily invalid), so there is no
+ * separate Save button. The domain password is not
  * entered here (that is the panel, where "remember" is decided); this tab only
  * shows whether one is stored and offers to forget it. */
 export function CalendarTab() {

@@ -86,7 +86,7 @@
   color: var(--text-2);
 }
 
-/* --- Notice cards (not configured / error) — mirror the Jira panel --- */
+/* --- Notice cards (not configured / error) --- */
 .cal-panel-notice {
   display: flex;
   flex-direction: column;
@@ -141,8 +141,8 @@
   background: var(--bg-2);
 }
 
-/* --- Login form (disconnected state) — on a card, like the Jira panel's
-   blocks. Inputs stay `--bg-0`, a shade darker than the card, for contrast. */
+/* --- Login form (disconnected state) — on a card. Inputs stay `--bg-0`, a
+   shade darker than the card, for contrast. */
 .cal-form {
   display: flex;
   flex-direction: column;
